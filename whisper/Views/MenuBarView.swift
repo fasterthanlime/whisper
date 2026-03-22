@@ -207,6 +207,24 @@ struct MenuBarView: View {
             permissionRow("Mic", status: appState.microphonePermission)
             permissionRow("Accessibility", status: appState.accessibilityPermission)
 
+            if let inputDevice = appState.activeInputDeviceName {
+                HStack(spacing: 8) {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.blue)
+                    Text("Input")
+                        .font(.system(.caption))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(inputDevice)
+                        .font(.system(.caption2, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .padding(.horizontal, 6)
+            }
+
             if !appState.hasRequiredPermissions {
                 permissionActionsSection
             }

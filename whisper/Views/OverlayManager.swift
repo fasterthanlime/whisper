@@ -6,7 +6,8 @@ import SwiftUI
 final class OverlayManager {
     private var panel: FloatingPanel<RecordingOverlayView>?
     private var isPresented = false
-    private let overlaySize = CGSize(width: RecordingOverlayView.circleDiameter, height: RecordingOverlayView.circleDiameter)
+    // Wide enough for circle + transcript text
+    private let overlaySize = CGSize(width: 600, height: 100)
 
     func show(appState: AppState) {
         if panel == nil {

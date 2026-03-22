@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		AD268C8F2F3F197400514254 /* MLXAudioSTT in Frameworks */ = {isa = PBXBuildFile; productRef = AA000002AAAA000000000001 /* MLXAudioSTT */; };
 		AD268C902F3F197400514254 /* MLXAudioCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA000002AAAA000000000002 /* MLXAudioCore */; };
+		AD268C912F3F197400514254 /* MLXAudioVAD in Frameworks */ = {isa = PBXBuildFile; productRef = AA000002AAAA000000000003 /* MLXAudioVAD */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,6 +60,7 @@
 			files = (
 				AD268C902F3F197400514254 /* MLXAudioCore in Frameworks */,
 				AD268C8F2F3F197400514254 /* MLXAudioSTT in Frameworks */,
+				AD268C912F3F197400514254 /* MLXAudioVAD in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -121,6 +123,7 @@
 			packageProductDependencies = (
 				AA000002AAAA000000000001 /* MLXAudioSTT */,
 				AA000002AAAA000000000002 /* MLXAudioCore */,
+				AA000002AAAA000000000003 /* MLXAudioVAD */,
 			);
 			productName = whisper;
 			productReference = AD268BB72F3F09A700514254 /* whisper.app */;
@@ -611,6 +614,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA000001AAAA000000000001 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
 			productName = MLXAudioCore;
+		};
+		AA000002AAAA000000000003 /* MLXAudioVAD */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA000001AAAA000000000001 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioVAD;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

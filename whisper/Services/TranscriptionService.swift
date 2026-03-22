@@ -227,6 +227,52 @@ actor TranscriptionService {
         return text
     }
 
+    /// Transcribe with streaming - yields partial text as tokens arrive.
+    /// - Parameters:
+    ///   - audio: Float32 samples at 16kHz, mono.
+    ///   - onToken: Called on main actor with each new token and cumulative text so far.
+    /// - Returns: Final transcribed text string.
+    func transcribeStreaming(
+        audio: [Float],
+        onToken: @escaping @MainActor @Sendable (String, String) -> Void
+    ) async throws -> String {
+        try Task.checkCancellation()
+        await acquireOperationTurn()
+        defer { releaseOperationTurn() }
+        try Task.checkCancellation()
+
+        guard let model else {
+            throw TranscriptionError.modelNotLoaded
+        }
+
+        guard !audio.isEmpty else {
+            throw TranscriptionError.emptyAudio
+        }
+
+        try Task.checkCancellation()
+
+        let text = await runStreamingInference(model: model, audio: audio, onToken: onToken)
+
+        try Task.checkCancellation()
+
+        guard !text.isEmpty else {
+            throw TranscriptionError.emptyResult
+        }
+
+        return text
+    }
+
+    /// Quick transcription for live preview during recording.
+    /// Does not use operation lock - meant for rapid fire updates.
+    /// Returns nil if model not loaded or audio too short.
+    func transcribeLive(audio: [Float]) async -> String? {
+        guard let model else { return nil }
+        guard audio.count >= 1600 else { return nil } // At least 0.1s at 16kHz
+
+        let text = await runInference(model: model, audio: audio)
+        return text.isEmpty ? nil : text
+    }
+
     private func invalidateLoadedModel() {
         loadGeneration &+= 1
         model = nil
@@ -269,6 +315,36 @@ actor TranscriptionService {
                 continuation.resume(returning: text)
             }
         }
+    }
+
+    private func runStreamingInference(
+        model: Qwen3ASRModel,
+        audio: [Float],
+        onToken: @escaping @MainActor @Sendable (String, String) -> Void
+    ) async -> String {
+        let mlxAudio = MLXArray(audio)
+        var accumulated = ""
+        var finalText = ""
+
+        let stream = model.generateStream(audio: mlxAudio, language: "English")
+
+        do {
+            for try await event in stream {
+                switch event {
+                case .token(let token):
+                    accumulated += token
+                    await onToken(token, accumulated)
+                case .result(let result):
+                    finalText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                case .info:
+                    break
+                }
+            }
+        } catch {
+            finalText = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return finalText.isEmpty ? accumulated.trimmingCharacters(in: .whitespacesAndNewlines) : finalText
     }
 }
 

@@ -21,9 +21,8 @@ struct PasteController {
         let pasteboard = NSPasteboard.general
         let snapshot = capturePasteboardSnapshot(from: pasteboard)
 
-        // Prepend a space if the cursor sits right after non-whitespace text
         // Append a trailing space unless we're submitting
-        var finalText = shouldPrependSpace() ? " \(text)" : text
+        var finalText = text
         if !submit {
             finalText += " "
         }

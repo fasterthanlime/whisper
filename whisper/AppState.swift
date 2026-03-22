@@ -54,8 +54,16 @@ final class AppState {
     var accessibilityPermission: PermissionStatus = .unknown
     var runOnStartupEnabled = false
     var runOnStartupError: String?
+    /// Name of the currently active input device.
+    var activeInputDeviceName: String?
     /// Real-time microphone audio level (0–1), updated from the audio tap.
     var audioLevel: Float = 0
+
+    /// Real-time spectrum bands (0–1 each), updated from FFT.
+    var spectrumBands: [Float] = Array(repeating: 0, count: 8)
+
+    /// Partial transcript during streaming transcription.
+    var partialTranscript: String = ""
 
     /// Recent transcription history (newest first), max 20 items.
     var transcriptionHistory: [TranscriptionHistoryItem] = []
