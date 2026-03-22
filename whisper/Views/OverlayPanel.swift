@@ -73,6 +73,15 @@ final class FloatingPanel<Content: View>: NSPanel {
         setFrameOrigin(NSPoint(x: x, y: y))
     }
 
+    /// Position the panel at the top-center of the main screen, below the menu bar.
+    func positionTopCenter() {
+        guard let screen = NSScreen.main else { return }
+        let screenFrame = screen.visibleFrame
+        let x = screenFrame.midX - (frame.width / 2)
+        let y = screenFrame.maxY - frame.height - 30  // 30pt below menu bar
+        setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
     required init?(coder: NSCoder) {
         fatalError("init(coder:) not supported")
     }

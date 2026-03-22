@@ -127,15 +127,18 @@ actor VADService {
     }
 
     /// Flush any remaining audio as a final segment.
-    func flush() -> [Float]? {
-        guard currentSegmentAudio.count >= minSegmentSamples else {
-            let remaining = currentSegmentAudio
-            currentSegmentAudio.removeAll()
-            return remaining.isEmpty ? nil : remaining
-        }
+    /// Returns (audio, wasSpeaking) - only transcribe if wasSpeaking is true.
+    func flush() -> (audio: [Float]?, wasSpeaking: Bool) {
+        let wasSpeaking = isSpeaking
         let segment = currentSegmentAudio
         currentSegmentAudio.removeAll()
-        return segment
+        isSpeaking = false
+        silenceFrameCount = 0
+
+        guard segment.count >= minSegmentSamples else {
+            return (segment.isEmpty ? nil : segment, wasSpeaking)
+        }
+        return (segment, wasSpeaking)
     }
 
     /// Get all accumulated audio (for final transcription on key release).

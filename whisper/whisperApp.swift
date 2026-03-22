@@ -1,10 +1,15 @@
 import AppKit
 import AudioToolbox
 import AVFoundation
+import Carbon.HIToolbox.Events
 import CoreAudio
 import os
 import ServiceManagement
 import SwiftUI
+
+extension Notification.Name {
+    static let cancelRecording = Notification.Name("cancelRecording")
+}
 
 @main
 struct WhisperApp: App {
@@ -31,8 +36,13 @@ struct WhisperApp: App {
     @State private var accumulatedTranscript: String = ""
     @State private var hadSpeechActivity: Bool = false
     @State private var inputDeviceMonitor = InputDeviceMonitor()
+    @State private var keyDownTime: Date?
+    @State private var isToggleMode: Bool = false
+    @State private var escapeMonitor: Any?
+    @State private var notificationObserver: NSObjectProtocol?
 
     private static let maxRecordingDurationSeconds = AudioRecorder.defaultMaximumDuration
+    private static let toggleModeThresholdSeconds: TimeInterval = 0.3
     private static let minimumSpeechDurationSeconds = 0.2
     private static let transcriptionSampleRate = 16_000.0
 
@@ -272,6 +282,13 @@ struct WhisperApp: App {
         refreshPermissionState()
 
         guard !appState.isEditingHotkey else { return }
+
+        // If already recording in toggle mode, stop recording
+        if appState.phase == .recording && isToggleMode {
+            await stopRecordingAndTranscribe()
+            return
+        }
+
         guard appState.phase == .idle else { return }
         guard appState.modelStatus == .loaded else { return }
 
@@ -287,8 +304,11 @@ struct WhisperApp: App {
         appState.partialTranscript = ""
         accumulatedTranscript = ""
         hadSpeechActivity = false
+        keyDownTime = Date()
+        isToggleMode = false
         overlayManager.show(appState: appState)
         startRecordingTimeout()
+        installEscapeMonitor()
         playStartSound()
 
         // Reset VAD state for new recording
@@ -386,6 +406,19 @@ struct WhisperApp: App {
 
     @MainActor
     private func handleKeyUp() async {
+        guard appState.phase == .recording else { return }
+
+        // Check if this was a quick press (toggle mode)
+        if let downTime = keyDownTime {
+            let pressDuration = Date().timeIntervalSince(downTime)
+            if pressDuration < Self.toggleModeThresholdSeconds {
+                // Enter toggle mode - don't stop recording
+                isToggleMode = true
+                return
+            }
+        }
+
+        // Hold mode - stop recording
         await stopRecordingAndTranscribe()
     }
 
@@ -412,12 +445,15 @@ struct WhisperApp: App {
     }
 
     @MainActor
-    private func stopRecordingAndTranscribe(cancelTimeoutTask: Bool = true) async {
+    private func stopRecordingAndTranscribe(cancelTimeoutTask: Bool = true, skipPaste: Bool = false) async {
         guard appState.phase == .recording else { return }
 
         if cancelTimeoutTask {
             cancelRecordingTimeout()
         }
+        removeEscapeMonitor()
+        isToggleMode = false
+        keyDownTime = nil
 
         // Stop VAD processing
         vadProcessingTask?.cancel()
@@ -446,18 +482,17 @@ struct WhisperApp: App {
             overlayManager.hide()
             appState.partialTranscript = ""
             _ = appState.transition(to: .idle)
-            playStopSound()
             return
         }
 
         // Get any remaining audio from VAD buffer
-        let remainingAudio = await vadService.flush()
+        let (remainingAudio, wasSpeaking) = await vadService.flush()
 
         // Start with accumulated transcript from completed segments
         var text = accumulatedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Transcribe remaining audio if there is any
-        if let remaining = remainingAudio, !remaining.isEmpty {
+        // Only transcribe remaining audio if speech was in progress when we stopped
+        if wasSpeaking, let remaining = remainingAudio, !remaining.isEmpty {
             _ = appState.transition(to: .transcribing)
             overlayManager.show(appState: appState)
 
@@ -470,14 +505,6 @@ struct WhisperApp: App {
                     text += trimmed
                 }
             }
-        } else if text.isEmpty {
-            // No accumulated text and no remaining audio - transcribe all captured audio
-            _ = appState.transition(to: .transcribing)
-            overlayManager.show(appState: appState)
-
-            if let result = await transcriptionService.transcribeLive(audio: samples) {
-                text = result.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
         }
 
         appState.partialTranscript = ""
@@ -489,8 +516,15 @@ struct WhisperApp: App {
             return
         }
 
-        // Add to history
+        // Add to history (even if we're skipping paste)
         appState.addToHistory(text)
+
+        // If escape was pressed, skip pasting but show cancelled animation
+        if skipPaste {
+            _ = appState.transition(to: .idle)
+            await overlayManager.hideWithResult(.cancelled)
+            return
+        }
 
         // Check if Return is held - if so, submit after pasting
         let shouldSubmit = PasteController.isReturnKeyPressed()
@@ -498,13 +532,58 @@ struct WhisperApp: App {
         _ = appState.transition(to: .pasting)
         do {
             try await PasteController.paste(text, submit: shouldSubmit)
-            playStopSound()
-            overlayManager.hide()
             _ = appState.transition(to: .idle)
+            await overlayManager.hideWithResult(.success)
         } catch {
             _ = appState.transition(to: .error(error.localizedDescription))
             overlayManager.hide()
             resetAfterDelay()
+        }
+    }
+
+    @MainActor
+    private func installEscapeMonitor() {
+        removeEscapeMonitor()
+
+        // Use global monitor to catch escape key even when other apps are focused
+        let currentAppState = appState
+        let currentHotkeyMonitor = hotkeyMonitor
+        escapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [self] event in
+            guard event.keyCode == UInt16(kVK_Escape) else { return }
+            guard currentAppState.phase == .recording else { return }
+
+            // In toggle mode, require hotkey + Escape to cancel
+            // In hold mode, Escape alone cancels
+            if isToggleMode {
+                // Check if hotkey is currently held
+                guard currentHotkeyMonitor.isHeld else { return }
+            }
+
+            // Post notification to cancel recording
+            NotificationCenter.default.post(name: .cancelRecording, object: nil)
+        }
+
+        // Observe the notification
+        notificationObserver = NotificationCenter.default.addObserver(
+            forName: .cancelRecording,
+            object: nil,
+            queue: .main
+        ) { [self] _ in
+            Task { @MainActor in
+                await self.stopRecordingAndTranscribe(skipPaste: true)
+            }
+        }
+    }
+
+    @MainActor
+    private func removeEscapeMonitor() {
+        if let monitor = escapeMonitor {
+            NSEvent.removeMonitor(monitor)
+            escapeMonitor = nil
+        }
+        if let observer = notificationObserver {
+            NotificationCenter.default.removeObserver(observer)
+            notificationObserver = nil
         }
     }
 
@@ -768,12 +847,6 @@ struct WhisperApp: App {
 
     private func playStartSound() {
         guard let sound = NSSound(named: "Tink") else { return }
-        sound.volume = calculateSoundVolume()
-        sound.play()
-    }
-
-    private func playStopSound() {
-        guard let sound = NSSound(named: "Pop") else { return }
         sound.volume = calculateSoundVolume()
         sound.play()
     }

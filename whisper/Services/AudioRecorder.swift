@@ -6,7 +6,7 @@ import Foundation
 /// Supports "warm" mode where the engine runs continuously with a pre-buffer.
 final class AudioRecorder: @unchecked Sendable {
     static let defaultMaximumDuration: TimeInterval = 90
-    static let defaultPreBufferDuration: TimeInterval = 0.5  // 500ms pre-buffer
+    static let defaultPreBufferDuration: TimeInterval = 0.2  // 200ms pre-buffer
     static let spectrumBandCount = 8
 
     private var engine: AVAudioEngine?
@@ -276,18 +276,23 @@ final class AudioRecorder: @unchecked Sendable {
             magnitudes[i] = sqrtf(realOut[i] * realOut[i] + imagOut[i] * imagOut[i])
         }
 
-        // Group into bands (logarithmic-ish spacing for better visualization)
+        // Group into bands focused on voice frequencies (100Hz - 4kHz)
         let bandCount = Self.spectrumBandCount
         var bands = [Float](repeating: 0, count: bandCount)
 
-        // Logarithmic band boundaries
-        let minBin = 1
-        let maxBin = halfSize - 1
+        // Calculate bin indices for voice frequency range
+        // Each bin represents nativeSampleRate/fftSize Hz
+        let binHz = nativeSampleRate / Double(fftSize)
+        let voiceMinHz = 100.0
+        let voiceMaxHz = 4000.0
+        let voiceMinBin = max(1, Int(voiceMinHz / binHz))
+        let voiceMaxBin = min(halfSize - 1, Int(voiceMaxHz / binHz))
+        let voiceBinRange = voiceMaxBin - voiceMinBin
+
+        // Linear spacing within voice range for even distribution
         for band in 0..<bandCount {
-            let lowRatio = Float(band) / Float(bandCount)
-            let highRatio = Float(band + 1) / Float(bandCount)
-            let lowBin = minBin + Int(powf(lowRatio, 1.5) * Float(maxBin - minBin))
-            let highBin = minBin + Int(powf(highRatio, 1.5) * Float(maxBin - minBin))
+            let lowBin = voiceMinBin + (band * voiceBinRange) / bandCount
+            let highBin = voiceMinBin + ((band + 1) * voiceBinRange) / bandCount
 
             var sum: Float = 0
             let binCount = max(1, highBin - lowBin)
@@ -297,12 +302,11 @@ final class AudioRecorder: @unchecked Sendable {
             bands[band] = sum / Float(binCount)
         }
 
-        // Normalize to 0-1 range
-        let maxMag = bands.max() ?? 1
-        if maxMag > 0.001 {
-            for i in 0..<bandCount {
-                bands[i] = min(bands[i] / maxMag, 1.0)
-            }
+        // Scale to 0-1 range - use adaptive scaling with decay
+        let maxMag = bands.max() ?? 1.0
+        let referenceLevel = max(maxMag, 0.5)  // Minimum reference to avoid division issues
+        for i in 0..<bandCount {
+            bands[i] = min(bands[i] / referenceLevel, 1.0)
         }
 
         return bands

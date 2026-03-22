@@ -1,81 +1,153 @@
 import SwiftUI
 
-/// Floating overlay showing transcript with inline spectrum visualizer.
+/// Result state for overlay dismissal animation
+enum OverlayResult {
+    case none
+    case success
+    case cancelled
+}
+
+/// Floating overlay showing transcript with spectrum bar below.
 struct RecordingOverlayView: View {
     let appState: AppState
+    let result: OverlayResult
+
+    @State private var isAppearing = false
+    @State private var displayedText = ""
+    @State private var textAnimationTask: Task<Void, Never>?
 
     var body: some View {
-        if isVisible {
-            HStack(alignment: .bottom, spacing: 0) {
-                // Transcript text (if any)
-                if !appState.partialTranscript.isEmpty {
-                    Text(appState.partialTranscript)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(.white)
-                        .lineLimit(3)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                // Inline spectrum visualizer
-                InlineSpectrumView(bands: appState.spectrumBands, isActive: appState.phase == .recording)
-                    .padding(.leading, appState.partialTranscript.isEmpty ? 0 : 6)
+        ZStack {
+            // Main content
+            if result == .none {
+                mainContent
+                    .scaleEffect(isAppearing ? 1.0 : 0.8)
+                    .opacity(isAppearing ? 1.0 : 0.0)
             }
-            .padding(.vertical, 10)
-            .padding(.horizontal, 14)
-            .frame(maxWidth: 550, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(.white.opacity(0.1), lineWidth: 1)
-            )
+
+            // Success overlay
+            if result == .success {
+                resultOverlay(success: true)
+            }
+
+            // Cancelled overlay
+            if result == .cancelled {
+                resultOverlay(success: false)
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isAppearing)
+        .animation(.easeInOut(duration: 0.2), value: result)
+        .onAppear {
+            withAnimation {
+                isAppearing = true
+            }
+        }
+        .onChange(of: appState.partialTranscript) { _, newValue in
+            animateTextChange(to: newValue)
         }
     }
 
-    private var isVisible: Bool {
-        appState.phase == .recording || appState.phase == .transcribing
+    private var mainContent: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Transcript text with typewriter effect
+            Text(displayedTextValue)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+
+            // Spectrum bar below text
+            SpectrumBarView(bands: appState.spectrumBands, isActive: appState.phase == .recording)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .frame(width: 500, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.black.opacity(0.8))
+                .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+        )
+    }
+
+    private func resultOverlay(success: Bool) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .font(.system(size: 28, weight: .medium))
+                .foregroundColor(success ? .green : .red)
+                .symbolEffect(.bounce, value: result)
+
+            Text(success ? "Pasted" : "Cancelled")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundColor(.white)
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 20)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.black.opacity(0.8))
+                .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+        )
+        .transition(.scale.combined(with: .opacity))
+    }
+
+    private var displayedTextValue: String {
+        if displayedText.isEmpty && appState.partialTranscript.isEmpty {
+            return appState.phase == .recording ? "Listening..." : "Transcribing..."
+        }
+        return displayedText.isEmpty ? appState.partialTranscript : displayedText
+    }
+
+    private func animateTextChange(to newText: String) {
+        textAnimationTask?.cancel()
+
+        // Find the common prefix - only animate new characters
+        let currentText = displayedText
+        let commonPrefixLength = currentText.commonPrefix(with: newText).count
+
+        if commonPrefixLength == newText.count {
+            // New text is shorter or same - just set it
+            displayedText = newText
+            return
+        }
+
+        // Animate new characters appearing
+        let newPart = String(newText.dropFirst(commonPrefixLength))
+        displayedText = String(newText.prefix(commonPrefixLength))
+
+        textAnimationTask = Task { @MainActor in
+            for char in newPart {
+                guard !Task.isCancelled else { return }
+                displayedText.append(char)
+                try? await Task.sleep(for: .milliseconds(15))
+            }
+        }
     }
 }
 
-/// Compact inline spectrum visualizer that looks like a cursor.
-struct InlineSpectrumView: View {
+/// Thin spectrum bar showing audio activity.
+struct SpectrumBarView: View {
     let bands: [Float]
     let isActive: Bool
 
-    private let barCount = 8
-    private let barWidth: CGFloat = 3
-    private let barSpacing: CGFloat = 2
-    private let maxHeight: CGFloat = 18
-    private let minHeight: CGFloat = 3
+    private let barCount = 32
+    private let barHeight: CGFloat = 4
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: barSpacing) {
-            ForEach(0..<barCount, id: \.self) { index in
-                let level = index < bands.count ? CGFloat(bands[index]) : 0
-                let height = minHeight + (maxHeight - minHeight) * level
+        GeometryReader { geo in
+            HStack(spacing: 1) {
+                ForEach(0..<barCount, id: \.self) { index in
+                    let bandIndex = index * bands.count / barCount
+                    let level = bandIndex < bands.count ? CGFloat(bands[bandIndex]) : 0
 
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(barGradient)
-                    .frame(width: barWidth, height: isActive ? height : minHeight)
-                    .animation(.easeOut(duration: 0.08), value: level)
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(Color.white.opacity(isActive ? 0.3 + 0.7 * level : 0.2))
+                        .frame(height: barHeight)
+                }
             }
+            .frame(width: geo.size.width, height: barHeight)
         }
-        .opacity(isActive ? 1.0 : 0.4)
-        .animation(.easeInOut(duration: 0.15), value: isActive)
-    }
-
-    private var barGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                Color(hue: 0.55, saturation: 0.8, brightness: 1.0),  // cyan
-                Color(hue: 0.75, saturation: 0.7, brightness: 1.0)   // purple
-            ],
-            startPoint: .bottom,
-            endPoint: .top
-        )
+        .frame(height: barHeight)
+        .animation(.easeOut(duration: 0.05), value: bands)
     }
 }

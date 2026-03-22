@@ -4,12 +4,16 @@ import SwiftUI
 /// Manages the lifecycle of the floating recording indicator panel.
 @MainActor
 final class OverlayManager {
-    private var panel: FloatingPanel<RecordingOverlayView>?
+    private var panel: FloatingPanel<AnyView>?
     private var isPresented = false
-    // Wide enough for circle + transcript text
-    private let overlaySize = CGSize(width: 600, height: 100)
+    private var currentResult: OverlayResult = .none
+    private var currentAppState: AppState?
+    private let overlaySize = CGSize(width: 550, height: 200)
 
     func show(appState: AppState) {
+        currentAppState = appState
+        currentResult = .none
+
         if panel == nil {
             let binding = Binding<Bool>(
                 get: { [weak self] in
@@ -26,27 +30,60 @@ final class OverlayManager {
 
             let contentRect = NSRect(origin: .zero, size: overlaySize)
             let newPanel = FloatingPanel(
-                view: {
-                    RecordingOverlayView(appState: appState)
+                view: { [weak self] in
+                    AnyView(
+                        RecordingOverlayView(
+                            appState: appState,
+                            result: self?.currentResult ?? .none
+                        )
+                    )
                 },
                 contentRect: contentRect,
                 isPresented: binding
             )
-            newPanel.positionBottomCenter()
+            newPanel.positionTopCenter()
             panel = newPanel
         } else {
-            panel?.updateView {
-                RecordingOverlayView(appState: appState)
-            }
+            updateView()
         }
 
         isPresented = true
         panel?.orderFrontRegardless()
     }
 
+    private func updateView() {
+        guard let appState = currentAppState else { return }
+        panel?.updateView { [weak self] in
+            AnyView(
+                RecordingOverlayView(
+                    appState: appState,
+                    result: self?.currentResult ?? .none
+                )
+            )
+        }
+    }
+
     func hide() {
         isPresented = false
         panel?.close()
         panel = nil
+        currentAppState = nil
+        currentResult = .none
+    }
+
+    /// Hide with a success or cancel animation
+    func hideWithResult(_ result: OverlayResult) async {
+        guard result != .none else {
+            hide()
+            return
+        }
+
+        currentResult = result
+        updateView()
+
+        // Wait for animation to play
+        try? await Task.sleep(for: .milliseconds(600))
+
+        hide()
     }
 }
