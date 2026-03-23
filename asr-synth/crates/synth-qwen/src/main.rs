@@ -6,7 +6,7 @@ use std::path::Path;
 #[derive(Parser)]
 struct Args {
     /// Path to model directory
-    #[arg(short, long, default_value = "~/Library/Caches/qwen3-asr/Qwen--Qwen3-ASR-0.6B")]
+    #[arg(short, long, default_value = "~/Library/Caches/qwen3-asr/Alkd--qwen3-asr-gguf--qwen3_asr_1_7b_q8_0_gguf")]
     model: String,
 
     /// Path to WAV file to transcribe

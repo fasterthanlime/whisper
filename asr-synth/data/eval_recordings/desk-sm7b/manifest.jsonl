@@ -1,0 +1,3 @@
+{"sentence_index":0,"text":"Let me verify telex:","spoken":"Let me verify telex:","vocab_terms":["telex"],"profile":"desk-sm7b","wav_path":"0000.wav","sample_rate":16000}
+{"sentence_index":1,"text":"Now stripTrigger is called as Self.stripTrigger but we're in a detached task, not on the type. Let me check if it's a static method:","spoken":"Now stripTrigger is called as Self.stripTrigger but we're in a detached task, not on the type. Let me check if it's a static method:","vocab_terms":["stripTrigger","Self.stripTrigger"],"profile":"desk-sm7b","wav_path":"0001.wav","sample_rate":16000}
+{"sentence_index":0,"text":"Let me verify telex:","spoken":"Let me verify telex:","vocab_terms":["telex"],"profile":"desk-sm7b","wav_path":"0000.wav","sample_rate":16000}

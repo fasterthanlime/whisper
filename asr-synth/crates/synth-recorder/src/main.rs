@@ -3,9 +3,12 @@ use clap::Parser;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal;
+use ratatui::prelude::*;
+use ratatui::widgets::*;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 #[derive(Parser)]
 #[command(about = "Record eval sentences with mic profile support")]
@@ -45,6 +48,13 @@ struct RecordingManifest {
     sample_rate: u32,
 }
 
+#[derive(PartialEq)]
+enum State {
+    Waiting,
+    Recording,
+    Recorded,
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -56,7 +66,6 @@ fn main() -> Result<()> {
         .map(|l| serde_json::from_str(l).context("parsing sentence"))
         .collect::<Result<Vec<_>>>()?;
 
-    println!("Loaded {} sentences", sentences.len());
     if args.start >= sentences.len() {
         println!("Nothing to record (start={} >= total={})", args.start, sentences.len());
         return Ok(());
@@ -75,153 +84,249 @@ fn main() -> Result<()> {
 
     // Set up audio
     let host = cpal::default_host();
-    let device = host.default_input_device()
-        .context("no input device found")?;
+    let device = host.default_input_device().context("no input device found")?;
     let device_name = device.name().unwrap_or_else(|_| "unknown".to_string());
     let config = device.default_input_config()?;
     let sample_rate = config.sample_rate().0;
     let channels = config.channels() as usize;
 
-    println!("Profile:     {}", args.profile);
-    println!("Input:       {} ({} Hz, {} ch)", device_name, sample_rate, channels);
-    println!("Output:      {}", profile_dir.display());
-    println!("Sentences:   {}-{} of {}", args.start, sentences.len() - 1, sentences.len());
-    println!();
-    println!("Controls:");
-    println!("  Space/Enter  = start/stop recording");
-    println!("  S            = skip sentence");
-    println!("  R            = re-record last");
-    println!("  Q/Esc        = quit");
-    println!();
-
+    // Set up terminal
     terminal::enable_raw_mode()?;
-    let _cleanup = RawModeGuard;
+    let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
+    terminal.clear()?;
 
     let mut i = args.start;
-    while i < sentences.len() {
+    let mut state = State::Waiting;
+    let mut recording_start: Option<Instant> = None;
+    let mut last_duration = 0.0f32;
+    let mut status_msg = String::new();
+    let buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+    let mut active_stream: Option<cpal::Stream> = None;
+
+    loop {
+        if i >= sentences.len() {
+            break;
+        }
         let sentence = &sentences[i];
-        let wav_name = format!("{:04}.wav", i);
-        let wav_path = profile_dir.join(&wav_name);
 
-        // Show the sentence
-        print!("\r\x1b[2J\x1b[H"); // clear screen
-        println!("┌─ Sentence {}/{} ─────────────────────────────────────", i + 1, sentences.len());
-        println!("│");
-        println!("│  \x1b[1;37m{}\x1b[0m", sentence.text);
-        println!("│");
-        println!("│  \x1b[2m(say: {})\x1b[0m", sentence.spoken);
-        println!("│");
-        println!("│  vocab: {}", sentence.vocab_terms.join(", "));
-        println!("│");
-        println!("└─ Press \x1b[1mSpace\x1b[0m to start recording, \x1b[1mS\x1b[0m to skip, \x1b[1mQ\x1b[0m to quit");
-        std::io::stdout().flush()?;
+        // Draw UI
+        let recording_secs = recording_start
+            .map(|s| s.elapsed().as_secs_f32())
+            .unwrap_or(0.0);
 
-        // Wait for start
-        match wait_for_key()? {
-            KeyAction::Record => {}
-            KeyAction::Skip => { i += 1; continue; }
-            KeyAction::Quit => break,
-            KeyAction::Redo => continue,
-        }
+        terminal.draw(|frame| {
+            let area = frame.area();
 
-        // Record
-        let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
-        let buf_clone = buffer.clone();
+            let chunks = Layout::vertical([
+                Constraint::Length(3),  // header
+                Constraint::Min(6),    // sentence
+                Constraint::Length(3), // status
+                Constraint::Length(3),  // controls
+            ])
+            .split(area);
 
-        let stream = device.build_input_stream(
-            &config.clone().into(),
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                let mut buf = buf_clone.lock().unwrap();
-                // Mix to mono if multi-channel
-                if channels == 1 {
-                    buf.extend_from_slice(data);
-                } else {
-                    for chunk in data.chunks(channels) {
-                        let mono: f32 = chunk.iter().sum::<f32>() / channels as f32;
-                        buf.push(mono);
-                    }
+            // Header
+            let header = Paragraph::new(Line::from(vec![
+                Span::styled(
+                    format!(" {} ", args.profile),
+                    Style::default().fg(Color::Black).bg(Color::Cyan).bold(),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    format!("{}", device_name),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw(format!("  {} Hz  {} ch", sample_rate, channels)),
+            ]))
+            .block(Block::bordered().title(format!(
+                " Sentence {}/{} ",
+                i + 1,
+                sentences.len()
+            )));
+            frame.render_widget(header, chunks[0]);
+
+            // Sentence content
+            let mut lines = vec![
+                Line::raw(""),
+                Line::from(Span::styled(
+                    &sentence.text,
+                    Style::default().fg(Color::White).bold(),
+                )),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("say: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        &sentence.spoken,
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("vocab: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        sentence.vocab_terms.join(", "),
+                        Style::default().fg(Color::Green),
+                    ),
+                ]),
+            ];
+            let content = Paragraph::new(lines)
+                .block(Block::bordered())
+                .wrap(Wrap { trim: false });
+            frame.render_widget(content, chunks[1]);
+
+            // Status
+            let status_line = match state {
+                State::Waiting => Line::from(Span::styled(
+                    "  Ready to record",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                State::Recording => Line::from(vec![
+                    Span::styled(" ● REC ", Style::default().fg(Color::White).bg(Color::Red).bold()),
+                    Span::raw(format!("  {:.1}s", recording_secs)),
+                ]),
+                State::Recorded => {
+                    let msg = if status_msg.is_empty() {
+                        format!("  Saved ({:.1}s)", last_duration)
+                    } else {
+                        format!("  {}", status_msg)
+                    };
+                    Line::from(Span::styled(
+                        msg,
+                        Style::default().fg(Color::Green),
+                    ))
                 }
-            },
-            |err| eprintln!("Audio error: {err}"),
-            None,
-        )?;
+            };
+            let status = Paragraph::new(status_line).block(Block::bordered().title(" Status "));
+            frame.render_widget(status, chunks[2]);
 
-        stream.play()?;
-        println!("\r\x1b[K  \x1b[1;31m● RECORDING\x1b[0m — speak now, press \x1b[1mSpace\x1b[0m when done");
-        std::io::stdout().flush()?;
+            // Controls
+            let controls = match state {
+                State::Waiting => " Space: record  S: skip  Q: quit ",
+                State::Recording => " Space: stop recording ",
+                State::Recorded => " Space: next  R: redo  Q: quit ",
+            };
+            let ctrl = Paragraph::new(Line::from(Span::styled(
+                controls,
+                Style::default().fg(Color::Cyan),
+            )))
+            .block(Block::bordered());
+            frame.render_widget(ctrl, chunks[3]);
+        })?;
 
-        // Wait for stop
-        match wait_for_key()? {
-            KeyAction::Quit => {
-                drop(stream);
-                break;
-            }
-            _ => {}
-        }
+        // Poll events (with timeout for recording animation)
+        let timeout = if state == State::Recording {
+            std::time::Duration::from_millis(100)
+        } else {
+            std::time::Duration::from_secs(60)
+        };
 
-        drop(stream);
-
-        let samples = buffer.lock().unwrap();
-        let duration = samples.len() as f32 / sample_rate as f32;
-
-        if samples.is_empty() || duration < 0.3 {
-            println!("  \x1b[33mToo short ({:.1}s), skipping\x1b[0m", duration);
+        if !event::poll(timeout)? {
             continue;
         }
 
-        // Write WAV (16kHz mono for ASR compatibility)
-        write_wav_16k(&wav_path, &samples, sample_rate)?;
-        println!("  \x1b[32m✓\x1b[0m Saved {:.1}s → {}", duration, wav_name);
-
-        // Write manifest entry
-        let entry = RecordingManifest {
-            sentence_index: i,
-            text: sentence.text.clone(),
-            spoken: sentence.spoken.clone(),
-            vocab_terms: sentence.vocab_terms.clone(),
-            profile: args.profile.clone(),
-            wav_path: wav_name.clone(),
-            sample_rate: 16000,
-        };
-        serde_json::to_writer(&mut manifest, &entry)?;
-        manifest.write_all(b"\n")?;
-        manifest.flush()?;
-
-        println!("  Press \x1b[1mSpace\x1b[0m for next, \x1b[1mR\x1b[0m to redo, \x1b[1mQ\x1b[0m to quit");
-        std::io::stdout().flush()?;
-
-        match wait_for_key()? {
-            KeyAction::Redo => continue, // re-record same sentence
-            KeyAction::Quit => break,
-            _ => { i += 1; }
-        }
-    }
-
-    println!("\n\x1b[1mDone!\x1b[0m Recordings in {}", profile_dir.display());
-    println!("Manifest: {}", manifest_path.display());
-    Ok(())
-}
-
-enum KeyAction {
-    Record, // Space/Enter — start or stop
-    Skip,
-    Redo,
-    Quit,
-}
-
-fn wait_for_key() -> Result<KeyAction> {
-    loop {
         if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
-            match code {
-                KeyCode::Char(' ') | KeyCode::Enter => return Ok(KeyAction::Record),
-                KeyCode::Char('s') | KeyCode::Char('S') => return Ok(KeyAction::Skip),
-                KeyCode::Char('r') | KeyCode::Char('R') => return Ok(KeyAction::Redo),
-                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => return Ok(KeyAction::Quit),
-                KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => return Ok(KeyAction::Quit),
+            match (&state, code) {
+                // Quit
+                (_, KeyCode::Char('q')) | (_, KeyCode::Char('Q')) | (_, KeyCode::Esc) => break,
+                (_, KeyCode::Char('c')) if modifiers.contains(KeyModifiers::CONTROL) => break,
+
+                // Start recording
+                (State::Waiting, KeyCode::Char(' ') | KeyCode::Enter) => {
+                    buffer.lock().unwrap().clear();
+                    let buf_clone = buffer.clone();
+                    let ch = channels;
+
+                    let stream = device.build_input_stream(
+                        &config.clone().into(),
+                        move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                            let mut buf = buf_clone.lock().unwrap();
+                            if ch == 1 {
+                                buf.extend_from_slice(data);
+                            } else {
+                                for chunk in data.chunks(ch) {
+                                    let mono: f32 = chunk.iter().sum::<f32>() / ch as f32;
+                                    buf.push(mono);
+                                }
+                            }
+                        },
+                        |err| eprintln!("Audio error: {err}"),
+                        None,
+                    )?;
+                    stream.play()?;
+                    active_stream = Some(stream);
+                    recording_start = Some(Instant::now());
+                    state = State::Recording;
+                }
+
+                // Stop recording
+                (State::Recording, KeyCode::Char(' ') | KeyCode::Enter) => {
+                    drop(active_stream.take());
+                    let duration = recording_start.take().map(|s| s.elapsed().as_secs_f32()).unwrap_or(0.0);
+                    let samples = buffer.lock().unwrap().clone();
+
+                    if samples.is_empty() || duration < 0.3 {
+                        status_msg = format!("Too short ({:.1}s), try again", duration);
+                        state = State::Waiting;
+                        continue;
+                    }
+
+                    // Write WAV
+                    let wav_name = format!("{:04}.wav", i);
+                    let wav_path = profile_dir.join(&wav_name);
+                    write_wav_16k(&wav_path, &samples, sample_rate)?;
+
+                    // Write manifest
+                    let entry = RecordingManifest {
+                        sentence_index: i,
+                        text: sentence.text.clone(),
+                        spoken: sentence.spoken.clone(),
+                        vocab_terms: sentence.vocab_terms.clone(),
+                        profile: args.profile.clone(),
+                        wav_path: wav_name,
+                        sample_rate: 16000,
+                    };
+                    serde_json::to_writer(&mut manifest, &entry)?;
+                    manifest.write_all(b"\n")?;
+                    manifest.flush()?;
+
+                    last_duration = duration;
+                    status_msg.clear();
+                    state = State::Recorded;
+                }
+
+                // Skip
+                (State::Waiting, KeyCode::Char('s') | KeyCode::Char('S')) => {
+                    i += 1;
+                    state = State::Waiting;
+                    status_msg.clear();
+                }
+
+                // Next sentence
+                (State::Recorded, KeyCode::Char(' ') | KeyCode::Enter) => {
+                    i += 1;
+                    state = State::Waiting;
+                    status_msg.clear();
+                }
+
+                // Redo
+                (State::Recorded, KeyCode::Char('r') | KeyCode::Char('R')) => {
+                    state = State::Waiting;
+                    status_msg.clear();
+                }
+
                 _ => {}
             }
         }
     }
+
+    // Cleanup terminal
+    drop(terminal);
+    terminal::disable_raw_mode()?;
+    crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
+
+    println!("Done! Recordings in {}", profile_dir.display());
+    println!("Manifest: {}", manifest_path.display());
+    Ok(())
 }
 
 /// Write samples to a 16kHz mono WAV, resampling if needed.
@@ -229,7 +334,6 @@ fn write_wav_16k(path: &Path, samples: &[f32], source_rate: u32) -> Result<()> {
     let samples_16k = if source_rate == 16000 {
         samples.to_vec()
     } else {
-        // Simple linear resampling for recording (quality is fine for eval)
         let ratio = 16000.0 / source_rate as f64;
         let out_len = (samples.len() as f64 * ratio) as usize;
         let mut out = Vec::with_capacity(out_len);
@@ -256,12 +360,4 @@ fn write_wav_16k(path: &Path, samples: &[f32], source_rate: u32) -> Result<()> {
     }
     writer.finalize()?;
     Ok(())
-}
-
-/// RAII guard to restore terminal on exit/panic.
-struct RawModeGuard;
-impl Drop for RawModeGuard {
-    fn drop(&mut self) {
-        let _ = terminal::disable_raw_mode();
-    }
 }

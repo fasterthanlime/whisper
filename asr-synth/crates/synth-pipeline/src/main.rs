@@ -15,7 +15,7 @@ struct Args {
     parakeet_model: String,
 
     /// Qwen3 ASR model directory
-    #[arg(long, default_value = "~/Library/Caches/qwen3-asr/Qwen--Qwen3-ASR-0.6B")]
+    #[arg(long, default_value = "~/Library/Caches/qwen3-asr/Alkd--qwen3-asr-gguf--qwen3_asr_1_7b_q8_0_gguf")]
     qwen_model: String,
 
     /// Root directory for docs scanning
@@ -29,15 +29,22 @@ struct Args {
     /// Output JSONL file
     #[arg(short, long, default_value = "data/output.jsonl")]
     output: String,
+
+    /// Save TTS audio as WAVs in this directory (for review)
+    #[arg(long)]
+    save_audio: Option<String>,
 }
 
 #[derive(serde::Serialize)]
 struct TrainingPair {
     original_text: String,
+    spoken_text: String,
     parakeet_output: String,
     qwen_output: String,
     vocab: Vec<String>,
     voice_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    audio_file: Option<String>,
 }
 
 fn resample_24k_to_16k(samples: &[f32]) -> Result<Vec<f32>> {
@@ -100,6 +107,11 @@ fn main() -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let mut out = std::io::BufWriter::new(std::fs::File::create(output_path)?);
+
+    // Set up audio save directory if requested
+    if let Some(ref audio_dir) = args.save_audio {
+        std::fs::create_dir_all(audio_dir)?;
+    }
 
     for (i, sentence) in sentences.iter().enumerate() {
         eprint!("[{}/{}] \"{}\" ... ", i + 1, sentences.len(), &sentence.text);

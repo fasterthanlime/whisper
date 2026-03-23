@@ -11,3 +11,4 @@ clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 crossterm = "0.29"
+ratatui = "0.29"
