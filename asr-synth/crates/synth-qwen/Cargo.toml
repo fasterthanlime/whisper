@@ -5,5 +5,6 @@ edition = "2024"
 
 [dependencies]
 qwen3-asr = { path = "../../../qwen3-asr-rs", features = ["metal"] }
+shellexpand = "3"
 anyhow.workspace = true
 clap.workspace = true
