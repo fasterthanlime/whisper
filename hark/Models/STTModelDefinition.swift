@@ -31,6 +31,17 @@ struct STTModelDefinition: Identifiable, Hashable {
             downloadSizeMB: 1200
         ),
         STTModelDefinition(
+            id: "qwen3-0.6b-q8",
+            displayName: "Qwen3 ASR 0.6B (Q8_0)",
+            repoID: "Qwen/Qwen3-ASR-0.6B",
+            format: .gguf(
+                repoID: "Alkd/qwen3-asr-gguf",
+                filename: "qwen3_asr_0.6b_q8_0.gguf",
+                baseRepoID: "Qwen/Qwen3-ASR-0.6B"
+            ),
+            downloadSizeMB: 1010
+        ),
+        STTModelDefinition(
             id: "qwen3-0.6b-q4k",
             displayName: "Qwen3 ASR 0.6B (Q4_K)",
             repoID: "Qwen/Qwen3-ASR-0.6B",
@@ -48,6 +59,17 @@ struct STTModelDefinition: Identifiable, Hashable {
             repoID: "Qwen/Qwen3-ASR-1.7B",
             format: .safetensors,
             downloadSizeMB: 3400
+        ),
+        STTModelDefinition(
+            id: "qwen3-1.7b-q8",
+            displayName: "Qwen3 ASR 1.7B (Q8_0)",
+            repoID: "Qwen/Qwen3-ASR-1.7B",
+            format: .gguf(
+                repoID: "Alkd/qwen3-asr-gguf",
+                filename: "qwen3_asr_1.7b_q8_0.gguf",
+                baseRepoID: "Qwen/Qwen3-ASR-1.7B"
+            ),
+            downloadSizeMB: 2510
         ),
         STTModelDefinition(
             id: "qwen3-1.7b-q4k",

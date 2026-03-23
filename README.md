@@ -40,8 +40,10 @@ Choose between Qwen3 ASR 0.6B and 1.7B in full-precision or Q4_K quantized forma
 | Model | Format | Download |
 |-------|--------|----------|
 | Qwen3 ASR 0.6B | safetensors | ~1.2 GB |
+| Qwen3 ASR 0.6B | Q8_0 GGUF | ~1.0 GB |
 | Qwen3 ASR 0.6B | Q4_K GGUF | ~605 MB |
 | Qwen3 ASR 1.7B | safetensors | ~3.4 GB |
+| Qwen3 ASR 1.7B | Q8_0 GGUF | ~2.5 GB |
 | Qwen3 ASR 1.7B | Q4_K GGUF | ~1.3 GB |
 
 ### Smart paste
