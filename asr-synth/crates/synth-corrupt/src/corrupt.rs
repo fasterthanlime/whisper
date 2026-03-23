@@ -136,25 +136,32 @@ impl PhonemeIndex {
     }
 }
 
-/// Levenshtein distance on phoneme sequences.
+/// Weighted phoneme edit distance.
+///
+/// Uses phoneme feature similarity for substitution costs:
+/// K→G (voicing flip) costs ~0.2, K→B (place change) costs ~0.8.
+/// Insertion/deletion cost 1.0.
+/// Returns distance * 100 as integer for easy comparison.
 pub fn phoneme_edit_distance(a: &[String], b: &[String]) -> usize {
+    use crate::features::substitution_cost;
+
     let m = a.len();
     let n = b.len();
-    let mut dp = vec![0usize; (m + 1) * (n + 1)];
+    let mut dp = vec![0u32; (m + 1) * (n + 1)];
 
     for i in 0..=m {
-        dp[i * (n + 1)] = i;
+        dp[i * (n + 1)] = (i as u32) * 100;
     }
     for j in 0..=n {
-        dp[j] = j;
+        dp[j] = (j as u32) * 100;
     }
     for i in 1..=m {
         for j in 1..=n {
-            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-            dp[i * (n + 1) + j] = (dp[(i - 1) * (n + 1) + j] + 1)
-                .min(dp[i * (n + 1) + (j - 1)] + 1)
-                .min(dp[(i - 1) * (n + 1) + (j - 1)] + cost);
+            let sub_cost = (substitution_cost(&a[i - 1], &b[j - 1]) * 100.0) as u32;
+            dp[i * (n + 1) + j] = (dp[(i - 1) * (n + 1) + j] + 100)        // deletion
+                .min(dp[i * (n + 1) + (j - 1)] + 100)                        // insertion
+                .min(dp[(i - 1) * (n + 1) + (j - 1)] + sub_cost);            // substitution
         }
     }
-    dp[m * (n + 1) + n]
+    dp[m * (n + 1) + n] as usize
 }

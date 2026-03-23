@@ -3,6 +3,7 @@ use clap::Parser;
 
 mod cmudict;
 mod corrupt;
+mod features;
 mod g2p;
 
 #[derive(Parser)]
@@ -18,8 +19,8 @@ struct Args {
     #[arg(long, default_value = "models/g2p.fst")]
     fst: String,
 
-    /// Max phoneme edit distance for single-word matches
-    #[arg(long, default_value = "2")]
+    /// Max phoneme edit distance (×100, so 200 = 2 old-style edits, 120 = ~1.2 weighted edits)
+    #[arg(long, default_value = "200")]
     max_dist: usize,
 
     /// Max results per category
@@ -71,18 +72,18 @@ fn show_confusions(
     println!("Term: {}  →  IPA: {}  ARPAbet: {}", term, ipa, phonemes.join(" "));
 
     let singles = index.find_single_word(&phonemes, args.max_dist, args.max_results);
-    let doubles = index.find_two_word(&phonemes, 2, args.max_results);
+    let doubles = index.find_two_word(&phonemes, 200, args.max_results);
 
     if !singles.is_empty() {
         println!("  Single-word:");
         for (word, dist) in &singles {
-            println!("    {:<25} (dist={})", word, dist);
+            println!("    {:<25} (cost={:.2})", word, *dist as f32 / 100.0);
         }
     }
     if !doubles.is_empty() {
         println!("  Two-word:");
         for (phrase, dist) in &doubles {
-            println!("    {:<30} (dist={})", phrase, dist);
+            println!("    {:<30} (cost={:.2})", phrase, *dist as f32 / 100.0);
         }
     }
     if singles.is_empty() && doubles.is_empty() {
