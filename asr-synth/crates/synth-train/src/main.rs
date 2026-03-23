@@ -89,26 +89,16 @@ fn prepare(input: &str, output: &str, identity_count: usize, claude_history: &st
     for line in &lines {
         let v: serde_json::Value = serde_json::from_str(line)?;
         let original = v["original"].as_str().unwrap_or("");
-        let corrupted = v["corrupted"].as_str().unwrap_or("");
-        let corruptions = v["corruptions_applied"].as_array();
+        let parakeet = v["parakeet"].as_str().unwrap_or("");
+        let qwen = v["qwen"].as_str().unwrap_or("");
 
-        if original.is_empty() || corrupted.is_empty() {
+        if original.is_empty() {
             continue;
         }
 
-        let vocab: Vec<String> = corruptions
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|c| c["term"].as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let vocab_str = vocab.join(" ");
-
         let prompt = format!(
-            "<vocab> {} <noisy> {} <correct>",
-            vocab_str, corrupted
+            "<parakeet> {} <qwen> {} <correct>",
+            parakeet, qwen
         );
         examples.push(serde_json::json!({
             "prompt": prompt,
@@ -118,8 +108,11 @@ fn prepare(input: &str, output: &str, identity_count: usize, claude_history: &st
 
     let n_corrections = examples.len();
 
-    // Load identity examples from conversation history (real clean text)
-    let mut identity_pool: Vec<String> = Vec::new();
+    // Build markov chain from history + blog posts for identity examples
+    let mut chain = synth_corrupt::markov::MarkovChain::new();
+    let mut raw_texts: Vec<String> = Vec::new();
+
+    // Conversation history
     for path in [claude_history, codex_history] {
         let expanded = shellexpand::tilde(path).to_string();
         if let Ok(content) = std::fs::read_to_string(&expanded) {
@@ -133,23 +126,76 @@ fn prepare(input: &str, output: &str, identity_count: usize, claude_history: &st
                         && !text.contains("[Image")
                         && !text.starts_with('/')
                     {
-                        identity_pool.push(text.to_string());
+                        chain.feed(text);
+                        raw_texts.push(text.to_string());
                     }
                 }
             }
         }
     }
-    eprintln!("Identity pool: {} messages from history", identity_pool.len());
 
-    // Sample identity examples
-    let n_identity = identity_count.min(identity_pool.len());
-    for text in identity_pool.choose_multiple(&mut rng, n_identity) {
-        let prompt = format!("<vocab>  <noisy> {} <correct>", text);
+    // Blog posts from ~/bearcove/fasterthanli.me — extract prose, skip code blocks
+    let blog_dir = shellexpand::tilde("~/bearcove/fasterthanli.me").to_string();
+    let mut blog_paragraphs = 0usize;
+    if let Ok(entries) = glob_md(&blog_dir) {
+        for path in entries {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let mut in_code_block = false;
+                let mut current_para = String::new();
+
+                for event in pulldown_cmark::Parser::new(&content) {
+                    match event {
+                        pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(_)) => {
+                            in_code_block = true;
+                        }
+                        pulldown_cmark::Event::End(pulldown_cmark::TagEnd::CodeBlock) => {
+                            in_code_block = false;
+                        }
+                        pulldown_cmark::Event::Text(text) if !in_code_block => {
+                            current_para.push_str(&text);
+                        }
+                        pulldown_cmark::Event::SoftBreak | pulldown_cmark::Event::HardBreak if !in_code_block => {
+                            current_para.push(' ');
+                        }
+                        pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Paragraph) => {
+                            let clean = current_para.trim().to_string();
+                            if clean.len() >= 30 && clean.len() <= 300 {
+                                chain.feed(&clean);
+                                blog_paragraphs += 1;
+                            }
+                            current_para.clear();
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("Blog: {} paragraphs from fasterthanli.me", blog_paragraphs);
+
+    eprintln!("Markov chain: {} transitions, {} raw texts", chain.transition_count(), raw_texts.len());
+
+    // Generate identity examples: mix of raw history + markov-generated
+    let mut identity_generated = 0;
+    for _ in 0..identity_count {
+        let text = if !raw_texts.is_empty() && rng.random_bool(0.5) {
+            raw_texts[rng.random_range(0..raw_texts.len())].clone()
+        } else {
+            let target_len: usize = 10 + rng.random_range(0..10);
+            match chain.generate(&mut rng, target_len) {
+                Some(t) => t,
+                None => continue,
+            }
+        };
+
+        let prompt = format!("<parakeet> {} <qwen> {} <correct>", text, text);
         examples.push(serde_json::json!({
             "prompt": prompt,
             "completion": format!(" {}<|endoftext|>", text),
         }));
+        identity_generated += 1;
     }
+    eprintln!("Generated {} identity examples", identity_generated);
 
     // Shuffle
     examples.shuffle(&mut rng);
@@ -177,11 +223,28 @@ fn prepare(input: &str, output: &str, identity_count: usize, claude_history: &st
     );
     eprintln!(
         "({} correction + {} identity examples)",
-        examples.len() - n_identity.min(lines.len()),
-        n_identity.min(lines.len())
+        n_corrections, identity_generated
     );
 
     Ok(())
+}
+
+fn glob_md(root: &str) -> Result<Vec<std::path::PathBuf>> {
+    let mut results = Vec::new();
+    fn walk(dir: &std::path::Path, results: &mut Vec<std::path::PathBuf>) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, results);
+                } else if path.extension().is_some_and(|e| e == "md") {
+                    results.push(path);
+                }
+            }
+        }
+    }
+    walk(std::path::Path::new(root), &mut results);
+    Ok(results)
 }
 
 fn write_jsonl(path: &str, entries: &[serde_json::Value]) -> Result<()> {

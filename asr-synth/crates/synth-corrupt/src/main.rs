@@ -180,37 +180,42 @@ fn main() -> Result<()> {
                     continue;
                 };
 
-                // Try to corrupt terms in the sentence
-                let mut corrupted = sentence.clone();
-                let mut applied = Vec::new();
-
-                for (term, confusions) in &corruption_map {
-                    // Case-insensitive search
-                    let lower_sent = corrupted.to_lowercase();
-                    let lower_term = term.to_lowercase();
-                    if lower_sent.contains(&lower_term) && rng.random_bool(corrupt_prob) {
-                        if let Some(replacement) = confusions.choose(&mut rng) {
-                            // Replace (case-insensitive, first occurrence)
-                            if let Some(pos) = lower_sent.find(&lower_term) {
-                                corrupted = format!(
-                                    "{}{}{}",
-                                    &corrupted[..pos],
-                                    replacement,
-                                    &corrupted[pos + term.len()..]
-                                );
-                                applied.push(serde_json::json!({
-                                    "term": term,
-                                    "replacement": replacement,
-                                }));
+                // Generate two independent corruptions (simulating Parakeet + Qwen)
+                let corrupt_once = |rng: &mut rand::rngs::ThreadRng| -> (String, Vec<serde_json::Value>) {
+                    let mut corrupted = sentence.clone();
+                    let mut applied = Vec::new();
+                    for (term, confusions) in &corruption_map {
+                        let lower_sent = corrupted.to_lowercase();
+                        let lower_term = term.to_lowercase();
+                        if lower_sent.contains(&lower_term) && rng.random_bool(corrupt_prob) {
+                            if let Some(replacement) = confusions.choose(rng) {
+                                if let Some(pos) = lower_sent.find(&lower_term) {
+                                    corrupted = format!(
+                                        "{}{}{}",
+                                        &corrupted[..pos],
+                                        replacement,
+                                        &corrupted[pos + term.len()..]
+                                    );
+                                    applied.push(serde_json::json!({
+                                        "term": term,
+                                        "replacement": replacement,
+                                    }));
+                                }
                             }
                         }
                     }
-                }
+                    (corrupted, applied)
+                };
+
+                let (parakeet, parakeet_applied) = corrupt_once(&mut rng);
+                let (qwen, qwen_applied) = corrupt_once(&mut rng);
 
                 let entry = serde_json::json!({
                     "original": sentence,
-                    "corrupted": corrupted,
-                    "corruptions_applied": applied,
+                    "parakeet": parakeet,
+                    "qwen": qwen,
+                    "parakeet_corruptions": parakeet_applied,
+                    "qwen_corruptions": qwen_applied,
                 });
                 serde_json::to_writer(&mut out, &entry)?;
                 std::io::Write::write_all(&mut out, b"\n")?;

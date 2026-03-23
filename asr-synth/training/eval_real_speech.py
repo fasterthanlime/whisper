@@ -93,8 +93,7 @@ def main():
         qwen_text = qwen.transcribe(wav_path)
 
         # Run corrector
-        vocab_str = " ".join(vocab) if vocab else ""
-        prompt = f"<vocab> {vocab_str} <parakeet> {parakeet_text} <qwen> {qwen_text} <correct>"
+        prompt = f"<parakeet> {parakeet_text} <qwen> {qwen_text} <correct>"
         corrected = generate(model, tokenizer, prompt=prompt, max_tokens=200)
         corrected = corrected.split("<|endoftext|>")[0].strip()
 
