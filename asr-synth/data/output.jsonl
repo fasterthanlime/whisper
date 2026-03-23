@@ -1,3 +1,0 @@
-{"original_text":"I wrote a wrapper around FtraceConfig.","parakeet_output":"I wrote a wrapper around Trace Coffee.","qwen_output":"I wrote a wrapper around trace config.","vocab":["FtraceConfig"],"voice_id":"amos"}
-{"original_text":"Can you add Visibility to the dependencies?","parakeet_output":"Can you add visibility to the dependencies?","qwen_output":"Can you add visibility to the dependencies?","vocab":["Visibility"],"voice_id":"amos"}
-{"original_text":"Make sure MaxLengthReached is in your Cargo.toml.","parakeet_output":"Make sure max length reached is in your cargo, tomal.","qwen_output":"Make sure max length reached is in your cargo.","vocab":["MaxLengthReached"],"voice_id":"amos"}
