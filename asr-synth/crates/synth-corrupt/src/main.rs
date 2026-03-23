@@ -25,6 +25,10 @@ struct Args {
     #[arg(long, default_value = "models/g2p.fst")]
     fst: String,
 
+    /// Path to pronunciation overrides JSONL
+    #[arg(long, default_value = "data/pronunciations.jsonl")]
+    pronunciations: String,
+
     /// Max phoneme cost for matches (e.g. 1.5)
     #[arg(long, default_value = "1.5")]
     max_cost: f32,
@@ -47,7 +51,7 @@ fn main() -> Result<()> {
     eprintln!("Loaded {} entries", dict.len());
 
     eprintln!("Loading G2P model from {}...", args.fst);
-    let g2p = Arc::new(g2p::G2p::load(&args.fst)?);
+    let g2p = Arc::new(g2p::G2p::load(&args.fst, Some(&args.pronunciations))?);
     eprintln!("G2P ready");
 
     eprintln!("Building phoneme index...");

@@ -43,23 +43,21 @@ impl PhonemeIndex {
         let target_len = target.len();
         let mut candidates: Vec<(String, usize)> = Vec::new();
 
-        // Check buckets within ±max_dist of target length
-        for delta in 0..=max_dist {
-            for len in [target_len.wrapping_sub(delta), target_len + delta] {
-                if len == 0 || len > 50 {
-                    continue;
-                }
-                // Check all first-phoneme buckets at this length
-                for ((blen, _), entries) in &self.buckets {
-                    if *blen != len {
-                        continue;
-                    }
-                    for (word, phonemes) in entries {
-                        let dist = phoneme_edit_distance(target, phonemes);
-                        if dist > 0 && dist <= max_dist {
-                            candidates.push((word.clone(), dist));
-                        }
-                    }
+        // Allow ±3 phonemes in length (insertions/deletions cost 100 each,
+        // so 3 phonemes = cost 300 which is within typical max_dist of 150-200)
+        let max_len_delta = 3;
+
+        let min_len = target_len.saturating_sub(max_len_delta).max(1);
+        let max_len = target_len + max_len_delta;
+
+        for ((blen, _), entries) in &self.buckets {
+            if *blen < min_len || *blen > max_len {
+                continue;
+            }
+            for (word, phonemes) in entries {
+                let dist = phoneme_edit_distance(target, phonemes);
+                if dist <= max_dist {
+                    candidates.push((word.clone(), dist));
                 }
             }
         }

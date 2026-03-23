@@ -1,30 +1,82 @@
 use crate::cmudict::CmuDict;
 use anyhow::Result;
 use phonetisaurus_g2p::PhonetisaurusModel;
+use std::collections::HashMap;
 
-/// G2P engine: CMUdict for known words, Phonetisaurus FST for everything else.
+/// G2P engine: overrides → CMUdict → acronym spelling → Phonetisaurus FST.
 pub struct G2p {
     model: PhonetisaurusModel,
+    overrides: HashMap<String, Vec<String>>,
 }
 
 impl G2p {
-    pub fn load(fst_path: &str) -> Result<Self> {
+    pub fn load(fst_path: &str, overrides_path: Option<&str>) -> Result<Self> {
         let path = std::path::Path::new(fst_path);
         let model = PhonetisaurusModel::try_from(path)?;
-        Ok(Self { model })
+
+        let mut overrides = HashMap::new();
+        if let Some(path) = overrides_path {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                for line in content.lines() {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                        if let (Some(term), Some(phonemes)) =
+                            (v["term"].as_str(), v["phonemes"].as_str())
+                        {
+                            let ph: Vec<String> =
+                                phonemes.split_whitespace().map(String::from).collect();
+                            if !ph.is_empty() {
+                                // Store both original case and uppercase for lookup
+                                overrides.insert(term.to_string(), ph.clone());
+                                overrides.insert(term.to_uppercase(), ph.clone());
+                                overrides.insert(term.to_lowercase(), ph);
+                            }
+                        }
+                    }
+                }
+                eprintln!("Loaded {} pronunciation overrides", overrides.len() / 3);
+            }
+        }
+
+        Ok(Self { model, overrides })
     }
 
     /// Get ARPAbet phonemes for a word.
-    /// Uses CMUdict first (exact), falls back to Phonetisaurus FST (neural/FST G2P).
+    /// Priority: overrides → CMUdict → acronym spelling → Phonetisaurus FST → crude fallback.
     pub fn phonemize(&self, word: &str, dict: &CmuDict) -> Vec<String> {
         let upper = word
             .to_uppercase()
             .trim_matches(|c: char| !c.is_alphanumeric())
             .to_string();
 
-        // Try CMUdict first (authoritative for known words)
+        // 1. Check pronunciation overrides first (highest priority)
+        if let Some(phonemes) = self.overrides.get(word)
+            .or_else(|| self.overrides.get(&upper))
+            .or_else(|| self.overrides.get(&word.to_lowercase()))
+        {
+            return phonemes.clone();
+        }
+
+        // 2. Try CMUdict (authoritative for standard English)
         if let Some(phonemes) = dict.get(&upper) {
             return phonemes.clone();
+        }
+
+        // 3. Acronyms: all-caps, 2-5 letters → spell out letter by letter
+        if upper.len() >= 2
+            && upper.len() <= 5
+            && upper.chars().all(|c| c.is_ascii_alphabetic())
+            && word.chars().all(|c| c.is_uppercase() || !c.is_alphabetic())
+        {
+            let mut phonemes = Vec::new();
+            for ch in upper.chars() {
+                let letter = ch.to_string();
+                if let Some(p) = dict.get(&letter) {
+                    phonemes.extend(p.iter().cloned());
+                }
+            }
+            if !phonemes.is_empty() {
+                return phonemes;
+            }
         }
 
         // Phonetisaurus FST for OOV words
