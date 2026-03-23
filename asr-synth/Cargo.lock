@@ -3955,6 +3955,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "synth-reviewer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crossterm 0.29.0",
+ "ratatui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "synth-textgen"
 version = "0.1.0"
 dependencies = [

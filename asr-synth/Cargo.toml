@@ -7,6 +7,7 @@ members = [
     "crates/synth-pipeline",
     "crates/synth-textgen",
     "crates/synth-recorder",
+    "crates/synth-reviewer",
 ]
 
 [workspace.dependencies]
