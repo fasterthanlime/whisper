@@ -7,7 +7,7 @@ import os
 /// must not be used from multiple threads concurrently.
 final class TranscriptionService: @unchecked Sendable {
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "whisper",
+        subsystem: Bundle.main.bundleIdentifier ?? "hark",
         category: "TranscriptionService"
     )
 

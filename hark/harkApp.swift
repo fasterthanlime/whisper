@@ -25,10 +25,10 @@ private struct StreamingResult {
 }
 
 @main
-struct WhisperApp: App {
+struct HarkApp: App {
     private static let sharedTranscriptionService = TranscriptionService()
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "whisper",
+        subsystem: Bundle.main.bundleIdentifier ?? "hark",
         category: "startup"
     )
 
@@ -420,7 +420,7 @@ struct WhisperApp: App {
             }
 
             // Strip the trigger phrase from the text.
-            lastText = WhisperApp.stripTrigger(lastText, signal: signal)
+            lastText = HarkApp.stripTrigger(lastText, signal: signal)
 
             return StreamingResult(text: lastText, signal: signal, processedSampleCount: processedCount)
         }
@@ -430,7 +430,7 @@ struct WhisperApp: App {
             guard let result = await streamingTask?.value else { return }
             guard result.signal != .none && appState.phase == .recording else { return }
 
-            print("[whisper] signal: \(result.signal) text='\(result.text)'")
+            print("[hark] signal: \(result.signal) text='\(result.text)'")
             appState.partialTranscript = ""
 
             if !result.text.isEmpty {
@@ -441,7 +441,7 @@ struct WhisperApp: App {
                 do {
                     try await PasteController.paste(result.text, submit: true)
                 } catch {
-                    print("[whisper] paste error: \(error)")
+                    print("[hark] paste error: \(error)")
                 }
                 appState.addToHistory(result.text)
             }
@@ -587,7 +587,7 @@ struct WhisperApp: App {
 
         // Feed any remaining samples and finalize the session to get the complete transcript.
         var text = appState.partialTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        Self.logger.warning("[whisper] stop: partial='\(text, privacy: .public)' sessionExists=\(streamingSession != nil) samples=\(allSamples.count)")
+        Self.logger.warning("[hark] stop: partial='\(text, privacy: .public)' sessionExists=\(streamingSession != nil) samples=\(allSamples.count)")
         if let session = streamingSession {
             appState.isFinishing = true
 
@@ -596,7 +596,7 @@ struct WhisperApp: App {
             let processedCount = result?.processedSampleCount ?? 0
             let remainingCount = max(0, allSamples.count - processedCount)
 
-            Self.logger.warning("[whisper] finalize: processed=\(processedCount) total=\(allSamples.count) remaining=\(remainingCount)")
+            Self.logger.warning("[hark] finalize: processed=\(processedCount) total=\(allSamples.count) remaining=\(remainingCount)")
 
             // Feed remaining unprocessed audio and finalize — off main thread.
             let transcriptionService = self.transcriptionService

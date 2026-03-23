@@ -45,7 +45,7 @@ enum HotkeyKeyCode {
 
 struct HotkeyBinding: Codable, Hashable, Sendable {
     private static let logger = Logger(
-        subsystem: "shoki.whisper",
+        subsystem: "fasterthanlime.hark",
         category: "HotkeyBinding"
     )
     private static let userDefaultsKey = "hotkeyBinding"

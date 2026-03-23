@@ -1,4 +1,4 @@
-# Whisper
+# Hark
 
 A macOS menu bar app for on-device speech-to-text. Hold a hotkey, speak, release — transcribed text is pasted into the active application automatically.
 
@@ -22,21 +22,21 @@ All processing runs locally using [Qwen3 ASR](https://huggingface.co/collections
 
 ## Installation
 
-1. Open `whisper.xcodeproj` in Xcode. Go to the **whisper** target, then **Signing & Capabilities**, enable **Automatically manage signing**, and select your Team (Personal Team works for local use).
+1. Open `hark.xcodeproj` in Xcode. Go to the **hark** target, then **Signing & Capabilities**, enable **Automatically manage signing**, and select your Team (Personal Team works for local use).
 
 2. Build a Release app bundle:
    ```
-   xcodebuild -project whisper.xcodeproj -scheme whisper -configuration Release -derivedDataPath build clean build
+   xcodebuild -project hark.xcodeproj -scheme hark -configuration Release -derivedDataPath build clean build
    ```
 
 3. Copy the built `.app` into `/Applications`:
    ```
-   cp -R "build/Build/Products/Release/whisper.app" /Applications/
+   cp -R "build/Build/Products/Release/hark.app" /Applications/
    ```
 
 4. Launch from `/Applications` (not from DerivedData):
    ```
-   open /Applications/whisper.app
+   open /Applications/hark.app
    ```
 
 5. Grant **Microphone** and **Accessibility** permissions when prompted.
@@ -45,7 +45,7 @@ All processing runs locally using [Qwen3 ASR](https://huggingface.co/collections
 
 > **If macOS blocks launch** — right-click the app and choose Open, or remove quarantine:
 > ```
-> xattr -dr com.apple.quarantine /Applications/whisper.app
+> xattr -dr com.apple.quarantine /Applications/hark.app
 > ```
 
 ## How It Works
@@ -58,7 +58,7 @@ All processing runs locally using [Qwen3 ASR](https://huggingface.co/collections
 ## Architecture
 
 ```
-whisperApp.swift          App entry point, hotkey wiring, lifecycle
+harkApp.swift          App entry point, hotkey wiring, lifecycle
 AppState.swift            Observable state machine (idle/recording/transcribing/pasting/error)
 
 Services/

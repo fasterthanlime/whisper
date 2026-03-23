@@ -6,7 +6,7 @@ import os
 /// Monitors the default audio input device and notifies when it changes.
 final class InputDeviceMonitor: @unchecked Sendable {
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "whisper",
+        subsystem: Bundle.main.bundleIdentifier ?? "hark",
         category: "InputDeviceMonitor"
     )
 

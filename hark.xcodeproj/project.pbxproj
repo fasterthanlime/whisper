@@ -15,37 +15,37 @@
 			containerPortal = AD268BAF2F3F09A700514254 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = AD268BB62F3F09A700514254;
-			remoteInfo = whisper;
+			remoteInfo = hark;
 		};
 		AD268BD42F3F09A700514254 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = AD268BAF2F3F09A700514254 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = AD268BB62F3F09A700514254;
-			remoteInfo = whisper;
+			remoteInfo = hark;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		AD268BB72F3F09A700514254 /* whisper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = whisper.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		AD268BC92F3F09A700514254 /* whisperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = whisperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		AD268BD32F3F09A700514254 /* whisperUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = whisperUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AD268BB72F3F09A700514254 /* hark.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = hark.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AD268BC92F3F09A700514254 /* harkTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = harkTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AD268BD32F3F09A700514254 /* harkUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = harkUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		AD268BB92F3F09A700514254 /* whisper */ = {
+		AD268BB92F3F09A700514254 /* hark */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = whisper;
+			path = hark;
 			sourceTree = "<group>";
 		};
-		AD268BCC2F3F09A700514254 /* whisperTests */ = {
+		AD268BCC2F3F09A700514254 /* harkTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = whisperTests;
+			path = harkTests;
 			sourceTree = "<group>";
 		};
-		AD268BD62F3F09A700514254 /* whisperUITests */ = {
+		AD268BD62F3F09A700514254 /* harkUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = whisperUITests;
+			path = harkUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -78,9 +78,9 @@
 		AD268BAE2F3F09A700514254 = {
 			isa = PBXGroup;
 			children = (
-				AD268BB92F3F09A700514254 /* whisper */,
-				AD268BCC2F3F09A700514254 /* whisperTests */,
-				AD268BD62F3F09A700514254 /* whisperUITests */,
+				AD268BB92F3F09A700514254 /* hark */,
+				AD268BCC2F3F09A700514254 /* harkTests */,
+				AD268BD62F3F09A700514254 /* harkUITests */,
 				AD268BB82F3F09A700514254 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -88,9 +88,9 @@
 		AD268BB82F3F09A700514254 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				AD268BB72F3F09A700514254 /* whisper.app */,
-				AD268BC92F3F09A700514254 /* whisperTests.xctest */,
-				AD268BD32F3F09A700514254 /* whisperUITests.xctest */,
+				AD268BB72F3F09A700514254 /* hark.app */,
+				AD268BC92F3F09A700514254 /* harkTests.xctest */,
+				AD268BD32F3F09A700514254 /* harkUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -98,9 +98,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		AD268BB62F3F09A700514254 /* whisper */ = {
+		AD268BB62F3F09A700514254 /* hark */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = AD268BDD2F3F09A700514254 /* Build configuration list for PBXNativeTarget "whisper" */;
+			buildConfigurationList = AD268BDD2F3F09A700514254 /* Build configuration list for PBXNativeTarget "hark" */;
 			buildPhases = (
 				AD268BB32F3F09A700514254 /* Sources */,
 				AD268BB42F3F09A700514254 /* Frameworks */,
@@ -111,18 +111,18 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				AD268BB92F3F09A700514254 /* whisper */,
+				AD268BB92F3F09A700514254 /* hark */,
 			);
-			name = whisper;
+			name = hark;
 			packageProductDependencies = (
 			);
-			productName = whisper;
-			productReference = AD268BB72F3F09A700514254 /* whisper.app */;
+			productName = hark;
+			productReference = AD268BB72F3F09A700514254 /* hark.app */;
 			productType = "com.apple.product-type.application";
 		};
-		AD268BC82F3F09A700514254 /* whisperTests */ = {
+		AD268BC82F3F09A700514254 /* harkTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = AD268BE02F3F09A700514254 /* Build configuration list for PBXNativeTarget "whisperTests" */;
+			buildConfigurationList = AD268BE02F3F09A700514254 /* Build configuration list for PBXNativeTarget "harkTests" */;
 			buildPhases = (
 				AD268BC52F3F09A700514254 /* Sources */,
 				AD268BC62F3F09A700514254 /* Frameworks */,
@@ -134,18 +134,18 @@
 				AD268BCB2F3F09A700514254 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				AD268BCC2F3F09A700514254 /* whisperTests */,
+				AD268BCC2F3F09A700514254 /* harkTests */,
 			);
-			name = whisperTests;
+			name = harkTests;
 			packageProductDependencies = (
 			);
-			productName = whisperTests;
-			productReference = AD268BC92F3F09A700514254 /* whisperTests.xctest */;
+			productName = harkTests;
+			productReference = AD268BC92F3F09A700514254 /* harkTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		AD268BD22F3F09A700514254 /* whisperUITests */ = {
+		AD268BD22F3F09A700514254 /* harkUITests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = AD268BE32F3F09A700514254 /* Build configuration list for PBXNativeTarget "whisperUITests" */;
+			buildConfigurationList = AD268BE32F3F09A700514254 /* Build configuration list for PBXNativeTarget "harkUITests" */;
 			buildPhases = (
 				AD268BCF2F3F09A700514254 /* Sources */,
 				AD268BD02F3F09A700514254 /* Frameworks */,
@@ -157,13 +157,13 @@
 				AD268BD52F3F09A700514254 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				AD268BD62F3F09A700514254 /* whisperUITests */,
+				AD268BD62F3F09A700514254 /* harkUITests */,
 			);
-			name = whisperUITests;
+			name = harkUITests;
 			packageProductDependencies = (
 			);
-			productName = whisperUITests;
-			productReference = AD268BD32F3F09A700514254 /* whisperUITests.xctest */;
+			productName = harkUITests;
+			productReference = AD268BD32F3F09A700514254 /* harkUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
@@ -189,7 +189,7 @@
 					};
 				};
 			};
-			buildConfigurationList = AD268BB22F3F09A700514254 /* Build configuration list for PBXProject "whisper" */;
+			buildConfigurationList = AD268BB22F3F09A700514254 /* Build configuration list for PBXProject "hark" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -205,9 +205,9 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				AD268BB62F3F09A700514254 /* whisper */,
-				AD268BC82F3F09A700514254 /* whisperTests */,
-				AD268BD22F3F09A700514254 /* whisperUITests */,
+				AD268BB62F3F09A700514254 /* hark */,
+				AD268BC82F3F09A700514254 /* harkTests */,
+				AD268BD22F3F09A700514254 /* harkUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -263,12 +263,12 @@
 /* Begin PBXTargetDependency section */
 		AD268BCB2F3F09A700514254 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = AD268BB62F3F09A700514254 /* whisper */;
+			target = AD268BB62F3F09A700514254 /* hark */;
 			targetProxy = AD268BCA2F3F09A700514254 /* PBXContainerItemProxy */;
 		};
 		AD268BD52F3F09A700514254 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = AD268BB62F3F09A700514254 /* whisper */;
+			target = AD268BB62F3F09A700514254 /* hark */;
 			targetProxy = AD268BD42F3F09A700514254 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -399,7 +399,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = whisper/whisper.entitlements;
+				CODE_SIGN_ENTITLEMENTS = hark/hark.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -412,7 +412,7 @@
 				INFOPLIST_KEY_ATSApplicationFontsPath = Fonts;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Whisper needs microphone access for voice-to-text dictation.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Hark needs microphone access for voice-to-text dictation.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -431,14 +431,14 @@
 					"-framework",
 					SystemConfiguration,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = shoki.whisper;
+				PRODUCT_BUNDLE_IDENTIFIER = fasterthanlime.hark;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "whisper/whisper-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "hark/hark-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 			};
@@ -449,7 +449,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = whisper/whisper.entitlements;
+				CODE_SIGN_ENTITLEMENTS = hark/hark.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -462,7 +462,7 @@
 				INFOPLIST_KEY_ATSApplicationFontsPath = Fonts;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Whisper needs microphone access for voice-to-text dictation.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Hark needs microphone access for voice-to-text dictation.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -481,14 +481,14 @@
 					"-framework",
 					SystemConfiguration,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = shoki.whisper;
+				PRODUCT_BUNDLE_IDENTIFIER = fasterthanlime.hark;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "whisper/whisper-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "hark/hark-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 			};
@@ -504,14 +504,14 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = shoki.whisperTests;
+				PRODUCT_BUNDLE_IDENTIFIER = fasterthanlime.harkTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/whisper.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/whisper";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/hark.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/hark";
 			};
 			name = Debug;
 		};
@@ -525,14 +525,14 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = shoki.whisperTests;
+				PRODUCT_BUNDLE_IDENTIFIER = fasterthanlime.harkTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/whisper.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/whisper";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/hark.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/hark";
 			};
 			name = Release;
 		};
@@ -544,14 +544,14 @@
 				DEVELOPMENT_TEAM = CH98WW8RDP;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = shoki.whisperUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = fasterthanlime.harkUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = whisper;
+				TEST_TARGET_NAME = hark;
 			};
 			name = Debug;
 		};
@@ -563,21 +563,21 @@
 				DEVELOPMENT_TEAM = CH98WW8RDP;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = shoki.whisperUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = fasterthanlime.harkUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = whisper;
+				TEST_TARGET_NAME = hark;
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		AD268BB22F3F09A700514254 /* Build configuration list for PBXProject "whisper" */ = {
+		AD268BB22F3F09A700514254 /* Build configuration list for PBXProject "hark" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				AD268BDB2F3F09A700514254 /* Debug */,
@@ -586,7 +586,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		AD268BDD2F3F09A700514254 /* Build configuration list for PBXNativeTarget "whisper" */ = {
+		AD268BDD2F3F09A700514254 /* Build configuration list for PBXNativeTarget "hark" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				AD268BDE2F3F09A700514254 /* Debug */,
@@ -595,7 +595,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		AD268BE02F3F09A700514254 /* Build configuration list for PBXNativeTarget "whisperTests" */ = {
+		AD268BE02F3F09A700514254 /* Build configuration list for PBXNativeTarget "harkTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				AD268BE12F3F09A700514254 /* Debug */,
@@ -604,7 +604,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		AD268BE32F3F09A700514254 /* Build configuration list for PBXNativeTarget "whisperUITests" */ = {
+		AD268BE32F3F09A700514254 /* Build configuration list for PBXNativeTarget "harkUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				AD268BE42F3F09A700514254 /* Debug */,

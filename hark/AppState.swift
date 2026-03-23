@@ -201,34 +201,34 @@ final class AppState {
     var menuStatusLabel: String {
         switch phase {
         case .recording:
-            return "Whisper Recording"
+            return "Hark Recording"
         case .transcribing:
-            return "Whisper Transcribing"
+            return "Hark Transcribing"
         case .pasting:
-            return "Whisper Pasting"
+            return "Hark Pasting"
         case .loading:
             switch modelStatus {
             case .downloading:
-                return "Whisper Downloading"
+                return "Hark Downloading"
             case .loading:
-                return "Whisper Initializing"
+                return "Hark Initializing"
             default:
-                return "Whisper Loading"
+                return "Hark Loading"
             }
         case .error:
-            return "Whisper Error"
+            return "Hark Error"
         case .idle:
             switch modelStatus {
             case .loaded where hasRequiredPermissions:
-                return "Whisper Ready"
+                return "Hark Ready"
             case .loaded:
-                return "Whisper Needs Permission"
+                return "Hark Needs Permission"
             case .error:
                 return "Model Error"
             case .notLoaded where downloadedModelIDs.isEmpty:
                 return "No Local Models"
             default:
-                return "Whisper Loading"
+                return "Hark Loading"
             }
         }
     }

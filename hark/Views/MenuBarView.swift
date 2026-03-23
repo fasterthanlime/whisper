@@ -485,7 +485,7 @@ struct MenuBarView: View {
             HStack(spacing: 6) {
                 Image(systemName: "power")
                     .font(.system(.caption))
-                Text("Quit Whisper")
+                Text("Quit Hark")
                     .font(.system(.body))
             }
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "AD268BB62F3F09A700514254"
-               BuildableName = "whisper.app"
-               BlueprintName = "whisper"
-               ReferencedContainer = "container:whisper.xcodeproj">
+               BuildableName = "hark.app"
+               BlueprintName = "hark"
+               ReferencedContainer = "container:hark.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -36,9 +36,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "AD268BC82F3F09A700514254"
-               BuildableName = "whisperTests.xctest"
-               BlueprintName = "whisperTests"
-               ReferencedContainer = "container:whisper.xcodeproj">
+               BuildableName = "harkTests.xctest"
+               BlueprintName = "harkTests"
+               ReferencedContainer = "container:hark.xcodeproj">
             </BuildableReference>
          </TestableReference>
          <TestableReference
@@ -47,9 +47,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "AD268BD22F3F09A700514254"
-               BuildableName = "whisperUITests.xctest"
-               BlueprintName = "whisperUITests"
-               ReferencedContainer = "container:whisper.xcodeproj">
+               BuildableName = "harkUITests.xctest"
+               BlueprintName = "harkUITests"
+               ReferencedContainer = "container:hark.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -69,9 +69,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "AD268BB62F3F09A700514254"
-            BuildableName = "whisper.app"
-            BlueprintName = "whisper"
-            ReferencedContainer = "container:whisper.xcodeproj">
+            BuildableName = "hark.app"
+            BlueprintName = "hark"
+            ReferencedContainer = "container:hark.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -86,9 +86,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "AD268BB62F3F09A700514254"
-            BuildableName = "whisper.app"
-            BlueprintName = "whisper"
-            ReferencedContainer = "container:whisper.xcodeproj">
+            BuildableName = "hark.app"
+            BlueprintName = "hark"
+            ReferencedContainer = "container:hark.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>
