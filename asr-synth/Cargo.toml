@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/synth-tts",
+    "crates/synth-parakeet",
+    "crates/synth-qwen",
+    "crates/synth-pipeline",
+    "crates/synth-textgen",
+]
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+hound = "3"

@@ -1,0 +1,9 @@
+[package]
+name = "synth-qwen"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+qwen3-asr = { path = "../../../qwen3-asr-rs", features = ["metal"] }
+anyhow.workspace = true
+clap.workspace = true

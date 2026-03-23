@@ -27,3 +27,8 @@ Package.resolved
 hark-*.zip
 default.profraw
 target/
+asr-synth/models/
+asr-synth/output*.wav
+asr-synth/target/
+asr-synth/voices/*.wav
+asr-synth/voices/*.m4a

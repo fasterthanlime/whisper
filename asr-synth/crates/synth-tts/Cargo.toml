@@ -1,0 +1,10 @@
+[package]
+name = "synth-tts"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+pocket-tts = { version = "0.6", features = ["metal", "quantized"] }
+anyhow.workspace = true
+clap.workspace = true
+hound.workspace = true

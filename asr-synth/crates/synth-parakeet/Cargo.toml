@@ -1,0 +1,10 @@
+[package]
+name = "synth-parakeet"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+parakeet-rs = "0.3"
+anyhow.workspace = true
+clap.workspace = true
+hound.workspace = true
