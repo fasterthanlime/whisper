@@ -1,107 +1,163 @@
 use crate::cmudict::CmuDict;
+use anyhow::Result;
+use phonetisaurus_g2p::PhonetisaurusModel;
 
-/// Get ARPAbet phonemes for a word. Uses CMUdict first, falls back to espeak-ng IPA → ARPAbet.
-pub fn word_to_phonemes(word: &str, dict: &CmuDict) -> Vec<String> {
-    let upper = word
-        .to_uppercase()
-        .trim_matches(|c: char| !c.is_alphanumeric())
-        .to_string();
-
-    // Try CMUdict first
-    if let Some(phonemes) = dict.get(&upper) {
-        return phonemes.clone();
-    }
-
-    // Fall back to espeak-ng → IPA → ARPAbet
-    let ipa = word_to_ipa(word);
-    ipa_to_arpabet(&ipa)
+/// G2P engine: CMUdict for known words, Phonetisaurus FST for everything else.
+pub struct G2p {
+    model: PhonetisaurusModel,
 }
 
-/// Get IPA pronunciation for a word using espeak-ng.
-pub fn word_to_ipa(word: &str) -> String {
-    match espeak_ng::text_to_ipa("en", word) {
-        Ok(ipa) => ipa.trim().to_string(),
-        Err(_) => word.to_lowercase(),
+impl G2p {
+    pub fn load(fst_path: &str) -> Result<Self> {
+        let path = std::path::Path::new(fst_path);
+        let model = PhonetisaurusModel::try_from(path)?;
+        Ok(Self { model })
+    }
+
+    /// Get ARPAbet phonemes for a word.
+    /// Uses CMUdict first (exact), falls back to Phonetisaurus FST (neural/FST G2P).
+    pub fn phonemize(&self, word: &str, dict: &CmuDict) -> Vec<String> {
+        let upper = word
+            .to_uppercase()
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_string();
+
+        // Try CMUdict first (authoritative for known words)
+        if let Some(phonemes) = dict.get(&upper) {
+            return phonemes.clone();
+        }
+
+        // Phonetisaurus FST for OOV words
+        match self.model.phonemize_word(&upper.to_lowercase()) {
+            Ok(result) => {
+                // result.phonemes is IPA — convert to ARPAbet
+                ipa_to_arpabet(&result.phonemes)
+            }
+            Err(_) => {
+                // Last resort: crude letter mapping
+                crude_g2p(&upper)
+            }
+        }
+    }
+
+    /// Get raw IPA for display.
+    pub fn ipa(&self, word: &str) -> String {
+        match self.model.phonemize_word(&word.to_lowercase()) {
+            Ok(result) => result.phonemes,
+            Err(_) => word.to_lowercase(),
+        }
     }
 }
 
 /// Convert IPA string to ARPAbet phoneme sequence (approximate).
-///
-/// This is lossy but good enough for phoneme distance matching.
 fn ipa_to_arpabet(ipa: &str) -> Vec<String> {
     let mut result = Vec::new();
     let chars: Vec<char> = ipa.chars().collect();
     let mut i = 0;
 
     while i < chars.len() {
-        let remaining = &ipa[ipa.char_indices().nth(i).map(|(b, _)| b).unwrap_or(ipa.len())..];
-
-        // Try two-char matches first
-        let matched = if remaining.len() >= 2 {
-            match &remaining[..remaining.char_indices().nth(2).map(|(b, _)| b).unwrap_or(remaining.len())] {
-                s if s.starts_with("aɪ") => { i += 2; Some("AY") }
-                s if s.starts_with("aʊ") => { i += 2; Some("AW") }
-                s if s.starts_with("eɪ") => { i += 2; Some("EY") }
-                s if s.starts_with("oʊ") => { i += 2; Some("OW") }
-                s if s.starts_with("ɔɪ") => { i += 2; Some("OY") }
-                s if s.starts_with("tʃ") => { i += 2; Some("CH") }
-                s if s.starts_with("dʒ") => { i += 2; Some("JH") }
-                s if s.starts_with("ŋk") => { i += 2; Some("NG") } // often followed by K
+        // Try two-char IPA digraphs first
+        if i + 1 < chars.len() {
+            let digraph = format!("{}{}", chars[i], chars[i + 1]);
+            let matched = match digraph.as_str() {
+                "aɪ" => Some("AY"),
+                "aʊ" => Some("AW"),
+                "eɪ" => Some("EY"),
+                "oʊ" => Some("OW"),
+                "ɔɪ" => Some("OY"),
+                "tʃ" => Some("CH"),
+                "dʒ" => Some("JH"),
                 _ => None,
+            };
+            if let Some(p) = matched {
+                result.push(p.to_string());
+                i += 2;
+                continue;
             }
-        } else {
-            None
-        };
-
-        if let Some(p) = matched {
-            result.push(p.to_string());
-            continue;
         }
 
-        // Single-char matches
+        // Single-char IPA → ARPAbet
         let p = match chars[i] {
-            'ɑ' | 'ɒ' => "AA",
-            'æ' => "AE",
-            'ʌ' | 'ə' => "AH",
-            'ɔ' => "AO",
-            'ɛ' | 'e' => "EH",
-            'ɝ' | 'ɜ' => "ER",
-            'ɪ' => "IH",
-            'i' => "IY",
-            'ʊ' => "UH",
-            'u' => "UW",
-            'b' => "B",
-            'd' => "D",
-            'f' => "F",
-            'ɡ' | 'g' => "G",
-            'h' => "HH",
-            'k' => "K",
-            'l' => "L",
-            'm' => "M",
-            'n' => "N",
-            'ŋ' => "NG",
-            'p' => "P",
-            'ɹ' | 'r' => "R",
-            's' => "S",
-            'ʃ' => "SH",
-            't' => "T",
-            'θ' => "TH",
-            'ð' => "DH",
-            'v' => "V",
-            'w' => "W",
-            'j' => "Y",
-            'z' => "Z",
-            'ʒ' => "ZH",
-            'a' => "AA",
-            'o' => "OW",
-            // Skip stress markers, syllable boundaries, etc.
-            'ˈ' | 'ˌ' | '.' | ':' | 'ː' | ' ' => { i += 1; continue; }
-            _ => { i += 1; continue; }
+            'ɑ' | 'ɒ' => Some("AA"),
+            'æ' => Some("AE"),
+            'ʌ' | 'ə' => Some("AH"),
+            'ɔ' => Some("AO"),
+            'ɛ' | 'e' => Some("EH"),
+            'ɝ' | 'ɜ' => Some("ER"),
+            'ɪ' => Some("IH"),
+            'i' => Some("IY"),
+            'ʊ' => Some("UH"),
+            'u' => Some("UW"),
+            'a' => Some("AA"),
+            'o' => Some("OW"),
+            'b' => Some("B"),
+            'd' => Some("D"),
+            'f' => Some("F"),
+            'ɡ' | 'g' => Some("G"),
+            'h' => Some("HH"),
+            'k' => Some("K"),
+            'l' => Some("L"),
+            'm' => Some("M"),
+            'n' => Some("N"),
+            'ŋ' => Some("NG"),
+            'p' => Some("P"),
+            'ɹ' | 'r' => Some("R"),
+            's' => Some("S"),
+            'ʃ' => Some("SH"),
+            't' => Some("T"),
+            'θ' => Some("TH"),
+            'ð' => Some("DH"),
+            'v' => Some("V"),
+            'w' => Some("W"),
+            'j' => Some("Y"),
+            'z' => Some("Z"),
+            'ʒ' => Some("ZH"),
+            // Skip stress/prosody markers
+            'ˈ' | 'ˌ' | '.' | ':' | 'ː' | ' ' | '|' => None,
+            _ => None,
         };
 
-        result.push(p.to_string());
+        if let Some(p) = p {
+            result.push(p.to_string());
+        }
         i += 1;
     }
 
     result
+}
+
+/// Last-resort crude letter→phoneme mapping.
+fn crude_g2p(word: &str) -> Vec<String> {
+    let mut phonemes = Vec::new();
+    for ch in word.chars() {
+        match ch.to_ascii_uppercase() {
+            'A' => phonemes.push("AE".into()),
+            'B' => phonemes.push("B".into()),
+            'C' => phonemes.push("K".into()),
+            'D' => phonemes.push("D".into()),
+            'E' => phonemes.push("EH".into()),
+            'F' => phonemes.push("F".into()),
+            'G' => phonemes.push("G".into()),
+            'H' => phonemes.push("HH".into()),
+            'I' => phonemes.push("IH".into()),
+            'J' => phonemes.push("JH".into()),
+            'K' => phonemes.push("K".into()),
+            'L' => phonemes.push("L".into()),
+            'M' => phonemes.push("M".into()),
+            'N' => phonemes.push("N".into()),
+            'O' => phonemes.push("AO".into()),
+            'P' => phonemes.push("P".into()),
+            'R' => phonemes.push("R".into()),
+            'S' => phonemes.push("S".into()),
+            'T' => phonemes.push("T".into()),
+            'U' => phonemes.push("AH".into()),
+            'V' => phonemes.push("V".into()),
+            'W' => phonemes.push("W".into()),
+            'X' => { phonemes.push("K".into()); phonemes.push("S".into()); }
+            'Y' => phonemes.push("Y".into()),
+            'Z' => phonemes.push("Z".into()),
+            _ => {}
+        }
+    }
+    phonemes
 }

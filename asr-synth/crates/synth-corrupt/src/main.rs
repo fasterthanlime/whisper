@@ -14,8 +14,12 @@ struct Args {
     #[arg(long, default_value = "data/cmudict.txt")]
     dict: String,
 
+    /// Path to Phonetisaurus FST model
+    #[arg(long, default_value = "models/g2p.fst")]
+    fst: String,
+
     /// Max phoneme edit distance for single-word matches
-    #[arg(long, default_value = "3")]
+    #[arg(long, default_value = "2")]
     max_dist: usize,
 
     /// Max results per category
@@ -30,20 +34,24 @@ fn main() -> Result<()> {
     let dict = cmudict::load(&args.dict)?;
     eprintln!("Loaded {} entries", dict.len());
 
+    eprintln!("Loading G2P model from {}...", args.fst);
+    let g2p = g2p::G2p::load(&args.fst)?;
+    eprintln!("G2P ready");
+
     eprintln!("Building phoneme index...");
     let index = corrupt::PhonemeIndex::new(&dict);
     eprintln!("Index built: {} length buckets", index.bucket_count());
 
     if let Some(term) = &args.term {
-        show_confusions(term, &dict, &index, &args);
+        show_confusions(term, &dict, &g2p, &index, &args);
     } else {
         let terms = [
             "serde", "tokio", "axum", "ratatui", "kajit", "reqwest",
             "facet", "clippy", "nextest", "backtraces", "minijinja",
-            "pulldown-cmark", "bearcove", "fasterthanlime",
+            "bearcove", "fasterthanlime",
         ];
         for term in terms {
-            show_confusions(term, &dict, &index, &args);
+            show_confusions(term, &dict, &g2p, &index, &args);
         }
     }
 
@@ -53,13 +61,14 @@ fn main() -> Result<()> {
 fn show_confusions(
     term: &str,
     dict: &cmudict::CmuDict,
+    g2p: &g2p::G2p,
     index: &corrupt::PhonemeIndex,
     args: &Args,
 ) {
-    let phonemes = g2p::word_to_phonemes(term, dict);
-    let ipa = g2p::word_to_ipa(term);
+    let phonemes = g2p.phonemize(term, dict);
+    let ipa = g2p.ipa(term);
     println!("\n{}", "=".repeat(60));
-    println!("Term: {}  →  ARPAbet: {}  IPA: {}", term, phonemes.join(" "), ipa);
+    println!("Term: {}  →  IPA: {}  ARPAbet: {}", term, ipa, phonemes.join(" "));
 
     let singles = index.find_single_word(&phonemes, args.max_dist, args.max_results);
     let doubles = index.find_two_word(&phonemes, 2, args.max_results);
