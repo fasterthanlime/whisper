@@ -141,13 +141,13 @@ let stats = { good: 0, bad: 0, unsure: 0 };
 const DATA_PLACEHOLDER = '__SENTENCES_JSON__';
 
 async function init() {
-  if (typeof DATA_PLACEHOLDER === 'string' && DATA_PLACEHOLDER.startsWith('__')) {
+  if (Array.isArray(DATA_PLACEHOLDER)) {
+    sentences = DATA_PLACEHOLDER;
+  } else if (typeof DATA_PLACEHOLDER === 'string') {
     // Try loading from file
     const resp = await fetch('focused_sentences.jsonl');
     const text = await resp.text();
     sentences = text.trim().split('\n').map(l => JSON.parse(l));
-  } else {
-    sentences = JSON.parse(DATA_PLACEHOLDER);
   }
 
   // Load any saved progress
