@@ -653,6 +653,14 @@ struct HarkApp: App {
 
         appState.addToHistory(text)
 
+        // Log for training data collection
+        Task {
+            await TranscriptionLogger.shared.log(
+                text: text,
+                app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            )
+        }
+
         let shouldSubmit = forceSubmit || PasteController.isReturnKeyPressed() || Self.isAutoSubmitApp()
 
         // Paste immediately (don't wait for overlay dismiss).
