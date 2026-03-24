@@ -141,7 +141,7 @@ let stats = { good: 0, bad: 0, unsure: 0 };
 const DATA_PLACEHOLDER = '__SENTENCES_JSON__';
 
 async function init() {
-  if (DATA_PLACEHOLDER.startsWith('__')) {
+  if (typeof DATA_PLACEHOLDER === 'string' && DATA_PLACEHOLDER.startsWith('__')) {
     // Try loading from file
     const resp = await fetch('focused_sentences.jsonl');
     const text = await resp.text();
