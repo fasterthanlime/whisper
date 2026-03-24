@@ -1,0 +1,173 @@
+{"term": "all-languages", "confusions": [{"text": "all-labguges", "cost": 0.0}]}
+{"term": "already", "confusions": [{"text": "arleady", "cost": 0.0}]}
+{"term": "arborium", "confusions": [{"text": "arboium", "cost": 0.0}, {"text": "arboreum", "cost": 0.0}]}
+{"term": "arborium xtask", "confusions": [{"text": "Arborium X task", "cost": 0.0}]}
+{"term": "arborium.kdl", "confusions": [{"text": "Arborium.ktl", "cost": 0.0}]}
+{"term": "Argo CD", "confusions": [{"text": "Argo city", "cost": 0.0}]}
+{"term": "async/await", "confusions": [{"text": "airsync await", "cost": 0.0}]}
+{"term": "axum", "confusions": [{"text": "axiom", "cost": 0.0}]}
+{"term": "backtraces", "confusions": [{"text": "bacterias", "cost": 0.0}]}
+{"term": "Base16 Ocean", "confusions": [{"text": "Bay 16 Ocean", "cost": 0.0}]}
+{"term": "bearcove", "confusions": [{"text": "Berkhov", "cost": 0.0}, {"text": "berkhov", "cost": 0.0}]}
+{"term": "bitflag", "confusions": [{"text": "bitfag", "cost": 0.0}]}
+{"term": "boxen", "confusions": [{"text": "boxin", "cost": 0.0}]}
+{"term": "Brotli", "confusions": [{"text": "Brotley", "cost": 0.0}]}
+{"term": "buckify", "confusions": [{"text": "Bucky-Fi", "cost": 0.0}]}
+{"term": "BuildBarn", "confusions": [{"text": "Build Barn", "cost": 0.0}]}
+{"term": "cache mounts", "confusions": [{"text": "cash mounts", "cost": 0.0}]}
+{"term": "cache-busted", "confusions": [{"text": "cache-pasted", "cost": 0.0}]}
+{"term": "Calico", "confusions": [{"text": "Palico", "cost": 0.0}]}
+{"term": "Cap'n Proto", "confusions": [{"text": "CaptainProto", "cost": 0.0}]}
+{"term": "cargo xtask", "confusions": [{"text": "cargo extask", "cost": 0.0}, {"text": "Cargo X task", "cost": 0.0}]}
+{"term": "cargo-dist", "confusions": [{"text": "cargo disk", "cost": 0.0}]}
+{"term": "Cargo.toml", "confusions": [{"text": "CargoTumel", "cost": 0.0}, {"text": "cargo tunnel", "cost": 0.0}, {"text": "cargo tuml", "cost": 0.0}, {"text": "cargo automil", "cost": 0.0}]}
+{"term": "Catppuccin", "confusions": [{"text": "Catppucin", "cost": 0.0}, {"text": "Katpuchin", "cost": 0.0}]}
+{"term": "clippy", "confusions": [{"text": "clipp", "cost": 0.0}]}
+{"term": "comrak", "confusions": [{"text": "common markdown", "cost": 0.0}]}
+{"term": "confused", "confusions": [{"text": "ocnfused", "cost": 0.0}]}
+{"term": "context", "confusions": [{"text": "contxt", "cost": 0.0}]}
+{"term": "continue", "confusions": [{"text": "ocntinue", "cost": 0.0}]}
+{"term": "conversion", "confusions": [{"text": "converrsion", "cost": 0.0}]}
+{"term": "corosensei", "confusions": [{"text": "KoroSensei", "cost": 0.0}]}
+{"term": "CPP crate build script", "confusions": [{"text": "CPP create build script", "cost": 0.0}]}
+{"term": "crate writers, crate authors", "confusions": [{"text": "create writers, create authors", "cost": 0.0}]}
+{"term": "crates, langs, version-adjacent", "confusions": [{"text": "crates length version adjacent", "cost": 0.0}]}
+{"term": "crates.io", "confusions": [{"text": "craze.io", "cost": 0.0}]}
+{"term": "Dashboard", "confusions": [{"text": "Dashbaord", "cost": 0.0}, {"text": "dahsboard", "cost": 0.0}]}
+{"term": "decl macro", "confusions": [{"text": "deck deck macro", "cost": 0.0}]}
+{"term": "DeclaredTraits", "confusions": [{"text": "declared trades", "cost": 0.0}]}
+{"term": "deployment", "confusions": [{"text": "Diploma", "cost": 0.0}]}
+{"term": "derive macro", "confusions": [{"text": "drive macro", "cost": 0.0}]}
+{"term": "deserialize_with", "confusions": [{"text": "deserialized width", "cost": 0.0}]}
+{"term": "deserializers", "confusions": [{"text": "deserilizers", "cost": 0.0}]}
+{"term": "design", "confusions": [{"text": "desing", "cost": 0.0}]}
+{"term": "design this", "confusions": [{"text": "desing htis", "cost": 0.0}]}
+{"term": "diosmio", "confusions": [{"text": "Dios Mio", "cost": 0.0}]}
+{"term": "Dioxus", "confusions": [{"text": "Dioxys", "cost": 0.0}]}
+{"term": "DOCUMENT", "confusions": [{"text": "DOCUMETN", "cost": 0.0}]}
+{"term": "documentation", "confusions": [{"text": "documentations", "cost": 0.0}]}
+{"term": "dodeca-protocol", "confusions": [{"text": "Dekasurf protocol", "cost": 0.0}]}
+{"term": "doing", "confusions": [{"text": "doign", "cost": 0.0}]}
+{"term": "don't", "confusions": [{"text": "odn't", "cost": 0.0}]}
+{"term": "entryPoints", "confusions": [{"text": "entry points", "cost": 0.0}]}
+{"term": "Enum variants", "confusions": [{"text": "Inum variants", "cost": 0.0}]}
+{"term": "everything", "confusions": [{"text": "eerything", "cost": 0.0}]}
+{"term": "everywhere", "confusions": [{"text": "eerywhere", "cost": 0.0}]}
+{"term": "exactly", "confusions": [{"text": "exaxctly", "cost": 0.0}]}
+{"term": "facet crate", "confusions": [{"text": "facet create", "cost": 0.0}]}
+{"term": "facet crates", "confusions": [{"text": "facet craze", "cost": 0.0}]}
+{"term": "facet-diff", "confusions": [{"text": "facets diff", "cost": 0.0}]}
+{"term": "facet-toml", "confusions": [{"text": "facetTuml", "cost": 0.0}]}
+{"term": "facet_testhelpers", "confusions": [{"text": "facet_helpers", "cost": 0.0}]}
+{"term": "fasterthanlime", "confusions": [{"text": "Fastenalime", "cost": 0.0}, {"text": "faster than lime", "cost": 0.0}]}
+{"term": "fasterthanlime.me", "confusions": [{"text": "fasterthanlight.me", "cost": 0.0}, {"text": "faster than LIE.ME", "cost": 0.0}]}
+{"term": "fontcull", "confusions": [{"text": "a font call", "cost": 0.0}, {"text": "font call", "cost": 0.0}]}
+{"term": "fontdue", "confusions": [{"text": "font do", "cost": 0.0}]}
+{"term": "for attrs", "confusions": [{"text": "fora ttrs", "cost": 0.0}]}
+{"term": "Forgejo", "confusions": [{"text": "forge-draw", "cost": 0.0}, {"text": "ForgeJoe", "cost": 0.0}]}
+{"term": "format crates", "confusions": [{"text": "format creates", "cost": 0.0}]}
+{"term": "glade-dioxus", "confusions": [{"text": "GladeDioxis", "cost": 0.0}]}
+{"term": "grammars", "confusions": [{"text": "grammers", "cost": 0.0}]}
+{"term": "green/red", "confusions": [{"text": "green/erd", "cost": 0.0}]}
+{"term": "have", "confusions": [{"text": "ahve", "cost": 0.0}]}
+{"term": "Highlight query inheritance", "confusions": [{"text": "Highly query inheritance", "cost": 0.0}]}
+{"term": "HTML crate", "confusions": [{"text": "HTML craze", "cost": 0.0}]}
+{"term": "IDEAS.md", "confusions": [{"text": "IDEAS.ms", "cost": 0.0}]}
+{"term": "IgnoredExpr type", "confusions": [{"text": "ignored expert type", "cost": 0.0}]}
+{"term": "ImageMagick", "confusions": [{"text": "image magic", "cost": 0.0}]}
+{"term": "in langs", "confusions": [{"text": "in Lengs", "cost": 0.0}]}
+{"term": "in one crate", "confusions": [{"text": "in one cell", "cost": 0.0}]}
+{"term": "indicatif", "confusions": [{"text": "Indicative", "cost": 0.0}]}
+{"term": "info.toml", "confusions": [{"text": "info.tuml", "cost": 0.0}]}
+{"term": "inter-crate deps", "confusions": [{"text": "Intercreate depths", "cost": 0.0}]}
+{"term": "jsDelivr", "confusions": [{"text": "GSDeliver", "cost": 0.0}, {"text": "GS deliver", "cost": 0.0}]}
+{"term": "JSON", "confusions": [{"text": "Jason", "cost": 0.0}]}
+{"term": "kubectl describe", "confusions": [{"text": "the scribe", "cost": 0.0}]}
+{"term": "less complex", "confusions": [{"text": "lexx complex", "cost": 0.0}]}
+{"term": "let's try", "confusions": [{"text": "let'st ry", "cost": 0.0}]}
+{"term": "load", "confusions": [{"text": "loade", "cost": 0.0}]}
+{"term": "logic", "confusions": [{"text": "logci", "cost": 0.0}]}
+{"term": "manifests", "confusions": [{"text": "manifestos", "cost": 0.0}]}
+{"term": "manually declared", "confusions": [{"text": "manually eclared", "cost": 0.0}]}
+{"term": "mdBook", "confusions": [{"text": "MD book", "cost": 0.0}]}
+{"term": "merge", "confusions": [{"text": "mourn", "cost": 0.0}]}
+{"term": "mind", "confusions": [{"text": "midn", "cost": 0.0}]}
+{"term": "minijinja", "confusions": [{"text": "mini ginger", "cost": 0.0}]}
+{"term": "minimal-versions failing", "confusions": [{"text": "minimal-versions if ailing", "cost": 0.0}]}
+{"term": "namespaced when they shouldn't be", "confusions": [{"text": "namespaced then they shouldn't be", "cost": 0.0}]}
+{"term": "nextest", "confusions": [{"text": "nexttest", "cost": 0.0}]}
+{"term": "npm package", "confusions": [{"text": "npk package", "cost": 0.0}]}
+{"term": "one pushing", "confusions": [{"text": "onep ushing", "cost": 0.0}]}
+{"term": "OpenObserve", "confusions": [{"text": "open observe", "cost": 0.0}]}
+{"term": "original", "confusions": [{"text": "oriignal", "cost": 0.0}]}
+{"term": "OUTPUT FORMATS", "confusions": [{"text": "OUTPUT FOMRATS", "cost": 0.0}]}
+{"term": "owo-colors", "confusions": [{"text": "Owell Colors", "cost": 0.0}]}
+{"term": "plugin build", "confusions": [{"text": "plugin bill", "cost": 0.0}]}
+{"term": "postcard", "confusions": [{"text": "postacrd", "cost": 0.0}]}
+{"term": "proc macro", "confusions": [{"text": "frog macro", "cost": 0.0}]}
+{"term": "pulldown-cmark", "confusions": [{"text": "Pull down C mark", "cost": 0.0}]}
+{"term": "ratatui", "confusions": [{"text": "Ratatouille", "cost": 0.0}]}
+{"term": "raw-dogging", "confusions": [{"text": "war-dogging", "cost": 0.0}]}
+{"term": "rebase", "confusions": [{"text": "rebae", "cost": 0.0}]}
+{"term": "release-plz", "confusions": [{"text": "Reese, please", "cost": 0.0}]}
+{"term": "remoc", "confusions": [{"text": "Remark", "cost": 0.0}]}
+{"term": "reqwest", "confusions": [{"text": "request", "cost": 0.0}]}
+{"term": "Rust Brotli", "confusions": [{"text": "Rust Brotley", "cost": 0.0}]}
+{"term": "search hotkey", "confusions": [{"text": "search honestly", "cost": 0.0}]}
+{"term": "serde", "confusions": [{"text": "Saturday", "cost": 0.0}, {"text": "third day", "cost": 0.0}, {"text": "Sererity", "cost": 0.0}, {"text": "CERD", "cost": 0.0}, {"text": "werde", "cost": 0.0}, {"text": "Surday", "cost": 0.0}]}
+{"term": "serde's", "confusions": [{"text": "Sirday's", "cost": 0.0}]}
+{"term": "serde_json", "confusions": [{"text": "surday.json", "cost": 0.0}]}
+{"term": "serde_json-only", "confusions": [{"text": "sered_json_only", "cost": 0.0}]}
+{"term": "serde_yaml", "confusions": [{"text": "surday.yaml", "cost": 0.0}]}
+{"term": "servperso", "confusions": [{"text": "serve personal", "cost": 0.0}]}
+{"term": "setting it to false", "confusions": [{"text": "setting it to fault", "cost": 0.0}]}
+{"term": "Shiki", "confusions": [{"text": "cheeky", "cost": 0.0}, {"text": "Shika", "cost": 0.0}]}
+{"term": "should", "confusions": [{"text": "sohuld", "cost": 0.0}]}
+{"term": "should help", "confusions": [{"text": "shouldhelp", "cost": 0.0}]}
+{"term": "SIGBUS crashes", "confusions": [{"text": "sick bus crashes", "cost": 0.0}]}
+{"term": "something", "confusions": [{"text": "sometihng", "cost": 0.0}]}
+{"term": "spez module", "confusions": [{"text": "spaz module", "cost": 0.0}]}
+{"term": "str", "confusions": [{"text": "stir", "cost": 0.0}]}
+{"term": "struct literals", "confusions": [{"text": "structals", "cost": 0.0}]}
+{"term": "stylance", "confusions": [{"text": "stylands", "cost": 0.0}]}
+{"term": "stylance.scss", "confusions": [{"text": "silence.scss", "cost": 0.0}]}
+{"term": "styles.css", "confusions": [{"text": "styes.css", "cost": 0.0}]}
+{"term": "super fond", "confusions": [{"text": "supre fund", "cost": 0.0}]}
+{"term": "surfacing template rendering errors", "confusions": [{"text": "surface template mannering errors", "cost": 0.0}]}
+{"term": "symlink", "confusions": [{"text": "simlink", "cost": 0.0}]}
+{"term": "syntect", "confusions": [{"text": "syntax", "cost": 0.0}]}
+{"term": "sysroot", "confusions": [{"text": "sysroo", "cost": 0.0}]}
+{"term": "tarball", "confusions": [{"text": "tarbo", "cost": 0.0}]}
+{"term": "tempfile", "confusions": [{"text": "temp file", "cost": 0.0}]}
+{"term": "TextMate grammars", "confusions": [{"text": "text made grammars", "cost": 0.0}]}
+{"term": "the crate can be regenerated", "confusions": [{"text": "the cray can be regenerated", "cost": 0.0}]}
+{"term": "the main", "confusions": [{"text": "th emain", "cost": 0.0}]}
+{"term": "there", "confusions": [{"text": "theer", "cost": 0.0}]}
+{"term": "tokio", "confusions": [{"text": "Tokyo", "cost": 0.0}]}
+{"term": "Tokio async I/O", "confusions": [{"text": "Tokyo Async IO", "cost": 0.0}]}
+{"term": "TOML", "confusions": [{"text": "Pommel", "cost": 0.0}]}
+{"term": "toml_edit", "confusions": [{"text": "TumlEdit", "cost": 0.0}]}
+{"term": "tower", "confusions": [{"text": "towwer", "cost": 0.0}]}
+{"term": "tracing_subscriber", "confusions": [{"text": "Sing subscriber", "cost": 0.0}]}
+{"term": "traefik", "confusions": [{"text": "traffic", "cost": 0.0}]}
+{"term": "traefik for traffic", "confusions": [{"text": "traffic for traffic", "cost": 0.0}]}
+{"term": "trait detection", "confusions": [{"text": "trade detection", "cost": 0.0}]}
+{"term": "tree-sitter", "confusions": [{"text": "tree-setter", "cost": 0.0}]}
+{"term": "tree-sitter grammars", "confusions": [{"text": "trace data grammars", "cost": 0.0}]}
+{"term": "tree-sitter-highlight", "confusions": [{"text": "tree-seller highlight", "cost": 0.0}]}
+{"term": "TreeSitter", "confusions": [{"text": "TreeState", "cost": 0.0}]}
+{"term": "TUI", "confusions": [{"text": "TUR", "cost": 0.0}]}
+{"term": "unpkg", "confusions": [{"text": "unpackage", "cost": 0.0}]}
+{"term": "upstream dependencies", "confusions": [{"text": "first-hour dependencies", "cost": 0.0}]}
+{"term": "VecDeque", "confusions": [{"text": "VECDQ", "cost": 0.0}]}
+{"term": "wait", "confusions": [{"text": "wati", "cost": 0.0}]}
+{"term": "WASM plugin", "confusions": [{"text": "buzzn plugin", "cost": 0.0}]}
+{"term": "wasm-bindgen", "confusions": [{"text": "wasm bindgen", "cost": 0.0}, {"text": "Wasm bindgen", "cost": 0.0}, {"text": "wbindgen", "cost": 0.0}, {"text": "wasm bind gen", "cost": 0.0}]}
+{"term": "wasm-pack", "confusions": [{"text": "wasmpec", "cost": 0.0}, {"text": "WASNPACK", "cost": 0.0}]}
+{"term": "websecure", "confusions": [{"text": "web secure", "cost": 0.0}]}
+{"term": "websocket", "confusions": [{"text": "webdsocket", "cost": 0.0}, {"text": "WebTocket", "cost": 0.0}]}
+{"term": "WebSocketTransport", "confusions": [{"text": "VkVkj0docketTransport", "cost": 0.0}]}
+{"term": "WireGuard", "confusions": [{"text": "wire guard", "cost": 0.0}]}
+{"term": "WOFF1", "confusions": [{"text": "WUF1", "cost": 0.0}]}
+{"term": "WOFF2", "confusions": [{"text": "WUF2", "cost": 0.0}]}
+{"term": "workspace dep", "confusions": [{"text": "workspace depth", "cost": 0.0}]}

@@ -110,3 +110,37 @@
 {"term":"WireGuard","phonemes":"W AY R G AA R D","note":"wire-guard"}
 {"term":"Calico","phonemes":"K AE L IH K OW","note":"cal-ih-co"}
 {"term":"Forgejo","phonemes":"F AO R JH EY OW","note":"for-jay-oh"}
+{"term":"vox","phonemes":"V AA K S","note":"like vox"}
+{"term":"vixen","phonemes":"V IH K S AH N","note":"like vixen"}
+{"term":"CFG-MIR","phonemes":"S IY EH F JH IY M IH R","note":"see-eff-gee-meer"}
+{"term":"Qwen","phonemes":"K W EH N","note":"like kwen"}
+{"term":"kajit-ir","phonemes":"K AH JH IH T AY AA R","note":"kuh-jit eye-are"}
+{"term":"kajit-mir","phonemes":"K AH JH IH T M IH R","note":"kuh-jit meer"}
+{"term":"kajit-lir","phonemes":"K AH JH IH T L IH R","note":"kuh-jit leer"}
+{"term":"kajit-hir","phonemes":"K AH JH IH T HH IH R","note":"kuh-jit heer"}
+{"term":"kajit-emit","phonemes":"K AH JH IH T IH M IH T","note":"kuh-jit emit"}
+{"term":"kajit-format","phonemes":"K AH JH IH T F AO R M AE T","note":"kuh-jit format"}
+{"term":"kajit-postcard","phonemes":"K AH JH IH T P OW S T K AA R D","note":"kuh-jit postcard"}
+{"term":"kajit-json","phonemes":"K AH JH IH T JH EY S AH N","note":"kuh-jit jason"}
+{"term":"kajit-malum","phonemes":"K AH JH IH T M AE L AH M","note":"kuh-jit malum"}
+{"term":"vixenfs","phonemes":"V IH K S AH N EH F EH S","note":"vixen-eff-ess"}
+{"term":"vx-eval","phonemes":"V IY EH K S IY V AE L","note":"vee-ex eval"}
+{"term":"vx-eval2","phonemes":"V IY EH K S IY V AE L T UW","note":"vee-ex eval two"}
+{"term":"vx-vfsd","phonemes":"V IY EH K S V IY EH F EH S D IY","note":"vee-ex vee-eff-ess-dee"}
+{"term":"vx-store","phonemes":"V IY EH K S S T AO R","note":"vee-ex store"}
+{"term":"vx-runner","phonemes":"V IY EH K S R AH N ER","note":"vee-ex runner"}
+{"term":"vx-cache","phonemes":"V IY EH K S K AE SH","note":"vee-ex cache"}
+{"term":"vox-schema","phonemes":"V AA K S S K IY M AH","note":"vox schema"}
+{"term":"vox-postcard","phonemes":"V AA K S P OW S T K AA R D","note":"vox postcard"}
+{"term":"vox-shm","phonemes":"V AA K S SH EH M","note":"vox shm"}
+{"term":"roam","phonemes":"R OW M","note":"like roam"}
+{"term":"roam-codegen","phonemes":"R OW M K OW D JH EH N","note":"roam code-gen"}
+{"term":"roam-schema","phonemes":"R OW M S K IY M AH","note":"roam schema"}
+{"term":"roam-postcard","phonemes":"R OW M P OW S T K AA R D","note":"roam postcard"}
+{"term":"styx","phonemes":"S T IH K S","note":"like sticks"}
+{"term":"dodeca","phonemes":"D OW D EH K AH","note":"doh-deck-uh"}
+{"term":"rapace","phonemes":"R AH P AA S","note":"ruh-pahss"}
+{"term":"facet","phonemes":"F AE S IH T","note":"fass-it"}
+{"term":"facet-json","phonemes":"F AE S IH T JH EY S AH N","note":"fass-it jason"}
+{"term":"arborium","phonemes":"AA R B AO R IY AH M","note":"ar-bore-ee-um"}
+{"term":"moire","phonemes":"M W AA R","note":"mwahr"}

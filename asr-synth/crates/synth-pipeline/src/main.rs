@@ -18,11 +18,15 @@ struct Args {
     #[arg(long, default_value = "~/Library/Caches/qwen3-asr/Alkd--qwen3-asr-gguf--qwen3_asr_1_7b_q8_0_gguf")]
     qwen_model: String,
 
-    /// Root directory for docs scanning
+    /// Pre-generated sentences JSONL (if provided, skips textgen)
+    #[arg(long)]
+    sentences: Option<String>,
+
+    /// Root directory for docs scanning (used if --sentences not provided)
     #[arg(long, default_value = "~/bearcove")]
     docs_root: String,
 
-    /// Number of sentences to generate
+    /// Number of sentences to generate (ignored if --sentences provided)
     #[arg(short, long, default_value = "10")]
     count: usize,
 
@@ -71,14 +75,32 @@ fn resample_24k_to_16k(samples: &[f32]) -> Result<Vec<f32>> {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // --- Step 1: Generate text ---
-    let docs_root = shellexpand::tilde(&args.docs_root).to_string();
-    eprintln!("Scanning {docs_root} for vocabulary...");
-    let vocab = synth_textgen::corpus::extract_vocab(&docs_root)?;
-    eprintln!("Extracted {} terms", vocab.len());
-
-    let sentences = synth_textgen::templates::generate(&vocab, args.count);
-    eprintln!("Generated {} sentences", sentences.len());
+    // --- Step 1: Get sentences ---
+    let sentences = if let Some(ref path) = args.sentences {
+        // Load pre-generated sentences
+        eprintln!("Loading sentences from {path}...");
+        let content = std::fs::read_to_string(path)?;
+        content.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                let v: serde_json::Value = serde_json::from_str(l).unwrap();
+                synth_textgen::templates::GeneratedSentence {
+                    text: v["text"].as_str().unwrap_or("").to_string(),
+                    spoken: v["spoken"].as_str().unwrap_or("").to_string(),
+                    vocab_terms: v["vocab_terms"].as_array()
+                        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                        .unwrap_or_default(),
+                }
+            })
+            .collect::<Vec<_>>()
+    } else {
+        let docs_root = shellexpand::tilde(&args.docs_root).to_string();
+        eprintln!("Scanning {docs_root} for vocabulary...");
+        let vocab = synth_textgen::corpus::extract_vocab(&docs_root)?;
+        eprintln!("Extracted {} terms", vocab.len());
+        synth_textgen::templates::generate(&vocab, args.count)
+    };
+    eprintln!("{} sentences ready", sentences.len());
 
     // --- Step 2: Load TTS ---
     eprintln!("Loading pocket-tts (quantized)...");
@@ -159,10 +181,12 @@ fn main() -> Result<()> {
 
         let pair = TrainingPair {
             original_text: sentence.text.clone(),
+            spoken_text: sentence.spoken.clone(),
             parakeet_output: parakeet_text,
             qwen_output: qwen_text,
             vocab: sentence.vocab_terms.clone(),
             voice_id: "amos".to_string(),
+            audio_file: None,
         };
 
         serde_json::to_writer(&mut out, &pair)?;
