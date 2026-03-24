@@ -2,6 +2,7 @@ mod config;
 mod decoder;
 mod encoder;
 mod error;
+mod forced_aligner;
 #[cfg(feature = "hub")]
 pub(crate) mod hub;
 mod inference;
@@ -13,6 +14,7 @@ mod weights;
 
 pub use encoder::EncoderCache;
 pub use error::{AsrError, Result};
+pub use forced_aligner::{ForcedAlignItem, ForcedAligner};
 pub use inference::{AsrInference, TranscribeOptions, TranscribeResult};
 pub use mel::load_audio_wav;
 pub use streaming::{StreamingOptions, StreamingState};

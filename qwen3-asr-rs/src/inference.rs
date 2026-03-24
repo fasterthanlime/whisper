@@ -580,7 +580,7 @@ fn find_gguf_file(model_dir: &Path) -> Option<std::path::PathBuf> {
 }
 
 /// Load safetensors weights from a directory (single file or sharded).
-fn load_safetensors_weights(model_dir: &Path, device: &Device) -> anyhow::Result<Weights> {
+pub(crate) fn load_safetensors_weights(model_dir: &Path, device: &Device) -> anyhow::Result<Weights> {
     // Check for sharded model
     let index_path = model_dir.join("model.safetensors.index.json");
     if index_path.exists() {

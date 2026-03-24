@@ -5,6 +5,16 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 pub struct AsrConfig {
     pub thinker_config: ThinkerConfig,
+    /// Number of time-bucket classes for forced alignment (e.g. 5000).
+    /// Present only in ForcedAligner configs.
+    #[serde(default)]
+    pub classify_num: Option<usize>,
+    /// Token ID for `<timestamp>` (e.g. 151705). Present only in ForcedAligner configs.
+    #[serde(default)]
+    pub timestamp_token_id: Option<i64>,
+    /// Milliseconds per time bucket (e.g. 80.0). Present only in ForcedAligner configs.
+    #[serde(default)]
+    pub timestamp_segment_time: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

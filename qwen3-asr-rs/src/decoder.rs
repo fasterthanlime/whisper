@@ -385,7 +385,9 @@ impl TextDecoder {
             .map_err(Into::into)
     }
 
-    pub(crate) fn forward(
+    /// Run through all transformer layers and final LayerNorm, returning
+    /// normalized hidden states **without** applying lm_head.
+    pub(crate) fn forward_hidden(
         &self,
         hidden_states: &Tensor, // [1, seq, hidden]
         cos: &Tensor,           // [seq, head_dim], F32
@@ -407,10 +409,22 @@ impl TextDecoder {
             hidden = h;
         }
 
+        self.norm.forward(&hidden).map_err(Into::into)
+    }
+
+    pub(crate) fn forward(
+        &self,
+        hidden_states: &Tensor, // [1, seq, hidden]
+        cos: &Tensor,           // [seq, head_dim], F32
+        sin: &Tensor,           // [seq, head_dim], F32
+        kv_cache: &mut KvCache,
+        mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let hidden = self.forward_hidden(hidden_states, cos, sin, kv_cache, mask)?;
         // LN → lm_head (weight-tied to embed_tokens).
         // LinearW::Dense: candle_nn::Linear::forward has 3D fast path.
         // LinearW::Quant: QMatMul::forward uses broadcast_matmul (also 3D-safe).
-        self.lm_head.forward(&self.norm.forward(&hidden)?).map_err(Into::into)
+        self.lm_head.forward(&hidden).map_err(Into::into)
     }
 }
 
