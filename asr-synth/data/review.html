@@ -106,8 +106,6 @@
   <div class="text" id="text"></div>
   <div class="label">Say it as</div>
   <div class="spoken" id="spoken"></div>
-  <div class="label">Vocab terms</div>
-  <div class="vocab" id="vocab"></div>
 </div>
 
 <div id="controls">
@@ -175,8 +173,6 @@ function show() {
   const s = sentences[current];
   document.getElementById('text').textContent = s.text;
   document.getElementById('spoken').textContent = s.spoken;
-  document.getElementById('vocab').innerHTML =
-    (s.vocab_terms || []).map(t => `<span>${t}</span>`).join('');
   document.getElementById('counter').textContent = `${current + 1} / ${sentences.length}`;
   document.getElementById('stats').textContent =
     `✓ ${stats.good}  ✗ ${stats.bad}  ? ${stats.unsure}`;
