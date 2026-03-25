@@ -90,6 +90,7 @@ async fn run_corpus_pass(
     written: &WrittenSentence,
     spoken: &SpokenSentence,
     term: &WrittenTerm,
+    protected_terms: &std::collections::HashSet<String>,
 ) -> anyhow::Result<CorpusPassResult> {
     // Dual ASR
     let state_q = state.clone();
@@ -127,7 +128,7 @@ async fn run_corpus_pass(
 
     let extraction = extract_with_consensus(
         &orig_alignment, &qwen_alignment, &parakeet_alignment,
-        term_start, term_end,
+        term_start, term_end, protected_terms,
     );
 
     Ok(CorpusPassResult {
@@ -440,19 +441,26 @@ struct ConsensusResult {
     debug: serde_json::Value,
 }
 
-/// Trim words from the left and right that all 3 lanes agree on.
-/// If the leftmost word is the same (case-insensitive) in all 3, remove it. Repeat.
-/// Same from the right. This strips context words, leaving just the disagreement.
-fn trim_matching_edges(orig: &str, qwen: &str, parakeet: &str) -> (String, String, String) {
-    let mut o: Vec<&str> = orig.split_whitespace().collect();
-    let mut q: Vec<&str> = qwen.split_whitespace().collect();
-    let mut p: Vec<&str> = parakeet.split_whitespace().collect();
+/// Trim matching words from alignment item slices.
+/// Returns (orig, qwen, parakeet) as trimmed word strings.
+/// Stops if the original lane's word is a known vocab term (in `protected`).
+fn trim_matching_edges(
+    orig: &[qwen3_asr::ForcedAlignItem],
+    qwen: &[qwen3_asr::ForcedAlignItem],
+    para: &[qwen3_asr::ForcedAlignItem],
+    start: f64, end: f64,
+    protected: &std::collections::HashSet<String>,
+) -> (String, String, String) {
+    let mut o: Vec<&str> = orig.iter().filter(|a| a.start_time >= start && a.start_time < end).map(|a| a.word.as_str()).collect();
+    let mut q: Vec<&str> = qwen.iter().filter(|a| a.start_time >= start && a.start_time < end).map(|a| a.word.as_str()).collect();
+    let mut p: Vec<&str> = para.iter().filter(|a| a.start_time >= start && a.start_time < end).map(|a| a.word.as_str()).collect();
 
-    // Trim from left — but never trim to empty
+    // Trim from left — stop at vocab terms or empty
     while o.len() > 1 && q.len() > 1 && p.len() > 1 {
-        let ow = o[0].to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
-        let qw = q[0].to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
-        let pw = p[0].to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
+        let ow = o[0].to_lowercase();
+        if protected.contains(&ow) { break; }
+        let qw = q[0].to_lowercase();
+        let pw = p[0].to_lowercase();
         if ow == qw && ow == pw {
             o.remove(0);
             q.remove(0);
@@ -462,11 +470,12 @@ fn trim_matching_edges(orig: &str, qwen: &str, parakeet: &str) -> (String, Strin
         }
     }
 
-    // Trim from right — but never trim to empty
+    // Trim from right — stop at vocab terms or empty
     while o.len() > 1 && q.len() > 1 && p.len() > 1 {
-        let ow = o.last().unwrap().to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
-        let qw = q.last().unwrap().to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
-        let pw = p.last().unwrap().to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
+        let ow = o.last().unwrap().to_lowercase();
+        if protected.contains(&ow) { break; }
+        let qw = q.last().unwrap().to_lowercase();
+        let pw = p.last().unwrap().to_lowercase();
         if ow == qw && ow == pw {
             o.pop();
             q.pop();
@@ -493,6 +502,7 @@ fn extract_with_consensus(
     parakeet_align: &[qwen3_asr::ForcedAlignItem],
     term_start: f64,
     term_end: f64,
+    protected_terms: &std::collections::HashSet<String>,
 ) -> ConsensusResult {
     let r2 = |v: f64| (v * 1000.0).round() / 1000.0;
 
@@ -519,13 +529,12 @@ fn extract_with_consensus(
     let end = right.unwrap_or(term_end);
     let clean = left.is_some() && right.is_some();
 
-    let original = words_in_range(orig_align, start, end);
-    let qwen = words_in_range(qwen_align, start, end);
-    let parakeet = words_in_range(parakeet_align, start, end);
-
-    // Trim matching words from edges: if all 3 lanes agree on a boundary word,
-    // it's context, not part of the error. Remove from both sides.
-    let (original, qwen, parakeet) = trim_matching_edges(&original, &qwen, &parakeet);
+    // Extract words in range then trim matching edges.
+    // Uses alignment items directly (same word boundaries as the aligner).
+    // Stops trimming at vocab terms to avoid eating important words.
+    let (original, qwen, parakeet) = trim_matching_edges(
+        orig_align, qwen_align, parakeet_align, start, end, protected_terms,
+    );
 
     let rv = |v: &[f64]| -> Vec<f64> { v.iter().map(|&x| r2(x)).collect() };
     let tri_debug: Vec<serde_json::Value> = tris.iter().map(|tb| {
@@ -679,6 +688,10 @@ async fn run_corpus_job(
         let db = state.db.lock().unwrap();
         (db.list_reviewed_vocab()?, db.all_sentence_texts()?)
     };
+
+    let protected_terms: std::collections::HashSet<String> = vocab_terms.iter()
+        .map(|v| v.term.to_lowercase())
+        .collect();
 
     // Build Markov chain from all sentence texts
     {
@@ -877,7 +890,7 @@ async fn run_corpus_job(
         let written_term = WrittenTerm(pi.term.clone());
         let written_sentence = WrittenSentence(pi.sentence.clone());
         let spoken_sentence = SpokenSentence(pi.spoken.clone());
-        let result = match run_corpus_pass(state, &full_16k, &written_sentence, &spoken_sentence, &written_term).await {
+        let result = match run_corpus_pass(state, &full_16k, &written_sentence, &spoken_sentence, &written_term, &protected_terms).await {
             Ok(r) => r,
             Err(e) => {
                 let db = state.db.lock().unwrap();
@@ -1866,7 +1879,11 @@ pub async fn api_test_term(
         audio.normalize();
         let full_16k = tts::resample_to_16k(&audio.samples, audio.sample_rate).map_err(err)?;
 
-        result = run_corpus_pass(&state, &full_16k, &written_sentence, &spoken_sentence, &written).await.map_err(err)?;
+        let protected_terms: std::collections::HashSet<String> = {
+            let db = state.db.lock().unwrap();
+            db.list_reviewed_vocab().unwrap_or_default().iter().map(|v| v.term.to_lowercase()).collect()
+        };
+        result = run_corpus_pass(&state, &full_16k, &written_sentence, &spoken_sentence, &written, &protected_terms).await.map_err(err)?;
 
         if result.extraction.clean || attempts >= 5 {
             break;

@@ -812,6 +812,13 @@ struct Cli {
 async fn main() -> anyhow::Result<()> {
     use clap::Parser;
 
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "synth_dashboard=debug,info".parse().unwrap())
+        )
+        .init();
+
     let cli = Cli::parse();
 
     let log_path = cli.log.map(std::path::PathBuf::from).unwrap_or_else(dirs_log_path);
