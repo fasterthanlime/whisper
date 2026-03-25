@@ -91,8 +91,9 @@ async fn run_corpus_pass(
     spoken: &SpokenSentence,
     term: &WrittenTerm,
     protected_terms: &std::collections::HashSet<String>,
+    dual_asr: bool,
 ) -> anyhow::Result<CorpusPassResult> {
-    // Dual ASR
+    // ASR — always run Qwen, optionally run Parakeet
     let state_q = state.clone();
     let samples_q = full_16k.to_vec();
     let qwen_task = tokio::task::spawn_blocking(move || -> String {
@@ -101,17 +102,21 @@ async fn run_corpus_pass(
             .map(|r| r.text)
             .unwrap_or_default()
     });
-    let state_p = state.clone();
-    let samples_p = full_16k.to_vec();
-    let parakeet_task = tokio::task::spawn_blocking(move || -> String {
-        let mut p = state_p.parakeet.lock().unwrap();
-        p.transcribe_samples(samples_p, 16000, 1, None)
-            .map(|r| r.text)
-            .unwrap_or_default()
-    });
-    let (qwen_full, parakeet_full) = tokio::join!(qwen_task, parakeet_task);
-    let qwen_full = qwen_full.unwrap_or_default();
-    let parakeet_full = parakeet_full.unwrap_or_default();
+
+    let parakeet_full = if dual_asr {
+        let state_p = state.clone();
+        let samples_p = full_16k.to_vec();
+        let parakeet_task = tokio::task::spawn_blocking(move || -> String {
+            let mut p = state_p.parakeet.lock().unwrap();
+            p.transcribe_samples(samples_p, 16000, 1, None)
+                .map(|r| r.text)
+                .unwrap_or_default()
+        });
+        parakeet_task.await.unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let qwen_full = qwen_task.await.unwrap_or_default();
 
     // Alignment — written sentence is ground truth, spoken sentence for visualization
     let orig_alignment = state.aligner.align(full_16k, &written.0).unwrap_or_default();
@@ -124,7 +129,11 @@ async fn run_corpus_pass(
         .unwrap_or((0.0, full_16k.len() as f64 / 16000.0));
 
     let qwen_alignment = state.aligner.align(full_16k, &qwen_full).unwrap_or_default();
-    let parakeet_alignment = state.aligner.align(full_16k, &parakeet_full).unwrap_or_default();
+    let parakeet_alignment = if dual_asr {
+        state.aligner.align(full_16k, &parakeet_full).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
     let extraction = extract_with_consensus(
         &orig_alignment, &qwen_alignment, &parakeet_alignment,
@@ -595,6 +604,7 @@ pub struct CorpusJobBody {
     pub tts_backend: Option<String>,
     pub limit: Option<usize>,  // max items to process this run (default: all)
     pub passes: Option<usize>, // TTS+ASR passes per term (default: 25)
+    pub dual_asr: Option<bool>, // true = Qwen + Parakeet, false = Qwen only (default: false)
 }
 
 #[derive(Deserialize)]
@@ -646,7 +656,8 @@ pub async fn api_start_corpus_job(
         Some(n) => n,
     };
     let passes = body.passes.unwrap_or(25);
-    let config_json = serde_json::json!({"tts_backend": tts_backend, "limit": limit, "passes": passes}).to_string();
+    let dual_asr = body.dual_asr.unwrap_or(false);
+    let config_json = serde_json::json!({"tts_backend": tts_backend, "limit": limit, "passes": passes, "dual_asr": dual_asr}).to_string();
 
     let job_id = {
         let db = state.db.lock().unwrap();
@@ -656,7 +667,7 @@ pub async fn api_start_corpus_job(
     let state2 = state.clone();
     let backend = tts_backend.clone();
     tokio::spawn(async move {
-        let result = run_corpus_job(&state2, job_id, &backend, limit, passes).await;
+        let result = run_corpus_job(&state2, job_id, &backend, limit, passes, dual_asr).await;
         let db = state2.db.lock().unwrap();
         match result {
             Ok(count) => {
@@ -682,6 +693,7 @@ async fn run_corpus_job(
     tts_backend: &str,
     limit: usize,
     target_passes: usize,
+    dual_asr: bool,
 ) -> anyhow::Result<usize> {
     // Collect reviewed vocab terms + approved sentences
     let (vocab_terms, all_texts) = {
@@ -890,7 +902,7 @@ async fn run_corpus_job(
         let written_term = WrittenTerm(pi.term.clone());
         let written_sentence = WrittenSentence(pi.sentence.clone());
         let spoken_sentence = SpokenSentence(pi.spoken.clone());
-        let result = match run_corpus_pass(state, &full_16k, &written_sentence, &spoken_sentence, &written_term, &protected_terms).await {
+        let result = match run_corpus_pass(state, &full_16k, &written_sentence, &spoken_sentence, &written_term, &protected_terms, dual_asr).await {
             Ok(r) => r,
             Err(e) => {
                 let db = state.db.lock().unwrap();
@@ -1031,21 +1043,22 @@ pub async fn api_start_prepare_job(
             let full_qwen = splice_fragment(&sentence, term, qwen_frag);
             let full_keet = splice_fragment(&sentence, term, keet_frag);
 
+            let prompt = synth_train::build_correction_prompt(&full_keet, &full_qwen);
             examples.push(serde_json::json!({
-                "prompt": format!("<keet> {}\n<qwen> {}\n<fixd>", full_keet, full_qwen),
+                "prompt": prompt,
                 "completion": format!(" {}<|endoftext|>", full_original),
             }));
             correction_count += 1;
         }
 
         // Identity examples: generate a sentence, all lanes are the same
-        // Pick random terms so sentences contain vocab words
         let vocab_terms: Vec<&str> = corpus_pairs.iter().map(|(t, _, _, _)| t.as_str()).collect();
         for _ in 0..n_identity {
             let term = vocab_terms[rng.random_range(0..vocab_terms.len())];
             let sentence = chain.generate_with(term, 15, &mut rng);
+            let prompt = synth_train::build_correction_prompt("", &sentence);
             examples.push(serde_json::json!({
-                "prompt": format!("<keet> {}\n<qwen> {}\n<fixd>", sentence, sentence),
+                "prompt": prompt,
                 "completion": format!(" {}<|endoftext|>", sentence),
             }));
             identity_count += 1;
@@ -1839,6 +1852,7 @@ pub async fn api_scan_results(
 pub struct TestTermBody {
     pub term: String,
     pub tts_backend: Option<String>,
+    pub dual_asr: Option<bool>,
 }
 
 /// Run one corpus pass for a single term and return the full result (without saving to DB).
@@ -1848,6 +1862,7 @@ pub async fn api_test_term(
 ) -> Result<Response, AppError> {
     let written = WrittenTerm(body.term.trim().to_string());
     let tts_backend = body.tts_backend.unwrap_or_else(|| "pocket-hq".to_string());
+    let dual_asr = body.dual_asr.unwrap_or(false);
 
     let vocab = {
         let db = state.db.lock().unwrap();
@@ -1883,7 +1898,7 @@ pub async fn api_test_term(
             let db = state.db.lock().unwrap();
             db.list_reviewed_vocab().unwrap_or_default().iter().map(|v| v.term.to_lowercase()).collect()
         };
-        result = run_corpus_pass(&state, &full_16k, &written_sentence, &spoken_sentence, &written, &protected_terms).await.map_err(err)?;
+        result = run_corpus_pass(&state, &full_16k, &written_sentence, &spoken_sentence, &written, &protected_terms, dual_asr).await.map_err(err)?;
 
         if result.extraction.clean || attempts >= 5 {
             break;

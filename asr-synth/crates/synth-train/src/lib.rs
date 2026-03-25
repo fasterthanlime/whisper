@@ -310,9 +310,15 @@ impl Default for InferenceConfig {
     }
 }
 
-/// Build the prompt for the correction model from ASR outputs
+/// Build the prompt for the correction model from ASR outputs.
+/// In dual mode: both Parakeet and Qwen lanes.
+/// In single mode: only Qwen lane (pass parakeet as empty or None).
 pub fn build_correction_prompt(parakeet: &str, qwen: &str) -> String {
-    format!("<keet> {}\n<qwen> {}\n<fixd>", parakeet, qwen)
+    if parakeet.is_empty() {
+        format!("<qwen> {}\n<fixd>", qwen)
+    } else {
+        format!("<keet> {}\n<qwen> {}\n<fixd>", parakeet, qwen)
+    }
 }
 
 /// An inference server that keeps the model loaded. Wraps mlx_lm.server.

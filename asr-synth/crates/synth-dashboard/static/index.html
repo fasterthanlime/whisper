@@ -3051,6 +3051,7 @@
             const [backend, setBackend] = useState('pocket-hq');
             const [corpusLimit, setCorpusLimit] = useState(200);
             const [corpusPasses, setCorpusPasses] = useState(25);
+            const [dualAsr, setDualAsr] = useState(false);
             const [totalExamples, setTotalExamples] = useState(12000);
             const [errorRate, setErrorRate] = useState(50);
             const [previewData, setPreviewData] = useState(null);
@@ -3133,7 +3134,7 @@
                                         if (e.key === 'Enter' && testTerm.trim()) {
                                             setTestSuggestions([]);
                                             setTestLoading(true); setTestResult(null);
-                                            api('/api/test-term', {method:'POST', body: JSON.stringify({term: testTerm.trim(), tts_backend: testBackend})})
+                                            api('/api/test-term', {method:'POST', body: JSON.stringify({term: testTerm.trim(), tts_backend: testBackend, dual_asr: dualAsr})})
                                                 .then(r => { setTestResult(r); setTestLoading(false); })
                                                 .catch(e => { setError(e.message); setTestLoading(false); });
                                         }
@@ -3148,7 +3149,7 @@
                                                     e.preventDefault();
                                                     setTestTerm(s); setTestSuggestions([]);
                                                     setTestLoading(true); setTestResult(null);
-                                                    api('/api/test-term', {method:'POST', body: JSON.stringify({term: s, tts_backend: testBackend})})
+                                                    api('/api/test-term', {method:'POST', body: JSON.stringify({term: s, tts_backend: testBackend, dual_asr: dualAsr})})
                                                         .then(r => { setTestResult(r); setTestLoading(false); })
                                                         .catch(err => { setError(err.message); setTestLoading(false); });
                                                 }}
@@ -3166,7 +3167,7 @@
                             </select>
                             <button className="btn btn-sm btn-primary" disabled={testLoading || !testTerm.trim()} onClick={() => {
                                 setTestLoading(true); setTestResult(null);
-                                api('/api/test-term', {method:'POST', body: JSON.stringify({term: testTerm.trim(), tts_backend: testBackend})})
+                                api('/api/test-term', {method:'POST', body: JSON.stringify({term: testTerm.trim(), tts_backend: testBackend, dual_asr: dualAsr})})
                                     .then(r => { setTestResult(r); setTestLoading(false); })
                                     .catch(e => { setError(e.message); setTestLoading(false); });
                             }}>{testLoading ? 'Running...' : 'Test'}</button>
@@ -3223,12 +3224,15 @@
                             <label style={{fontSize:11,color:'var(--text-muted)',marginLeft:4,display:'flex',alignItems:'center',gap:3,cursor:'pointer'}}>
                                 <input type="checkbox" checked={corpusLimit === 0} onChange={e => setCorpusLimit(e.target.checked ? 0 : 200)} disabled={corpusRunning} /> endless
                             </label>
+                            <label style={{fontSize:11,color:'var(--text-muted)',marginLeft:8,display:'flex',alignItems:'center',gap:3,cursor:'pointer'}}>
+                                <input type="checkbox" checked={dualAsr} onChange={e => setDualAsr(e.target.checked)} disabled={corpusRunning} /> dual ASR
+                            </label>
                             <div style={{flex:1}} />
                             {corpusRunning
                                 ? <button className="btn btn-sm" style={{borderColor:'var(--warning)',color:'var(--warning)',background:'rgba(210,153,34,0.1)'}}
                                     onClick={stopJob} disabled={stopping}>{stopping ? 'Stopping...' : 'Stop'}</button>
                                 : <button className="btn btn-primary btn-sm" disabled={!canGenerate}
-                                    onClick={() => startJob('corpus', {tts_backend: backend, limit: corpusLimit, passes: corpusPasses})}>Generate</button>
+                                    onClick={() => startJob('corpus', {tts_backend: backend, limit: corpusLimit, passes: corpusPasses, dual_asr: dualAsr})}>Generate</button>
                             }
                         </div>
 
