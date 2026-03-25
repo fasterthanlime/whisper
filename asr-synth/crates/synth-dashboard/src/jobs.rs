@@ -1421,7 +1421,17 @@ pub async fn api_start_eval_job(
                         .count();
 
                     let icon = if is_correct { "\u{2713}" } else { "\u{2717}" };
+                    let accuracy = correct as f64 / total_evaluated as f64 * 100.0;
+                    let word_acc = if total_words > 0 { corrected_words as f64 / total_words as f64 * 100.0 } else { 0.0 };
                     let db = state2.db.lock().unwrap();
+
+                    // Update live stats
+                    let _ = db.update_job_result(job_id, &serde_json::json!({
+                        "correct": correct, "total": total_evaluated,
+                        "accuracy": (accuracy * 10.0).round() / 10.0,
+                        "word_accuracy": (word_acc * 10.0).round() / 10.0,
+                    }).to_string());
+
                     if is_correct {
                         let _ = db.append_job_log(job_id, &format!("[{}/{}] {icon} {term}: P=\"{parakeet}\" Q=\"{qwen}\" => \"{corrected}\"", i+1, total));
                     } else {

@@ -88,6 +88,7 @@ fn main() -> Result<()> {
                 iters,
                 batch_size,
                 num_layers,
+                ..Default::default()
             };
             let status = synth_train::train(&config)?;
             if !status.success() {

@@ -2945,6 +2945,7 @@
             const [status, setStatus] = useState(null);
             const [runningJob, setRunningJob] = useState(null);
             const [jobLog, setJobLog] = useState('');
+            const [liveEval, setLiveEval] = useState(null);
             const [error, setError] = useState(null);
             const pollRef = useRef(null);
             const logRef = useRef(null);
@@ -2957,11 +2958,12 @@
             useEffect(() => { load(); }, []);
             useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [jobLog]);
             useEffect(() => {
-                if (!runningJob) return;
+                if (!runningJob) { setLiveEval(null); return; }
                 const poll = async () => {
                     const job = await api(`/api/jobs/${runningJob.id}`);
                     setJobLog(job.log);
-                    if (job.status !== 'running') { setRunningJob(null); load(); }
+                    if (job.result) try { setLiveEval(JSON.parse(job.result)); } catch {}
+                    if (job.status !== 'running') { setRunningJob(null); setLiveEval(null); load(); }
                 };
                 poll(); pollRef.current = setInterval(poll, 2000);
                 return () => clearInterval(pollRef.current);
@@ -2979,7 +2981,7 @@
 
             if (!status) return <div className="container"><p>Loading...</p></div>;
             const isRunning = !!runningJob;
-            const ev = status.last_eval;
+            const ev = liveEval || status.last_eval;
 
             return (
                 <div className="container">

@@ -42,6 +42,10 @@ pub struct TrainConfig {
     pub iters: usize,
     pub batch_size: usize,
     pub num_layers: usize,
+    /// Stop training if val loss doesn't improve for this many evals. 0 = disabled.
+    pub early_stop_patience: usize,
+    /// How often to run validation (in training steps).
+    pub steps_per_eval: usize,
 }
 
 impl Default for TrainConfig {
@@ -50,9 +54,11 @@ impl Default for TrainConfig {
             data: "training/data".into(),
             adapters: "training/adapters".into(),
             model: "Qwen/Qwen2.5-0.5B".into(),
-            iters: 1000,
+            iters: 2000,
             batch_size: 1,
             num_layers: 4,
+            early_stop_patience: 3,
+            steps_per_eval: 100,
         }
     }
 }
@@ -275,6 +281,7 @@ pub fn train_streaming(
             "--batch-size", &config.batch_size.to_string(),
             "--num-layers", &config.num_layers.to_string(),
             "--adapter-path", &config.adapters,
+            "--steps-per-eval", &config.steps_per_eval.to_string(),
             "--mask-prompt",
         ])
         .stdout(Stdio::piped())
@@ -283,7 +290,10 @@ pub fn train_streaming(
 
     // MLX-LM writes progress to stderr using \r for progress bars.
     // Read byte-by-byte and split on both \r and \n.
-    // For \r lines (progress updates), only emit the final update.
+    // Monitor val loss for early stopping.
+    let mut best_val_loss = f64::INFINITY;
+    let mut patience_remaining = config.early_stop_patience;
+
     if let Some(stderr) = child.stderr.take() {
         use std::io::Read;
         let mut reader = std::io::BufReader::new(stderr);
@@ -294,17 +304,43 @@ pub fn train_streaming(
                 b'\n' => {
                     let line = String::from_utf8_lossy(&buf).to_string();
                     let line = line.trim();
-                    if !line.is_empty() { on_line(line); }
+                    if !line.is_empty() {
+                        on_line(line);
+
+                        // Check for val loss: "Val loss 2.345, Val took 1.2s"
+                        if config.early_stop_patience > 0 {
+                            let lower = line.to_lowercase();
+                            if lower.contains("val") && lower.contains("loss") {
+                                if let Some(loss) = lower.split_whitespace()
+                                    .filter_map(|w| w.trim_matches(',').parse::<f64>().ok())
+                                    .next()
+                                {
+                                    if loss < best_val_loss {
+                                        best_val_loss = loss;
+                                        patience_remaining = config.early_stop_patience;
+                                    } else {
+                                        patience_remaining = patience_remaining.saturating_sub(1);
+                                        if patience_remaining == 0 {
+                                            on_line(&format!(
+                                                "Early stopping: val loss {loss:.4} did not improve from {best_val_loss:.4} for {} evals",
+                                                config.early_stop_patience
+                                            ));
+                                            let _ = child.kill();
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     buf.clear();
                 }
                 b'\r' => {
-                    // Carriage return = overwrite current line. Keep only the latest.
                     buf.clear();
                 }
                 _ => buf.push(byte[0]),
             }
         }
-        // Flush remaining
         if !buf.is_empty() {
             let line = String::from_utf8_lossy(&buf).to_string();
             let line = line.trim();
