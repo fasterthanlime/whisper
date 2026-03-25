@@ -2622,7 +2622,7 @@
                                     const d = await api('/api/pipeline/corpus');
                                     setCorpusData(d.pairs); setCorpusFilter(''); setExpandedTerm(null);
                                     dialogRef.current?.showModal();
-                                }}>{status.corpus_lines} pairs</a>
+                                }}>{liveStats?.pairs_total ?? status.corpus_lines} pairs</a>
                                 <a href="#" style={{color:'var(--text-muted)',fontSize:11}} onClick={async e => {
                                     e.preventDefault();
                                     if (confirm('Delete all corpus pairs?')) { await api('/api/pipeline/reset-corpus', {method:'POST'}); load(); }
