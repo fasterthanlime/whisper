@@ -214,7 +214,7 @@ fn extract_with_consensus(
     let qwen_b = word_boundaries(qwen_align);
     let para_b = word_boundaries(parakeet_align);
 
-    const TOL: f64 = 0.12;
+    const TOL: f64 = 0.03;
     const MAX_STEPS: usize = 5;
 
     // Find start consensus: try term_start, then expand left
