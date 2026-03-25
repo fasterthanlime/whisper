@@ -1846,6 +1846,8 @@
             const [newTerm, setNewTerm] = useState('');
             const [newOverride, setNewOverride] = useState('');
             const [newPreviewed, setNewPreviewed] = useState(false);
+            const [newTermExists, setNewTermExists] = useState(false);
+            const newTermRef = useRef(null);
             const [curating, setCurating] = useState(false);
             const [curateLog, setCurateLog] = useState('');
             const curateRef = useRef(null);
@@ -1883,7 +1885,8 @@
                 if (!newTerm.trim()) return;
                 if (!newPreviewed) {previewNewTerm(); return;}
                 await api('/api/vocab', {method: 'POST', body: JSON.stringify({term: newTerm.trim(), spoken_override: newOverride.trim() || undefined})});
-                setNewTerm(''); setNewOverride(''); setNewPreviewed(false); load();
+                setNewTerm(''); setNewOverride(''); setNewPreviewed(false); setNewTermExists(false); load();
+                setTimeout(() => newTermRef.current?.focus(), 50);
             };
 
             const startCurate = async () => {
@@ -1934,11 +1937,18 @@
                         </button>
                     </div>
                     <div className="search-bar" style={{display: 'flex', gap: 8, alignItems: 'center', marginTop: 8}}>
-                        <input placeholder="New term..." value={newTerm} onChange={e => setNewTerm(e.target.value)}
+                        <input ref={newTermRef} placeholder="New term..." value={newTerm} onChange={e => {
+                                setNewTerm(e.target.value); setNewPreviewed(false);
+                                const v = e.target.value.trim();
+                                if (v) { api(`/api/vocab?search=${encodeURIComponent(v)}&limit=1`).then(list => {
+                                    setNewTermExists(list.some(r => r.term.toLowerCase() === v.toLowerCase()));
+                                }).catch(() => {}); } else { setNewTermExists(false); }
+                            }}
                             onKeyDown={e => {if (e.key === 'Enter') addTerm();}} />
                         <input placeholder="Override (optional)" value={newOverride} onChange={e => {setNewOverride(e.target.value); setNewPreviewed(false);}}
                             onKeyDown={e => {if (e.key === 'Enter') addTerm();}} />
                         <button className="btn btn-sm btn-primary" onClick={addTerm} disabled={!newTerm.trim()}>{newPreviewed ? 'Save' : 'Preview'}</button>
+                        {newTermExists && <span style={{fontSize:11,color:'var(--warning)'}}>already exists</span>}
                     </div>
                     {loading ? <p>Loading...</p> : vocab.length === 0 ? (
                         <div className="empty-state"><h3>No results</h3></div>
