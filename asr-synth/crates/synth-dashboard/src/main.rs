@@ -174,9 +174,12 @@ async fn api_vocab_add(
     let spoken_auto = synth_textgen::corpus::to_spoken(&term);
     let db = state.db.lock().unwrap();
     db.insert_candidate_vocab(&term, &spoken_auto).map_err(err)?;
-    if let Some(ref spoken) = body.spoken_override {
-        if !spoken.is_empty() {
-            if let Ok(Some(row)) = db.find_vocab_by_term(&term) {
+    if let Ok(Some(row)) = db.find_vocab_by_term(&term) {
+        // Manual add = automatically reviewed + curated
+        db.set_vocab_reviewed(row.id, true).map_err(err)?;
+        db.set_vocab_curated(&term, "kept").map_err(err)?;
+        if let Some(ref spoken) = body.spoken_override {
+            if !spoken.is_empty() {
                 db.update_vocab_override(row.id, Some(spoken)).map_err(err)?;
             }
         }
