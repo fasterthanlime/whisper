@@ -86,10 +86,13 @@ pub fn err(e: impl std::fmt::Display) -> AppError {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
-async fn index() -> Result<Html<String>, AppError> {
+async fn index() -> Result<Response, AppError> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("static/index.html");
     let content = std::fs::read_to_string(&path).map_err(err)?;
-    Ok(Html(content))
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Html(content),
+    ).into_response())
 }
 
 // ==================== STATS ====================
