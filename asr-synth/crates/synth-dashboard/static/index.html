@@ -2579,6 +2579,8 @@
             const [spellLoading, setSpellLoading] = useState(false);
             const [suggestions, setSuggestions] = useState(null);
             const [suggestLoading, setSuggestLoading] = useState(false);
+            const [suggestIdx, setSuggestIdx] = useState(0);
+            const suggestPronRef = useRef(null);
             const inputRef = useRef(null);
 
             const loadNext = () => {
@@ -2663,41 +2665,67 @@
                         </div>
                     )}
 
-                    {suggestions && (
-                        <div className="card" style={{marginBottom:12}}>
-                            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
-                                <h3 style={{margin:0}}>Suggested Vocab</h3>
-                                <button onClick={() => setSuggestions(null)} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer'}}>&times;</button>
+                    {suggestions && (() => {
+                        const s = suggestions[suggestIdx];
+                        if (!s) return (
+                            <div className="card" style={{marginBottom:12,textAlign:'center',padding:24}}>
+                                <div style={{color:'var(--success)',fontSize:16,marginBottom:8}}>All {suggestions.length === 0 ? 'suggestions' : suggestions.length + ' suggestions'} reviewed!</div>
+                                <button className="btn btn-sm" onClick={() => setSuggestions(null)}>Close</button>
                             </div>
-                            {suggestions.map((s, i) => {
-                                const pron = s._override ?? s.pronunciation;
-                                const spokenSentence = s.sentence ? (() => {
-                                    const idx = s.sentence.toLowerCase().indexOf(s.term.toLowerCase());
-                                    if (idx >= 0) return s.sentence.slice(0, idx) + pron + s.sentence.slice(idx + s.term.length);
-                                    return s.sentence;
-                                })() : pron;
-                                return (
-                                <div key={i} style={{padding:'8px 0',borderBottom:'1px solid rgba(255,255,255,0.04)',fontSize:12}}>
-                                    <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                                        <span style={{fontWeight:700,fontFamily:'monospace',minWidth:100,fontSize:14}}>{s.term}</span>
-                                        <input value={pron} onChange={e => setSuggestions(prev => prev.map((x, j) => j === i ? {...x, _override: e.target.value} : x))}
-                                            style={{padding:'2px 6px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--accent)',fontSize:12,fontFamily:'Jost,sans-serif',width:140}} />
-                                        <PlayBtn text={spokenSentence} small />
-                                        <div style={{flex:1}} />
-                                        <button className="btn btn-sm" onClick={async () => {
-                                            await api('/api/vocab', {method:'POST', body: JSON.stringify({term: s.term, spoken_override: pron})});
-                                            setSuggestions(prev => prev.filter((_, j) => j !== i));
-                                            loadStats();
-                                        }} style={{color:'var(--success)',borderColor:'var(--success)'}}>Add</button>
-                                        <button className="btn btn-sm" onClick={() => setSuggestions(prev => prev.filter((_, j) => j !== i))}>Skip</button>
-                                    </div>
-                                    {s.sentence && <div style={{marginTop:3,color:'var(--text-muted)',fontSize:11,fontStyle:'italic'}}>"{s.sentence}"</div>}
-                                </div>
-                                );
-                            })}
-                            {suggestions.length === 0 && <div style={{color:'var(--text-muted)'}}>All reviewed!</div>}
+                        );
+                        const pron = s._override ?? s.pronunciation;
+                        const spokenSentence = s.sentence ? (() => {
+                            const idx = s.sentence.toLowerCase().indexOf(s.term.toLowerCase());
+                            if (idx >= 0) return s.sentence.slice(0, idx) + pron + s.sentence.slice(idx + s.term.length);
+                            return s.sentence;
+                        })() : pron;
+                        const doAdd = async () => {
+                            await api('/api/vocab', {method:'POST', body: JSON.stringify({term: s.term, spoken_override: pron})});
+                            setSuggestions(prev => { const n = prev.filter((_, j) => j !== suggestIdx); return n; });
+                            setSuggestIdx(i => Math.min(i, suggestions.length - 2));
+                            loadStats();
+                            setTimeout(() => suggestPronRef.current?.focus(), 50);
+                        };
+                        const doSkip = () => {
+                            setSuggestions(prev => prev.filter((_, j) => j !== suggestIdx));
+                            setSuggestIdx(i => Math.min(i, suggestions.length - 2));
+                            setTimeout(() => suggestPronRef.current?.focus(), 50);
+                        };
+                        const doPlay = () => {
+                            fetchTtsBuffer(spokenSentence).then(buf => playBuffer(buf)).catch(() => {});
+                        };
+                        return (
+                        <div className="card" style={{marginBottom:12}}>
+                            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
+                                <h3 style={{margin:0}}>Suggested Vocab</h3>
+                                <span style={{fontSize:12,color:'var(--text-muted)'}}>{suggestIdx + 1} / {suggestions.length}</span>
+                                <div style={{flex:1}} />
+                                <button onClick={() => setSuggestions(null)} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:16}}>&times;</button>
+                            </div>
+                            <div style={{textAlign:'center',marginBottom:12}}>
+                                <div style={{fontSize:28,fontWeight:700,fontFamily:'monospace',color:'var(--text)'}}>{s.term}</div>
+                                {s.sentence && <div style={{marginTop:6,color:'var(--text-muted)',fontSize:13,fontStyle:'italic'}}>"{s.sentence}"</div>}
+                            </div>
+                            <div style={{display:'flex',gap:8,alignItems:'center',justifyContent:'center',marginBottom:12}}>
+                                <label style={{fontSize:11,color:'var(--text-muted)'}}>Pronunciation:</label>
+                                <input ref={suggestPronRef} value={pron}
+                                    onChange={e => setSuggestions(prev => prev.map((x, j) => j === suggestIdx ? {...x, _override: e.target.value} : x))}
+                                    onKeyDown={e => {
+                                        if (e.key === 'Enter') { e.preventDefault(); doAdd(); }
+                                        else if (e.key === 'Escape') { e.preventDefault(); doSkip(); }
+                                        else if (e.key === ' ' && e.ctrlKey) { e.preventDefault(); doPlay(); }
+                                    }}
+                                    autoFocus
+                                    style={{padding:'6px 10px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,color:'var(--accent)',fontSize:15,fontFamily:'Jost,sans-serif',width:200,textAlign:'center'}} />
+                                <button onClick={doPlay} style={{background:'none',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',cursor:'pointer',padding:'4px 10px',fontSize:13}}>&#9654;</button>
+                            </div>
+                            <div style={{display:'flex',gap:8,justifyContent:'center'}}>
+                                <button className="btn btn-primary" onClick={doAdd}>Add (Enter)</button>
+                                <button className="btn" onClick={doSkip}>Skip (Esc)</button>
+                            </div>
                         </div>
-                    )}
+                        );
+                    })()}
 
                     {error && <div className="pipeline-error" style={{marginBottom:12}}>{error}</div>}
 
