@@ -167,12 +167,16 @@ fn find_term_time_range(
     None
 }
 
-/// Get all word boundary times (start of each word) from alignment items.
+/// Get all word boundary times (start AND end of each word).
+/// This captures gaps between words as distinct boundaries.
 fn word_boundaries(items: &[qwen3_asr::ForcedAlignItem]) -> Vec<f64> {
-    let mut bounds: Vec<f64> = items.iter().map(|a| a.start_time).collect();
-    if let Some(last) = items.last() {
-        bounds.push(last.end_time);
+    let mut bounds = Vec::with_capacity(items.len() * 2);
+    for a in items {
+        bounds.push(a.start_time);
+        bounds.push(a.end_time);
     }
+    bounds.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    bounds.dedup_by(|a, b| (*a - *b).abs() < 0.001);
     bounds
 }
 
