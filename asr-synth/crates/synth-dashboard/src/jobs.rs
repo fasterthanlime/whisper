@@ -510,6 +510,7 @@ async fn run_corpus_job(
 
             writeln!(file, "{}", serde_json::json!({
                 "term": item.term,
+                "spoken_term": item.spoken,
                 "sentence": sentence,
                 "spoken": spoken,
                 "qwen_full": qwen_full,

@@ -2710,6 +2710,7 @@
                                                                 </div>}
                                                                 {tt && <div style={{color:'var(--text-muted)'}}>
                                                                     <b>Term time:</b> {tt[0]?.toFixed(2)}s – {tt[1]?.toFixed(2)}s
+                                                                    {p.spoken_term && <span style={{marginLeft:8}}><b>Searching for:</b> "{p.spoken_term}"</span>}
                                                                 </div>}
                                                                 <div style={{display:'flex',gap:24,marginTop:4}}>
                                                                     <div>
