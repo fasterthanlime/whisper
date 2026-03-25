@@ -288,63 +288,85 @@ pub fn train_streaming(
         .stderr(Stdio::piped())
         .spawn()?;
 
-    // MLX-LM writes progress to stderr using \r for progress bars.
-    // Read byte-by-byte and split on both \r and \n.
-    // Monitor val loss for early stopping.
+    // MLX-LM writes progress bars to stderr (with \r) and training results to stdout.
+    // Merge both streams and parse line-by-line, monitoring val loss for early stopping.
     let mut best_val_loss = f64::INFINITY;
     let mut patience_remaining = config.early_stop_patience;
+    let mut should_kill = false;
 
+    // Read both stdout and stderr on separate threads, funnel into one channel
+    let (line_tx, line_rx) = std::sync::mpsc::channel::<String>();
+
+    // Stderr reader (handles \r progress bars)
     if let Some(stderr) = child.stderr.take() {
-        use std::io::Read;
-        let mut reader = std::io::BufReader::new(stderr);
-        let mut buf = Vec::new();
-        let mut byte = [0u8; 1];
-        while reader.read(&mut byte).unwrap_or(0) == 1 {
-            match byte[0] {
-                b'\n' => {
-                    let line = String::from_utf8_lossy(&buf).to_string();
-                    let line = line.trim();
-                    if !line.is_empty() {
-                        on_line(line);
+        let tx = line_tx.clone();
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut reader = std::io::BufReader::new(stderr);
+            let mut buf = Vec::new();
+            let mut byte = [0u8; 1];
+            while reader.read(&mut byte).unwrap_or(0) == 1 {
+                match byte[0] {
+                    b'\n' => {
+                        let line = String::from_utf8_lossy(&buf).trim().to_string();
+                        if !line.is_empty() { let _ = tx.send(line); }
+                        buf.clear();
+                    }
+                    b'\r' => { buf.clear(); }
+                    _ => buf.push(byte[0]),
+                }
+            }
+            if !buf.is_empty() {
+                let line = String::from_utf8_lossy(&buf).trim().to_string();
+                if !line.is_empty() { let _ = tx.send(line); }
+            }
+        });
+    }
 
-                        // Check for val loss: "Val loss 2.345, Val took 1.2s"
-                        if config.early_stop_patience > 0 {
-                            let lower = line.to_lowercase();
-                            if lower.contains("val") && lower.contains("loss") {
-                                if let Some(loss) = lower.split_whitespace()
-                                    .filter_map(|w| w.trim_matches(',').parse::<f64>().ok())
-                                    .next()
-                                {
-                                    if loss < best_val_loss {
-                                        best_val_loss = loss;
-                                        patience_remaining = config.early_stop_patience;
-                                    } else {
-                                        patience_remaining = patience_remaining.saturating_sub(1);
-                                        if patience_remaining == 0 {
-                                            on_line(&format!(
-                                                "Early stopping: val loss {loss:.4} did not improve from {best_val_loss:.4} for {} evals",
-                                                config.early_stop_patience
-                                            ));
-                                            let _ = child.kill();
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
+    // Stdout reader (line-based, training output)
+    if let Some(stdout) = child.stdout.take() {
+        let tx = line_tx.clone();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            let reader = std::io::BufReader::new(stdout);
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                let line = line.trim().to_string();
+                if !line.is_empty() { let _ = tx.send(line); }
+            }
+        });
+    }
+
+    drop(line_tx); // Close sender so receiver knows when both threads are done
+
+    for line in line_rx {
+        on_line(&line);
+
+        // Check for val loss for early stopping
+        if config.early_stop_patience > 0 {
+            let lower = line.to_lowercase();
+            if lower.contains("val") && lower.contains("loss") {
+                if let Some(loss) = lower.split_whitespace()
+                    .filter_map(|w| w.trim_matches(',').parse::<f64>().ok())
+                    .next()
+                {
+                    if loss < best_val_loss {
+                        best_val_loss = loss;
+                        patience_remaining = config.early_stop_patience;
+                    } else {
+                        patience_remaining = patience_remaining.saturating_sub(1);
+                        if patience_remaining == 0 {
+                            on_line(&format!(
+                                "Early stopping: val loss {loss:.4} did not improve from {best_val_loss:.4} for {} evals",
+                                config.early_stop_patience
+                            ));
+                            let _ = child.kill();
+                            should_kill = true;
+                            break;
                         }
                     }
-                    buf.clear();
                 }
-                b'\r' => {
-                    buf.clear();
-                }
-                _ => buf.push(byte[0]),
             }
-        }
-        if !buf.is_empty() {
-            let line = String::from_utf8_lossy(&buf).to_string();
-            let line = line.trim();
-            if !line.is_empty() { on_line(line); }
         }
     }
 
