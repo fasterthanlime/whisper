@@ -76,15 +76,19 @@ struct CorpusPassResult {
     term_found: bool,
     /// Time range of the term in the original alignment
     term_range: (f64, f64),
+    /// Forced alignment of the spoken sentence against audio (for visualization)
+    spoken_alignment: Vec<qwen3_asr::ForcedAlignItem>,
 }
 
 /// Run the ASR + alignment + extraction pipeline on pre-generated audio.
 /// `written` is the sentence as written (for alignment ground truth).
+/// `spoken` is the sentence as spoken (for TTS alignment / visualization).
 /// `term` is the written form of the vocab term (for finding the time range).
 async fn run_corpus_pass(
     state: &Arc<AppState>,
     full_16k: &[f32],
     written: &WrittenSentence,
+    spoken: &SpokenSentence,
     term: &WrittenTerm,
 ) -> anyhow::Result<CorpusPassResult> {
     // Dual ASR
@@ -108,8 +112,9 @@ async fn run_corpus_pass(
     let qwen_full = qwen_full.unwrap_or_default();
     let parakeet_full = parakeet_full.unwrap_or_default();
 
-    // Alignment — always align against the WRITTEN sentence (ground truth)
+    // Alignment — written sentence is ground truth, spoken sentence for visualization
     let orig_alignment = state.aligner.align(full_16k, &written.0).unwrap_or_default();
+    let spoken_alignment = state.aligner.align(full_16k, &spoken.0).unwrap_or_default();
 
     // Find the WRITTEN term in the original alignment
     let term_lower = term.0.to_lowercase();
@@ -127,7 +132,7 @@ async fn run_corpus_pass(
 
     Ok(CorpusPassResult {
         sentence: written.clone(),
-        spoken_sentence: SpokenSentence(String::new()), // filled by caller
+        spoken_sentence: spoken.clone(),
         qwen_full,
         parakeet_full,
         orig_alignment,
@@ -136,6 +141,7 @@ async fn run_corpus_pass(
         extraction,
         term_found: term_found_range.is_some(),
         term_range: (term_start, term_end),
+        spoken_alignment,
     })
 }
 
@@ -850,7 +856,8 @@ async fn run_corpus_job(
         let t0 = std::time::Instant::now();
         let written_term = WrittenTerm(pi.term.clone());
         let written_sentence = WrittenSentence(pi.sentence.clone());
-        let result = match run_corpus_pass(state, &full_16k, &written_sentence, &written_term).await {
+        let spoken_sentence = SpokenSentence(pi.spoken.clone());
+        let result = match run_corpus_pass(state, &full_16k, &written_sentence, &spoken_sentence, &written_term).await {
             Ok(r) => r,
             Err(e) => {
                 let db = state.db.lock().unwrap();
@@ -1778,9 +1785,8 @@ pub async fn api_test_term(
         base64::engine::general_purpose::STANDARD.encode(&wav)
     };
 
-    // Pipeline uses the WRITTEN term and WRITTEN sentence
-    let mut result = run_corpus_pass(&state, &full_16k, &written_sentence, &written).await.map_err(err)?;
-    result.spoken_sentence = spoken_sentence;
+    // Pipeline uses the WRITTEN term and both sentence forms
+    let result = run_corpus_pass(&state, &full_16k, &written_sentence, &spoken_sentence, &written).await.map_err(err)?;
 
     let ex = &result.extraction;
     Ok(Json(serde_json::json!({
@@ -1799,6 +1805,7 @@ pub async fn api_test_term(
             "cons_range": [ex.cons_range.0, ex.cons_range.1],
         },
         "alignments": {
+            "spoken": fmt_alignment_json(&result.spoken_alignment),
             "original": fmt_alignment_json(&result.orig_alignment),
             "qwen": fmt_alignment_json(&result.qwen_alignment),
             "parakeet": fmt_alignment_json(&result.parakeet_alignment),

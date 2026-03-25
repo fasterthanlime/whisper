@@ -2548,18 +2548,20 @@
         // ==================== SHARED: Alignment Timeline ====================
 
         function AlignmentView({data}) {
-            // data: { term, spoken, sentence, spoken_sentence, qwen_full, parakeet_full,
-            //         extraction: {original, qwen, parakeet, clean, cons_range},
-            //         alignments: {original, qwen, parakeet}, term_range }
             if (!data) return null;
             const ex = data.extraction || {};
             const al = data.alignments || {};
+            const spokenItems = al.spoken || [];
             const origItems = al.original || [];
             const qwenItems = al.qwen || [];
             const paraItems = al.parakeet || [];
-            const allItems = [...origItems, ...qwenItems, ...paraItems];
+            const allItems = [...spokenItems, ...origItems, ...qwenItems, ...paraItems];
             const maxTime = allItems.length ? Math.max(...allItems.map(a => a.e)) : 1;
             const pct = t => (t / maxTime * 100).toFixed(2) + '%';
+
+            const [playbackTime, setPlaybackTime] = useState(-1);
+            const audioRef = useRef(null);
+            const animRef = useRef(null);
 
             const extractedIndices = (items, extracted) => {
                 if (!extracted) return new Set();
@@ -2581,53 +2583,61 @@
                     <div style={{position:'relative',flex:1,height:22,background:'rgba(255,255,255,0.03)',borderRadius:3,overflow:'hidden'}}>
                         {items.map((a, j) => {
                             const hl = highlighted.has(j);
+                            const playing = playbackTime >= 0 && playbackTime >= a.s && playbackTime < a.e;
                             return (<div key={j} title={`${a.w} (${a.s}s–${a.e}s)`} style={{
                                 position:'absolute', left:pct(a.s), width:pct(Math.max(a.e - a.s, 0.02)), top:2, bottom:2, borderRadius:2,
-                                background: hl ? color : 'rgba(255,255,255,0.08)', border:`1px solid ${hl ? color : 'rgba(255,255,255,0.12)'}`,
+                                background: playing ? '#fff3' : hl ? color : 'rgba(255,255,255,0.08)',
+                                border:`1px solid ${playing ? '#fff8' : hl ? color : 'rgba(255,255,255,0.12)'}`,
                                 display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden',
-                            }}><span style={{fontSize:8, color: hl ? '#fff' : 'var(--text-muted)', whiteSpace:'nowrap', padding:'0 2px'}}>{a.w}</span></div>);
+                                transition: 'background 0.05s',
+                            }}><span style={{fontSize:8, color: playing ? '#fff' : hl ? '#fff' : 'var(--text-muted)', whiteSpace:'nowrap', padding:'0 2px',
+                                fontWeight: playing ? 700 : 400}}>{a.w}</span></div>);
                         })}
+                        {playbackTime >= 0 && <div style={{position:'absolute',left:pct(playbackTime),top:0,bottom:0,width:1,background:'#fff',zIndex:10,pointerEvents:'none'}} />}
                     </div>
                 </div>
             );
 
-            const origMatch = ex.original?.toLowerCase().replace(/[.,!?]/g,'').trim();
-            const qwenMatch = ex.qwen?.toLowerCase().replace(/[.,!?]/g,'').trim() === origMatch;
-            const paraMatch = ex.parakeet?.toLowerCase().replace(/[.,!?]/g,'').trim() === origMatch;
-
             const playWav = () => {
                 if (!data.wav_b64) return;
+                if (audioRef.current) { audioRef.current.pause(); }
                 const bin = atob(data.wav_b64);
                 const buf = new Uint8Array(bin.length);
                 for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
                 const blob = new Blob([buf], {type: 'audio/wav'});
                 const url = URL.createObjectURL(blob);
                 const a = new Audio(url);
+                audioRef.current = a;
+                const tick = () => {
+                    if (!a.paused) {
+                        setPlaybackTime(a.currentTime);
+                        animRef.current = requestAnimationFrame(tick);
+                    }
+                };
+                a.onplay = () => { animRef.current = requestAnimationFrame(tick); };
+                a.onended = () => { setPlaybackTime(-1); URL.revokeObjectURL(url); cancelAnimationFrame(animRef.current); };
+                a.onpause = () => { cancelAnimationFrame(animRef.current); };
                 a.play();
-                a.onended = () => URL.revokeObjectURL(url);
             };
+
+            const origMatch = ex.original?.toLowerCase().replace(/[.,!?]/g,'').trim();
+            const qwenMatch = ex.qwen?.toLowerCase().replace(/[.,!?]/g,'').trim() === origMatch;
+            const paraMatch = ex.parakeet?.toLowerCase().replace(/[.,!?]/g,'').trim() === origMatch;
 
             return (
                 <div style={{fontSize:12,lineHeight:1.6}}>
-                    <div style={{marginBottom:6}}>
-                        <div style={{color:'var(--text-muted)',display:'flex',alignItems:'center',gap:8}}>
-                            <b>Sentence:</b> {data.sentence}
-                            {data.wav_b64 && <button onClick={playWav} style={{background:'none',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',cursor:'pointer',padding:'1px 8px',fontSize:11}}>&#9654; Play</button>}
-                        </div>
-                        {data.spoken_sentence && data.spoken_sentence !== data.sentence &&
-                            <div style={{color:'var(--text-muted)'}}><b>Spoken:</b> {data.spoken_sentence}</div>}
-                        <div style={{color:'var(--text-muted)'}}><b>Qwen full:</b> {data.qwen_full}</div>
-                        <div style={{color:'var(--text-muted)'}}><b>Parakeet full:</b> {data.parakeet_full}</div>
-                    </div>
-                    <div style={{display:'flex',gap:16,padding:'6px 10px',background:'rgba(0,0,0,0.2)',borderRadius:4,fontFamily:'monospace',fontSize:13,marginBottom:6}}>
+                    <div style={{display:'flex',gap:16,padding:'6px 10px',background:'rgba(0,0,0,0.2)',borderRadius:4,fontFamily:'monospace',fontSize:13,marginBottom:6,alignItems:'center'}}>
                         <div><span style={{color:'rgba(88,166,255,0.7)',fontWeight:600}}>{ex.original||'—'}</span><span style={{color:'var(--text-muted)',fontSize:10,marginLeft:4}}>orig</span></div>
                         <div style={{color:'var(--text-muted)'}}>&rarr;</div>
                         <div><span style={{color:qwenMatch?'var(--success)':'var(--error)',fontWeight:600}}>{ex.qwen||'—'}</span><span style={{color:'var(--text-muted)',fontSize:10,marginLeft:4}}>Q</span></div>
                         <div><span style={{color:paraMatch?'var(--success)':'var(--error)',fontWeight:600}}>{ex.parakeet||'—'}</span><span style={{color:'var(--text-muted)',fontSize:10,marginLeft:4}}>P</span></div>
                         {ex.clean === false && <span style={{color:'var(--warning)',fontSize:11}}>noisy</span>}
                         {ex.clean === true && <span style={{color:'var(--success)',fontSize:11}}>clean</span>}
+                        <div style={{flex:1}} />
+                        {data.wav_b64 && <button onClick={playWav} style={{background:'none',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',cursor:'pointer',padding:'2px 10px',fontSize:11}}>&#9654;</button>}
                     </div>
                     <div style={{marginBottom:4}}>
+                        {renderTimeline('Spoken', spokenItems, 'rgba(126,231,135,0.5)', new Set())}
                         {renderTimeline('Original', origItems, 'rgba(88,166,255,0.6)', origIdx)}
                         {renderTimeline('Qwen', qwenItems, 'rgba(210,153,34,0.7)', qwenIdx)}
                         {renderTimeline('Parakeet', paraItems, 'rgba(163,113,247,0.7)', paraIdx)}
@@ -2636,10 +2646,10 @@
                         </div>
                     </div>
                     {ex.cons_range && <div style={{fontSize:10,color:'var(--text-muted)'}}>
-                        Consensus range: {ex.cons_range[0]?.toFixed(3)}s – {ex.cons_range[1]?.toFixed(3)}s
-                        {data.term_range && <span> | Term range: {data.term_range[0]?.toFixed(3)}s – {data.term_range[1]?.toFixed(3)}s</span>}
-                        {data.term_found === false && <span style={{color:'var(--error)',fontWeight:700,marginLeft:8}}>TERM NOT FOUND IN ALIGNMENT</span>}
-                        {data.term_found === true && <span style={{color:'var(--success)',marginLeft:8}}>term found</span>}
+                        Consensus: {ex.cons_range[0]?.toFixed(3)}s – {ex.cons_range[1]?.toFixed(3)}s
+                        {data.term_range && <span> | Term: {data.term_range[0]?.toFixed(3)}s – {data.term_range[1]?.toFixed(3)}s</span>}
+                        {data.term_found === false && <span style={{color:'var(--error)',fontWeight:700,marginLeft:8}}>TERM NOT FOUND</span>}
+                        {data.term_found === true && <span style={{color:'var(--success)',marginLeft:8}}>found</span>}
                     </div>}
                 </div>
             );
