@@ -163,6 +163,17 @@ async fn api_vocab_update(
     Ok(Json(serde_json::json!({ "ok": true })).into_response())
 }
 
+async fn api_vocab_delete(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let db = state.db.lock().unwrap();
+    if let Some(row) = db.get_vocab(id).map_err(err)? {
+        db.delete_vocab_by_term(&row.term).map_err(err)?;
+    }
+    Ok(Json(serde_json::json!({"ok": true})).into_response())
+}
+
 async fn api_vocab_add(
     State(state): State<Arc<AppState>>,
     Json(body): Json<VocabAddBody>,
@@ -930,6 +941,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/vocab", get(api_vocab_list).post(api_vocab_add))
         .route("/api/vocab/import", post(api_vocab_import))
         .route("/api/vocab/{id}", post(api_vocab_update))
+        .route("/api/vocab/{id}/delete", post(api_vocab_delete))
         // Candidates + Sentences
         .route("/api/candidates/import", post(api_candidates_import))
         .route("/api/sentences", get(api_sentences_list))

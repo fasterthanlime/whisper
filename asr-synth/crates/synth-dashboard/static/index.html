@@ -1978,6 +1978,12 @@
                                                 )}
                                             </td>
                                             <td><PlayBtn text={row.spoken_override || row.spoken_auto} small /></td>
+                                            <td><button onClick={async () => {
+                                                if (confirm(`Delete "${row.term}"?`)) {
+                                                    await api(`/api/vocab/${row.id}/delete`, {method:'POST'});
+                                                    load();
+                                                }
+                                            }} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:13,padding:2}} title="Delete">&times;</button></td>
                                         </tr>
                                     ))}
                                 </tbody>
