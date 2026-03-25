@@ -2980,41 +2980,32 @@
                 <div className="container">
                     <h2>Evaluate</h2>
                     <p style={{color: 'var(--text-muted)', marginBottom: 16}}>
-                        Run the correction model on approved sentences and measure accuracy.
+                        Run the correction model on corpus triplets and measure accuracy.
                     </p>
-                    {error && <div className="pipeline-error">{error}</div>}
-                    {isRunning && <div style={{textAlign:'right',marginBottom:8}}><button className="stage-launch-btn" style={{borderColor:'var(--warning)',color:'var(--warning)',background:'rgba(210,153,34,0.1)'}} onClick={stopJob}>Stop</button></div>}
+                    {error && <div className="pipeline-error" style={{marginBottom:12}}>{error}</div>}
 
                     {ev && (
-                        <div style={{display:'flex',gap:16,marginBottom:24}}>
-                            <div style={{padding:'12px 20px',background:'rgba(63,185,80,0.08)',border:'1px solid rgba(63,185,80,0.15)',borderRadius:8}}>
-                                <div style={{fontSize:28,fontWeight:600,color:'var(--success)'}}>{ev.accuracy?.toFixed(1)}%</div>
-                                <div style={{fontSize:11,color:'var(--text-muted)',letterSpacing:'0.5px',textTransform:'uppercase'}}>Sentence accuracy</div>
-                            </div>
-                            <div style={{padding:'12px 20px',background:'rgba(88,166,255,0.08)',border:'1px solid rgba(88,166,255,0.15)',borderRadius:8}}>
-                                <div style={{fontSize:28,fontWeight:600,color:'var(--accent)'}}>{ev.word_accuracy?.toFixed(1)}%</div>
-                                <div style={{fontSize:11,color:'var(--text-muted)',letterSpacing:'0.5px',textTransform:'uppercase'}}>Word accuracy</div>
-                            </div>
-                            <div style={{padding:'12px 20px',background:'rgba(139,148,158,0.08)',border:'1px solid rgba(139,148,158,0.15)',borderRadius:8}}>
-                                <div style={{fontSize:28,fontWeight:600}}>{ev.correct}/{ev.total}</div>
-                                <div style={{fontSize:11,color:'var(--text-muted)',letterSpacing:'0.5px',textTransform:'uppercase'}}>Correct</div>
-                            </div>
+                        <div className="stats-grid" style={{marginBottom:16}}>
+                            <div className="stat-card"><div className="value" style={{color:'var(--success)'}}>{ev.accuracy?.toFixed(1)}%</div><div className="label">Fragment Accuracy</div></div>
+                            <div className="stat-card"><div className="value" style={{color:'var(--accent)'}}>{ev.word_accuracy?.toFixed(1)}%</div><div className="label">Word Accuracy</div></div>
+                            <div className="stat-card"><div className="value">{ev.correct}/{ev.total}</div><div className="label">Correct</div></div>
                         </div>
                     )}
 
                     <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:16}}>
-                        <button className="btn btn-primary" disabled={isRunning || !status.adapters_exist || !status.corpus_exists}
-                            onClick={startEval}>
-                            {isRunning ? 'Evaluating...' : ev ? 'Re-evaluate' : 'Evaluate'}
-                        </button>
-                        <span style={{fontSize:13,color:'var(--text-muted)'}}>{status.human_recordings} human recordings</span>
+                        {isRunning
+                            ? <button className="btn" style={{borderColor:'var(--warning)',color:'var(--warning)',background:'rgba(210,153,34,0.1)'}} onClick={stopJob}>Stop</button>
+                            : <button className="btn btn-primary" disabled={!status.adapters_exist || !status.corpus_exists}
+                                onClick={startEval}>{ev ? 'Re-evaluate' : 'Evaluate'}</button>
+                        }
                         {!status.adapters_exist && <span style={{fontSize:12,color:'var(--text-muted)'}}>Train adapters first.</span>}
+                        {!status.corpus_exists && <span style={{fontSize:12,color:'var(--text-muted)'}}>Generate corpus first.</span>}
                     </div>
 
-                    {isRunning && jobLog && <pre ref={logRef} className="stage-log" style={{maxHeight:400}}>{jobLog}</pre>}
+                    {jobLog && <pre ref={logRef} className="stage-log" style={{maxHeight:400,marginBottom:24}}>{jobLog}</pre>}
 
                     {status.adapters_exist && (
-                        <div style={{marginTop: 32}}>
+                        <div>
                             <h3>Live Correction Demo</h3>
                             <LiveCorrection />
                         </div>

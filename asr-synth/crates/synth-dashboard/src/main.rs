@@ -30,6 +30,8 @@ pub struct AppState {
     vocab_precompute_notify: std::sync::Arc<tokio::sync::Notify>,
     audio_dir: String,
     job_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Shared inference server for live correction (started on first use)
+    inference_server: std::sync::Mutex<Option<synth_train::InferenceServer>>,
 }
 
 #[derive(Deserialize)]
@@ -853,6 +855,7 @@ async fn main() -> anyhow::Result<()> {
         vocab_precompute_notify: vocab_precompute_notify.clone(),
         audio_dir: audio_dir.clone(),
         job_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        inference_server: std::sync::Mutex::new(None),
     });
 
     // Start background pre-computation loop

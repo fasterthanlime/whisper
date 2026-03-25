@@ -1351,15 +1351,31 @@ pub async fn api_start_eval_job(
             }
         };
 
-        let sentences = {
-            let db = state2.db.lock().unwrap();
-            db.list_approved_sentences().unwrap_or_default()
-        };
+        // Read corpus triplets (only clean ones)
+        let corpus: Vec<serde_json::Value> = std::fs::read_to_string("data/corpus_dashboard.jsonl")
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .filter(|v: &serde_json::Value| v["clean"].as_bool() == Some(true))
+            .collect();
 
-        let total = sentences.len();
+        // Deduplicate: keep unique (original, qwen, parakeet) triplets
+        let mut seen = std::collections::HashSet::new();
+        let triplets: Vec<(String, String, String, String)> = corpus.iter()
+            .filter_map(|v| {
+                let orig = v["original"].as_str()?.to_string();
+                let q = v["qwen"].as_str()?.to_string();
+                let p = v["parakeet"].as_str()?.to_string();
+                let term = v["term"].as_str().unwrap_or("").to_string();
+                let key = format!("{}|{}|{}", orig.to_lowercase(), q.to_lowercase(), p.to_lowercase());
+                if seen.insert(key) { Some((orig, q, p, term)) } else { None }
+            })
+            .collect();
+
+        let total = triplets.len();
         {
             let db = state2.db.lock().unwrap();
-            let _ = db.append_job_log(job_id, &format!("Server ready. Evaluating {total} sentences..."));
+            let _ = db.append_job_log(job_id, &format!("Server ready. Evaluating {total} unique clean triplets..."));
         }
 
         let mut correct = 0usize;
@@ -1367,42 +1383,21 @@ pub async fn api_start_eval_job(
         let mut total_words = 0usize;
         let mut corrected_words = 0usize;
 
-        // Read corpus for ASR outputs
-        let corpus: Vec<serde_json::Value> = std::fs::read_to_string("data/corpus_dashboard.jsonl")
-            .unwrap_or_default()
-            .lines()
-            .filter_map(|l| serde_json::from_str(l).ok())
-            .collect();
-
-        let corpus_map: std::collections::HashMap<String, (String, String)> = corpus.iter()
-            .filter_map(|v| {
-                let orig = v["original"].as_str()?.to_string();
-                let p = v["parakeet"].as_str()?.to_string();
-                let q = v["qwen"].as_str()?.to_string();
-                Some((orig, (p, q)))
-            })
-            .collect();
-
-        for (i, sentence) in sentences.iter().enumerate() {
-            let (parakeet, qwen) = match corpus_map.get(&sentence.text) {
-                Some(pair) => pair.clone(),
-                None => {
-                    let db = state2.db.lock().unwrap();
-                    let _ = db.append_job_log(job_id, &format!("[{}/{}] SKIP (no corpus entry)", i+1, total));
-                    continue;
-                }
-            };
-
-            let prompt = synth_train::build_correction_prompt(&parakeet, &qwen);
+        for (i, (original, qwen, parakeet, term)) in triplets.iter().enumerate() {
+            let original: &str = original;
+            let qwen: &str = qwen;
+            let parakeet: &str = parakeet;
+            let term: &str = term;
+            let prompt = synth_train::build_correction_prompt(parakeet, qwen);
             match server.infer(&prompt) {
                 Ok(corrected) => {
                     total_evaluated += 1;
-                    let original_clean = sentence.text.trim().to_lowercase();
+                    let original_clean = original.trim().to_lowercase();
                     let corrected_clean = corrected.trim().to_lowercase();
                     let is_correct = original_clean == corrected_clean;
                     if is_correct { correct += 1; }
 
-                    let orig_words: Vec<&str> = sentence.text.split_whitespace().collect();
+                    let orig_words: Vec<&str> = original.split_whitespace().collect();
                     let corr_words: Vec<&str> = corrected.split_whitespace().collect();
                     total_words += orig_words.len();
                     corrected_words += orig_words.iter().zip(corr_words.iter())
@@ -1410,14 +1405,13 @@ pub async fn api_start_eval_job(
                         .count();
 
                     let icon = if is_correct { "\u{2713}" } else { "\u{2717}" };
-                    let preview: String = sentence.text.chars().take(50).collect();
                     let db = state2.db.lock().unwrap();
                     if is_correct {
-                        let _ = db.append_job_log(job_id, &format!("[{}/{}] {icon} {preview}", i+1, total));
+                        let _ = db.append_job_log(job_id, &format!("[{}/{}] {icon} {term}: P=\"{parakeet}\" Q=\"{qwen}\" => \"{corrected}\"", i+1, total));
                     } else {
                         let _ = db.append_job_log(job_id, &format!(
-                            "[{}/{}] {icon} {preview}\n  expected: {}\n  got:      {corrected}",
-                            i+1, total, sentence.text
+                            "[{}/{}] {icon} {term}: P=\"{parakeet}\" Q=\"{qwen}\" => \"{corrected}\" (expected \"{original}\")",
+                            i+1, total
                         ));
                     }
                 }
@@ -1433,7 +1427,7 @@ pub async fn api_start_eval_job(
         let word_acc = if total_words > 0 { corrected_words as f64 / total_words as f64 * 100.0 } else { 0.0 };
         let db = state2.db.lock().unwrap();
         let _ = db.append_job_log(job_id, &format!(
-            "\n=== RESULTS ===\nSentence accuracy: {correct}/{total_evaluated} ({accuracy:.1}%)\nWord accuracy: {corrected_words}/{total_words} ({word_acc:.1}%)"
+            "\n=== RESULTS ===\nFragment accuracy: {correct}/{total_evaluated} ({accuracy:.1}%)\nWord accuracy: {corrected_words}/{total_words} ({word_acc:.1}%)"
         ));
         let _ = db.finish_job(job_id, "completed", Some(&serde_json::json!({
             "correct": correct, "total": total_evaluated,
@@ -1456,14 +1450,22 @@ pub struct CorrectionBody {
 /// Run a single correction inference via a temporary server.
 /// For batch work, use the eval job which keeps the server running.
 pub async fn api_correct(
+    State(state): State<Arc<AppState>>,
     Json(body): Json<CorrectionBody>,
 ) -> Result<Response, AppError> {
+    let state2 = state.clone();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-        let config = synth_train::InferenceConfig::default();
-        let server = synth_train::InferenceServer::start(&config)?;
+        let mut server_guard = state2.inference_server.lock().unwrap();
+        // Start server on first use, reuse for subsequent calls
+        if server_guard.is_none() {
+            eprintln!("[correct] Starting inference server...");
+            let config = synth_train::InferenceConfig::default();
+            *server_guard = Some(synth_train::InferenceServer::start(&config)?);
+            eprintln!("[correct] Inference server ready");
+        }
+        let server = server_guard.as_ref().unwrap();
         let prompt = synth_train::build_correction_prompt(&body.parakeet, &body.qwen);
         server.infer(&prompt)
-        // server dropped here, subprocess killed
     })
     .await
     .map_err(|e| err(e))?
