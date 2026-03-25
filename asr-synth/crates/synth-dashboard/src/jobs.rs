@@ -840,10 +840,9 @@ async fn run_corpus_job(
     }
 
     // Pipeline: TTS producer fires concurrent requests, consumer does ASR+alignment.
-    // Local TTS (pocket-tts) shares model state — must be sequential.
-    // Network TTS (openai, elevenlabs) can run in parallel.
+    // Local TTS is serialized by its own Mutex. Network TTS benefits from parallelism.
     let is_network_tts = tts_backend == "openai" || tts_backend == "elevenlabs";
-    let tts_concurrency: usize = if is_network_tts { 8 } else { 1 };
+    let tts_concurrency: usize = if is_network_tts { 8 } else { 4 };
     let pass_items = std::sync::Arc::new(pass_items);
     let (tx, mut rx) = tokio::sync::mpsc::channel::<(usize, Result<tts::TtsAudio, anyhow::Error>, u64)>(tts_concurrency * 2);
 
