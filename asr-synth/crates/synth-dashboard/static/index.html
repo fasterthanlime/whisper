@@ -2616,7 +2616,7 @@
                     <div className="card" style={{marginBottom: 16}}>
                         <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
                             <h3 style={{margin:0,flex:1}}>1. Generate Corpus</h3>
-                            {status.corpus_exists && <>
+                            {(status.corpus_exists || liveStats?.pairs_total > 0) && <>
                                 <a href="#" style={{color:'var(--success)',fontSize:13,fontWeight:600}} onClick={async e => {
                                     e.preventDefault();
                                     const d = await api('/api/pipeline/corpus');
