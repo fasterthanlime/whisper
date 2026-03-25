@@ -737,8 +737,9 @@ impl Db {
     /// Get IDs of kept vocab terms that haven't been reviewed yet
     pub fn unreviewed_vocab_ids(&self, limit: i64) -> Result<Vec<i64>> {
         // Include both unreviewed terms AND reviewed terms missing overrides
+        // curated can be NULL (not yet curated) or 'kept'
         let mut stmt = self.conn.prepare(
-            "SELECT id FROM vocab WHERE curated = 'kept' AND (reviewed = 0 OR spoken_override IS NULL) ORDER BY id LIMIT ?1"
+            "SELECT id FROM vocab WHERE (curated IS NULL OR curated = 'kept') AND (reviewed = 0 OR spoken_override IS NULL) ORDER BY id LIMIT ?1"
         )?;
         let rows = stmt.query_map(params![limit], |row| row.get(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -793,12 +794,12 @@ impl Db {
     }
 
     pub fn vocab_review_counts(&self) -> Result<(i64, i64, i64)> {
-        // "reviewed" = has override (actually usable for corpus generation)
-        // "to review" = unreviewed OR missing override
+        // "done" = reviewed AND has override (actually usable for corpus generation)
+        // "to review" = missing override (regardless of reviewed flag or curated status)
         let done: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM vocab WHERE curated = 'kept' AND reviewed = 1 AND spoken_override IS NOT NULL", [], |r| r.get(0))?;
+            "SELECT COUNT(*) FROM vocab WHERE (curated IS NULL OR curated = 'kept') AND reviewed = 1 AND spoken_override IS NOT NULL", [], |r| r.get(0))?;
         let to_review: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM vocab WHERE curated = 'kept' AND (reviewed = 0 OR spoken_override IS NULL)", [], |r| r.get(0))?;
+            "SELECT COUNT(*) FROM vocab WHERE (curated IS NULL OR curated = 'kept') AND (reviewed = 0 OR spoken_override IS NULL)", [], |r| r.get(0))?;
         Ok((done, to_review, done + to_review))
     }
 
