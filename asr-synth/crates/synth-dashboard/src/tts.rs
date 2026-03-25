@@ -173,26 +173,22 @@ impl LocalTtsBackend for PocketTtsBackend {
 /// Pool of pocket-tts workers sharing model weights via Arc.
 /// Each worker has its own voice_state. generate() picks a free worker.
 struct PocketTtsPool {
-    /// Single Mutex guards the model — GPU operations cannot be concurrent.
-    inner: Mutex<PocketTtsInner>,
+    model: std::sync::Arc<pocket_tts::TTSModel>,
+    workers: Vec<Mutex<pocket_tts::ModelState>>,
     sample_rate: u32,
-}
-
-struct PocketTtsInner {
-    model: pocket_tts::TTSModel,
-    voice_states: Vec<pocket_tts::ModelState>,
-    next_voice: usize,
 }
 
 impl LocalTtsBackend for PocketTtsPool {
     fn name(&self) -> &'static str { "pocket-hq" }
 
     fn generate(&self, text: &str) -> Result<TtsAudio> {
-        let mut inner = self.inner.lock().unwrap();
-        // Round-robin voice states for variety
-        let idx = inner.next_voice % inner.voice_states.len();
-        inner.next_voice = idx + 1;
-        let audio = inner.model.generate(text, &inner.voice_states[idx])
+        // Try to find an available worker, otherwise block on the first one.
+        // Each worker has its own ModelState; model weights are shared read-only.
+        let voice_state = self.workers.iter()
+            .find_map(|w| w.try_lock().ok())
+            .unwrap_or_else(|| self.workers[0].lock().unwrap());
+
+        let audio = self.model.generate(text, &voice_state)
             .map_err(|e| anyhow::anyhow!("pocket-tts-hq: {e}"))?;
         let samples: Vec<f32> = audio.flatten_all()?.to_vec1()?;
         Ok(TtsAudio { samples, sample_rate: self.sample_rate })
@@ -542,12 +538,13 @@ impl PocketTtsPool {
             .map_err(|e| anyhow::anyhow!("loading voice '{voice_path}': {e}"))?;
         let sample_rate = model.sample_rate as u32;
 
-        let voice_states: Vec<pocket_tts::ModelState> = (0..num_workers)
-            .map(|_| voice_state.clone())
+        let workers: Vec<Mutex<pocket_tts::ModelState>> = (0..num_workers)
+            .map(|_| Mutex::new(voice_state.clone()))
             .collect();
 
         Ok(Self {
-            inner: Mutex::new(PocketTtsInner { model, voice_states, next_voice: 0 }),
+            model: std::sync::Arc::new(model),
+            workers,
             sample_rate,
         })
     }
