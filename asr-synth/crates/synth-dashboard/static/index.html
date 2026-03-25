@@ -2560,6 +2560,9 @@
             const [corpusLimit, setCorpusLimit] = useState(200);
             const [corpusPasses, setCorpusPasses] = useState(25);
             const [identityCount, setIdentityCount] = useState(95000);
+            const [trainRatio, setTrainRatio] = useState(0.8);
+            const [previewData, setPreviewData] = useState(null);
+            const [previewLoading, setPreviewLoading] = useState(false);
             const [liveStats, setLiveStats] = useState(null);
             const pollRef = useRef(null);
             const logRef = useRef(null);
@@ -2669,21 +2672,99 @@
                     <div className="card">
                         <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
                             <h3 style={{margin:0,flex:1}}>2. Prepare Training Data</h3>
-                            {status.training_data_exists && <span style={{color:'var(--success)',fontSize:13,fontWeight:600}}>{status.train_count?.toLocaleString()} examples</span>}
+                            {status.training_data_exists && <>
+                                <a href="#" style={{color:'var(--success)',fontSize:13,fontWeight:600}} onClick={async e => {
+                                    e.preventDefault();
+                                    setPreviewData(null); setPreviewLoading(true);
+                                    try {
+                                        const d = await api('/api/pipeline/preview-training');
+                                        setPreviewData(d);
+                                    } catch (err) { setError(err.message); }
+                                    setPreviewLoading(false);
+                                }}>{status.train_count?.toLocaleString()} train / {status.valid_count?.toLocaleString()} valid / {status.test_count?.toLocaleString()} test</a>
+                                <a href="#" style={{color:'var(--text-muted)',fontSize:11}} onClick={async e => {
+                                    e.preventDefault();
+                                    if (confirm('Delete training data splits?')) {
+                                        await api('/api/pipeline/reset-training', {method:'POST'});
+                                        setPreviewData(null); load();
+                                    }
+                                }}>reset</a>
+                            </>}
                         </div>
-                        <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                            <label style={{fontSize:12,color:'var(--text-muted)'}}>Identity examples</label>
-                            <input type="number" value={identityCount} onChange={e => setIdentityCount(parseInt(e.target.value)||95000)} disabled={prepareRunning}
-                                style={{...inputStyle,width:80}} />
-                            <div style={{flex:1}} />
-                            {prepareRunning
-                                ? <button className="btn btn-sm" style={{borderColor:'var(--warning)',color:'var(--warning)',background:'rgba(210,153,34,0.1)'}}
-                                    onClick={stopJob} disabled={stopping}>{stopping ? 'Stopping...' : 'Stop'}</button>
-                                : <button className="btn btn-primary btn-sm" disabled={isRunning || !status.corpus_exists}
-                                    onClick={() => startJob('prepare', {identity_count: identityCount})}>Prepare</button>
-                            }
+
+                        <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:10,lineHeight:1.5}}>
+                            Takes your corpus pairs (the real ASR errors) and mixes them with identity examples (correct text where input=output, so the model learns when <i>not</i> to correct).
+                            Shuffles everything and splits into train/valid/test sets.
                         </div>
+
+                        <div style={{display:'flex',gap:16,alignItems:'flex-start',marginBottom:8,flexWrap:'wrap'}}>
+                            <div>
+                                <label style={{fontSize:12,color:'var(--text-muted)',display:'block',marginBottom:2}}>Identity examples</label>
+                                <input type="number" value={identityCount} onChange={e => setIdentityCount(parseInt(e.target.value)||95000)} disabled={prepareRunning}
+                                    style={{...inputStyle,width:80}} />
+                                <div style={{fontSize:10,color:'var(--text-muted)',marginTop:2}}>Generated from chat history + blog posts. Higher = model is more conservative.</div>
+                            </div>
+                            <div>
+                                <label style={{fontSize:12,color:'var(--text-muted)',display:'block',marginBottom:2}}>Train ratio</label>
+                                <input type="number" value={trainRatio} onChange={e => setTrainRatio(parseFloat(e.target.value)||0.8)} disabled={prepareRunning}
+                                    step="0.05" min="0.5" max="0.95"
+                                    style={{...inputStyle,width:60}} />
+                                <div style={{fontSize:10,color:'var(--text-muted)',marginTop:2}}>Fraction for training. Rest split evenly into valid/test.</div>
+                            </div>
+                            <div style={{flex:1,display:'flex',alignItems:'flex-end',justifyContent:'flex-end',paddingTop:16}}>
+                                {prepareRunning
+                                    ? <button className="btn btn-sm" style={{borderColor:'var(--warning)',color:'var(--warning)',background:'rgba(210,153,34,0.1)'}}
+                                        onClick={stopJob} disabled={stopping}>{stopping ? 'Stopping...' : 'Stop'}</button>
+                                    : <button className="btn btn-primary btn-sm" disabled={isRunning || !status.corpus_exists}
+                                        onClick={() => startJob('prepare', {identity_count: identityCount, train_ratio: trainRatio})}>Prepare</button>
+                                }
+                            </div>
+                        </div>
+
+                        {status.corpus_exists && !prepareRunning && (
+                            <div style={{fontSize:12,color:'var(--text-muted)',padding:'6px 0',borderTop:'1px solid var(--border)',marginTop:4}}>
+                                Will create: ~{status.corpus_lines?.toLocaleString()} correction examples + {identityCount.toLocaleString()} identity examples = ~{((status.corpus_lines||0) + identityCount).toLocaleString()} total.
+                                {' '}Train: ~{Math.round(((status.corpus_lines||0) + identityCount) * trainRatio).toLocaleString()},
+                                {' '}Valid: ~{Math.round(((status.corpus_lines||0) + identityCount) * (1-trainRatio) / 2).toLocaleString()},
+                                {' '}Test: ~{Math.round(((status.corpus_lines||0) + identityCount) * (1-trainRatio) / 2).toLocaleString()}.
+                            </div>
+                        )}
+
                         {jobLog && prepareRunning && <pre ref={logRef} className="stage-log" style={{marginTop:10,maxHeight:150}}>{jobLog}</pre>}
+
+                        {previewLoading && <div style={{fontSize:12,color:'var(--text-muted)',marginTop:8}}>Loading preview...</div>}
+                        {previewData && (
+                            <div style={{marginTop:12,borderTop:'1px solid var(--border)',paddingTop:12}}>
+                                <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8}}>
+                                    <b style={{fontSize:13}}>Training Data Preview</b>
+                                    <span style={{fontSize:11,color:'var(--text-muted)'}}>{previewData.correction_count?.toLocaleString()} corrections + {previewData.identity_count?.toLocaleString()} identity = {previewData.total?.toLocaleString()} total</span>
+                                    <div style={{flex:1}} />
+                                    <button onClick={() => setPreviewData(null)} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:14}}>&times;</button>
+                                </div>
+                                {previewData.correction_samples?.length > 0 && <>
+                                    <div style={{fontSize:11,fontWeight:600,color:'var(--success)',marginBottom:4}}>Correction examples (random sample):</div>
+                                    <div style={{maxHeight:200,overflow:'auto',marginBottom:12}}>
+                                        {previewData.correction_samples.map((s, i) => (
+                                            <div key={i} style={{fontSize:11,fontFamily:'monospace',padding:'3px 6px',background:i%2?'transparent':'rgba(255,255,255,0.02)',lineHeight:1.5}}>
+                                                <span style={{color:'var(--text-muted)'}}>prompt:</span> {s.prompt}
+                                                <br/><span style={{color:'var(--text-muted)'}}>completion:</span> <span style={{color:'var(--success)'}}>{s.completion}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>}
+                                {previewData.identity_samples?.length > 0 && <>
+                                    <div style={{fontSize:11,fontWeight:600,color:'var(--accent)',marginBottom:4}}>Identity examples (random sample):</div>
+                                    <div style={{maxHeight:200,overflow:'auto'}}>
+                                        {previewData.identity_samples.map((s, i) => (
+                                            <div key={i} style={{fontSize:11,fontFamily:'monospace',padding:'3px 6px',background:i%2?'transparent':'rgba(255,255,255,0.02)',lineHeight:1.5}}>
+                                                <span style={{color:'var(--text-muted)'}}>prompt:</span> {s.prompt}
+                                                <br/><span style={{color:'var(--text-muted)'}}>completion:</span> <span style={{color:'var(--accent)'}}>{s.completion}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>}
+                            </div>
+                        )}
                     </div>
 
                     <dialog ref={dialogRef} style={{
@@ -2860,9 +2941,11 @@
             const [jobLog, setJobLog] = useState('');
             const [error, setError] = useState(null);
             const [model, setModel] = useState('Qwen/Qwen2.5-0.5B');
-            const [iters, setIters] = useState(1000);
-            const [batch, setBatch] = useState(1);
-            const [layers, setLayers] = useState(4);
+            const [iters, setIters] = useState(2000);
+            const [batch, setBatch] = useState(4);
+            const [layers, setLayers] = useState(8);
+            const [patience, setPatience] = useState(10);
+            const [stepsPerEval, setStepsPerEval] = useState(500);
             const pollRef = useRef(null);
             const logRef = useRef(null);
 
@@ -2896,12 +2979,18 @@
             if (!status) return <div className="container"><p>Loading...</p></div>;
             const isRunning = !!runningJob;
 
+            const trainExamples = status.train_count || 0;
+            const epochSteps = batch > 0 ? Math.ceil(trainExamples / batch) : 0;
+            const epochs = epochSteps > 0 ? (iters / epochSteps).toFixed(1) : '?';
+
+            const inputStyle = {padding:'4px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',fontFamily:'Jost,sans-serif',fontSize:13};
+            const helpStyle = {fontSize:11,color:'var(--text-muted)',lineHeight:1.4,marginTop:2};
+            const paramRow = {display:'flex',gap:12,alignItems:'flex-start',marginBottom:12};
+            const paramLabel = {fontSize:12,color:'var(--text-muted)',fontWeight:600,minWidth:90,paddingTop:6};
+
             return (
                 <div className="container">
                     <h2>Train</h2>
-                    <p style={{color: 'var(--text-muted)', marginBottom: 16}}>
-                        Fine-tune {model} with LoRA adapters using MLX-LM.
-                    </p>
                     {error && <div className="pipeline-error" style={{marginBottom:12}}>{error}</div>}
 
                     {status.adapters_exist && (
@@ -2912,28 +3001,69 @@
                         </div>
                     )}
 
+                    {trainExamples > 0 && (
+                        <div className="card" style={{marginBottom:16,padding:'10px 14px',background:'rgba(255,255,255,0.03)'}}>
+                            <span style={{fontSize:13}}>
+                                Training data: <b>{trainExamples.toLocaleString()}</b> examples.
+                                {' '}At batch={batch}, 1 epoch = <b>{epochSteps.toLocaleString()}</b> steps.
+                                {' '}{iters} iters = <b>{epochs} epochs</b>.
+                            </span>
+                        </div>
+                    )}
+
                     <div className="card">
-                        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-                            <label style={{fontSize:12,color:'var(--text-muted)'}}>Model</label>
-                            <input value={model} onChange={e => setModel(e.target.value)} disabled={isRunning}
-                                style={{width:180,padding:'4px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',fontFamily:'Jost,sans-serif',fontSize:13}} />
-                            <label style={{fontSize:12,color:'var(--text-muted)'}}>Iters</label>
-                            <input type="number" value={iters} onChange={e => setIters(parseInt(e.target.value)||1000)} disabled={isRunning}
-                                style={{width:60,padding:'4px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',fontFamily:'Jost,sans-serif',fontSize:13}} />
-                            <label style={{fontSize:12,color:'var(--text-muted)'}}>Batch</label>
-                            <input type="number" value={batch} onChange={e => setBatch(parseInt(e.target.value)||1)} disabled={isRunning}
-                                style={{width:40,padding:'4px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',fontFamily:'Jost,sans-serif',fontSize:13}} />
-                            <label style={{fontSize:12,color:'var(--text-muted)'}}>Layers</label>
-                            <input type="number" value={layers} onChange={e => setLayers(parseInt(e.target.value)||4)} disabled={isRunning}
-                                style={{width:40,padding:'4px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',fontFamily:'Jost,sans-serif',fontSize:13}} />
+                        <div style={paramRow}>
+                            <div style={paramLabel}>Model</div>
+                            <div style={{flex:1}}>
+                                <input value={model} onChange={e => setModel(e.target.value)} disabled={isRunning} style={{...inputStyle,width:'100%',maxWidth:260}} />
+                                <div style={helpStyle}>HuggingFace model ID. The base model whose weights are frozen; only LoRA adapters are trained.</div>
+                            </div>
+                        </div>
+                        <div style={paramRow}>
+                            <div style={paramLabel}>Iters</div>
+                            <div style={{flex:1}}>
+                                <input type="number" value={iters} onChange={e => setIters(parseInt(e.target.value)||2000)} disabled={isRunning} style={{...inputStyle,width:80}} />
+                                <div style={helpStyle}>Total gradient steps. Each step processes one batch. For 3 full passes over your data, set to ~{(epochSteps * 3).toLocaleString() || '?'}.</div>
+                            </div>
+                        </div>
+                        <div style={paramRow}>
+                            <div style={paramLabel}>Batch</div>
+                            <div style={{flex:1}}>
+                                <input type="number" value={batch} onChange={e => setBatch(parseInt(e.target.value)||1)} disabled={isRunning} style={{...inputStyle,width:60}} />
+                                <div style={helpStyle}>Examples per gradient update. Larger = smoother learning, more memory. 1 is noisy, 4-8 recommended.</div>
+                            </div>
+                        </div>
+                        <div style={paramRow}>
+                            <div style={paramLabel}>Layers</div>
+                            <div style={{flex:1}}>
+                                <input type="number" value={layers} onChange={e => setLayers(parseInt(e.target.value)||4)} disabled={isRunning} style={{...inputStyle,width:60}} />
+                                <div style={helpStyle}>Transformer layers with LoRA adapters. 4 = smoke test, 8-12 = realistic, 16 = thorough. More layers = more capacity + memory.</div>
+                            </div>
+                        </div>
+                        <div style={paramRow}>
+                            <div style={paramLabel}>Patience</div>
+                            <div style={{flex:1}}>
+                                <input type="number" value={patience} onChange={e => setPatience(parseInt(e.target.value)||10)} disabled={isRunning} style={{...inputStyle,width:60}} />
+                                <div style={helpStyle}>Consecutive evals without val loss improvement before early stopping fires. Set to 0 to disable early stopping entirely. With noisy batches, use 8-10+.</div>
+                            </div>
+                        </div>
+                        <div style={paramRow}>
+                            <div style={paramLabel}>Eval interval</div>
+                            <div style={{flex:1}}>
+                                <input type="number" value={stepsPerEval} onChange={e => setStepsPerEval(parseInt(e.target.value)||500)} disabled={isRunning} style={{...inputStyle,width:80}} />
+                                <div style={helpStyle}>Steps between validation runs. Lower = more frequent checks but noisier signal. 500-1000 recommended for large datasets.</div>
+                            </div>
+                        </div>
+
+                        <div style={{display:'flex',gap:8,alignItems:'center',marginTop:8,borderTop:'1px solid var(--border)',paddingTop:12}}>
                             <div style={{flex:1}} />
+                            {!status.training_data_exists && <span style={{fontSize:12,color:'var(--text-muted)'}}>Prepare training data first on the Corpus tab.</span>}
                             {isRunning
                                 ? <button className="btn" style={{borderColor:'var(--warning)',color:'var(--warning)',background:'rgba(210,153,34,0.1)'}} onClick={stopJob}>Stop</button>
                                 : <button className="btn btn-primary" disabled={!status.training_data_exists}
-                                    onClick={() => startJob({model, iters, batch_size: batch, num_layers: layers})}>Train</button>
+                                    onClick={() => startJob({model, iters, batch_size: batch, num_layers: layers, patience, steps_per_eval: stepsPerEval})}>Train</button>
                             }
                         </div>
-                        {!status.training_data_exists && <p style={{color:'var(--text-muted)',fontSize:13,marginTop:8}}>Prepare training data first on the Corpus tab.</p>}
                         {jobLog && <pre ref={logRef} className="stage-log" style={{marginTop:12,maxHeight:400}}>{jobLog}</pre>}
                     </div>
                 </div>

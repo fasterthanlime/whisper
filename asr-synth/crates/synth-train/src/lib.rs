@@ -55,10 +55,10 @@ impl Default for TrainConfig {
             adapters: "training/adapters".into(),
             model: "Qwen/Qwen2.5-0.5B".into(),
             iters: 2000,
-            batch_size: 1,
-            num_layers: 4,
-            early_stop_patience: 3,
-            steps_per_eval: 100,
+            batch_size: 4,
+            num_layers: 8,
+            early_stop_patience: 10,
+            steps_per_eval: 500,
         }
     }
 }

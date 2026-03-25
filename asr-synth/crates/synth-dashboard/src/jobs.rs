@@ -407,6 +407,7 @@ pub struct CorpusJobBody {
 #[derive(Deserialize)]
 pub struct PrepareJobBody {
     pub identity_count: Option<usize>,
+    pub train_ratio: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -415,6 +416,8 @@ pub struct TrainJobBody {
     pub iters: Option<usize>,
     pub batch_size: Option<usize>,
     pub num_layers: Option<usize>,
+    pub patience: Option<usize>,
+    pub steps_per_eval: Option<usize>,
 }
 
 // ==================== Job Guard ====================
@@ -760,7 +763,8 @@ pub async fn api_start_prepare_job(
     check_no_running_jobs(&state)?;
 
     let identity_count = body.identity_count.unwrap_or(95000);
-    let config_json = serde_json::json!({"identity_count": identity_count}).to_string();
+    let train_ratio = body.train_ratio.unwrap_or(0.8);
+    let config_json = serde_json::json!({"identity_count": identity_count, "train_ratio": train_ratio}).to_string();
 
     let job_id = {
         let db = state.db.lock().unwrap();
@@ -785,6 +789,7 @@ pub async fn api_start_prepare_job(
         let config = synth_train::PrepareConfig {
             input: "data/corpus_dashboard.jsonl".into(),
             identity_count,
+            train_ratio,
             ..Default::default()
         };
 
@@ -842,9 +847,11 @@ pub async fn api_start_train_job(
 
     let config = synth_train::TrainConfig {
         model: body.model.unwrap_or_else(|| "Qwen/Qwen2.5-0.5B".into()),
-        iters: body.iters.unwrap_or(1000),
-        batch_size: body.batch_size.unwrap_or(1),
-        num_layers: body.num_layers.unwrap_or(4),
+        iters: body.iters.unwrap_or(2000),
+        batch_size: body.batch_size.unwrap_or(4),
+        num_layers: body.num_layers.unwrap_or(8),
+        early_stop_patience: body.patience.unwrap_or(10),
+        steps_per_eval: body.steps_per_eval.unwrap_or(500),
         ..Default::default()
     };
     let config_json = serde_json::json!({
@@ -852,6 +859,8 @@ pub async fn api_start_train_job(
         "iters": config.iters,
         "batch_size": config.batch_size,
         "num_layers": config.num_layers,
+        "patience": config.early_stop_patience,
+        "steps_per_eval": config.steps_per_eval,
     })
     .to_string();
 
@@ -867,8 +876,9 @@ pub async fn api_start_train_job(
             let _ = db.append_job_log(
                 job_id,
                 &format!(
-                    "Starting training: model={}, iters={}, batch_size={}, num_layers={}",
-                    config.model, config.iters, config.batch_size, config.num_layers
+                    "Starting training: model={}, iters={}, batch_size={}, num_layers={}, patience={}, steps_per_eval={}",
+                    config.model, config.iters, config.batch_size, config.num_layers,
+                    config.early_stop_patience, config.steps_per_eval
                 ),
             );
         }
@@ -1560,6 +1570,75 @@ pub async fn api_reset_corpus(
     Ok(Json(serde_json::json!({"ok": true})).into_response())
 }
 
+/// Preview training data: returns sample prompts from the training set so the user
+/// can see exactly what the model will be trained on.
+pub async fn api_preview_training(
+    State(_state): State<Arc<AppState>>,
+) -> Result<Response, AppError> {
+    let train_path = "training/data/train.jsonl";
+    if !std::path::Path::new(train_path).exists() {
+        return Ok(Json(serde_json::json!({"error": "No training data. Run Prepare first."})).into_response());
+    }
+
+    let content = std::fs::read_to_string(train_path).map_err(err)?;
+    let all_lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+    let total = all_lines.len();
+
+    // Separate correction vs identity examples
+    let mut corrections = Vec::new();
+    let mut identities = Vec::new();
+    for line in &all_lines {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+            let prompt = v["prompt"].as_str().unwrap_or("");
+            let completion = v["completion"].as_str().unwrap_or("");
+            // An identity example has the same text in both <parakeet> and <qwen> slots
+            let parts: Vec<&str> = prompt.splitn(3, " <qwen> ").collect();
+            let is_identity = if parts.len() == 2 {
+                let p_text = parts[0].strip_prefix("<parakeet> ").unwrap_or(parts[0]);
+                let q_text = parts[1].strip_suffix(" <correct>").unwrap_or(parts[1]);
+                p_text == q_text
+            } else {
+                false
+            };
+            let entry = serde_json::json!({"prompt": prompt, "completion": completion});
+            if is_identity {
+                identities.push(entry);
+            } else {
+                corrections.push(entry);
+            }
+        }
+    }
+
+    // Sample up to 10 of each type
+    let mut rng = rand::rng();
+    use rand::seq::SliceRandom;
+    let mut corr_sample: Vec<_> = corrections.iter().collect();
+    corr_sample.shuffle(&mut rng);
+    let corr_sample: Vec<_> = corr_sample.into_iter().take(10).cloned().collect();
+
+    let mut id_sample: Vec<_> = identities.iter().collect();
+    id_sample.shuffle(&mut rng);
+    let id_sample: Vec<_> = id_sample.into_iter().take(10).cloned().collect();
+
+    Ok(Json(serde_json::json!({
+        "total": total,
+        "correction_count": corrections.len(),
+        "identity_count": identities.len(),
+        "correction_samples": corr_sample,
+        "identity_samples": id_sample,
+    })).into_response())
+}
+
+/// Delete training data (train/valid/test splits) so prepare can be re-run.
+pub async fn api_reset_training(
+    State(_state): State<Arc<AppState>>,
+) -> Result<Response, AppError> {
+    let _ = std::fs::remove_file("training/data/train.jsonl");
+    let _ = std::fs::remove_file("training/data/valid.jsonl");
+    let _ = std::fs::remove_file("training/data/test.jsonl");
+    Ok(Json(serde_json::json!({"ok": true})).into_response())
+}
+
 pub async fn api_pipeline_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Response, AppError> {
@@ -1592,12 +1671,16 @@ pub async fn api_pipeline_status(
     let corpus_exists = corpus_lines > 0;
 
     let training_data_exists = std::path::Path::new("training/data/train.jsonl").exists();
-    let train_count = if training_data_exists {
-        std::fs::read_to_string("training/data/train.jsonl")
-            .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
-            .unwrap_or(0)
+    let (train_count, valid_count, test_count) = if training_data_exists {
+        let tc = std::fs::read_to_string("training/data/train.jsonl")
+            .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count()).unwrap_or(0);
+        let vc = std::fs::read_to_string("training/data/valid.jsonl")
+            .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count()).unwrap_or(0);
+        let tec = std::fs::read_to_string("training/data/test.jsonl")
+            .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count()).unwrap_or(0);
+        (tc, vc, tec)
     } else {
-        0
+        (0, 0, 0)
     };
 
     let adapters_exist = std::path::Path::new("training/adapters").exists()
@@ -1622,6 +1705,8 @@ pub async fn api_pipeline_status(
         "corpus_lines": corpus_lines,
         "training_data_exists": training_data_exists,
         "train_count": train_count,
+        "valid_count": valid_count,
+        "test_count": test_count,
         "adapters_exist": adapters_exist,
         "human_recordings": human_recordings,
         "vocab_scanned": vocab_scanned,
