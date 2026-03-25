@@ -365,6 +365,12 @@ async fn run_corpus_job(
             });
         }
     }
+    // Shuffle so each run covers different terms first (not always starting at A)
+    {
+        use rand::seq::SliceRandom;
+        let mut rng = rand::rngs::StdRng::from_os_rng();
+        work.shuffle(&mut rng);
+    }
 
     let passes_to_run = total_passes_needed.min(limit);
 
