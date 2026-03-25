@@ -167,8 +167,7 @@ fn find_term_time_range(
     None
 }
 
-/// Get all word boundary times (start AND end of each word).
-/// This captures gaps between words as distinct boundaries.
+/// Get sorted word boundary times (start AND end of each word).
 fn word_boundaries(items: &[qwen3_asr::ForcedAlignItem]) -> Vec<f64> {
     let mut bounds = Vec::with_capacity(items.len() * 2);
     for a in items {
@@ -180,38 +179,43 @@ fn word_boundaries(items: &[qwen3_asr::ForcedAlignItem]) -> Vec<f64> {
     bounds
 }
 
-/// Find a consensus boundary near `target_time` across multiple alignment boundary lists.
-/// Returns the boundary time if all lists have a boundary within `tolerance` of each other.
-/// `after=true`: find the nearest boundary >= target_time (end of term)
-/// `after=false`: find the nearest boundary <= target_time (start of term)
-fn find_consensus_boundary(all_boundaries: &[&[f64]], target_time: f64, tolerance: f64, after: bool) -> Option<f64> {
-    let mut candidates = Vec::new();
-    for bounds in all_boundaries {
-        let nearest = if after {
-            // Find the smallest boundary that is >= target_time (or close to it)
-            bounds.iter().copied()
-                .filter(|&t| t >= target_time - 0.08)
-                .min_by(|a, b| a.partial_cmp(b).unwrap())
-        } else {
-            // Find the largest boundary that is <= target_time (or close to it)
-            bounds.iter().copied()
-                .filter(|&t| t <= target_time + 0.08)
-                .max_by(|a, b| a.partial_cmp(b).unwrap())
-        };
-        candidates.push(nearest?);
-    }
+/// Check if a boundary list has a boundary within `tolerance` of `time`.
+fn has_boundary_near(bounds: &[f64], time: f64, tolerance: f64) -> bool {
+    bounds.iter().any(|&b| (b - time).abs() <= tolerance)
+}
 
-    let min = candidates.iter().copied().fold(f64::INFINITY, f64::min);
-    let max = candidates.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    if max - min <= tolerance {
-        Some(candidates.iter().sum::<f64>() / candidates.len() as f64)
+/// Starting from `anchor`, expand outward through `orig_bounds` to find a
+/// boundary that all alignment boundary lists agree on.
+/// `direction`: -1 for left (earlier), +1 for right (later).
+/// Returns the consensus boundary time, or None after max_steps.
+fn find_consensus_expanding(
+    anchor: f64,
+    orig_bounds: &[f64],
+    others: &[&[f64]],
+    direction: i32,
+    tolerance: f64,
+    max_steps: usize,
+) -> Option<f64> {
+    // Collect candidate boundaries from orig in the right direction, sorted by distance from anchor
+    let mut candidates: Vec<f64> = if direction > 0 {
+        orig_bounds.iter().copied().filter(|&b| b >= anchor - 0.01).collect()
     } else {
-        None
+        let mut v: Vec<f64> = orig_bounds.iter().copied().filter(|&b| b <= anchor + 0.01).collect();
+        v.reverse();
+        v
+    };
+    candidates.truncate(max_steps);
+
+    for candidate in candidates {
+        // Check if all other alignments have a boundary near this one
+        if others.iter().all(|bounds| has_boundary_near(bounds, candidate, tolerance)) {
+            return Some(candidate);
+        }
     }
+    None
 }
 
 /// Extract words from an alignment that START within [start, end).
-/// A word belongs to the segment that contains its start time. No slack.
 fn words_in_range(items: &[qwen3_asr::ForcedAlignItem], start: f64, end: f64) -> String {
     let words: Vec<&str> = items.iter()
         .filter(|a| a.start_time >= start && a.start_time < end)
@@ -220,26 +224,11 @@ fn words_in_range(items: &[qwen3_asr::ForcedAlignItem], start: f64, end: f64) ->
     words.join(" ")
 }
 
-/// Align an ASR transcription against audio, then extract the words
-/// that overlap with a given time range.
-fn extract_asr_at_time_range(
-    aligner: &qwen3_asr::ForcedAligner,
-    samples_16k: &[f32],
-    asr_text: &str,
-    start: f64,
-    end: f64,
-) -> String {
-    if asr_text.is_empty() { return String::new(); }
-
-    let asr_align = aligner.align(samples_16k, asr_text).unwrap_or_default();
-    if asr_align.is_empty() { return asr_text.to_string(); }
-
-    let result = words_in_range(&asr_align, start, end);
-    if result.is_empty() { asr_text.to_string() } else { result }
-}
-
-/// Extract words using consensus boundaries from all three alignments.
-/// Returns (original_fragment, qwen_fragment, parakeet_fragment, consensus_range, clean).
+/// Extract triplets using consensus boundaries.
+/// 1. Start with the term's exact boundaries from the original alignment.
+/// 2. Check if the other two alignments agree (have a boundary nearby).
+/// 3. If not, expand left/right one boundary at a time, up to 5 steps.
+/// 4. Give up and mark as noisy if no consensus found.
 fn extract_with_consensus(
     orig_align: &[qwen3_asr::ForcedAlignItem],
     qwen_align: &[qwen3_asr::ForcedAlignItem],
@@ -250,10 +239,19 @@ fn extract_with_consensus(
     let orig_bounds = word_boundaries(orig_align);
     let qwen_bounds = word_boundaries(qwen_align);
     let parakeet_bounds = word_boundaries(parakeet_align);
-    let all_bounds: Vec<&[f64]> = vec![&orig_bounds, &qwen_bounds, &parakeet_bounds];
+    let others = vec![qwen_bounds.as_slice(), parakeet_bounds.as_slice()];
 
-    let start_cons = find_consensus_boundary(&all_bounds, term_start, 0.10, false);
-    let end_cons = find_consensus_boundary(&all_bounds, term_end, 0.10, true);
+    let tolerance = 0.10;
+    let max_steps = 5;
+
+    // Find start consensus: start at term_start, expand LEFT if needed
+    let start_cons = find_consensus_expanding(
+        term_start, &orig_bounds, &others, -1, tolerance, max_steps,
+    );
+    // Find end consensus: start at term_end, expand RIGHT if needed
+    let end_cons = find_consensus_expanding(
+        term_end, &orig_bounds, &others, 1, tolerance, max_steps,
+    );
 
     let cons_start = start_cons.unwrap_or(term_start);
     let cons_end = end_cons.unwrap_or(term_end);
