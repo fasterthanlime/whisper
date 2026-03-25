@@ -448,8 +448,8 @@ fn trim_matching_edges(orig: &str, qwen: &str, parakeet: &str) -> (String, Strin
     let mut q: Vec<&str> = qwen.split_whitespace().collect();
     let mut p: Vec<&str> = parakeet.split_whitespace().collect();
 
-    // Trim from left
-    while !o.is_empty() && !q.is_empty() && !p.is_empty() {
+    // Trim from left — but never trim to empty
+    while o.len() > 1 && q.len() > 1 && p.len() > 1 {
         let ow = o[0].to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
         let qw = q[0].to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
         let pw = p[0].to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
@@ -462,8 +462,8 @@ fn trim_matching_edges(orig: &str, qwen: &str, parakeet: &str) -> (String, Strin
         }
     }
 
-    // Trim from right
-    while !o.is_empty() && !q.is_empty() && !p.is_empty() {
+    // Trim from right — but never trim to empty
+    while o.len() > 1 && q.len() > 1 && p.len() > 1 {
         let ow = o.last().unwrap().to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
         let qw = q.last().unwrap().to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
         let pw = p.last().unwrap().to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
