@@ -739,6 +739,9 @@ async fn api_job_detail(
 
 #[derive(clap::Parser)]
 struct Cli {
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+
     #[arg(long, default_value = "3456")]
     port: u16,
 
@@ -923,7 +926,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/correct", post(jobs::api_correct))
         .with_state(state);
 
-    let addr = format!("127.0.0.1:{}", cli.port);
+    let addr = format!("{}:{}", cli.host, cli.port);
     eprintln!("hark ml listening on http://{addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
