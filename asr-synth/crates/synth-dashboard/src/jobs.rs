@@ -211,10 +211,10 @@ fn find_consensus_boundary(all_boundaries: &[&[f64]], target_time: f64, toleranc
 }
 
 /// Extract words from an alignment that START within [start, end).
-/// A word belongs to the segment that contains its start time.
+/// A word belongs to the segment that contains its start time. No slack.
 fn words_in_range(items: &[qwen3_asr::ForcedAlignItem], start: f64, end: f64) -> String {
     let words: Vec<&str> = items.iter()
-        .filter(|a| a.start_time >= start - 0.02 && a.start_time < end + 0.02)
+        .filter(|a| a.start_time >= start && a.start_time < end)
         .map(|a| a.word.as_str())
         .collect();
     words.join(" ")
