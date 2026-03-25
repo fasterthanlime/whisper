@@ -2526,8 +2526,10 @@
             const [jobLog, setJobLog] = useState('');
             const [error, setError] = useState(null);
             const [backend, setBackend] = useState('pocket-hq');
-            const [corpusLimit, setCorpusLimit] = useState(50);
+            const [corpusLimit, setCorpusLimit] = useState(200);
+            const [corpusPasses, setCorpusPasses] = useState(25);
             const [identityCount, setIdentityCount] = useState(95000);
+            const [liveStats, setLiveStats] = useState(null);
             const pollRef = useRef(null);
             const logRef = useRef(null);
 
@@ -2538,11 +2540,12 @@
             useEffect(() => { load(); }, []);
             useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [jobLog]);
             useEffect(() => {
-                if (!runningJob) return;
+                if (!runningJob) { setLiveStats(null); return; }
                 const poll = async () => {
                     const job = await api(`/api/jobs/${runningJob.id}`);
                     setJobLog(job.log);
-                    if (job.status !== 'running') { setRunningJob(null); setJobLog(''); load(); }
+                    if (job.result) try { setLiveStats(JSON.parse(job.result)); } catch {}
+                    if (job.status !== 'running') { setRunningJob(null); setJobLog(''); setLiveStats(null); load(); }
                 };
                 poll(); pollRef.current = setInterval(poll, 2000);
                 return () => clearInterval(pollRef.current);
@@ -2574,9 +2577,9 @@
                     <div className="card" style={{marginBottom: 16}}>
                         <h3>1. Generate Corpus</h3>
                         <p style={{color: 'var(--text-muted)', fontSize: 13, marginBottom: 12}}>
-                            {status.approved_count} approved sentences, {status.vocab_reviewed || 0} reviewed vocab → TTS → dual ASR → training pairs.
-                            {status.corpus_exists && <span style={{color: 'var(--success)'}}> {status.corpus_lines} pairs generated.</span>}
-                            {' '}Generates incrementally — run again to add more.
+                            {status.approved_count} sentences + {status.vocab_reviewed || 0} vocab × {corpusPasses} passes → TTS → dual ASR → training pairs.
+                            {status.corpus_exists && <span style={{color: 'var(--success)'}}> {status.corpus_lines} pairs in corpus.</span>}
+                            {' '}Runs incrementally.
                         </p>
                         <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
                             <label style={{fontSize:12,color:'var(--text-muted)'}}>TTS</label>
@@ -2584,15 +2587,26 @@
                                 style={{padding:'4px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',fontFamily:'Jost,sans-serif',fontSize:13}}>
                                 {(status.backends||[]).map(b => <option key={b} value={b}>{b}</option>)}
                             </select>
+                            <label style={{fontSize:12,color:'var(--text-muted)',marginLeft:8}}>Passes</label>
+                            <input type="number" value={corpusPasses} onChange={e => setCorpusPasses(+e.target.value || 25)}
+                                style={{width:50,padding:'4px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',fontFamily:'Jost,sans-serif',fontSize:13}} />
                             <label style={{fontSize:12,color:'var(--text-muted)',marginLeft:8}}>Batch</label>
-                            <input type="number" value={corpusLimit} onChange={e => setCorpusLimit(+e.target.value || 50)}
+                            <input type="number" value={corpusLimit} onChange={e => setCorpusLimit(+e.target.value || 200)}
                                 style={{width:60,padding:'4px 8px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',fontFamily:'Jost,sans-serif',fontSize:13}} />
                             <div style={{flex:1}} />
                             <button className="btn btn-primary btn-sm" disabled={isRunning || (status.approved_count === 0 && !(status.vocab_reviewed > 0))}
-                                onClick={() => startJob('corpus', {tts_backend: backend, limit: corpusLimit})}>
+                                onClick={() => startJob('corpus', {tts_backend: backend, limit: corpusLimit, passes: corpusPasses})}>
                                 {rt === 'corpus' ? 'Running...' : 'Generate'}
                             </button>
                         </div>
+                        {rt === 'corpus' && liveStats && (
+                            <div className="stats-grid" style={{marginTop:12}}>
+                                <div className="stat-card"><div className="value">{liveStats.pairs_total}</div><div className="label">Total Pairs</div></div>
+                                <div className="stat-card"><div className="value">{liveStats.pairs_written}</div><div className="label">This Run</div></div>
+                                <div className="stat-card"><div className="value">{liveStats.items_done}/{liveStats.items_total}</div><div className="label">Items</div></div>
+                                {liveStats.errors > 0 && <div className="stat-card"><div className="value" style={{color:'var(--error)'}}>{liveStats.errors}</div><div className="label">Errors</div></div>}
+                            </div>
+                        )}
                         {rt === 'corpus' && jobLog && <pre ref={logRef} className="stage-log" style={{marginTop:8}}>{jobLog}</pre>}
                     </div>
 

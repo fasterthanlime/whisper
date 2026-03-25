@@ -29,7 +29,8 @@ pub async fn api_stop_job(
 #[derive(Deserialize)]
 pub struct CorpusJobBody {
     pub tts_backend: Option<String>,
-    pub limit: Option<usize>, // max items to process this run (default: all)
+    pub limit: Option<usize>,  // max items to process this run (default: all)
+    pub passes: Option<usize>, // TTS+ASR passes per term (default: 25)
 }
 
 #[derive(Deserialize)]
@@ -74,7 +75,8 @@ pub async fn api_start_corpus_job(
 
     let tts_backend = body.tts_backend.unwrap_or_else(|| "openai".to_string());
     let limit = body.limit.unwrap_or(usize::MAX);
-    let config_json = serde_json::json!({"tts_backend": tts_backend, "limit": limit}).to_string();
+    let passes = body.passes.unwrap_or(25);
+    let config_json = serde_json::json!({"tts_backend": tts_backend, "limit": limit, "passes": passes}).to_string();
 
     let job_id = {
         let db = state.db.lock().unwrap();
@@ -84,7 +86,7 @@ pub async fn api_start_corpus_job(
     let state2 = state.clone();
     let backend = tts_backend.clone();
     tokio::spawn(async move {
-        let result = run_corpus_job(&state2, job_id, &backend, limit).await;
+        let result = run_corpus_job(&state2, job_id, &backend, limit, passes).await;
         let db = state2.db.lock().unwrap();
         match result {
             Ok(count) => {
@@ -109,6 +111,7 @@ async fn run_corpus_job(
     job_id: i64,
     tts_backend: &str,
     limit: usize,
+    target_passes: usize,
 ) -> anyhow::Result<usize> {
     // Collect both approved sentences AND reviewed vocab terms
     let (sentences, vocab_terms) = {
@@ -117,7 +120,6 @@ async fn run_corpus_job(
     };
 
     // Build unified list of (original_text, spoken_text, is_short) items
-    // Short items (vocab terms, ≤3 words) need carrier phrase wrapping for good TTS
     let mut items: Vec<(String, String, bool)> = Vec::new();
     for s in &sentences {
         items.push((s.text.clone(), s.spoken.clone(), false));
@@ -128,32 +130,52 @@ async fn run_corpus_job(
         items.push((v.term.clone(), spoken, is_short));
     }
 
-    // Load existing corpus to skip already-processed items
+    // Count existing passes per original in the corpus file
     std::fs::create_dir_all("data").ok();
     let corpus_path = "data/corpus_dashboard.jsonl";
-    let existing: std::collections::HashSet<String> = std::fs::read_to_string(corpus_path)
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| {
-            serde_json::from_str::<serde_json::Value>(l).ok()
-                .and_then(|v| v["original"].as_str().map(|s| s.to_string()))
-        })
-        .collect();
+    let mut existing_passes: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    if let Ok(content) = std::fs::read_to_string(corpus_path) {
+        for line in content.lines() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(orig) = v["original"].as_str() {
+                    *existing_passes.entry(orig.to_string()).or_default() += 1;
+                }
+            }
+        }
+    }
+    let existing_total: usize = existing_passes.values().sum();
 
-    // Filter to items not yet in the corpus
-    let pending: Vec<_> = items.into_iter()
-        .filter(|(orig, _, _)| !existing.contains(orig))
-        .collect();
-    let batch_size = pending.len().min(limit);
-    let batch = &pending[..batch_size];
+    // Build work list: for each item, how many more passes are needed?
+    struct WorkItem {
+        original: String,
+        spoken: String,
+        is_short: bool,
+        passes_needed: usize,
+    }
+    let mut work: Vec<WorkItem> = Vec::new();
+    let mut total_passes_needed = 0usize;
+    for (orig, spoken, is_short) in &items {
+        let done = existing_passes.get(orig).copied().unwrap_or(0);
+        let needed = target_passes.saturating_sub(done);
+        if needed > 0 {
+            total_passes_needed += needed;
+            work.push(WorkItem {
+                original: orig.clone(),
+                spoken: spoken.clone(),
+                is_short: *is_short,
+                passes_needed: needed,
+            });
+        }
+    }
+
+    let passes_to_run = total_passes_needed.min(limit);
 
     {
         let db = state.db.lock().unwrap();
         db.append_job_log(job_id, &format!(
-            "Corpus: {} sentences + {} vocab, {} already done, {} to process (limit {}{})  backend: {tts_backend}",
-            sentences.len(), vocab_terms.len(), existing.len(), batch_size,
-            if limit == usize::MAX { "".to_string() } else { format!(", max {limit}") },
-            ""
+            "Corpus: {} items × {} passes, {} pairs exist, {} passes needed, running {} (limit {})\nBackend: {tts_backend}",
+            items.len(), target_passes, existing_total, total_passes_needed, passes_to_run,
+            if limit == usize::MAX { "∞".to_string() } else { limit.to_string() },
         ))?;
     }
 
@@ -166,113 +188,139 @@ async fn run_corpus_job(
             .map_err(|e| anyhow::anyhow!("Failed to open corpus file: {e}"))?,
     );
 
-    let mut count = 0;
-    let total = batch_size;
-    for (i, (original, spoken, is_short)) in batch.iter().enumerate() {
-        if state.job_cancel.load(Ordering::Relaxed) {
-            let db = state.db.lock().unwrap();
-            let _ = db.append_job_log(job_id, "Stopped by user.");
-            break;
-        }
-        let text_preview: String = original.chars().take(50).collect();
+    let mut count = 0usize;
+    let mut errors = 0usize;
+    let mut items_done = 0usize;
 
-        // For short items (vocab terms), wrap in carrier phrase for better TTS
-        let tts_text = if *is_short {
-            format!("The word is: {}.", spoken.replace('-', " "))
+    let update_stats = |state: &Arc<AppState>, job_id: i64, count: usize, items_done: usize, errors: usize| {
+        let db = state.db.lock().unwrap();
+        let _ = db.update_job_result(job_id, &serde_json::json!({
+            "pairs_written": count,
+            "pairs_total": existing_total + count,
+            "items_done": items_done,
+            "items_total": work.len(),
+            "errors": errors,
+        }).to_string());
+    };
+
+    'outer: for item in &work {
+        if count >= passes_to_run { break; }
+
+        let text_preview: String = item.original.chars().take(40).collect();
+        let passes_this_item = item.passes_needed.min(passes_to_run - count);
+
+        // For short items, build carrier phrase
+        let tts_text = if item.is_short {
+            format!("The word is: {}.", item.spoken.replace('-', " "))
         } else {
-            spoken.clone()
+            item.spoken.clone()
         };
 
-        // TTS (async for remote backends)
-        let mut audio = match state.tts.generate(tts_backend, &tts_text).await {
-            Ok(mut a) => {
-                a.normalize();
-                a
-            }
-            Err(e) => {
+        for pass in 0..passes_this_item {
+            if state.job_cancel.load(Ordering::Relaxed) {
                 let db = state.db.lock().unwrap();
-                let _ = db.append_job_log(job_id, &format!("[{}/{}] TTS FAILED: {e} — {text_preview}", i + 1, total));
-                continue;
+                let _ = db.append_job_log(job_id, "Stopped by user.");
+                break 'outer;
             }
-        };
 
-        // If carrier phrase was used, align and crop to just the target word(s)
-        if *is_short {
-            if let Ok(full_16k) = tts::resample_to_16k(&audio.samples, audio.sample_rate) {
-                let carrier_items = state.aligner.align(&full_16k, &tts_text).unwrap_or_default();
-                let skip = 3; // "The", "word", "is"
-                if carrier_items.len() > skip {
-                    let start_time = carrier_items[skip].start_time;
-                    let end_time = carrier_items.last().map(|it| it.end_time).unwrap_or(start_time + 1.0);
-                    let start_sample = ((start_time - 0.05).max(0.0) * audio.sample_rate as f64) as usize;
-                    let end_sample = ((end_time + 0.1) * audio.sample_rate as f64).min(audio.samples.len() as f64) as usize;
-                    if start_sample < end_sample && end_sample <= audio.samples.len() {
-                        audio.samples = audio.samples[start_sample..end_sample].to_vec();
+            // TTS
+            let mut audio = match state.tts.generate(tts_backend, &tts_text).await {
+                Ok(mut a) => { a.normalize(); a }
+                Err(e) => {
+                    let db = state.db.lock().unwrap();
+                    let _ = db.append_job_log(job_id, &format!("TTS FAILED: {e} — {text_preview}"));
+                    errors += 1;
+                    continue;
+                }
+            };
+
+            // Carrier phrase: align + crop
+            if item.is_short {
+                if let Ok(full_16k) = tts::resample_to_16k(&audio.samples, audio.sample_rate) {
+                    let carrier_items = state.aligner.align(&full_16k, &tts_text).unwrap_or_default();
+                    let skip = 3;
+                    if carrier_items.len() > skip {
+                        let start_time = carrier_items[skip].start_time;
+                        let end_time = carrier_items.last().map(|it| it.end_time).unwrap_or(start_time + 1.0);
+                        let start_sample = ((start_time - 0.05).max(0.0) * audio.sample_rate as f64) as usize;
+                        let end_sample = ((end_time + 0.1) * audio.sample_rate as f64).min(audio.samples.len() as f64) as usize;
+                        if start_sample < end_sample && end_sample <= audio.samples.len() {
+                            audio.samples = audio.samples[start_sample..end_sample].to_vec();
+                        }
                     }
                 }
             }
-        }
 
-        // Resample to 16kHz for ASR
-        let samples_16k = match tts::resample_to_16k(&audio.samples, audio.sample_rate) {
-            Ok(s) => s,
-            Err(e) => {
-                let db = state.db.lock().unwrap();
-                let _ = db.append_job_log(job_id, &format!("[{}/{}] Resample FAILED: {e} — {text_preview}", i + 1, total));
-                continue;
-            }
-        };
+            // Resample
+            let samples_16k = match tts::resample_to_16k(&audio.samples, audio.sample_rate) {
+                Ok(s) => s,
+                Err(e) => {
+                    let db = state.db.lock().unwrap();
+                    let _ = db.append_job_log(job_id, &format!("Resample FAILED: {e} — {text_preview}"));
+                    errors += 1;
+                    continue;
+                }
+            };
 
-        // Run Qwen and Parakeet in parallel
-        let state_q = state.clone();
-        let samples_q = samples_16k.clone();
-        let qwen_task = tokio::task::spawn_blocking(move || -> String {
-            state_q.asr
-                .transcribe_samples(&samples_q, qwen3_asr::TranscribeOptions::default())
-                .map(|r| r.text)
-                .unwrap_or_default()
-        });
+            // Dual ASR
+            let state_q = state.clone();
+            let samples_q = samples_16k.clone();
+            let qwen_task = tokio::task::spawn_blocking(move || -> String {
+                state_q.asr
+                    .transcribe_samples(&samples_q, qwen3_asr::TranscribeOptions::default())
+                    .map(|r| r.text)
+                    .unwrap_or_default()
+            });
+            let state_p = state.clone();
+            let samples_p = samples_16k;
+            let parakeet_task = tokio::task::spawn_blocking(move || -> String {
+                let mut p = state_p.parakeet.lock().unwrap();
+                p.transcribe_samples(samples_p.to_vec(), 16000, 1, None)
+                    .map(|r| r.text)
+                    .unwrap_or_default()
+            });
 
-        let state_p = state.clone();
-        let samples_p = samples_16k;
-        let parakeet_task = tokio::task::spawn_blocking(move || -> String {
-            let mut p = state_p.parakeet.lock().unwrap();
-            p.transcribe_samples(samples_p.to_vec(), 16000, 1, None)
-                .map(|r| r.text)
-                .unwrap_or_default()
-        });
+            let (qwen, parakeet) = tokio::join!(qwen_task, parakeet_task);
+            let qwen = qwen.unwrap_or_default();
+            let parakeet = parakeet.unwrap_or_default();
 
-        let (qwen, parakeet) = tokio::join!(qwen_task, parakeet_task);
-        let qwen = qwen.unwrap_or_default();
-        let parakeet = parakeet.unwrap_or_default();
-
-        // Write JSONL line
-        writeln!(
-            file,
-            "{}",
-            serde_json::json!({
-                "original": original,
+            writeln!(file, "{}", serde_json::json!({
+                "original": item.original,
                 "parakeet": parakeet,
                 "qwen": qwen,
-            })
-        )?;
-        count += 1;
+            }))?;
+            count += 1;
 
-        // Log progress
-        {
-            let db = state.db.lock().unwrap();
-            let _ = db.append_job_log(
-                job_id,
-                &format!("[{}/{}] {text_preview}...", i + 1, total),
-            );
+            // Log every pass for first item, then every Nth
+            if pass == 0 || (count % 10) == 0 {
+                let db = state.db.lock().unwrap();
+                let _ = db.append_job_log(job_id, &format!(
+                    "[{}/{}] {text_preview} (pass {}/{}): Q=\"{}\" P=\"{}\"",
+                    items_done + 1, work.len(), pass + 1, passes_this_item,
+                    &qwen.chars().take(30).collect::<String>(),
+                    &parakeet.chars().take(30).collect::<String>(),
+                ));
+            }
+
+            // Update live stats periodically
+            if count % 5 == 0 {
+                file.flush()?;
+                update_stats(state, job_id, count, items_done, errors);
+            }
         }
+
+        items_done += 1;
     }
 
     file.flush()?;
+    update_stats(state, job_id, count, items_done, errors);
 
     {
         let db = state.db.lock().unwrap();
-        db.append_job_log(job_id, &format!("Done: {count}/{total} sentences written to data/corpus_dashboard.jsonl"))?;
+        db.append_job_log(job_id, &format!(
+            "Done: {count} pairs written ({items_done} items, {errors} errors). Total corpus: {} pairs.",
+            existing_total + count
+        ))?;
     }
 
     Ok(count)

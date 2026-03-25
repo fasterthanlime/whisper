@@ -812,6 +812,15 @@ impl Db {
         Ok(())
     }
 
+    /// Update the result field of a running job (for live stats).
+    pub fn update_job_result(&self, job_id: i64, result: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE jobs SET result = ?1 WHERE id = ?2",
+            params![result, job_id],
+        )?;
+        Ok(())
+    }
+
     pub fn finish_job(&self, job_id: i64, status: &str, result: Option<&str>) -> Result<()> {
         self.conn.execute(
             "UPDATE jobs SET status = ?1, result = ?2, finished_at = ?3 WHERE id = ?4",
