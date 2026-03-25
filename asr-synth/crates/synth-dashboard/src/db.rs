@@ -67,6 +67,10 @@ CREATE TABLE IF NOT EXISTS corpus_pairs (
     parakeet TEXT NOT NULL,
     sentence TEXT NOT NULL,
     spoken TEXT NOT NULL,
+    orig_alignment TEXT,
+    qwen_alignment TEXT,
+    parakeet_alignment TEXT,
+    cons_time TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -170,6 +174,10 @@ impl Db {
         let _ = conn.execute_batch("ALTER TABLE sentences ADD COLUMN tts_backend TEXT;");
         let _ = conn.execute_batch("ALTER TABLE sentences ADD COLUMN human_wav_path TEXT;");
         let _ = conn.execute_batch("ALTER TABLE vocab ADD COLUMN curated TEXT;"); // 'kept', 'removed', or NULL
+        let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN orig_alignment TEXT;");
+        let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN qwen_alignment TEXT;");
+        let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN parakeet_alignment TEXT;");
+        let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN cons_time TEXT;");
 
         // Migration: case-insensitive dedup of vocab terms.
         // For each group of case-insensitive duplicates, keep the row that has
@@ -557,10 +565,15 @@ impl Db {
     /// All sentence texts (for Markov chain building).
     // ==================== CORPUS PAIRS ====================
 
-    pub fn insert_corpus_pair(&self, term: &str, original: &str, qwen: &str, parakeet: &str, sentence: &str, spoken: &str) -> Result<()> {
+    pub fn insert_corpus_pair(
+        &self, term: &str, original: &str, qwen: &str, parakeet: &str,
+        sentence: &str, spoken: &str,
+        orig_align: Option<&str>, qwen_align: Option<&str>, parakeet_align: Option<&str>,
+        cons_time: Option<&str>,
+    ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO corpus_pairs (term, original, qwen, parakeet, sentence, spoken, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![term, original, qwen, parakeet, sentence, spoken, now_str()],
+            "INSERT INTO corpus_pairs (term, original, qwen, parakeet, sentence, spoken, orig_alignment, qwen_alignment, parakeet_alignment, cons_time, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![term, original, qwen, parakeet, sentence, spoken, orig_align, qwen_align, parakeet_align, cons_time, now_str()],
         )?;
         Ok(())
     }
@@ -585,9 +598,13 @@ impl Db {
 
     pub fn corpus_pairs_all(&self) -> Result<Vec<serde_json::Value>> {
         let mut stmt = self.conn.prepare(
-            "SELECT term, original, qwen, parakeet, sentence, spoken FROM corpus_pairs ORDER BY term COLLATE NOCASE, id"
+            "SELECT term, original, qwen, parakeet, sentence, spoken, orig_alignment, qwen_alignment, parakeet_alignment, cons_time FROM corpus_pairs ORDER BY term COLLATE NOCASE, id"
         )?;
         let rows = stmt.query_map([], |row| {
+            let orig_align: Option<String> = row.get(6)?;
+            let qwen_align: Option<String> = row.get(7)?;
+            let para_align: Option<String> = row.get(8)?;
+            let cons_time: Option<String> = row.get(9)?;
             Ok(serde_json::json!({
                 "term": row.get::<_, String>(0)?,
                 "original": row.get::<_, String>(1)?,
@@ -596,6 +613,10 @@ impl Db {
                 "sentence": row.get::<_, String>(4)?,
                 "spoken": row.get::<_, String>(5)?,
                 "clean": true,
+                "orig_alignment": orig_align.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
+                "qwen_alignment": qwen_align.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
+                "parakeet_alignment": para_align.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
+                "cons_time": cons_time.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
             }))
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)

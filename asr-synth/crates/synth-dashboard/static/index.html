@@ -2615,7 +2615,7 @@
 
                     <div className="card" style={{marginBottom: 16}}>
                         <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
-                            <h3 style={{margin:0,flex:1}}>1. Generate Corpus</h3>
+                            <h3 style={{margin:0,flex:1}}>1. Generate Corpus {corpusRunning && <span style={{display:'inline-block',width:10,height:10,borderRadius:'50%',background:'var(--success)',marginLeft:8,animation:'pulse 1s ease-in-out infinite'}} />}</h3>
                             {(status.corpus_exists || liveStats?.pairs_total > 0) && <>
                                 <a href="#" style={{color:'var(--success)',fontSize:13,fontWeight:600}} onClick={async e => {
                                     e.preventDefault();

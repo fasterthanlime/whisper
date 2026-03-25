@@ -706,8 +706,18 @@ async fn run_corpus_job(
         let cons = extract_with_consensus(&orig_align, &qwen_align, &parakeet_align, term_start, term_end);
 
         if cons.clean {
+            let fmt = |items: &[qwen3_asr::ForcedAlignItem]| -> String {
+                serde_json::to_string(&items.iter().map(|a| {
+                    serde_json::json!({"w": a.word, "s": (a.start_time * 1000.0).round() / 1000.0, "e": (a.end_time * 1000.0).round() / 1000.0})
+                }).collect::<Vec<_>>()).unwrap_or_default()
+            };
+            let cons_time_json = serde_json::to_string(&[cons.cons_range.0, cons.cons_range.1]).ok();
             let db = state.db.lock().unwrap();
-            let _ = db.insert_corpus_pair(&pi.term, &cons.original, &cons.qwen, &cons.parakeet, &pi.sentence, &pi.spoken);
+            let _ = db.insert_corpus_pair(
+                &pi.term, &cons.original, &cons.qwen, &cons.parakeet, &pi.sentence, &pi.spoken,
+                Some(&fmt(&orig_align)), Some(&fmt(&qwen_align)), Some(&fmt(&parakeet_align)),
+                cons_time_json.as_deref(),
+            );
         }
         count += 1;
         items_done = pi.item_idx + 1;
@@ -721,7 +731,7 @@ async fn run_corpus_job(
             ));
         }
 
-        if count % 5 == 0 {
+        if count % 2 == 0 {
             update_stats(state, job_id, count, items_done, errors, tts_ms, asr_ms, align_ms, job_start.elapsed().as_millis() as u64);
         }
     }
