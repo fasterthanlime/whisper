@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::sync::Mutex;
 
 /// Resample f32 mono samples to 16kHz. Returns samples unchanged if already 16kHz.
 pub fn resample_to_16k(samples: &[f32], from_rate: u32) -> Result<Vec<f32>> {
@@ -146,9 +147,10 @@ impl TtsAudio {
 // ==================== Local (sync) backends ====================
 
 /// Sync TTS backend — runs on a blocking thread
-trait LocalTtsBackend: Send + 'static {
+trait LocalTtsBackend: Send + Sync + 'static {
     fn name(&self) -> &'static str;
-    fn generate(&mut self, text: &str) -> Result<TtsAudio>;
+    /// Generate audio. Takes &self — implementations handle their own concurrency.
+    fn generate(&self, text: &str) -> Result<TtsAudio>;
 }
 
 struct PocketTtsBackend {
@@ -160,7 +162,7 @@ struct PocketTtsBackend {
 impl LocalTtsBackend for PocketTtsBackend {
     fn name(&self) -> &'static str { "pocket" }
 
-    fn generate(&mut self, text: &str) -> Result<TtsAudio> {
+    fn generate(&self, text: &str) -> Result<TtsAudio> {
         let audio = self.model.generate(text, &self.voice_state)
             .map_err(|e| anyhow::anyhow!("pocket-tts: {e}"))?;
         let samples: Vec<f32> = audio.flatten_all()?.to_vec1()?;
@@ -168,17 +170,28 @@ impl LocalTtsBackend for PocketTtsBackend {
     }
 }
 
-struct PocketTtsHqBackend {
-    model: pocket_tts::TTSModel,
-    voice_state: pocket_tts::ModelState,
+/// Pool of pocket-tts workers sharing model weights via Arc.
+/// Each worker has its own voice_state. generate() picks a free worker.
+struct PocketTtsPool {
+    workers: Vec<Mutex<PocketTtsWorker>>,
     sample_rate: u32,
 }
 
-impl LocalTtsBackend for PocketTtsHqBackend {
+struct PocketTtsWorker {
+    model: std::sync::Arc<pocket_tts::TTSModel>,
+    voice_state: pocket_tts::ModelState,
+}
+
+impl LocalTtsBackend for PocketTtsPool {
     fn name(&self) -> &'static str { "pocket-hq" }
 
-    fn generate(&mut self, text: &str) -> Result<TtsAudio> {
-        let audio = self.model.generate(text, &self.voice_state)
+    fn generate(&self, text: &str) -> Result<TtsAudio> {
+        // Find an unlocked worker, or wait on the first one
+        let worker_mutex: &Mutex<PocketTtsWorker> = self.workers.iter()
+            .find(|w| w.try_lock().is_ok())
+            .unwrap_or(&self.workers[0]);
+        let worker = worker_mutex.lock().unwrap();
+        let audio = worker.model.generate(text, &worker.voice_state)
             .map_err(|e| anyhow::anyhow!("pocket-tts-hq: {e}"))?;
         let samples: Vec<f32> = audio.flatten_all()?.to_vec1()?;
         Ok(TtsAudio { samples, sample_rate: self.sample_rate })
@@ -186,14 +199,16 @@ impl LocalTtsBackend for PocketTtsHqBackend {
 }
 
 struct KokoroBackend {
-    model: voice_tts::KokoroModel,
+    model: Mutex<voice_tts::KokoroModel>,
     voice: mlx_rs::Array,
 }
+
+unsafe impl Sync for KokoroBackend {}
 
 impl LocalTtsBackend for KokoroBackend {
     fn name(&self) -> &'static str { "kokoro" }
 
-    fn generate(&mut self, text: &str) -> Result<TtsAudio> {
+    fn generate(&self, text: &str) -> Result<TtsAudio> {
         // Use espeak-ng directly for the full sentence — the voice-g2p pipeline
         // drops unknown words and botches contractions.
         let fallback = voice_g2p::espeak::EspeakFallback::new();
@@ -222,7 +237,7 @@ impl LocalTtsBackend for KokoroBackend {
         let phonemes = phoneme_parts.join(" ");
         eprintln!("kokoro espeak: {text:?} → {phonemes:?}");
 
-        let audio = voice_tts::generate(&mut self.model, &phonemes, &self.voice, 1.0)
+        let audio = voice_tts::generate(&mut self.model.lock().unwrap(), &phonemes, &self.voice, 1.0)
             .map_err(|e| anyhow::anyhow!("kokoro: {e}"))?;
         audio.eval().map_err(|e| anyhow::anyhow!("mlx eval: {e}"))?;
         let samples: Vec<f32> = audio.as_slice().to_vec();
@@ -429,40 +444,29 @@ fn decode_wav(wav_bytes: &[u8]) -> Result<TtsAudio> {
 
 // ==================== Manager ====================
 
-use std::sync::Mutex;
-
-/// Holds all TTS backends. Local backends are behind Mutex (sync, need &mut).
-/// Remote backends are shared (async, &self only).
+/// Holds all TTS backends. Local backends handle their own concurrency.
 pub struct TtsManager {
-    local: Vec<Mutex<Box<dyn LocalTtsBackend>>>,
+    local: Vec<Box<dyn LocalTtsBackend>>,
     remote: Vec<Box<dyn RemoteTtsBackend>>,
 }
 
 impl TtsManager {
     pub fn available_backends(&self) -> Vec<&str> {
         let mut names: Vec<&str> = self.local.iter()
-            .map(|b| b.lock().unwrap().name())
+            .map(|b| b.name())
             .collect();
         names.extend(self.remote.iter().map(|b| b.name()));
         names
     }
 
-    /// Generate audio. Local backends run on spawn_blocking, remote backends run async.
+    /// Generate audio. Local backends run synchronously, remote backends run async.
     pub async fn generate(&self, backend_name: &str, text: &str) -> Result<TtsAudio> {
-        // Check local backends
         for local in &self.local {
-            let name = local.lock().unwrap().name();
-            if name == backend_name {
-                let text = text.to_string();
-                // Move the mutex ref into spawn_blocking via a pointer trick —
-                // actually, we can't move &Mutex into spawn_blocking.
-                // Instead, lock, generate, unlock — all sync, no await.
-                let mut backend = local.lock().unwrap();
-                return backend.generate(&text);
+            if local.name() == backend_name {
+                return local.generate(text);
             }
         }
 
-        // Check remote backends
         for remote in &self.remote {
             if remote.name() == backend_name {
                 return remote.generate(text).await;
@@ -473,22 +477,22 @@ impl TtsManager {
     }
 }
 
+/// Number of parallel pocket-tts workers (share weights, separate state).
+const POCKET_TTS_WORKERS: usize = 4;
+
 /// Build a TtsManager with all available backends
-pub fn init(voice_path: &str, kokoro_voice: &str) -> TtsManager {
-    let mut local: Vec<Mutex<Box<dyn LocalTtsBackend>>> = Vec::new();
+pub fn init(voice_path: &str, _kokoro_voice: &str) -> TtsManager {
+    let mut local: Vec<Box<dyn LocalTtsBackend>> = Vec::new();
     let mut remote: Vec<Box<dyn RemoteTtsBackend>> = Vec::new();
 
-    // Pocket-tts HQ (full-weight only, skip quantized)
-    match PocketTtsHqBackend::load(voice_path) {
-        Ok(b) => local.push(Mutex::new(Box::new(b))),
+    // Pocket-tts HQ pool — N workers sharing one model
+    match PocketTtsPool::load(voice_path, POCKET_TTS_WORKERS) {
+        Ok(pool) => {
+            eprintln!("pocket-tts-hq ready ({} workers, {} Hz)", POCKET_TTS_WORKERS, pool.sample_rate);
+            local.push(Box::new(pool));
+        }
         Err(e) => eprintln!("pocket-tts-hq not available: {e}"),
     }
-
-    // Kokoro — loaded on demand, not eagerly
-    // match KokoroBackend::load(kokoro_voice) {
-    //     Ok(b) => local.push(Mutex::new(Box::new(b))),
-    //     Err(e) => eprintln!("Kokoro not available: {e}"),
-    // }
 
     // OpenAI
     if std::env::var("OPENAI_API_KEY").is_ok() {
@@ -531,16 +535,24 @@ impl PocketTtsBackend {
     }
 }
 
-impl PocketTtsHqBackend {
-    fn load(voice_path: &str) -> Result<Self> {
+impl PocketTtsPool {
+    fn load(voice_path: &str, num_workers: usize) -> Result<Self> {
         eprintln!("Loading pocket-tts (full precision)...");
         let model = pocket_tts::TTSModel::load("b6369a24")?;
         let voice_state = model
             .get_voice_state(voice_path)
             .map_err(|e| anyhow::anyhow!("loading voice '{voice_path}': {e}"))?;
         let sample_rate = model.sample_rate as u32;
-        eprintln!("pocket-tts-hq ready ({sample_rate} Hz)");
-        Ok(Self { model, voice_state, sample_rate })
+
+        let model = std::sync::Arc::new(model);
+        let workers: Vec<Mutex<PocketTtsWorker>> = (0..num_workers)
+            .map(|_| Mutex::new(PocketTtsWorker {
+                model: model.clone(),
+                voice_state: voice_state.clone(),
+            }))
+            .collect();
+
+        Ok(Self { workers, sample_rate })
     }
 }
 
@@ -552,6 +564,6 @@ impl KokoroBackend {
         let voice = voice_tts::load_voice(voice_name, None)
             .map_err(|e| anyhow::anyhow!("kokoro voice '{voice_name}': {e}"))?;
         eprintln!("Kokoro ready (24000 Hz, voice: {voice_name})");
-        Ok(Self { model, voice })
+        Ok(Self { model: Mutex::new(model), voice })
     }
 }
