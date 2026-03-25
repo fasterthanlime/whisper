@@ -248,8 +248,8 @@ fn extract_with_consensus(
     let parakeet_bounds = word_boundaries(parakeet_align);
     let all_bounds: Vec<&[f64]> = vec![&orig_bounds, &qwen_bounds, &parakeet_bounds];
 
-    let start_cons = find_consensus_boundary(&all_bounds, term_start, 0.15, false);
-    let end_cons = find_consensus_boundary(&all_bounds, term_end, 0.15, true);
+    let start_cons = find_consensus_boundary(&all_bounds, term_start, 0.10, false);
+    let end_cons = find_consensus_boundary(&all_bounds, term_end, 0.10, true);
 
     let cons_start = start_cons.unwrap_or(term_start);
     let cons_end = end_cons.unwrap_or(term_end);
