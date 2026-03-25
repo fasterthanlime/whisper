@@ -521,29 +521,50 @@ fn extract_with_consensus(
     protected_terms: &std::collections::HashSet<String>,
 ) -> ConsensusResult {
     let r2 = |v: f64| (v * 1000.0).round() / 1000.0;
+    let has_parakeet = !parakeet_align.is_empty();
 
-    let orig_b = lane_boundaries(orig_align);
-    let qwen_b = lane_boundaries(qwen_align);
-    let para_b = lane_boundaries(parakeet_align);
+    let (start, end, clean) = if has_parakeet {
+        // Tri-boundary consensus: all 3 lanes must agree
+        let orig_b = lane_boundaries(orig_align);
+        let qwen_b = lane_boundaries(qwen_align);
+        let para_b = lane_boundaries(parakeet_align);
 
-    let tris = compute_tri_boundaries(
-        &orig_b, &qwen_b, &para_b,
-        orig_align, qwen_align, parakeet_align, 0.05,
-    );
+        let tris = compute_tri_boundaries(
+            &orig_b, &qwen_b, &para_b,
+            orig_align, qwen_align, parakeet_align, 0.05,
+        );
 
-    // Left: walk right-to-left, find first where before_matches
-    let left = tris.iter().rev()
-        .find(|tb| tb.time <= term_start + 0.01 && tb.before_matches())
-        .map(|tb| tb.time);
+        let left = tris.iter().rev()
+            .find(|tb| tb.time <= term_start + 0.01 && tb.before_matches())
+            .map(|tb| tb.time);
+        let right = tris.iter()
+            .find(|tb| tb.time >= term_end - 0.01 && tb.after_matches())
+            .map(|tb| tb.time);
 
-    // Right: walk left-to-right, find first where after_matches
-    let right = tris.iter()
-        .find(|tb| tb.time >= term_end - 0.01 && tb.after_matches())
-        .map(|tb| tb.time);
+        (left.unwrap_or(term_start), right.unwrap_or(term_end), left.is_some() && right.is_some())
+    } else {
+        // Single-lane: use bi-boundaries (orig + qwen only)
+        let orig_b = lane_boundaries(orig_align);
+        let qwen_b = lane_boundaries(qwen_align);
 
-    let start = left.unwrap_or(term_start);
-    let end = right.unwrap_or(term_end);
-    let clean = left.is_some() && right.is_some();
+        // Find boundaries present in both lanes within epsilon
+        let epsilon = 0.05;
+        let mut bi_boundaries = Vec::new();
+        for &ob in &orig_b {
+            if qwen_b.iter().any(|&qb| (ob - qb).abs() < epsilon) {
+                bi_boundaries.push(ob);
+            }
+        }
+
+        let left = bi_boundaries.iter().rev()
+            .find(|&&t| t <= term_start + 0.01)
+            .copied();
+        let right = bi_boundaries.iter()
+            .find(|&&t| t >= term_end - 0.01)
+            .copied();
+
+        (left.unwrap_or(term_start), right.unwrap_or(term_end), left.is_some() && right.is_some())
+    };
 
     // Extract words in range then trim matching edges.
     // Uses alignment items directly (same word boundaries as the aligner).
@@ -552,26 +573,13 @@ fn extract_with_consensus(
         orig_align, qwen_align, parakeet_align, start, end, protected_terms,
     );
 
-    let rv = |v: &[f64]| -> Vec<f64> { v.iter().map(|&x| r2(x)).collect() };
-    let tri_debug: Vec<serde_json::Value> = tris.iter().map(|tb| {
-        serde_json::json!({
-            "t": r2(tb.time),
-            "before": [&tb.before.0, &tb.before.1, &tb.before.2],
-            "after": [&tb.after.0, &tb.after.1, &tb.after.2],
-            "bm": tb.before_matches(),
-            "am": tb.after_matches(),
-        })
-    }).collect();
-
     let debug = serde_json::json!({
-        "orig_bounds": rv(&orig_b),
-        "qwen_bounds": rv(&qwen_b),
-        "para_bounds": rv(&para_b),
-        "tri_boundaries": tri_debug,
         "term_start": r2(term_start),
         "term_end": r2(term_end),
-        "left_chosen": left.map(r2),
-        "right_chosen": right.map(r2),
+        "cons_start": r2(start),
+        "cons_end": r2(end),
+        "clean": clean,
+        "has_parakeet": has_parakeet,
     });
 
     ConsensusResult { original, qwen, parakeet, cons_range: (start, end), clean, debug }
