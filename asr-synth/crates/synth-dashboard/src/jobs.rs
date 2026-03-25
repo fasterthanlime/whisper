@@ -1771,11 +1771,30 @@ pub async fn api_test_term(
     };
     let chain = MarkovChain::build(&all_texts);
     let mut rng = rand::rngs::StdRng::from_os_rng();
-    let (written_sentence, spoken_sentence) = make_sentence_pair(&chain, &written, &spoken, &mut rng);
 
-    // TTS uses the SPOKEN sentence
-    let mut audio = state.tts.generate(&tts_backend, &spoken_sentence.0).await.map_err(|e| err(e))?;
-    audio.normalize();
+    // Retry up to 5 times if we get a noisy extraction
+    let mut result;
+    let mut audio;
+    let mut written_sentence;
+    let mut spoken_sentence;
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let pair = make_sentence_pair(&chain, &written, &spoken, &mut rng);
+        written_sentence = pair.0;
+        spoken_sentence = pair.1;
+
+        audio = state.tts.generate(&tts_backend, &spoken_sentence.0).await.map_err(|e| err(e))?;
+        audio.normalize();
+        let full_16k = tts::resample_to_16k(&audio.samples, audio.sample_rate).map_err(err)?;
+
+        result = run_corpus_pass(&state, &full_16k, &written_sentence, &spoken_sentence, &written).await.map_err(err)?;
+
+        if result.extraction.clean || attempts >= 5 {
+            break;
+        }
+    }
+
     let full_16k = tts::resample_to_16k(&audio.samples, audio.sample_rate).map_err(err)?;
 
     // Encode audio as base64 WAV for playback
@@ -1784,9 +1803,6 @@ pub async fn api_test_term(
         let wav = audio.to_wav().map_err(err)?;
         base64::engine::general_purpose::STANDARD.encode(&wav)
     };
-
-    // Pipeline uses the WRITTEN term and both sentence forms
-    let result = run_corpus_pass(&state, &full_16k, &written_sentence, &spoken_sentence, &written).await.map_err(err)?;
 
     let ex = &result.extraction;
     Ok(Json(serde_json::json!({
@@ -1797,6 +1813,7 @@ pub async fn api_test_term(
         "qwen_full": result.qwen_full,
         "parakeet_full": result.parakeet_full,
         "term_found": result.term_found,
+        "attempts": attempts,
         "extraction": {
             "original": ex.original,
             "qwen": ex.qwen,
