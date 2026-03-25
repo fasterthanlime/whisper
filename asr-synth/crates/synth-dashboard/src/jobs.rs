@@ -98,8 +98,7 @@ async fn run_corpus_pass(
     let state_q = state.clone();
     let samples_q = full_16k.to_vec();
     let qwen_task = tokio::task::spawn_blocking(move || -> String {
-        let asr = state_q.asr.lock().unwrap();
-        asr.transcribe_samples(&samples_q, qwen3_asr::TranscribeOptions::default().with_language("english"))
+        state_q.asr.transcribe_samples(&samples_q, qwen3_asr::TranscribeOptions::default().with_language("english"))
             .map(|r| r.text)
             .unwrap_or_default()
     });
@@ -1600,8 +1599,7 @@ async fn run_vocab_scan(
             let seg_p = segment;
 
             let qwen_task = tokio::task::spawn_blocking(move || -> String {
-                let asr = state_q.asr.lock().unwrap();
-                asr.transcribe_samples(&seg_q, qwen3_asr::TranscribeOptions::default().with_language("english"))
+                state_q.asr.transcribe_samples(&seg_q, qwen3_asr::TranscribeOptions::default().with_language("english"))
                     .map(|r| r.text)
                     .unwrap_or_default()
             });

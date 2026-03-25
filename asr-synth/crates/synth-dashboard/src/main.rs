@@ -22,7 +22,7 @@ pub struct AppState {
     log_path: std::path::PathBuf,
     docs_root: String,
     tts: tts::TtsManager,
-    asr: std::sync::Mutex<qwen3_asr::AsrInference>,
+    asr: qwen3_asr::AsrInference,
     parakeet: std::sync::Mutex<parakeet_rs::ParakeetTDT>,
     aligner: qwen3_asr::ForcedAligner,
     review: Mutex<review::ReviewSession>,
@@ -592,7 +592,7 @@ async fn api_asr_transcribe(
             mono
         };
 
-        let result = state2.asr.lock().unwrap().transcribe_samples(
+        let result = state2.asr.transcribe_samples(
             &samples_16k,
             qwen3_asr::TranscribeOptions::default(),
         ).map_err(|e| anyhow::anyhow!("ASR: {e}"))?;
@@ -630,7 +630,7 @@ async fn api_asr_dual(
         } else { samples_f32 };
         let samples_16k = tts::resample_to_16k(&mono, spec.sample_rate)?;
 
-        let qwen = state2.asr.lock().unwrap().transcribe_samples(&samples_16k, qwen3_asr::TranscribeOptions::default())
+        let qwen = state2.asr.transcribe_samples(&samples_16k, qwen3_asr::TranscribeOptions::default())
             .map(|r| r.text).unwrap_or_default();
         let parakeet = {
             let mut p = state2.parakeet.lock().unwrap();
@@ -886,7 +886,7 @@ async fn main() -> anyhow::Result<()> {
         log_path,
         docs_root,
         tts: tts_manager,
-        asr: std::sync::Mutex::new(asr),
+        asr,
         parakeet: std::sync::Mutex::new(parakeet),
         aligner,
         review: Mutex::new(review::ReviewSession::new()),

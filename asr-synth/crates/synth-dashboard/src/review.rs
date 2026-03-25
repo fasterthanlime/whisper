@@ -271,7 +271,7 @@ pub fn compute_for_sentence(
     let alignment = match_alignment(&spoken_words, &spoken_items);
 
     // Run ASR on the TTS audio (round-trip quality check)
-    let qwen_asr = match state.asr.lock().unwrap().transcribe_samples(&samples_16k, qwen3_asr::TranscribeOptions::default().with_language("english")) {
+    let qwen_asr = match state.asr.transcribe_samples(&samples_16k, qwen3_asr::TranscribeOptions::default().with_language("english")) {
         Ok(r) => r.text,
         Err(e) => { eprintln!("[review] Qwen ASR failed: {e}"); String::new() }
     };
@@ -923,7 +923,7 @@ pub async fn api_review_asr(
         let samples_16k = crate::tts::resample_to_16k(&mono, spec.sample_rate)?;
 
         // Run both ASR models on human recording
-        let qwen = match state2.asr.lock().unwrap().transcribe_samples(&samples_16k, qwen3_asr::TranscribeOptions::default().with_language("english")) {
+        let qwen = match state2.asr.transcribe_samples(&samples_16k, qwen3_asr::TranscribeOptions::default().with_language("english")) {
             Ok(r) => r.text,
             Err(e) => format!("(error: {e})"),
         };
