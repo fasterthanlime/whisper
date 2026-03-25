@@ -1414,12 +1414,22 @@ pub async fn api_start_eval_job(
             let _ = db.append_job_log(job_id, &format!("Server ready. Evaluating {total} unique clean triplets..."));
         }
 
-        let mut correct = 0usize;
+        // Eval categories:
+        // - fixed: ASR was wrong, model corrected it right
+        // - kept:  ASR was right (or close), model left it correct
+        // - broken: ASR was right, model changed it to something wrong
+        // - wrong_fix: ASR was wrong, model's fix is also wrong
+        // - blank: model output nothing
+        // - timeout: inference timed out
+        let mut fixed = 0usize;
+        let mut kept = 0usize;
+        let mut broken = 0usize;
+        let mut wrong_fix = 0usize;
+        let mut blank = 0usize;
+        let mut timeouts = 0usize;
         let mut total_evaluated = 0usize;
-        let mut total_words = 0usize;
-        let mut corrected_words = 0usize;
 
-        for (i, (original, qwen, parakeet, term)) in triplets.iter().enumerate() {
+        for (i, (term, original, qwen, parakeet)) in triplets.iter().enumerate() {
             if state2.job_cancel.load(Ordering::Relaxed) {
                 let db = state2.db.lock().unwrap();
                 let _ = db.append_job_log(job_id, "Stopped by user.");
@@ -1430,60 +1440,84 @@ pub async fn api_start_eval_job(
             let parakeet: &str = parakeet;
             let term: &str = term;
             let prompt = synth_train::build_correction_prompt(parakeet, qwen);
-            match server.infer(&prompt) {
+
+            let result = server.infer(&prompt);
+            total_evaluated += 1;
+
+            let orig_lower = original.trim().to_lowercase();
+            let keet_lower = parakeet.trim().to_lowercase();
+            let qwen_lower = qwen.trim().to_lowercase();
+            let asr_was_correct = keet_lower == orig_lower || qwen_lower == orig_lower;
+
+            let (category, corrected_text) = match result {
+                Ok(ref corrected) if corrected.trim().is_empty() => {
+                    blank += 1;
+                    ("blank", String::new())
+                }
                 Ok(corrected) => {
-                    total_evaluated += 1;
-                    let original_clean = original.trim().to_lowercase();
-                    let corrected_clean = corrected.trim().to_lowercase();
-                    let is_correct = original_clean == corrected_clean;
-                    if is_correct { correct += 1; }
+                    let corr_lower = corrected.trim().to_lowercase();
+                    let model_correct = corr_lower == orig_lower;
 
-                    let orig_words: Vec<&str> = original.split_whitespace().collect();
-                    let corr_words: Vec<&str> = corrected.split_whitespace().collect();
-                    total_words += orig_words.len();
-                    corrected_words += orig_words.iter().zip(corr_words.iter())
-                        .filter(|(a, b)| a.to_lowercase() == b.to_lowercase())
-                        .count();
-
-                    let icon = if is_correct { "\u{2713}" } else { "\u{2717}" };
-                    let accuracy = correct as f64 / total_evaluated as f64 * 100.0;
-                    let word_acc = if total_words > 0 { corrected_words as f64 / total_words as f64 * 100.0 } else { 0.0 };
-                    let db = state2.db.lock().unwrap();
-
-                    // Update live stats
-                    let _ = db.update_job_result(job_id, &serde_json::json!({
-                        "correct": correct, "total": total_evaluated,
-                        "accuracy": (accuracy * 10.0).round() / 10.0,
-                        "word_accuracy": (word_acc * 10.0).round() / 10.0,
-                    }).to_string());
-
-                    if is_correct {
-                        let _ = db.append_job_log(job_id, &format!("[{}/{}] {icon} {term}: P=\"{parakeet}\" Q=\"{qwen}\" => \"{corrected}\"", i+1, total));
+                    if model_correct && asr_was_correct {
+                        kept += 1;
+                        ("kept", corrected)
+                    } else if model_correct && !asr_was_correct {
+                        fixed += 1;
+                        ("fixed", corrected)
+                    } else if !model_correct && asr_was_correct {
+                        broken += 1;
+                        ("broken", corrected)
                     } else {
-                        let _ = db.append_job_log(job_id, &format!(
-                            "[{}/{}] {icon} {term}: P=\"{parakeet}\" Q=\"{qwen}\" => \"{corrected}\" (expected \"{original}\")",
-                            i+1, total
-                        ));
+                        wrong_fix += 1;
+                        ("wrong_fix", corrected)
                     }
                 }
                 Err(e) => {
-                    let db = state2.db.lock().unwrap();
-                    let _ = db.append_job_log(job_id, &format!("[{}/{}] ERROR: {e}", i+1, total));
+                    let msg = e.to_string();
+                    if msg.contains("timeout") || msg.contains("timed out") {
+                        timeouts += 1;
+                        ("timeout", format!("(timeout: {msg})"))
+                    } else {
+                        timeouts += 1;
+                        ("error", format!("(error: {msg})"))
+                    }
                 }
-            }
+            };
+
+            let correct = fixed + kept;
+            let accuracy = if total_evaluated > 0 { correct as f64 / total_evaluated as f64 * 100.0 } else { 0.0 };
+
+            let db = state2.db.lock().unwrap();
+            let _ = db.update_job_result(job_id, &serde_json::json!({
+                "total": total_evaluated,
+                "fixed": fixed, "kept": kept, "broken": broken,
+                "wrong_fix": wrong_fix, "blank": blank, "timeouts": timeouts,
+                "accuracy": (accuracy * 10.0).round() / 10.0,
+            }).to_string());
+
+            // Log entry with category tag
+            let _ = db.append_job_log(job_id, &format!(
+                "[{}/{}] [{category}] {term}: <keet> {parakeet} <qwen> {qwen} => \"{}\"{}",
+                i+1, total, corrected_text.trim(),
+                if category == "fixed" || category == "kept" { String::new() }
+                else { format!(" (expected \"{}\")", original) }
+            ));
         }
         // server is dropped here, killing the subprocess
 
+        let correct = fixed + kept;
         let accuracy = if total_evaluated > 0 { correct as f64 / total_evaluated as f64 * 100.0 } else { 0.0 };
-        let word_acc = if total_words > 0 { corrected_words as f64 / total_words as f64 * 100.0 } else { 0.0 };
         let db = state2.db.lock().unwrap();
         let _ = db.append_job_log(job_id, &format!(
-            "\n=== RESULTS ===\nFragment accuracy: {correct}/{total_evaluated} ({accuracy:.1}%)\nWord accuracy: {corrected_words}/{total_words} ({word_acc:.1}%)"
+            "\n=== RESULTS ({total_evaluated} evaluated) ===\n\
+            Correct: {correct}/{total_evaluated} ({accuracy:.1}%)\n\
+            Fixed: {fixed} | Kept: {kept} | Broken: {broken} | Wrong fix: {wrong_fix} | Blank: {blank} | Timeouts: {timeouts}"
         ));
         let _ = db.finish_job(job_id, "completed", Some(&serde_json::json!({
-            "correct": correct, "total": total_evaluated,
+            "total": total_evaluated,
+            "fixed": fixed, "kept": kept, "broken": broken,
+            "wrong_fix": wrong_fix, "blank": blank, "timeouts": timeouts,
             "accuracy": accuracy,
-            "word_accuracy": word_acc,
         }).to_string()));
     });
 

@@ -360,6 +360,7 @@ impl InferenceServer {
     }
 
     /// Run inference on a single prompt. Returns the corrected text.
+    /// Times out after 30 seconds to prevent hangs on degenerate inputs.
     pub fn infer(&self, prompt: &str) -> Result<String> {
         let url = format!("http://127.0.0.1:{}/v1/completions", self.port);
         let body = serde_json::json!({
@@ -368,7 +369,12 @@ impl InferenceServer {
             "temperature": 0.0,
         });
 
-        let mut resp = ureq::post(&url)
+        let agent = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .build()
+            .new_agent();
+
+        let mut resp = agent.post(&url)
             .header("Content-Type", "application/json")
             .send_json(&body)
             .map_err(|e| anyhow::anyhow!("inference request failed: {e}"))?;
