@@ -80,29 +80,33 @@ impl MarkovChain {
         Some(choices.last().unwrap().0.clone())
     }
 
-    /// Generate a sentence containing `target_word` (lowercased).
-    /// Returns None if the word isn't in the chain at all.
-    fn generate_with(&self, target_word: &str, max_words: usize, rng: &mut impl Rng) -> Option<String> {
+    /// Generate a sentence containing `target_word`.
+    /// Falls back to a random template if the word isn't in the chain.
+    fn generate_with(&self, target_word: &str, max_words: usize, rng: &mut impl Rng) -> String {
         let target_lower = target_word.to_lowercase();
 
         // Build forward from target
         let mut forward_words = Vec::new();
         let mut cur = target_lower.clone();
-        for _ in 0..max_words / 2 {
-            let choices = self.forward.get(&cur)?;
-            let next = Self::sample(choices, rng)?;
-            if next == SENTENCE_END { break; }
-            forward_words.push(next.clone());
-            cur = next;
+        if let Some(choices) = self.forward.get(&cur) {
+            if let Some(next) = Self::sample(choices, rng) {
+                if next != SENTENCE_END { forward_words.push(next.clone()); cur = next; }
+            }
+            for _ in 1..max_words / 2 {
+                let Some(choices) = self.forward.get(&cur) else { break };
+                let Some(next) = Self::sample(choices, rng) else { break };
+                if next == SENTENCE_END { break; }
+                forward_words.push(next.clone());
+                cur = next;
+            }
         }
 
         // Build backward from target
         let mut backward_words = Vec::new();
         cur = target_lower.clone();
         for _ in 0..max_words / 2 {
-            let choices = self.backward.get(&cur);
-            let Some(choices) = choices else { break; };
-            let prev = Self::sample(choices, rng)?;
+            let Some(choices) = self.backward.get(&cur) else { break };
+            let Some(prev) = Self::sample(choices, rng) else { break };
             if prev == SENTENCE_START { break; }
             backward_words.push(prev.clone());
             cur = prev;
@@ -111,12 +115,23 @@ impl MarkovChain {
 
         // Assemble: backward + target + forward
         let mut words = backward_words;
-        words.push(target_word.to_string()); // preserve original casing
+        words.push(target_word.to_string());
         words.extend(forward_words);
 
         if words.len() < 3 {
-            // Too short — fall back to a simple template
-            return Some(format!("The {} configuration is important.", target_word));
+            // Fallback templates for terms not in the chain
+            const TEMPLATES: &[&str] = &[
+                "I've been looking into {} and it seems useful.",
+                "The {} approach worked really well for us.",
+                "We should probably use {} for this project.",
+                "Have you tried {} in production yet?",
+                "The problem with {} is the documentation.",
+                "I think {} would be a good fit here.",
+                "After switching to {} things got much better.",
+                "Does anyone here have experience with {}?",
+            ];
+            let idx = rng.random_range(0..TEMPLATES.len());
+            return TEMPLATES[idx].replace("{}", target_word);
         }
 
         // Capitalize first word
@@ -127,7 +142,7 @@ impl MarkovChain {
             }
         }
 
-        Some(words.join(" "))
+        words.join(" ")
     }
 }
 
@@ -595,8 +610,7 @@ async fn run_corpus_job(
         if pass_items.len() >= passes_to_run { break; }
         let passes_this = item.passes_needed.min(passes_to_run - pass_items.len());
         for pass_idx in 0..passes_this {
-            let sentence = chain.generate_with(&item.term, 15, &mut rng)
-                .unwrap_or_else(|| format!("Please check the {} setting.", item.term));
+            let sentence = chain.generate_with(&item.term, 15, &mut rng);
             let spoken = {
                 let lower = sentence.to_lowercase();
                 let lower_term = item.term.to_lowercase();
@@ -630,17 +644,24 @@ async fn run_corpus_job(
             break;
         }
 
-        // Fire all TTS calls in the chunk concurrently
+        // Fire all TTS calls in the chunk concurrently via separate tokio tasks
         let t0 = std::time::Instant::now();
-        let tts_futures: Vec<_> = chunk.iter().map(|pi| {
+        let tts_handles: Vec<_> = chunk.iter().map(|pi| {
             let backend = tts_backend.to_string();
             let spoken = pi.spoken.clone();
             let state2 = state.clone();
-            async move {
-                state2.tts.generate(&backend, &spoken).await
-            }
+            tokio::spawn(async move {
+                let t = std::time::Instant::now();
+                let result = state2.tts.generate(&backend, &spoken).await;
+                let ms = t.elapsed().as_millis();
+                eprintln!("[tts] {} ms — {}", ms, &spoken.chars().take(40).collect::<String>());
+                result
+            })
         }).collect();
-        let tts_results = futures::future::join_all(tts_futures).await;
+        let mut tts_results = Vec::with_capacity(tts_handles.len());
+        for handle in tts_handles {
+            tts_results.push(handle.await.unwrap_or_else(|e| Err(anyhow::anyhow!("task join: {e}"))));
+        }
         tts_ms += t0.elapsed().as_millis() as u64;
 
         // Process each result: resample → ASR → align → extract → write
