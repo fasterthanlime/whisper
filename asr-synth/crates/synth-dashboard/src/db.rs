@@ -204,7 +204,74 @@ impl Db {
                 updated_at TEXT NOT NULL
             )"
         ).ok();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS authored_sentences (
+                id INTEGER PRIMARY KEY,
+                term TEXT NOT NULL,
+                sentence TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )"
+        ).ok();
+
         Ok(Db { conn })
+    }
+
+    // ==================== AUTHORED SENTENCES ====================
+
+    pub fn insert_authored_sentence(&self, term: &str, sentence: &str) -> Result<i64> {
+        let now = now_str();
+        self.conn.execute(
+            "INSERT INTO authored_sentences (term, sentence, created_at) VALUES (?1, ?2, ?3)",
+            params![term, sentence, now],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Get a vocab term that needs more sentences, weighted toward terms with fewer.
+    /// Only considers terms that have overrides and are reviewed (usable for corpus).
+    pub fn pick_term_for_authoring(&self) -> Result<Option<(VocabRow, i64)>> {
+        // Count authored sentences per term, pick the one with fewest
+        let mut stmt = self.conn.prepare(
+            "SELECT v.id, v.term, v.spoken_auto, v.spoken_override, v.reviewed,
+                    COALESCE(c.cnt, 0) as sentence_count
+             FROM vocab v
+             LEFT JOIN (SELECT term, COUNT(*) as cnt FROM authored_sentences GROUP BY term) c
+                ON LOWER(c.term) = LOWER(v.term)
+             WHERE v.reviewed = 1 AND v.spoken_override IS NOT NULL
+                AND (v.curated IS NULL OR v.curated = 'kept')
+                AND v.term NOT LIKE '%-%'
+             ORDER BY sentence_count ASC, RANDOM()
+             LIMIT 1"
+        )?;
+        let mut rows = stmt.query_map([], |row| {
+            Ok((VocabRow {
+                id: row.get(0)?, term: row.get(1)?, spoken_auto: row.get(2)?,
+                spoken_override: row.get(3)?, reviewed: row.get::<_, i64>(4)? != 0,
+            }, row.get::<_, i64>(5)?))
+        })?;
+        match rows.next() {
+            Some(Ok(r)) => Ok(Some(r)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn authored_sentence_count(&self) -> Result<i64> {
+        Ok(self.conn.query_row("SELECT COUNT(*) FROM authored_sentences", [], |r| r.get(0))?)
+    }
+
+    pub fn authored_sentence_term_counts(&self) -> Result<Vec<(String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT term, COUNT(*) FROM authored_sentences GROUP BY term ORDER BY COUNT(*) DESC"
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Get all authored sentences as plain text (for Markov chain building).
+    pub fn all_authored_sentences(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT sentence FROM authored_sentences")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     // ==================== IMPORT OFFSETS ====================
@@ -639,7 +706,7 @@ impl Db {
     }
 
     pub fn all_sentence_texts(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare("SELECT text FROM sentences UNION SELECT text FROM candidate_sentences")?;
+        let mut stmt = self.conn.prepare("SELECT text FROM sentences UNION SELECT text FROM candidate_sentences UNION SELECT sentence FROM authored_sentences")?;
         let rows = stmt.query_map([], |row| row.get(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }

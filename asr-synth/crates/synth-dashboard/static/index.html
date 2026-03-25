@@ -1755,6 +1755,7 @@
                 ['#/', 'Import'],
                 ['#/vocab', 'Vocab'],
                 ['#/review', 'Review'],
+                ['#/author', 'Author'],
                 ['#/corpus', 'Corpus'],
                 ['#/train', 'Train'],
                 ['#/eval', 'Eval'],
@@ -2548,6 +2549,106 @@
                                     <button className="btn btn-sm btn-primary" onClick={saveVocabOverride} disabled={!editSpoken}>Save</button>
                                     <button className="btn btn-sm" onClick={() => {stopPreview(); stopRecording(); setEditingWord(null);}}>Cancel</button>
                                 </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // ==================== AUTHOR PAGE ====================
+
+        function AuthorPage() {
+            const [term, setTerm] = useState(null);
+            const [sentence, setSentence] = useState('');
+            const [sentenceCount, setSentenceCount] = useState(0);
+            const [stats, setStats] = useState(null);
+            const [error, setError] = useState(null);
+            const [saving, setSaving] = useState(false);
+            const inputRef = useRef(null);
+
+            const loadNext = () => {
+                api('/api/author/next').then(r => {
+                    if (r.done) { setTerm(null); }
+                    else { setTerm(r); setSentenceCount(r.sentence_count); }
+                    setSentence('');
+                    setTimeout(() => inputRef.current?.focus(), 50);
+                }).catch(e => setError(e.message));
+            };
+
+            const loadStats = () => api('/api/author/stats').then(setStats).catch(() => {});
+
+            useEffect(() => { loadNext(); loadStats(); }, []);
+
+            const submit = async () => {
+                if (!sentence.trim() || !term) return;
+                setSaving(true); setError(null);
+                try {
+                    const res = await api('/api/author/submit', {method: 'POST', body: JSON.stringify({term: term.term, sentence: sentence.trim()})});
+                    if (res.error) { setError(res.error); setSaving(false); return; }
+                    setSentence('');
+                    setSentenceCount(c => c + 1);
+                    loadStats();
+                    // 50% chance to move to next term (so you write multiple per term)
+                    if (Math.random() < 0.5 || sentenceCount >= 4) {
+                        loadNext();
+                    } else {
+                        setTimeout(() => inputRef.current?.focus(), 50);
+                    }
+                } catch (e) { setError(e.message); }
+                setSaving(false);
+            };
+
+            const skip = () => loadNext();
+
+            return (
+                <div className="container">
+                    <h2>Author Sentences</h2>
+
+                    {stats && (
+                        <div className="stats-grid" style={{marginBottom:16}}>
+                            <div className="stat-card"><div className="value" style={{color:'var(--success)'}}>{stats.total_sentences}</div><div className="label">Sentences</div></div>
+                            <div className="stat-card"><div className="value">{stats.terms?.length || 0}</div><div className="label">Terms Covered</div></div>
+                            <div className="stat-card"><div className="value">{stats.vocab_count || 0}</div><div className="label">Vocab Total</div></div>
+                        </div>
+                    )}
+
+                    {error && <div className="pipeline-error" style={{marginBottom:12}}>{error}</div>}
+
+                    {!term ? (
+                        <div className="card" style={{textAlign:'center',padding:32}}>
+                            <p style={{color:'var(--text-muted)',fontSize:16}}>No vocab terms available. Add terms with overrides on the Vocab tab first.</p>
+                        </div>
+                    ) : (
+                        <div className="card">
+                            <div style={{textAlign:'center',marginBottom:16}}>
+                                <div style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>Write a sentence using</div>
+                                <div style={{fontSize:32,fontWeight:700,fontFamily:'monospace',color:'var(--accent)'}}>{term.term}</div>
+                                {term.spoken !== term.term && <div style={{fontSize:13,color:'var(--text-muted)',marginTop:4}}>pronounced "{term.spoken}"</div>}
+                                <div style={{fontSize:11,color:'var(--text-muted)',marginTop:8}}>{sentenceCount} sentence{sentenceCount !== 1 ? 's' : ''} so far</div>
+                            </div>
+                            <div style={{display:'flex',gap:8}}>
+                                <input ref={inputRef} type="text" value={sentence} onChange={e => setSentence(e.target.value)}
+                                    placeholder={`Type a sentence containing "${term.term}"...`}
+                                    onKeyDown={e => { if (e.key === 'Enter' && sentence.trim()) submit(); }}
+                                    style={{flex:1,padding:'10px 14px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontFamily:'Jost,sans-serif',fontSize:15}} />
+                                <button className="btn btn-primary" onClick={submit} disabled={saving || !sentence.trim()}>Save</button>
+                                <button className="btn" onClick={skip} style={{color:'var(--text-muted)'}}>Skip</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {stats?.terms?.length > 0 && (
+                        <div style={{marginTop:24}}>
+                            <h3>Coverage</h3>
+                            <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                                {stats.terms.map(([term, count]) => (
+                                    <span key={term} style={{fontSize:12,padding:'2px 8px',borderRadius:10,
+                                        background: count >= 3 ? 'rgba(126,231,135,0.15)' : count >= 1 ? 'rgba(88,166,255,0.15)' : 'rgba(255,255,255,0.05)',
+                                        color: count >= 3 ? 'var(--success)' : count >= 1 ? 'var(--accent)' : 'var(--text-muted)',
+                                        border: `1px solid ${count >= 3 ? 'rgba(126,231,135,0.3)' : count >= 1 ? 'rgba(88,166,255,0.3)' : 'var(--border)'}`,
+                                    }}>{term} <b>{count}</b></span>
+                                ))}
                             </div>
                         </div>
                     )}
@@ -3924,6 +4025,7 @@
             else if (hash.startsWith('#/vocab/scan')) page = <ScanResultsPage />;
             else if (hash.startsWith('#/vocab')) page = <VocabPage />;
             else if (hash.startsWith('#/review')) page = <ReviewPage />;
+            else if (hash.startsWith('#/author')) page = <AuthorPage />;
             else if (hash.startsWith('#/corpus')) page = <CorpusPage />;
             else if (hash.startsWith('#/train')) page = <TrainPage />;
             else if (hash.startsWith('#/eval')) page = <EvalPage />;

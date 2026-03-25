@@ -869,6 +869,55 @@ async fn main() -> anyhow::Result<()> {
     review::spawn_precompute_loop(state.clone(), precompute_notify, audio_dir.clone());
     review::spawn_vocab_precompute_loop(state.clone(), vocab_precompute_notify, audio_dir);
 
+    // ==================== AUTHORING ====================
+
+    async fn api_author_next(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
+        let db = state.db.lock().unwrap();
+        match db.pick_term_for_authoring().map_err(err)? {
+            Some((vocab, count)) => Ok(Json(serde_json::json!({
+                "term": vocab.term,
+                "spoken": vocab.spoken(),
+                "sentence_count": count,
+            })).into_response()),
+            None => Ok(Json(serde_json::json!({"done": true})).into_response()),
+        }
+    }
+
+    #[derive(Deserialize)]
+    struct AuthorSubmitBody {
+        term: String,
+        sentence: String,
+    }
+
+    async fn api_author_submit(
+        State(state): State<Arc<AppState>>,
+        Json(body): Json<AuthorSubmitBody>,
+    ) -> Result<Response, AppError> {
+        let sentence = body.sentence.trim().to_string();
+        if sentence.is_empty() {
+            return Ok(Json(serde_json::json!({"error": "empty sentence"})).into_response());
+        }
+        // Verify the sentence contains the term (case-insensitive)
+        if !sentence.to_lowercase().contains(&body.term.to_lowercase()) {
+            return Ok(Json(serde_json::json!({"error": format!("Sentence must contain '{}'", body.term)})).into_response());
+        }
+        let db = state.db.lock().unwrap();
+        let id = db.insert_authored_sentence(&body.term, &sentence).map_err(err)?;
+        Ok(Json(serde_json::json!({"id": id})).into_response())
+    }
+
+    async fn api_author_stats(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
+        let db = state.db.lock().unwrap();
+        let total = db.authored_sentence_count().map_err(err)?;
+        let terms = db.authored_sentence_term_counts().map_err(err)?;
+        let vocab_count = db.list_reviewed_vocab().map_err(err)?.len();
+        Ok(Json(serde_json::json!({
+            "total_sentences": total,
+            "vocab_count": vocab_count,
+            "terms": terms,
+        })).into_response())
+    }
+
     let app = Router::new()
         // UI
         .route("/", get(index))
@@ -927,6 +976,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pipeline/scan-results", get(jobs::api_scan_results))
         .route("/api/correct", post(jobs::api_correct))
         .route("/api/test-term", post(jobs::api_test_term))
+        // Authoring
+        .route("/api/author/next", get(api_author_next))
+        .route("/api/author/submit", post(api_author_submit))
+        .route("/api/author/stats", get(api_author_stats))
         .with_state(state);
 
     let addr = format!("{}:{}", cli.host, cli.port);
