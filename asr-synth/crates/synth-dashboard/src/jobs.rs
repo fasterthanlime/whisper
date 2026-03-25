@@ -141,6 +141,64 @@ fn apply_overrides_to_sentence(sentence: &str, overrides: &HashMap<String, Strin
     result
 }
 
+/// Find the time range of a spoken term in alignment items.
+/// Handles multi-word spoken forms (e.g., "sir day" for serde).
+fn find_term_time_range(
+    align_items: &[qwen3_asr::ForcedAlignItem],
+    spoken_term_lower: &str,
+) -> Option<(f64, f64)> {
+    let target_clean: String = spoken_term_lower.chars()
+        .filter(|c| c.is_alphanumeric() || *c == ' ')
+        .collect();
+
+    for i in 0..align_items.len() {
+        let mut concat = String::new();
+        for j in i..align_items.len().min(i + 5) {
+            if !concat.is_empty() { concat.push(' '); }
+            concat.push_str(&align_items[j].word.to_lowercase());
+            let concat_clean: String = concat.chars()
+                .filter(|c| c.is_alphanumeric() || *c == ' ')
+                .collect();
+            if concat_clean.trim() == target_clean.trim() {
+                return Some((align_items[i].start_time, align_items[j].end_time));
+            }
+        }
+    }
+    None
+}
+
+/// Align an ASR transcription against audio, then extract the words
+/// that overlap with a given time range.
+fn extract_asr_at_time_range(
+    aligner: &qwen3_asr::ForcedAligner,
+    samples_16k: &[f32],
+    asr_text: &str,
+    start: f64,
+    end: f64,
+) -> String {
+    if asr_text.is_empty() { return String::new(); }
+
+    // Align the ASR output against the audio
+    let asr_align = aligner.align(samples_16k, asr_text).unwrap_or_default();
+    if asr_align.is_empty() { return asr_text.to_string(); }
+
+    // Collect words whose time range overlaps with [start, end]
+    let mut words = Vec::new();
+    for item in &asr_align {
+        // Check overlap: word overlaps if it doesn't end before start or begin after end
+        if item.end_time > start + 0.02 && item.start_time < end - 0.02 {
+            words.push(item.word.as_str());
+        }
+    }
+
+    if words.is_empty() {
+        // No overlap found — fall back to full text
+        asr_text.to_string()
+    } else {
+        words.join(" ")
+    }
+}
+
 /// Strip carrier phrase prefix variants from ASR output.
 fn strip_carrier_prefix(text: &str) -> String {
     let lower = text.to_lowercase();
@@ -407,50 +465,16 @@ async fn run_corpus_job(
                 }
             };
 
-            // Forced alignment: find where the target term is in the audio
-            let align_items = state.aligner.align(&full_16k, &spoken).unwrap_or_default();
-
-            // Find the aligner word(s) that correspond to the spoken form of our term
+            // 1) Align the ORIGINAL text against the audio to find the term's time range
+            let orig_align = state.aligner.align(&full_16k, &spoken).unwrap_or_default();
             let spoken_term_lower = item.spoken.to_lowercase();
-            let spoken_term_words: Vec<&str> = spoken_term_lower.split_whitespace().collect();
 
-            let mut term_start = None;
-            let mut term_end = None;
+            let (term_start, term_end) = find_term_time_range(&orig_align, &spoken_term_lower)
+                .unwrap_or((0.0, full_16k.len() as f64 / 16000.0));
 
-            // Walk alignment items, try to find a contiguous span matching the spoken term
-            'align: for i in 0..align_items.len() {
-                let mut concat = String::new();
-                for j in i..align_items.len().min(i + spoken_term_words.len() + 2) {
-                    if !concat.is_empty() { concat.push(' '); }
-                    concat.push_str(&align_items[j].word.to_lowercase());
-                    let concat_clean: String = concat.chars().filter(|c| c.is_alphanumeric() || *c == ' ').collect();
-                    let target_clean: String = spoken_term_lower.chars().filter(|c| c.is_alphanumeric() || *c == ' ').collect();
-                    if concat_clean.trim() == target_clean.trim() {
-                        term_start = Some(align_items[i].start_time);
-                        term_end = Some(align_items[j].end_time);
-                        break 'align;
-                    }
-                }
-            }
-
-            // If alignment didn't find the term, fall back to the whole audio
-            let (start_time, end_time) = match (term_start, term_end) {
-                (Some(s), Some(e)) => (s, e),
-                _ => (0.0, full_16k.len() as f64 / 16000.0),
-            };
-
-            // Crop audio to the term's time range (with small padding)
-            let crop_start = ((start_time - 0.08).max(0.0) * 16000.0) as usize;
-            let crop_end = ((end_time + 0.08) * 16000.0).min(full_16k.len() as f64) as usize;
-            let cropped = if crop_start < crop_end && crop_end <= full_16k.len() {
-                full_16k[crop_start..crop_end].to_vec()
-            } else {
-                full_16k.clone()
-            };
-
-            // Run dual ASR on the CROPPED audio (just the term)
+            // 2) Run dual ASR on the FULL audio (natural context → better transcription)
             let state_q = state.clone();
-            let samples_q = cropped.clone();
+            let samples_q = full_16k.clone();
             let qwen_task = tokio::task::spawn_blocking(move || -> String {
                 state_q.asr
                     .transcribe_samples(&samples_q, qwen3_asr::TranscribeOptions::default().with_language("english"))
@@ -458,16 +482,26 @@ async fn run_corpus_job(
                     .unwrap_or_default()
             });
             let state_p = state.clone();
+            let samples_p = full_16k.clone();
             let parakeet_task = tokio::task::spawn_blocking(move || -> String {
                 let mut p = state_p.parakeet.lock().unwrap();
-                p.transcribe_samples(cropped.to_vec(), 16000, 1, None)
+                p.transcribe_samples(samples_p, 16000, 1, None)
                     .map(|r| r.text)
                     .unwrap_or_default()
             });
 
-            let (qwen, parakeet) = tokio::join!(qwen_task, parakeet_task);
-            let qwen = qwen.unwrap_or_default();
-            let parakeet = parakeet.unwrap_or_default();
+            let (qwen_full, parakeet_full) = tokio::join!(qwen_task, parakeet_task);
+            let qwen_full = qwen_full.unwrap_or_default();
+            let parakeet_full = parakeet_full.unwrap_or_default();
+
+            // 3) Align each ASR output against the same audio, then extract
+            //    the word(s) that overlap with the target term's time range
+            let qwen = extract_asr_at_time_range(
+                &state.aligner, &full_16k, &qwen_full, term_start, term_end,
+            );
+            let parakeet = extract_asr_at_time_range(
+                &state.aligner, &full_16k, &parakeet_full, term_start, term_end,
+            );
 
             // Write both ASR outputs as separate training pairs
             // original = the sentence with correct spelling
