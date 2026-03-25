@@ -4489,6 +4489,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "clap",
+ "futures",
  "hound",
  "mlx-rs",
  "parakeet-rs",

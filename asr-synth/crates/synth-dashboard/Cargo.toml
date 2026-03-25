@@ -35,3 +35,4 @@ qwen3-asr = { path = "../../../qwen3-asr-rs", features = ["metal", "hub"] }
 parakeet-rs = "0.3"
 rubato = "0.15"
 base64 = "0.22"
+futures = "0.3"

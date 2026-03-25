@@ -574,69 +574,92 @@ async fn run_corpus_job(
 
     let mut rng = rand::rngs::StdRng::from_os_rng();
 
-    // Get spoken overrides for building spoken forms of Markov sentences
+    // Get spoken overrides
     let overrides = {
         let db = state.db.lock().unwrap();
         db.get_spoken_overrides().unwrap_or_default()
     };
+    let _ = &overrides; // suppress unused warning for now
 
-    'outer: for item in &work {
-        if count >= passes_to_run { break; }
-
-        let passes_this_item = item.passes_needed.min(passes_to_run - count);
-
-        for pass in 0..passes_this_item {
-            if state.job_cancel.load(Ordering::Relaxed) {
-                let db = state.db.lock().unwrap();
-                let _ = db.append_job_log(job_id, "Stopped by user.");
-                break 'outer;
-            }
-
-            // Generate a Markov sentence containing this term
+    // Pre-generate all (term, sentence, spoken) tuples
+    struct PassItem {
+        term: String,
+        sentence: String,
+        spoken: String,
+        item_idx: usize,
+        pass_idx: usize,
+    }
+    let mut pass_items: Vec<PassItem> = Vec::new();
+    let mut item_idx = 0;
+    for item in &work {
+        if pass_items.len() >= passes_to_run { break; }
+        let passes_this = item.passes_needed.min(passes_to_run - pass_items.len());
+        for pass_idx in 0..passes_this {
             let sentence = chain.generate_with(&item.term, 15, &mut rng)
                 .unwrap_or_else(|| format!("Please check the {} setting.", item.term));
-
-            // Build spoken form: replace the term with its spoken pronunciation
             let spoken = {
-                let lower_sentence = sentence.to_lowercase();
+                let lower = sentence.to_lowercase();
                 let lower_term = item.term.to_lowercase();
-                if let Some(pos) = lower_sentence.find(&lower_term) {
-                    // Replace the term occurrence with the spoken form
-                    let before = &sentence[..pos];
-                    let after = &sentence[pos + item.term.len()..];
-                    // Apply overrides to surrounding words too
-                    let spoken_term = &item.spoken;
-                    format!("{before}{spoken_term}{after}")
+                if let Some(pos) = lower.find(&lower_term) {
+                    format!("{}{}{}", &sentence[..pos], &item.spoken, &sentence[pos + item.term.len()..])
                 } else {
                     sentence.clone()
                 }
             };
+            pass_items.push(PassItem { term: item.term.clone(), sentence, spoken, item_idx, pass_idx });
+        }
+        item_idx += 1;
+    }
+    let total_items = item_idx;
 
-            // Don't apply bulk overrides — only the target term was replaced above.
-            // Applying overrides to the whole sentence risks corrupting common words.
+    {
+        let db = state.db.lock().unwrap();
+        let _ = db.append_job_log(job_id, &format!("Generated {} Markov sentences, starting pipeline...", pass_items.len()));
+    }
 
-            // TTS
-            let t0 = std::time::Instant::now();
-            let audio = match state.tts.generate(tts_backend, &spoken).await {
+    // Pipeline: run N TTS calls concurrently, process ASR+alignment as results arrive
+    const PIPELINE_DEPTH: usize = 4;
+
+    // We process in chunks of PIPELINE_DEPTH
+    let chunks: Vec<&[PassItem]> = pass_items.chunks(PIPELINE_DEPTH).collect();
+
+    for chunk in chunks {
+        if state.job_cancel.load(Ordering::Relaxed) {
+            let db = state.db.lock().unwrap();
+            let _ = db.append_job_log(job_id, "Stopped by user.");
+            break;
+        }
+
+        // Fire all TTS calls in the chunk concurrently
+        let t0 = std::time::Instant::now();
+        let tts_futures: Vec<_> = chunk.iter().map(|pi| {
+            let backend = tts_backend.to_string();
+            let spoken = pi.spoken.clone();
+            let state2 = state.clone();
+            async move {
+                state2.tts.generate(&backend, &spoken).await
+            }
+        }).collect();
+        let tts_results = futures::future::join_all(tts_futures).await;
+        tts_ms += t0.elapsed().as_millis() as u64;
+
+        // Process each result: resample → ASR → align → extract → write
+        for (pi, tts_result) in chunk.iter().zip(tts_results.into_iter()) {
+            if state.job_cancel.load(Ordering::Relaxed) { break; }
+
+            let mut audio = match tts_result {
                 Ok(mut a) => { a.normalize(); a }
                 Err(e) => {
                     let db = state.db.lock().unwrap();
-                    let _ = db.append_job_log(job_id, &format!("TTS FAILED: {e} — {}", &sentence.chars().take(40).collect::<String>()));
+                    let _ = db.append_job_log(job_id, &format!("TTS FAILED: {e} — {}", &pi.sentence.chars().take(40).collect::<String>()));
                     errors += 1;
                     continue;
                 }
             };
-            tts_ms += t0.elapsed().as_millis() as u64;
 
-            // Resample
             let full_16k = match tts::resample_to_16k(&audio.samples, audio.sample_rate) {
                 Ok(s) => s,
-                Err(e) => {
-                    let db = state.db.lock().unwrap();
-                    let _ = db.append_job_log(job_id, &format!("Resample FAILED: {e}"));
-                    errors += 1;
-                    continue;
-                }
+                Err(e) => { errors += 1; continue; }
             };
 
             // ASR (dual, parallel)
@@ -662,20 +685,18 @@ async fn run_corpus_job(
             let parakeet_full = parakeet_full.unwrap_or_default();
             asr_ms += t0.elapsed().as_millis() as u64;
 
-            // Alignment (3x: original + both ASR outputs)
+            // Alignment
             let t0 = std::time::Instant::now();
-            let orig_align = state.aligner.align(&full_16k, &sentence).unwrap_or_default();
-            let term_lower = item.term.to_lowercase();
+            let orig_align = state.aligner.align(&full_16k, &pi.sentence).unwrap_or_default();
+            let term_lower = pi.term.to_lowercase();
             let (term_start, term_end) = find_term_time_range(&orig_align, &term_lower)
                 .unwrap_or((0.0, full_16k.len() as f64 / 16000.0));
             let qwen_align = state.aligner.align(&full_16k, &qwen_full).unwrap_or_default();
             let parakeet_align = state.aligner.align(&full_16k, &parakeet_full).unwrap_or_default();
             align_ms += t0.elapsed().as_millis() as u64;
 
-            // 4) Tri-boundary consensus extraction
             let cons = extract_with_consensus(&orig_align, &qwen_align, &parakeet_align, term_start, term_end);
 
-            // Serialize alignments for debugging
             let fmt_align = |items: &[qwen3_asr::ForcedAlignItem]| -> Vec<serde_json::Value> {
                 items.iter().map(|a| {
                     serde_json::json!({"w": a.word, "s": (a.start_time * 1000.0).round() / 1000.0, "e": (a.end_time * 1000.0).round() / 1000.0})
@@ -683,13 +704,13 @@ async fn run_corpus_job(
             };
 
             writeln!(file, "{}", serde_json::json!({
-                "term": item.term,
+                "term": pi.term,
                 "original": cons.original,
                 "qwen": cons.qwen,
                 "parakeet": cons.parakeet,
                 "clean": cons.clean,
-                "sentence": sentence,
-                "spoken": spoken,
+                "sentence": pi.sentence,
+                "spoken": pi.spoken,
                 "qwen_full": qwen_full,
                 "parakeet_full": parakeet_full,
                 "term_time": [term_start, term_end],
@@ -701,25 +722,20 @@ async fn run_corpus_job(
             }))?;
             count += 1;
 
-            // Log
-            if pass == 0 || (count % 10) == 0 {
+            if pi.pass_idx == 0 || (count % 10) == 0 {
                 let db = state.db.lock().unwrap();
                 let _ = db.append_job_log(job_id, &format!(
-                    "[{}/{}] \"{}\" pass {}/{}: \"{}\"",
-                    items_done + 1, work.len(), item.term,
-                    pass + 1, passes_this_item,
-                    &sentence.chars().take(50).collect::<String>(),
+                    "[{}/{}] \"{}\" pass {}: \"{}\"",
+                    pi.item_idx + 1, total_items, pi.term,
+                    pi.pass_idx + 1,
+                    &pi.sentence.chars().take(50).collect::<String>(),
                 ));
-            }
-
-            // Update live stats
-            if count % 5 == 0 {
-                file.flush()?;
-                update_stats(state, job_id, count, items_done, errors, tts_ms, asr_ms, align_ms, job_start.elapsed().as_millis() as u64);
             }
         }
 
-        items_done += 1;
+        items_done = chunk.last().map(|pi| pi.item_idx + 1).unwrap_or(items_done);
+        file.flush()?;
+        update_stats(state, job_id, count, items_done, errors, tts_ms, asr_ms, align_ms, job_start.elapsed().as_millis() as u64);
     }
 
     file.flush()?;
