@@ -163,6 +163,8 @@ pub struct ReviewSession {
     // Vocab review
     pub vocab_queue: VecDeque<i64>,  // shuffled once, stable order
     pub vocab_precomputed: HashMap<i64, PrecomputedData>,
+    /// The vocab ID currently being shown to the user (already popped from queue).
+    pub vocab_current_id: Option<i64>,
     /// Which vocab ID the precompute loop is currently computing (if any).
     /// Used by /current to avoid redundant concurrent computation.
     pub vocab_computing: Option<i64>,
@@ -188,6 +190,7 @@ impl ReviewSession {
             precomputed: HashMap::new(),
             vocab_queue: VecDeque::new(),
             vocab_precomputed: HashMap::new(),
+            vocab_current_id: None,
             vocab_computing: None,
         }
     }
@@ -1026,39 +1029,67 @@ pub async fn api_vocab_review_current(
         return Ok(Json(serde_json::json!({"sentence": null, "ready": true})).into_response());
     };
 
+    // Track which term is currently being shown
+    state.review.lock().unwrap().vocab_current_id = Some(vocab_id);
+
+    serve_vocab_review(&state, vocab_id, true).await
+}
+
+/// Compute and return the review response for a specific vocab ID.
+/// If `use_cache` is true, checks the precompute cache first (for /current).
+/// If false, always recomputes (for pronunciation changes).
+async fn serve_vocab_review(
+    state: &Arc<AppState>,
+    vocab_id: i64,
+    use_cache: bool,
+) -> Result<Response, AppError> {
     let vocab = {
         let db = state.db.lock().unwrap();
         db.get_vocab(vocab_id).map_err(err)?.ok_or_else(|| err(anyhow::anyhow!("vocab gone")))?
     };
 
-    // Check precompute cache — if the precompute loop is actively computing
-    // this item, wait for it instead of starting a competing computation
-    let data = 'resolve: {
-        // First check: already cached?
-        if let Some(data) = state.review.lock().unwrap().vocab_precomputed.remove(&vocab_id) {
-            break 'resolve data;
-        }
+    let data = if use_cache {
+        // Check precompute cache — if the precompute loop is actively computing
+        // this item, wait for it instead of starting a competing computation
+        'resolve: {
+            // First check: already cached?
+            if let Some(data) = state.review.lock().unwrap().vocab_precomputed.remove(&vocab_id) {
+                break 'resolve data;
+            }
 
-        // If precompute loop is computing this exact item, wait for it
-        let is_being_computed = state.review.lock().unwrap().vocab_computing == Some(vocab_id);
-        if is_being_computed {
-            for _ in 0..30 {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                let mut review = state.review.lock().unwrap();
-                if let Some(data) = review.vocab_precomputed.remove(&vocab_id) {
-                    break 'resolve data;
-                }
-                if review.vocab_computing != Some(vocab_id) {
-                    // Precompute moved on — check once more then fall through
+            // If precompute loop is computing this exact item, wait for it
+            let is_being_computed = state.review.lock().unwrap().vocab_computing == Some(vocab_id);
+            if is_being_computed {
+                for _ in 0..30 {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    let mut review = state.review.lock().unwrap();
                     if let Some(data) = review.vocab_precomputed.remove(&vocab_id) {
                         break 'resolve data;
                     }
-                    break;
+                    if review.vocab_computing != Some(vocab_id) {
+                        if let Some(data) = review.vocab_precomputed.remove(&vocab_id) {
+                            break 'resolve data;
+                        }
+                        break;
+                    }
                 }
             }
-        }
 
-        // Not cached and not being precomputed — compute inline
+            // Not cached and not being precomputed — compute inline
+            let sentence = vocab_to_sentence(&vocab);
+            let backend = state.review.lock().unwrap().backend.clone();
+            let audio_dir = state.audio_dir.clone();
+            let state2 = state.clone();
+            let backend2 = backend.clone();
+            tokio::task::spawn_blocking(move || {
+                compute_for_sentence(&state2, &sentence, &backend2, &audio_dir)
+            })
+            .await
+            .map_err(|e| err(e))?
+            .map_err(err)?
+        }
+    } else {
+        // Always recompute (pronunciation changed, cache is stale)
         let sentence = vocab_to_sentence(&vocab);
         let backend = state.review.lock().unwrap().backend.clone();
         let audio_dir = state.audio_dir.clone();
@@ -1212,26 +1243,33 @@ pub async fn api_vocab_review_pronunciation(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PronunciationBody>,
 ) -> Result<Response, AppError> {
-    // Update the vocab override
-    {
+    // Update the vocab override and get the ID
+    let vocab_id = {
         let db = state.db.lock().unwrap();
-        if let Ok(Some(vocab)) = db.find_vocab_by_term(&body.word) {
-            db.update_vocab_override(vocab.id, Some(&body.spoken)).map_err(err)?;
-        }
-    }
-    // Re-fetch and recompute current
-    api_vocab_review_current(State(state)).await
+        let vocab = db.find_vocab_by_term(&body.word).map_err(err)?
+            .ok_or_else(|| err(anyhow::anyhow!("vocab term not found: {}", body.word)))?;
+        db.update_vocab_override(vocab.id, Some(&body.spoken)).map_err(err)?;
+        vocab.id
+    };
+    // Recompute for the SAME term (don't advance to next)
+    serve_vocab_review(&state, vocab_id, false).await
 }
 
 pub async fn api_vocab_review_backend(
     State(state): State<Arc<AppState>>,
     Json(body): Json<BackendBody>,
 ) -> Result<Response, AppError> {
-    {
+    let vocab_id = {
         let mut review = state.review.lock().unwrap();
         review.backend = body.backend;
+        // Invalidate precomputed data (wrong backend now)
+        review.vocab_precomputed.clear();
+        review.vocab_current_id
+    };
+    match vocab_id {
+        Some(id) => serve_vocab_review(&state, id, false).await,
+        None => api_vocab_review_current(State(state)).await,
     }
-    api_vocab_review_current(State(state)).await
 }
 
 fn load_wav_16k(wav_path: &str) -> anyhow::Result<Vec<f32>> {
