@@ -2670,21 +2670,22 @@
                                 <button onClick={() => setSuggestions(null)} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer'}}>&times;</button>
                             </div>
                             {suggestions.map((s, i) => {
-                                // Build spoken sentence by replacing term with pronunciation
+                                const pron = s._override ?? s.pronunciation;
                                 const spokenSentence = s.sentence ? (() => {
                                     const idx = s.sentence.toLowerCase().indexOf(s.term.toLowerCase());
-                                    if (idx >= 0) return s.sentence.slice(0, idx) + s.pronunciation + s.sentence.slice(idx + s.term.length);
+                                    if (idx >= 0) return s.sentence.slice(0, idx) + pron + s.sentence.slice(idx + s.term.length);
                                     return s.sentence;
-                                })() : s.pronunciation;
+                                })() : pron;
                                 return (
                                 <div key={i} style={{padding:'8px 0',borderBottom:'1px solid rgba(255,255,255,0.04)',fontSize:12}}>
                                     <div style={{display:'flex',gap:8,alignItems:'center'}}>
                                         <span style={{fontWeight:700,fontFamily:'monospace',minWidth:100,fontSize:14}}>{s.term}</span>
-                                        <span style={{color:'var(--accent)'}}>"{s.pronunciation}"</span>
+                                        <input value={pron} onChange={e => setSuggestions(prev => prev.map((x, j) => j === i ? {...x, _override: e.target.value} : x))}
+                                            style={{padding:'2px 6px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:3,color:'var(--accent)',fontSize:12,fontFamily:'Jost,sans-serif',width:140}} />
                                         <PlayBtn text={spokenSentence} small />
                                         <div style={{flex:1}} />
                                         <button className="btn btn-sm" onClick={async () => {
-                                            await api('/api/vocab', {method:'POST', body: JSON.stringify({term: s.term, spoken_override: s.pronunciation})});
+                                            await api('/api/vocab', {method:'POST', body: JSON.stringify({term: s.term, spoken_override: pron})});
                                             setSuggestions(prev => prev.filter((_, j) => j !== i));
                                             loadStats();
                                         }} style={{color:'var(--success)',borderColor:'var(--success)'}}>Add</button>
