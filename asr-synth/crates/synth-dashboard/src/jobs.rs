@@ -434,6 +434,45 @@ struct ConsensusResult {
     debug: serde_json::Value,
 }
 
+/// Trim words from the left and right that all 3 lanes agree on.
+/// If the leftmost word is the same (case-insensitive) in all 3, remove it. Repeat.
+/// Same from the right. This strips context words, leaving just the disagreement.
+fn trim_matching_edges(orig: &str, qwen: &str, parakeet: &str) -> (String, String, String) {
+    let mut o: Vec<&str> = orig.split_whitespace().collect();
+    let mut q: Vec<&str> = qwen.split_whitespace().collect();
+    let mut p: Vec<&str> = parakeet.split_whitespace().collect();
+
+    // Trim from left
+    while !o.is_empty() && !q.is_empty() && !p.is_empty() {
+        let ow = o[0].to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
+        let qw = q[0].to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
+        let pw = p[0].to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
+        if ow == qw && ow == pw {
+            o.remove(0);
+            q.remove(0);
+            p.remove(0);
+        } else {
+            break;
+        }
+    }
+
+    // Trim from right
+    while !o.is_empty() && !q.is_empty() && !p.is_empty() {
+        let ow = o.last().unwrap().to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
+        let qw = q.last().unwrap().to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
+        let pw = p.last().unwrap().to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
+        if ow == qw && ow == pw {
+            o.pop();
+            q.pop();
+            p.pop();
+        } else {
+            break;
+        }
+    }
+
+    (o.join(" "), q.join(" "), p.join(" "))
+}
+
 /// Extract triplets using annotated tri-boundaries.
 ///
 /// 1. Compute tri-boundaries with before/after word annotations.
@@ -477,6 +516,10 @@ fn extract_with_consensus(
     let original = words_in_range(orig_align, start, end);
     let qwen = words_in_range(qwen_align, start, end);
     let parakeet = words_in_range(parakeet_align, start, end);
+
+    // Trim matching words from edges: if all 3 lanes agree on a boundary word,
+    // it's context, not part of the error. Remove from both sides.
+    let (original, qwen, parakeet) = trim_matching_edges(&original, &qwen, &parakeet);
 
     let rv = |v: &[f64]| -> Vec<f64> { v.iter().map(|&x| r2(x)).collect() };
     let tri_debug: Vec<serde_json::Value> = tris.iter().map(|tb| {
