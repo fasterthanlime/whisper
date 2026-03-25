@@ -2675,6 +2675,7 @@
             const [previewLoading, setPreviewLoading] = useState(false);
             const [liveStats, setLiveStats] = useState(null);
             const [testTerm, setTestTerm] = useState('');
+            const [testBackend, setTestBackend] = useState('pocket-hq');
             const [testResult, setTestResult] = useState(null);
             const [testLoading, setTestLoading] = useState(false);
             const pollRef = useRef(null);
@@ -2737,14 +2738,17 @@
                             <input type="text" value={testTerm} onChange={e => setTestTerm(e.target.value)} placeholder="Type a vocab term..."
                                 onKeyDown={e => { if (e.key === 'Enter' && testTerm.trim()) {
                                     setTestLoading(true); setTestResult(null);
-                                    api('/api/test-term', {method:'POST', body: JSON.stringify({term: testTerm.trim(), tts_backend: backend})})
+                                    api('/api/test-term', {method:'POST', body: JSON.stringify({term: testTerm.trim(), tts_backend: testBackend})})
                                         .then(r => { setTestResult(r); setTestLoading(false); })
                                         .catch(e => { setError(e.message); setTestLoading(false); });
                                 }}}
                                 style={{...inputStyle,flex:1}} />
+                            <select value={testBackend} onChange={e => setTestBackend(e.target.value)} style={inputStyle}>
+                                {(status.backends||[]).map(b => <option key={b} value={b}>{b}</option>)}
+                            </select>
                             <button className="btn btn-sm btn-primary" disabled={testLoading || !testTerm.trim()} onClick={() => {
                                 setTestLoading(true); setTestResult(null);
-                                api('/api/test-term', {method:'POST', body: JSON.stringify({term: testTerm.trim(), tts_backend: backend})})
+                                api('/api/test-term', {method:'POST', body: JSON.stringify({term: testTerm.trim(), tts_backend: testBackend})})
                                     .then(r => { setTestResult(r); setTestLoading(false); })
                                     .catch(e => { setError(e.message); setTestLoading(false); });
                             }}>{testLoading ? 'Running...' : 'Test'}</button>
