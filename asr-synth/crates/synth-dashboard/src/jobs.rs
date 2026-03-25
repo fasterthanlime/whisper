@@ -840,10 +840,12 @@ async fn run_corpus_job(
     }
 
     // Pipeline: TTS producer fires concurrent requests, consumer does ASR+alignment.
-    // Concurrency limit controls how many TTS requests are in flight at once.
-    const TTS_CONCURRENCY: usize = 8;
+    // Local TTS (pocket-tts) shares model state — must be sequential.
+    // Network TTS (openai, elevenlabs) can run in parallel.
+    let is_network_tts = tts_backend == "openai" || tts_backend == "elevenlabs";
+    let tts_concurrency: usize = if is_network_tts { 8 } else { 1 };
     let pass_items = std::sync::Arc::new(pass_items);
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<(usize, Result<tts::TtsAudio, anyhow::Error>, u64)>(TTS_CONCURRENCY * 2);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(usize, Result<tts::TtsAudio, anyhow::Error>, u64)>(tts_concurrency * 2);
 
     // TTS producer: spawn up to TTS_CONCURRENCY tasks at a time
     let cancel = state.job_cancel.clone();
@@ -851,7 +853,7 @@ async fn run_corpus_job(
     let state_tts = state.clone();
     let items_ref = pass_items.clone();
     let producer = tokio::spawn(async move {
-        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(TTS_CONCURRENCY));
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(tts_concurrency));
         let mut handles = Vec::new();
 
         for (idx, pi) in items_ref.iter().enumerate() {
