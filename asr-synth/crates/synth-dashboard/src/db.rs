@@ -7,7 +7,7 @@ use std::path::Path;
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS vocab (
     id INTEGER PRIMARY KEY,
-    term TEXT UNIQUE NOT NULL,
+    term TEXT UNIQUE NOT NULL COLLATE NOCASE,
     spoken_auto TEXT NOT NULL,
     spoken_override TEXT,
     reviewed INTEGER NOT NULL DEFAULT 0,
@@ -159,6 +159,13 @@ impl Db {
         let _ = conn.execute_batch("ALTER TABLE sentences ADD COLUMN tts_backend TEXT;");
         let _ = conn.execute_batch("ALTER TABLE sentences ADD COLUMN human_wav_path TEXT;");
         let _ = conn.execute_batch("ALTER TABLE vocab ADD COLUMN curated TEXT;"); // 'kept', 'removed', or NULL
+
+        // Migration: case-insensitive dedup of vocab terms.
+        // For each group of case-insensitive duplicates, keep the row that has
+        // the most info (reviewed > unreviewed, has override > no override, lowest id as tiebreaker).
+        // Then rebuild the table with COLLATE NOCASE on the unique constraint.
+        Self::migrate_vocab_nocase(&conn);
+
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS vocab_confusions (
                 id INTEGER PRIMARY KEY,
@@ -796,6 +803,69 @@ impl Db {
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+}
+
+impl Db {
+    /// One-time migration: deduplicate vocab terms case-insensitively and
+    /// rebuild the table with COLLATE NOCASE on the UNIQUE constraint.
+    fn migrate_vocab_nocase(conn: &Connection) {
+        // Check if the table already has COLLATE NOCASE by inspecting the schema
+        let schema: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='vocab'",
+            [], |r| r.get(0),
+        ).unwrap_or_default();
+
+        if schema.to_uppercase().contains("COLLATE NOCASE") {
+            return; // Already migrated
+        }
+
+        eprintln!("[db-migrate] Rebuilding vocab table with case-insensitive uniqueness...");
+
+        let result = conn.execute_batch("
+            -- Dedup: keep the best row per case-insensitive group
+            -- (reviewed > unreviewed, has override > no override, lowest id as tiebreaker)
+            CREATE TABLE vocab_dedup AS
+            SELECT * FROM vocab WHERE id IN (
+                SELECT id FROM (
+                    SELECT id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY LOWER(term)
+                               ORDER BY reviewed DESC,
+                                        CASE WHEN spoken_override IS NOT NULL AND spoken_override != '' THEN 0 ELSE 1 END,
+                                        id ASC
+                           ) AS rn
+                    FROM vocab
+                )
+                WHERE rn = 1
+            );
+
+            DROP TABLE vocab;
+
+            CREATE TABLE vocab (
+                id INTEGER PRIMARY KEY,
+                term TEXT UNIQUE NOT NULL COLLATE NOCASE,
+                spoken_auto TEXT NOT NULL,
+                spoken_override TEXT,
+                reviewed INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                curated TEXT
+            );
+
+            INSERT INTO vocab (id, term, spoken_auto, spoken_override, reviewed, created_at, updated_at, curated)
+            SELECT id, term, spoken_auto, spoken_override, reviewed, created_at, updated_at, curated
+            FROM vocab_dedup;
+
+            DROP TABLE vocab_dedup;
+        ");
+        match result {
+            Ok(()) => {
+                let count: i64 = conn.query_row("SELECT COUNT(*) FROM vocab", [], |r| r.get(0)).unwrap_or(0);
+                eprintln!("[db-migrate] Vocab table rebuilt with COLLATE NOCASE ({count} terms)");
+            }
+            Err(e) => eprintln!("[db-migrate] Vocab rebuild failed (non-fatal): {e}"),
+        }
     }
 }
 
