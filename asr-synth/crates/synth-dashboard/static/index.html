@@ -3750,7 +3750,7 @@
                     {ev && (
                         <div style={{marginBottom:16}}>
                             <div className="stats-grid" style={{marginBottom:8}}>
-                                <div className="stat-card"><div className="value" style={{color:'var(--success)',fontSize:28}}>{ev.accuracy?.toFixed(1)}%</div><div className="label">Accuracy</div></div>
+                                <div className="stat-card"><div className="value" style={{color:'var(--success)',fontSize:28}}>{ev.total > 0 ? ((ev.fixed + ev.kept) / ev.total * 100).toFixed(1) : 0}%</div><div className="label">Accuracy</div></div>
                                 <div className="stat-card"><div className="value" style={{color:catColors.fixed}}>{ev.fixed||0}</div><div className="label">Fixed</div></div>
                                 <div className="stat-card"><div className="value" style={{color:catColors.kept}}>{ev.kept||0}</div><div className="label">Kept</div></div>
                                 <div className="stat-card"><div className="value" style={{color:catColors.broken}}>{ev.broken||0}</div><div className="label">Broken</div></div>
@@ -3787,10 +3787,8 @@
                                     <div key={i} style={{padding:'6px 10px',borderBottom:'1px solid rgba(255,255,255,0.04)',fontSize:12,fontFamily:'monospace',lineHeight:1.6}}>
                                         <span style={{color:catColors[e.cat],fontWeight:700,display:'inline-block',width:70}}>[{e.cat}]</span>
                                         <span style={{color:'var(--text)',fontWeight:600}}>{e.term}</span>
-                                        <br/>
-                                        <span style={{color:'#7ee787'}}>keet:</span> {e.keet}
-                                        {'  '}<span style={{color:'#58a6ff'}}>qwen:</span> {e.qwen}
-                                        {'  '}<span style={{color:'var(--text-muted)'}}>{'=> '}</span>
+                                        {'  '}<span style={{color:'#58a6ff'}}>{e.qwen}</span>
+                                        {'  '}<span style={{color:'var(--text-muted)'}}>{'\u2192'}</span>{' '}
                                         <span style={{color: e.cat === 'fixed' || e.cat === 'kept' ? 'var(--success)' : e.cat === 'blank' ? 'var(--text-muted)' : 'var(--error)',
                                             fontWeight: e.cat === 'fixed' ? 700 : 400}}>
                                             {e.output || '(empty)'}

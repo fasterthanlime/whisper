@@ -1838,16 +1838,9 @@ pub async fn api_start_eval_job(
                 "pre_correct": pre_correct,
             }).to_string());
 
-            let tag = match category {
-                "fixed" => "\x1b[32mfixed\x1b[0m",
-                "kept" => "kept",
-                "broken" => "\x1b[31mbroken\x1b[0m",
-                "wrong_fix" => "\x1b[33mwrong_fix\x1b[0m",
-                _ => category,
-            };
             let _ = db.append_job_log(job_id, &format!(
-                "[{}/{}] [{tag}] {}: {} \u{2192} \"{}\"{}",
-                i+1, total, item.term, item.qwen, corrected_text.trim(),
+                "[{}/{}] [{}] {}: {} \u{2192} \"{}\"{}",
+                i+1, total, category, item.term, item.qwen, corrected_text.trim(),
                 if category == "fixed" || category == "kept" { String::new() }
                 else { format!(" (expected \"{}\")", item.original) }
             ));
