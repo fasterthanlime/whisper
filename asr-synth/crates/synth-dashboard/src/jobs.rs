@@ -267,6 +267,12 @@ impl MarkovChain {
         }
         backward_words.reverse();
 
+        // Ensure the target is never the first word — TTS often clips the start.
+        if backward_words.is_empty() {
+            const FILLERS: &[&str] = &["So", "Well", "Now", "OK", "Right", "Also", "And", "But", "Then"];
+            backward_words.push(FILLERS[rng.random_range(0..FILLERS.len())].to_string());
+        }
+
         // Assemble: backward + target + forward
         let mut words = backward_words;
         words.push(target_word.to_string());
@@ -1655,7 +1661,6 @@ pub async fn api_start_eval_job(
             let _ = db.append_job_log(job_id, &format!("Loading model {} with adapters {}...", config.model, config.adapters));
         }
 
-        // Start inference server once — model stays loaded for all sentences
         let server = match synth_train::InferenceServer::start(&config) {
             Ok(s) => s,
             Err(e) => {
@@ -1666,57 +1671,48 @@ pub async fn api_start_eval_job(
             }
         };
 
-        // Read unique corpus triplets from DB (already clean)
-        let triplets = {
+        let eval_set = {
             let db = state2.db.lock().unwrap();
-            db.corpus_unique_triplets().unwrap_or_default()
+            db.corpus_eval_set().unwrap_or_default()
         };
 
-        let total = triplets.len();
+        let total = eval_set.len();
+        let pre_mistakes = eval_set.iter().filter(|e| e.is_mistake).count();
+        let pre_correct = eval_set.iter().filter(|e| !e.is_mistake).count();
+        let pre_error_rate = if total > 0 { pre_mistakes as f64 / total as f64 * 100.0 } else { 0.0 };
+
         {
             let db = state2.db.lock().unwrap();
-            let _ = db.append_job_log(job_id, &format!("Server ready. Evaluating {total} unique clean triplets..."));
+            let _ = db.append_job_log(job_id, &format!(
+                "Server ready. Evaluating {total} corpus pairs ({pre_mistakes} mistakes, {pre_correct} correct).\n\
+                 Pre-correction error rate: {pre_error_rate:.1}%"
+            ));
         }
 
-        // Eval categories:
-        // - fixed: ASR was wrong, model corrected it right
-        // - kept:  ASR was right (or close), model left it correct
-        // - broken: ASR was right, model changed it to something wrong
-        // - wrong_fix: ASR was wrong, model's fix is also wrong
-        // - blank: model output nothing
-        // - timeout: inference timed out
-        let mut fixed = 0usize;
-        let mut kept = 0usize;
-        let mut broken = 0usize;
-        let mut wrong_fix = 0usize;
+        // Counters
+        let mut fixed = 0usize;      // was wrong, model fixed it
+        let mut kept = 0usize;       // was correct, model kept it correct
+        let mut broken = 0usize;     // was correct, model broke it
+        let mut wrong_fix = 0usize;  // was wrong, model's fix is also wrong
         let mut blank = 0usize;
         let mut timeouts = 0usize;
-        let mut total_evaluated = 0usize;
+        let mut evaluated = 0usize;
 
-        let mut cancelled = false;
-        for (i, (term, original, qwen, parakeet)) in triplets.iter().enumerate() {
+        for (i, item) in eval_set.iter().enumerate() {
             if state2.job_cancel.load(Ordering::Relaxed) {
-                cancelled = true;
                 let db = state2.db.lock().unwrap();
                 let _ = db.append_job_log(job_id, "Stopped by user.");
                 break;
             }
-            let original: &str = original;
-            let qwen: &str = qwen;
-            let parakeet: &str = parakeet;
-            let term: &str = term;
-            let prompt = synth_train::build_correction_prompt(parakeet, qwen);
 
+            let prompt = synth_train::build_correction_prompt(&item.parakeet, &item.qwen);
             let result = server.infer(&prompt);
-            total_evaluated += 1;
+            evaluated += 1;
 
-            let orig_lower = original.trim().to_lowercase();
-            let keet_lower = parakeet.trim().to_lowercase();
-            let qwen_lower = qwen.trim().to_lowercase();
-            let asr_was_correct = keet_lower == orig_lower || qwen_lower == orig_lower;
+            let orig_lower = item.original.trim().to_lowercase();
 
             let (category, corrected_text) = match result {
-                Ok(ref corrected) if corrected.trim().is_empty() => {
+                Ok(ref c) if c.trim().is_empty() => {
                     blank += 1;
                     ("blank", String::new())
                 }
@@ -1724,13 +1720,13 @@ pub async fn api_start_eval_job(
                     let corr_lower = corrected.trim().to_lowercase();
                     let model_correct = corr_lower == orig_lower;
 
-                    if model_correct && asr_was_correct {
+                    if model_correct && !item.is_mistake {
                         kept += 1;
                         ("kept", corrected)
-                    } else if model_correct && !asr_was_correct {
+                    } else if model_correct && item.is_mistake {
                         fixed += 1;
                         ("fixed", corrected)
-                    } else if !model_correct && asr_was_correct {
+                    } else if !model_correct && !item.is_mistake {
                         broken += 1;
                         ("broken", corrected)
                     } else {
@@ -1740,51 +1736,72 @@ pub async fn api_start_eval_job(
                 }
                 Err(e) => {
                     let msg = e.to_string();
-                    if msg.contains("timeout") || msg.contains("timed out") {
-                        timeouts += 1;
-                        ("timeout", format!("(timeout: {msg})"))
-                    } else {
-                        timeouts += 1;
-                        ("error", format!("(error: {msg})"))
-                    }
+                    timeouts += 1;
+                    if msg.contains("timeout") { ("timeout", "(timeout)".into()) }
+                    else { ("error", format!("(error: {msg})")) }
                 }
             };
 
-            let correct = fixed + kept;
-            let accuracy = if total_evaluated > 0 { correct as f64 / total_evaluated as f64 * 100.0 } else { 0.0 };
+            // Post-correction stats
+            let post_correct = fixed + kept;
+            let post_wrong = broken + wrong_fix + blank + timeouts;
+            let post_error_rate = if evaluated > 0 { (evaluated - post_correct) as f64 / evaluated as f64 * 100.0 } else { 0.0 };
 
             let db = state2.db.lock().unwrap();
             let _ = db.update_job_result(job_id, &serde_json::json!({
-                "total": total_evaluated,
+                "total": evaluated,
                 "fixed": fixed, "kept": kept, "broken": broken,
                 "wrong_fix": wrong_fix, "blank": blank, "timeouts": timeouts,
-                "accuracy": (accuracy * 10.0).round() / 10.0,
+                "pre_error_rate": (pre_error_rate * 10.0).round() / 10.0,
+                "post_error_rate": (post_error_rate * 10.0).round() / 10.0,
+                "pre_mistakes": pre_mistakes,
+                "pre_correct": pre_correct,
             }).to_string());
 
-            // Log entry with category tag
+            let tag = match category {
+                "fixed" => "\x1b[32mfixed\x1b[0m",
+                "kept" => "kept",
+                "broken" => "\x1b[31mbroken\x1b[0m",
+                "wrong_fix" => "\x1b[33mwrong_fix\x1b[0m",
+                _ => category,
+            };
             let _ = db.append_job_log(job_id, &format!(
-                "[{}/{}] [{category}] {term}: <keet> {parakeet} <qwen> {qwen} => \"{}\"{}",
-                i+1, total, corrected_text.trim(),
+                "[{}/{}] [{tag}] {}: {} \u{2192} \"{}\"{}",
+                i+1, total, item.term, item.qwen, corrected_text.trim(),
                 if category == "fixed" || category == "kept" { String::new() }
-                else { format!(" (expected \"{}\")", original) }
+                else { format!(" (expected \"{}\")", item.original) }
             ));
         }
-        // Kill the server immediately — don't wait for graceful shutdown
+
         drop(server);
 
-        let correct = fixed + kept;
-        let accuracy = if total_evaluated > 0 { correct as f64 / total_evaluated as f64 * 100.0 } else { 0.0 };
+        let post_correct = fixed + kept;
+        let post_error_rate = if evaluated > 0 { (evaluated - post_correct) as f64 / evaluated as f64 * 100.0 } else { 0.0 };
+        let fix_rate = if pre_mistakes > 0 { fixed as f64 / pre_mistakes as f64 * 100.0 } else { 0.0 };
+        let break_rate = if pre_correct > 0 { broken as f64 / pre_correct as f64 * 100.0 } else { 0.0 };
+
         let db = state2.db.lock().unwrap();
         let _ = db.append_job_log(job_id, &format!(
-            "\n=== RESULTS ({total_evaluated} evaluated) ===\n\
-            Correct: {correct}/{total_evaluated} ({accuracy:.1}%)\n\
-            Fixed: {fixed} | Kept: {kept} | Broken: {broken} | Wrong fix: {wrong_fix} | Blank: {blank} | Timeouts: {timeouts}"
+            "\n=== RESULTS ({evaluated} pairs) ===\n\
+             Pre-correction error rate:  {pre_error_rate:.1}% ({pre_mistakes}/{total} wrong)\n\
+             Post-correction error rate: {post_error_rate:.1}% ({}/{evaluated} wrong)\n\
+             \n\
+             Fix rate:   {fix_rate:.1}% ({fixed}/{pre_mistakes} mistakes fixed)\n\
+             Break rate: {break_rate:.1}% ({broken}/{pre_correct} correct inputs broken)\n\
+             \n\
+             Fixed: {fixed} | Kept: {kept} | Broken: {broken} | Wrong fix: {wrong_fix} | Blank: {blank} | Timeouts: {timeouts}",
+            evaluated - post_correct,
         ));
         let _ = db.finish_job(job_id, "completed", Some(&serde_json::json!({
-            "total": total_evaluated,
+            "total": evaluated,
             "fixed": fixed, "kept": kept, "broken": broken,
             "wrong_fix": wrong_fix, "blank": blank, "timeouts": timeouts,
-            "accuracy": accuracy,
+            "pre_error_rate": pre_error_rate,
+            "post_error_rate": post_error_rate,
+            "fix_rate": fix_rate,
+            "break_rate": break_rate,
+            "pre_mistakes": pre_mistakes,
+            "pre_correct": pre_correct,
         }).to_string()));
     });
 

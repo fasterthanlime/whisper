@@ -103,6 +103,16 @@ impl VocabRow {
 // --- Sentences ---
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct EvalItem {
+    pub term: String,
+    pub original: String,
+    pub qwen: String,
+    pub parakeet: String,
+    pub is_mistake: bool,
+    pub hit_count: i64,
+}
+
+#[derive(serde::Serialize)]
 pub struct SentenceRow {
     pub id: i64,
     pub text: String,
@@ -893,6 +903,26 @@ impl Db {
     }
 
     /// Get unique clean triplets for evaluation (deduplicated by original+qwen+parakeet).
+    /// All corpus pairs for eval: (term, original, qwen, parakeet, is_mistake, hit_count).
+    /// Each row is a unique (term, original, qwen) combination.
+    pub fn corpus_eval_set(&self) -> Result<Vec<EvalItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT term, original, qwen, parakeet, is_mistake, hit_count FROM corpus_pairs ORDER BY term COLLATE NOCASE"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(EvalItem {
+                term: row.get(0)?,
+                original: row.get(1)?,
+                qwen: row.get(2)?,
+                parakeet: row.get(3)?,
+                is_mistake: row.get::<_, i64>(4)? != 0,
+                hit_count: row.get(5)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Keep old method for backward compat
     pub fn corpus_unique_triplets(&self) -> Result<Vec<(String, String, String, String)>> {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT term, original, qwen, parakeet FROM corpus_pairs"
