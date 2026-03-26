@@ -1750,91 +1750,7 @@ pub async fn api_start_eval_job(
     let state2 = state.clone();
     eprintln!("[eval] Job {job_id} created with {} sentences, {} overrides", sentences.len(), overrides.len());
     tokio::spawn(async move {
-        eprintln!("[eval] Spawned task starting for job {job_id}");
-        // Phase 1: TTS + ASR each authored sentence to get realistic ASR output
-        let total = sentences.len();
-        eprintln!("[eval] About to lock db for Phase 1 log");
-        {
-            let db = state2.db.lock().unwrap();
-            let _ = db.append_job_log(job_id, &format!("Phase 1: TTS + ASR on {total} authored sentences..."));
-        }
-        eprintln!("[eval] Phase 1 log written, entering loop");
-
-        // (original_sentence, asr_output) pairs
-        let mut eval_pairs: Vec<(String, String, String)> = Vec::new(); // (original, asr_qwen, term)
-
-        for (i, (sentence, term)) in sentences.iter().enumerate() {
-            if state2.job_cancel.load(Ordering::Relaxed) {
-                let db = state2.db.lock().unwrap();
-                let _ = db.append_job_log(job_id, "Stopped by user.");
-                let _ = db.finish_job(job_id, "stopped", None);
-                return;
-            }
-
-            // Build spoken form
-            let spoken = tts::build_spoken_form(sentence, &overrides);
-
-            eprintln!("[eval] [{}/{}] about to TTS: {}", i+1, total, term);
-            {
-                let db = state2.db.lock().unwrap();
-                let _ = db.append_job_log(job_id, &format!("[{}/{}] TTS+ASR: {}", i+1, total, term));
-            }
-            eprintln!("[eval] [{}/{}] calling tts.generate", i+1, total);
-
-            // TTS
-            let audio = match state2.tts.generate("pocket-hq", &spoken).await {
-                Ok(mut a) => { a.normalize(); a }
-                Err(e) => {
-                    let db = state2.db.lock().unwrap();
-                    let _ = db.append_job_log(job_id, &format!("[{}/{}] TTS failed for \"{}\": {e}", i+1, total, term));
-                    continue;
-                }
-            };
-
-            // Resample to 16kHz for ASR
-            let full_16k = match tts::resample_to_16k(&audio.samples, audio.sample_rate) {
-                Ok(s) => s,
-                Err(e) => {
-                    let db = state2.db.lock().unwrap();
-                    let _ = db.append_job_log(job_id, &format!("[{}/{}] Resample failed: {e}", i+1, total));
-                    continue;
-                }
-            };
-
-            // ASR (Qwen only)
-            let state_q = state2.clone();
-            let samples = full_16k.clone();
-            let qwen_text = tokio::task::spawn_blocking(move || -> String {
-                state_q.asr.transcribe_samples(&samples, qwen3_asr::TranscribeOptions::default().with_language("english"))
-                    .map(|r| r.text)
-                    .unwrap_or_default()
-            }).await.unwrap_or_default();
-
-            {
-                let db = state2.db.lock().unwrap();
-                let _ = db.append_job_log(job_id, &format!("[{}/{}] ASR: \"{}\" \u{2192} \"{}\"", i+1, total, sentence, qwen_text));
-            }
-
-            eval_pairs.push((sentence.clone(), qwen_text, term.clone()));
-        }
-
-        if eval_pairs.is_empty() {
-            let db = state2.db.lock().unwrap();
-            let _ = db.append_job_log(job_id, "No eval pairs produced (all TTS/ASR failed).");
-            let _ = db.finish_job(job_id, "failed", None);
-            return;
-        }
-
-        // Phase 2: Start correction model (or reuse shared instance) and evaluate
-        {
-            let db = state2.db.lock().unwrap();
-            let _ = db.append_job_log(job_id, &format!(
-                "\nPhase 2: Correction model on {} sentences...",
-                eval_pairs.len()
-            ));
-        }
-
-        // Ensure shared inference server is running
+        // Ensure shared inference server is running before the loop
         {
             let mut guard = state2.inference_server.lock().unwrap();
             if guard.is_none() {
@@ -1850,31 +1766,65 @@ pub async fn api_start_eval_job(
                         return;
                     }
                 }
+            } else {
+                let db = state2.db.lock().unwrap();
+                let _ = db.append_job_log(job_id, "Inference server already running.");
             }
         }
 
-        let total = eval_pairs.len();
+        let total = sentences.len();
         let mut correct = 0usize;
         let mut wrong = 0usize;
         let mut blank = 0usize;
         let mut timeouts = 0usize;
         let mut evaluated = 0usize;
-        // Track how many the ASR already got right (baseline)
         let mut asr_correct = 0usize;
+        let mut skipped = 0usize;
 
-        for (i, (original, asr_qwen, term)) in eval_pairs.iter().enumerate() {
+        {
+            let db = state2.db.lock().unwrap();
+            let _ = db.append_job_log(job_id, &format!("Evaluating {total} authored sentences (TTS \u{2192} ASR \u{2192} correct, pipelined)..."));
+        }
+
+        for (i, (sentence, term)) in sentences.iter().enumerate() {
             if state2.job_cancel.load(Ordering::Relaxed) {
                 let db = state2.db.lock().unwrap();
                 let _ = db.append_job_log(job_id, "Stopped by user.");
                 break;
             }
 
-            let orig_lower = original.trim().to_lowercase();
+            // TTS
+            let spoken = tts::build_spoken_form(sentence, &overrides);
+            let audio = match state2.tts.generate("pocket-hq", &spoken).await {
+                Ok(mut a) => { a.normalize(); a }
+                Err(e) => {
+                    let db = state2.db.lock().unwrap();
+                    let _ = db.append_job_log(job_id, &format!("[{}/{}] TTS failed: {e}", i+1, total));
+                    skipped += 1;
+                    continue;
+                }
+            };
+
+            // Resample + ASR
+            let full_16k = match tts::resample_to_16k(&audio.samples, audio.sample_rate) {
+                Ok(s) => s,
+                Err(_) => { skipped += 1; continue; }
+            };
+            let state_q = state2.clone();
+            let samples = full_16k;
+            let asr_qwen = tokio::task::spawn_blocking(move || -> String {
+                state_q.asr.transcribe_samples(&samples, qwen3_asr::TranscribeOptions::default().with_language("english"))
+                    .map(|r| r.text)
+                    .unwrap_or_default()
+            }).await.unwrap_or_default();
+
+            // Correct
+            let orig_lower = sentence.trim().to_lowercase();
             let asr_lower = asr_qwen.trim().to_lowercase();
             let asr_was_correct = asr_lower == orig_lower;
             if asr_was_correct { asr_correct += 1; }
 
-            let prompt = synth_train::build_correction_prompt("", asr_qwen);
+            let prompt = synth_train::build_correction_prompt("", &asr_qwen);
             let result = {
                 let guard = state2.inference_server.lock().unwrap();
                 guard.as_ref().unwrap().infer(&prompt)
@@ -1922,7 +1872,7 @@ pub async fn api_start_eval_job(
                 "[{}/{}] [{}] {}: \"{}\" \u{2192} \"{}\"{}",
                 i+1, total, category, term, asr_qwen, corrected_text.trim(),
                 if category == "fixed" || category == "kept" { String::new() }
-                else { format!(" (expected \"{}\")", original) }
+                else { format!(" (expected \"{}\")", sentence) }
             ));
         }
 
@@ -1931,7 +1881,7 @@ pub async fn api_start_eval_job(
 
         let db = state2.db.lock().unwrap();
         let _ = db.append_job_log(job_id, &format!(
-            "\n=== RESULTS ({evaluated} sentences) ===\n\
+            "\n=== RESULTS ({evaluated} sentences, {skipped} skipped) ===\n\
              ASR accuracy (baseline):     {asr_accuracy:.1}% ({asr_correct}/{evaluated})\n\
              Post-correction accuracy:    {post_accuracy:.1}% ({correct}/{evaluated})\n\
              \n\
