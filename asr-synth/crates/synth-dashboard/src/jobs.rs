@@ -1753,10 +1753,12 @@ pub async fn api_start_eval_job(
         eprintln!("[eval] Spawned task starting for job {job_id}");
         // Phase 1: TTS + ASR each authored sentence to get realistic ASR output
         let total = sentences.len();
+        eprintln!("[eval] About to lock db for Phase 1 log");
         {
             let db = state2.db.lock().unwrap();
             let _ = db.append_job_log(job_id, &format!("Phase 1: TTS + ASR on {total} authored sentences..."));
         }
+        eprintln!("[eval] Phase 1 log written, entering loop");
 
         // (original_sentence, asr_output) pairs
         let mut eval_pairs: Vec<(String, String, String)> = Vec::new(); // (original, asr_qwen, term)
@@ -1772,10 +1774,12 @@ pub async fn api_start_eval_job(
             // Build spoken form
             let spoken = tts::build_spoken_form(sentence, &overrides);
 
+            eprintln!("[eval] [{}/{}] about to TTS: {}", i+1, total, term);
             {
                 let db = state2.db.lock().unwrap();
                 let _ = db.append_job_log(job_id, &format!("[{}/{}] TTS+ASR: {}", i+1, total, term));
             }
+            eprintln!("[eval] [{}/{}] calling tts.generate", i+1, total);
 
             // TTS
             let audio = match state2.tts.generate("pocket-hq", &spoken).await {
