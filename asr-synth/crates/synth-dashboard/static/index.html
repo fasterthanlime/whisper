@@ -3739,11 +3739,10 @@
                     <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:16}}>
                         {isRunning
                             ? <button className="btn" style={{borderColor:'var(--warning)',color:'var(--warning)',background:'rgba(210,153,34,0.1)'}} onClick={stopJob}>Stop</button>
-                            : <button className="btn btn-primary" disabled={!status.adapters_exist || !status.corpus_exists}
+                            : <button className="btn btn-primary" disabled={!status.adapters_exist}
                                 onClick={startEval}>{ev ? 'Re-evaluate' : 'Evaluate'}</button>
                         }
                         {!status.adapters_exist && <span style={{fontSize:12,color:'var(--text-muted)'}}>Train adapters first.</span>}
-                        {!status.corpus_exists && <span style={{fontSize:12,color:'var(--text-muted)'}}>Generate corpus first.</span>}
                         {isRunning && totalTriplets > 0 && <span style={{fontSize:12,color:'var(--text-muted)',marginLeft:8}}>{progress}/{totalTriplets}</span>}
                     </div>
 
