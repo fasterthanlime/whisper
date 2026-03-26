@@ -3721,7 +3721,15 @@
                 const m = line.match(/^\[(\d+)\/(\d+)\]\s*\[(\w+)\]\s*(.+?):\s*(.+?)\s*\u2192\s*"(.*?)"(.*)$/);
                 if (!m) return null;
                 const expected = m[7]?.match(/\(expected "(.+?)"\)/)?.[1];
-                return { i: +m[1], total: +m[2], cat: m[3], term: m[4], qwen: m[5].trim(), output: m[6], expected };
+                return {
+                    i: +m[1],
+                    total: +m[2],
+                    cat: m[3],
+                    term: m[4],
+                    qwen: stripOuterQuotes(m[5]),
+                    output: stripOuterQuotes(m[6]),
+                    expected
+                };
             }).filter(Boolean) : [];
 
             const catColors = {fixed:'#7ee787', kept:'#58a6ff', broken:'#f85149', wrong:'#d29922', wrong_fix:'#d29922', blank:'#8b949e', timeout:'#8b949e'};
@@ -3730,6 +3738,13 @@
 
             const progress = ev ? (ev.total || 0) : 0;
             const totalTriplets = entries.length > 0 ? entries[entries.length - 1].total : 0;
+            const stripOuterQuotes = (text) => {
+                const value = (text || '').trim();
+                if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+                    return value.slice(1, -1);
+                }
+                return value;
+            };
 
             return (
                 <div className="container">
@@ -3790,8 +3805,7 @@
                                         </div>
                                         <div style={{paddingLeft:8,borderLeft:'2px solid rgba(255,255,255,0.08)'}}>
                                             <div><span style={{color:'var(--text-muted)',fontSize:10,display:'inline-block',width:55}}>ASR:</span> <span style={{color:'#58a6ff'}}>{e.qwen}</span></div>
-                                            <div><span style={{color:'var(--text-muted)',fontSize:10,display:'inline-block',width:55}}>model:</span> <span style={{color: e.cat === 'fixed' || e.cat === 'kept' ? 'var(--success)' : e.cat === 'blank' ? 'var(--text-muted)' : 'var(--error)',
-                                                fontWeight: e.cat === 'fixed' ? 700 : 400}}>{e.output || '(empty)'}</span></div>
+                                            <div><span style={{color:'var(--text-muted)',fontSize:10,display:'inline-block',width:55}}>model:</span> <span style={{color: e.cat === 'fixed' || e.cat === 'kept' ? 'var(--success)' : e.cat === 'blank' ? 'var(--text-muted)' : 'var(--error)', fontWeight: 400}}>{e.output || '(empty)'}</span></div>
                                             {e.expected && <div><span style={{color:'var(--text-muted)',fontSize:10,display:'inline-block',width:55}}>expected:</span> <span style={{color:'var(--text-muted)'}}>{e.expected}</span></div>}
                                         </div>
                                     </div>
