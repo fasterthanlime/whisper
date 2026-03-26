@@ -1721,8 +1721,6 @@ pub async fn api_start_eval_job(
     State(state): State<Arc<AppState>>,
     Json(body): Json<EvalJobBody>,
 ) -> Result<Response, AppError> {
-    check_no_running_jobs(&state)?;
-
     let config = synth_train::InferenceConfig {
         model: body.model.unwrap_or_else(|| "Qwen/Qwen2.5-0.5B".into()),
         adapters: body.adapters.unwrap_or_else(|| "training/adapters".into()),
@@ -1734,14 +1732,101 @@ pub async fn api_start_eval_job(
         db.create_job("eval", Some(&serde_json::json!({"model": config.model, "adapters": config.adapters}).to_string())).map_err(err)?
     };
 
+    // Gather eval data: authored sentences + overrides
+    let (sentences, overrides) = {
+        let db = state.db.lock().unwrap();
+        let sentences = db.authored_sentences_for_eval().map_err(err)?;
+        let overrides = db.get_spoken_overrides().map_err(err)?;
+        (sentences, overrides)
+    };
+
+    if sentences.is_empty() {
+        let db = state.db.lock().unwrap();
+        let _ = db.append_job_log(job_id, "No authored sentences to evaluate.");
+        let _ = db.finish_job(job_id, "failed", None);
+        return Ok(Json(serde_json::json!({"job_id": job_id, "error": "No authored sentences. Write some in the Author tab first."})).into_response());
+    }
+
     let state2 = state.clone();
-    tokio::task::spawn_blocking(move || {
+    tokio::spawn(async move {
+        // Phase 1: TTS + ASR each authored sentence to get realistic ASR output
+        let total = sentences.len();
         {
             let db = state2.db.lock().unwrap();
-            let _ = db.append_job_log(job_id, &format!("Loading model {} with adapters {}...", config.model, config.adapters));
+            let _ = db.append_job_log(job_id, &format!("Phase 1: TTS + ASR on {total} authored sentences..."));
         }
 
-        let server = match synth_train::InferenceServer::start(&config) {
+        // (original_sentence, asr_output) pairs
+        let mut eval_pairs: Vec<(String, String, String)> = Vec::new(); // (original, asr_qwen, term)
+
+        for (i, (sentence, term)) in sentences.iter().enumerate() {
+            if state2.job_cancel.load(Ordering::Relaxed) {
+                let db = state2.db.lock().unwrap();
+                let _ = db.append_job_log(job_id, "Stopped by user.");
+                let _ = db.finish_job(job_id, "stopped", None);
+                return;
+            }
+
+            // Build spoken form
+            let spoken = tts::build_spoken_form(sentence, &overrides);
+
+            // TTS
+            let audio = match state2.tts.generate("pocket-hq", &spoken).await {
+                Ok(mut a) => { a.normalize(); a }
+                Err(e) => {
+                    let db = state2.db.lock().unwrap();
+                    let _ = db.append_job_log(job_id, &format!("[{}/{}] TTS failed for \"{}\": {e}", i+1, total, term));
+                    continue;
+                }
+            };
+
+            // Resample to 16kHz for ASR
+            let full_16k = match tts::resample_to_16k(&audio.samples, audio.sample_rate) {
+                Ok(s) => s,
+                Err(e) => {
+                    let db = state2.db.lock().unwrap();
+                    let _ = db.append_job_log(job_id, &format!("[{}/{}] Resample failed: {e}", i+1, total));
+                    continue;
+                }
+            };
+
+            // ASR (Qwen only)
+            let state_q = state2.clone();
+            let samples = full_16k.clone();
+            let qwen_text = tokio::task::spawn_blocking(move || -> String {
+                state_q.asr.transcribe_samples(&samples, qwen3_asr::TranscribeOptions::default().with_language("english"))
+                    .map(|r| r.text)
+                    .unwrap_or_default()
+            }).await.unwrap_or_default();
+
+            {
+                let db = state2.db.lock().unwrap();
+                let _ = db.append_job_log(job_id, &format!("[{}/{}] ASR: \"{}\" \u{2192} \"{}\"", i+1, total, sentence, qwen_text));
+            }
+
+            eval_pairs.push((sentence.clone(), qwen_text, term.clone()));
+        }
+
+        if eval_pairs.is_empty() {
+            let db = state2.db.lock().unwrap();
+            let _ = db.append_job_log(job_id, "No eval pairs produced (all TTS/ASR failed).");
+            let _ = db.finish_job(job_id, "failed", None);
+            return;
+        }
+
+        // Phase 2: Start correction model and evaluate
+        {
+            let db = state2.db.lock().unwrap();
+            let _ = db.append_job_log(job_id, &format!(
+                "\nPhase 2: Correction model on {} sentences...\nLoading model {} with adapters {}...",
+                eval_pairs.len(), config.model, config.adapters
+            ));
+        }
+
+        let server = match tokio::task::spawn_blocking({
+            let config = config.clone();
+            move || synth_train::InferenceServer::start(&config)
+        }).await.unwrap() {
             Ok(s) => s,
             Err(e) => {
                 let db = state2.db.lock().unwrap();
@@ -1751,45 +1836,30 @@ pub async fn api_start_eval_job(
             }
         };
 
-        let eval_set = {
-            let db = state2.db.lock().unwrap();
-            db.corpus_eval_set().unwrap_or_default()
-        };
-
-        let total = eval_set.len();
-        let pre_mistakes = eval_set.iter().filter(|e| e.is_mistake).count();
-        let pre_correct = eval_set.iter().filter(|e| !e.is_mistake).count();
-        let pre_error_rate = if total > 0 { pre_mistakes as f64 / total as f64 * 100.0 } else { 0.0 };
-
-        {
-            let db = state2.db.lock().unwrap();
-            let _ = db.append_job_log(job_id, &format!(
-                "Server ready. Evaluating {total} corpus pairs ({pre_mistakes} mistakes, {pre_correct} correct).\n\
-                 Pre-correction error rate: {pre_error_rate:.1}%"
-            ));
-        }
-
-        // Counters
-        let mut fixed = 0usize;      // was wrong, model fixed it
-        let mut kept = 0usize;       // was correct, model kept it correct
-        let mut broken = 0usize;     // was correct, model broke it
-        let mut wrong_fix = 0usize;  // was wrong, model's fix is also wrong
+        let total = eval_pairs.len();
+        let mut correct = 0usize;
+        let mut wrong = 0usize;
         let mut blank = 0usize;
         let mut timeouts = 0usize;
         let mut evaluated = 0usize;
+        // Track how many the ASR already got right (baseline)
+        let mut asr_correct = 0usize;
 
-        for (i, item) in eval_set.iter().enumerate() {
+        for (i, (original, asr_qwen, term)) in eval_pairs.iter().enumerate() {
             if state2.job_cancel.load(Ordering::Relaxed) {
                 let db = state2.db.lock().unwrap();
                 let _ = db.append_job_log(job_id, "Stopped by user.");
                 break;
             }
 
-            let prompt = synth_train::build_correction_prompt("", &item.qwen);
+            let orig_lower = original.trim().to_lowercase();
+            let asr_lower = asr_qwen.trim().to_lowercase();
+            let asr_was_correct = asr_lower == orig_lower;
+            if asr_was_correct { asr_correct += 1; }
+
+            let prompt = synth_train::build_correction_prompt("", asr_qwen);
             let result = server.infer(&prompt);
             evaluated += 1;
-
-            let orig_lower = item.original.trim().to_lowercase();
 
             let (category, corrected_text) = match result {
                 Ok(ref c) if c.trim().is_empty() => {
@@ -1798,20 +1868,14 @@ pub async fn api_start_eval_job(
                 }
                 Ok(corrected) => {
                     let corr_lower = corrected.trim().to_lowercase();
-                    let model_correct = corr_lower == orig_lower;
-
-                    if model_correct && !item.is_mistake {
-                        kept += 1;
-                        ("kept", corrected)
-                    } else if model_correct && item.is_mistake {
-                        fixed += 1;
-                        ("fixed", corrected)
-                    } else if !model_correct && !item.is_mistake {
-                        broken += 1;
-                        ("broken", corrected)
+                    if corr_lower == orig_lower {
+                        correct += 1;
+                        if asr_was_correct { ("kept", corrected) }
+                        else { ("fixed", corrected) }
                     } else {
-                        wrong_fix += 1;
-                        ("wrong_fix", corrected)
+                        wrong += 1;
+                        if asr_was_correct { ("broken", corrected) }
+                        else { ("wrong", corrected) }
                     }
                 }
                 Err(e) => {
@@ -1822,59 +1886,45 @@ pub async fn api_start_eval_job(
                 }
             };
 
-            // Post-correction stats
-            let post_correct = fixed + kept;
-            let post_wrong = broken + wrong_fix + blank + timeouts;
-            let post_error_rate = if evaluated > 0 { (evaluated - post_correct) as f64 / evaluated as f64 * 100.0 } else { 0.0 };
+            let asr_accuracy = if evaluated > 0 { asr_correct as f64 / evaluated as f64 * 100.0 } else { 0.0 };
+            let post_accuracy = if evaluated > 0 { correct as f64 / evaluated as f64 * 100.0 } else { 0.0 };
 
             let db = state2.db.lock().unwrap();
             let _ = db.update_job_result(job_id, &serde_json::json!({
                 "total": evaluated,
-                "fixed": fixed, "kept": kept, "broken": broken,
-                "wrong_fix": wrong_fix, "blank": blank, "timeouts": timeouts,
-                "pre_error_rate": (pre_error_rate * 10.0).round() / 10.0,
-                "post_error_rate": (post_error_rate * 10.0).round() / 10.0,
-                "pre_mistakes": pre_mistakes,
-                "pre_correct": pre_correct,
+                "correct": correct, "wrong": wrong, "blank": blank, "timeouts": timeouts,
+                "asr_correct": asr_correct,
+                "asr_accuracy": (asr_accuracy * 10.0).round() / 10.0,
+                "post_accuracy": (post_accuracy * 10.0).round() / 10.0,
             }).to_string());
 
             let _ = db.append_job_log(job_id, &format!(
-                "[{}/{}] [{}] {}: {} \u{2192} \"{}\"{}",
-                i+1, total, category, item.term, item.qwen, corrected_text.trim(),
+                "[{}/{}] [{}] {}: \"{}\" \u{2192} \"{}\"{}",
+                i+1, total, category, term, asr_qwen, corrected_text.trim(),
                 if category == "fixed" || category == "kept" { String::new() }
-                else { format!(" (expected \"{}\")", item.original) }
+                else { format!(" (expected \"{}\")", original) }
             ));
         }
 
         drop(server);
 
-        let post_correct = fixed + kept;
-        let post_error_rate = if evaluated > 0 { (evaluated - post_correct) as f64 / evaluated as f64 * 100.0 } else { 0.0 };
-        let fix_rate = if pre_mistakes > 0 { fixed as f64 / pre_mistakes as f64 * 100.0 } else { 0.0 };
-        let break_rate = if pre_correct > 0 { broken as f64 / pre_correct as f64 * 100.0 } else { 0.0 };
+        let asr_accuracy = if evaluated > 0 { asr_correct as f64 / evaluated as f64 * 100.0 } else { 0.0 };
+        let post_accuracy = if evaluated > 0 { correct as f64 / evaluated as f64 * 100.0 } else { 0.0 };
 
         let db = state2.db.lock().unwrap();
         let _ = db.append_job_log(job_id, &format!(
-            "\n=== RESULTS ({evaluated} pairs) ===\n\
-             Pre-correction error rate:  {pre_error_rate:.1}% ({pre_mistakes}/{total} wrong)\n\
-             Post-correction error rate: {post_error_rate:.1}% ({}/{evaluated} wrong)\n\
+            "\n=== RESULTS ({evaluated} sentences) ===\n\
+             ASR accuracy (baseline):     {asr_accuracy:.1}% ({asr_correct}/{evaluated})\n\
+             Post-correction accuracy:    {post_accuracy:.1}% ({correct}/{evaluated})\n\
              \n\
-             Fix rate:   {fix_rate:.1}% ({fixed}/{pre_mistakes} mistakes fixed)\n\
-             Break rate: {break_rate:.1}% ({broken}/{pre_correct} correct inputs broken)\n\
-             \n\
-             Fixed: {fixed} | Kept: {kept} | Broken: {broken} | Wrong fix: {wrong_fix} | Blank: {blank} | Timeouts: {timeouts}",
-            evaluated - post_correct,
+             Correct: {correct} | Wrong: {wrong} | Blank: {blank} | Timeouts: {timeouts}"
         ));
         let _ = db.finish_job(job_id, "completed", Some(&serde_json::json!({
             "total": evaluated,
-            "fixed": fixed, "kept": kept, "broken": broken,
-            "wrong_fix": wrong_fix, "blank": blank, "timeouts": timeouts,
-            "pre_error_rate": pre_error_rate,
-            "post_error_rate": post_error_rate,
-            "fix_rate": fix_rate,
-            "break_rate": break_rate,
-            "pre_mistakes": pre_mistakes,
-            "pre_correct": pre_correct,
+            "correct": correct, "wrong": wrong, "blank": blank, "timeouts": timeouts,
+            "asr_correct": asr_correct,
+            "asr_accuracy": asr_accuracy,
+            "post_accuracy": post_accuracy,
         }).to_string()));
     });
 

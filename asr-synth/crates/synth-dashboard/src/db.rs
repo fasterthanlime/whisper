@@ -348,6 +348,17 @@ impl Db {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Get unique authored sentences for eval. Returns (sentence, primary_term).
+    pub fn authored_sentences_for_eval(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT sentence, term FROM authored_sentences GROUP BY sentence ORDER BY id"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn update_authored_sentence(&self, id: i64, sentence: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE authored_sentences SET sentence = ?1 WHERE id = ?2",

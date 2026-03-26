@@ -296,6 +296,7 @@ pub fn train_streaming(
 }
 
 /// Configuration for inference with the trained correction model
+#[derive(Clone)]
 pub struct InferenceConfig {
     pub model: String,
     pub adapters: String,

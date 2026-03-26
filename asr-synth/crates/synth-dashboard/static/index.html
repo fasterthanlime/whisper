@@ -3724,8 +3724,8 @@
                 return { i: +m[1], total: +m[2], cat: m[3], term: m[4], qwen: m[5].trim(), output: m[6], expected };
             }).filter(Boolean) : [];
 
-            const catColors = {fixed:'#7ee787', kept:'#58a6ff', broken:'#f85149', wrong_fix:'#d29922', blank:'#8b949e', timeout:'#8b949e'};
-            const catLabels = {fixed:'Fixed', kept:'Kept', broken:'Broken', wrong_fix:'Wrong fix', blank:'Blank', timeout:'Timeout'};
+            const catColors = {fixed:'#7ee787', kept:'#58a6ff', broken:'#f85149', wrong:'#d29922', wrong_fix:'#d29922', blank:'#8b949e', timeout:'#8b949e'};
+            const catLabels = {fixed:'Fixed', kept:'Kept', broken:'Broken', wrong:'Wrong', wrong_fix:'Wrong fix', blank:'Blank', timeout:'Timeout'};
             const filtered = filter === 'all' ? entries : entries.filter(e => e.cat === filter);
 
             const progress = ev ? (ev.total || 0) : 0;
@@ -3750,18 +3750,18 @@
                     {ev && (
                         <div style={{marginBottom:16}}>
                             <div className="stats-grid" style={{marginBottom:8}}>
-                                <div className="stat-card"><div className="value" style={{color:'var(--success)',fontSize:28}}>{ev.total > 0 ? ((ev.fixed + ev.kept) / ev.total * 100).toFixed(1) : 0}%</div><div className="label">Accuracy</div></div>
-                                <div className="stat-card"><div className="value" style={{color:catColors.fixed}}>{ev.fixed||0}</div><div className="label">Fixed</div></div>
-                                <div className="stat-card"><div className="value" style={{color:catColors.kept}}>{ev.kept||0}</div><div className="label">Kept</div></div>
-                                <div className="stat-card"><div className="value" style={{color:catColors.broken}}>{ev.broken||0}</div><div className="label">Broken</div></div>
-                                <div className="stat-card"><div className="value" style={{color:catColors.wrong_fix}}>{ev.wrong_fix||0}</div><div className="label">Wrong fix</div></div>
+                                <div className="stat-card"><div className="value" style={{color:'var(--text-muted)',fontSize:22}}>{ev.asr_accuracy?.toFixed(1) ?? '?'}%</div><div className="label">ASR baseline</div></div>
+                                <div className="stat-card"><div className="value" style={{color:'var(--success)',fontSize:28}}>{ev.post_accuracy?.toFixed(1) ?? '?'}%</div><div className="label">Post-correction</div></div>
+                                <div className="stat-card"><div className="value" style={{color:catColors.fixed}}>{ev.correct||0}</div><div className="label">Correct</div></div>
+                                <div className="stat-card"><div className="value" style={{color:catColors.wrong}}>{ev.wrong||0}</div><div className="label">Wrong</div></div>
                                 <div className="stat-card"><div className="value" style={{color:catColors.blank}}>{ev.blank||0}</div><div className="label">Blank</div></div>
                             </div>
                             {ev.total > 0 && (() => {
                                 const total = ev.total;
-                                const segments = ['fixed','kept','broken','wrong_fix','blank','timeout'].filter(k => ev[k] > 0);
+                                const segments = ['correct','wrong','blank','timeouts'].filter(k => ev[k] > 0);
+                                const colors = {correct:'#7ee787', wrong:'#d29922', blank:'#8b949e', timeouts:'#8b949e'};
                                 return <div style={{display:'flex',height:6,borderRadius:3,overflow:'hidden',marginBottom:4}}>
-                                    {segments.map(k => <div key={k} style={{width:`${ev[k]/total*100}%`,background:catColors[k]}} title={`${catLabels[k]}: ${ev[k]}`} />)}
+                                    {segments.map(k => <div key={k} style={{width:`${ev[k]/total*100}%`,background:colors[k]}} title={`${k}: ${ev[k]}`} />)}
                                 </div>;
                             })()}
                         </div>
@@ -3770,7 +3770,7 @@
                     {entries.length > 0 && (
                         <div>
                             <div style={{display:'flex',gap:4,marginBottom:8,flexWrap:'wrap'}}>
-                                {['all','fixed','kept','broken','wrong_fix','blank'].map(cat => {
+                                {['all','fixed','kept','broken','wrong','wrong_fix','blank'].map(cat => {
                                     const count = cat === 'all' ? entries.length : entries.filter(e => e.cat === cat).length;
                                     if (count === 0 && cat !== 'all') return null;
                                     return <button key={cat} onClick={() => setFilter(cat)}
