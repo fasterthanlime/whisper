@@ -1207,6 +1207,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/algorithm-tests", get(jobs::api_algorithm_tests))
         .route("/api/pipeline/corpus/{id}/audio", get(jobs::api_corpus_audio))
         .route("/api/pipeline/reset-corpus", post(jobs::api_reset_corpus))
+        .route("/api/pipeline/delete-corpus-term", post(jobs::api_delete_corpus_term))
         .route("/api/pipeline/preview-training", get(jobs::api_preview_training))
         .route("/api/pipeline/reset-training", post(jobs::api_reset_training))
         .route("/api/pipeline/scan-results", get(jobs::api_scan_results))

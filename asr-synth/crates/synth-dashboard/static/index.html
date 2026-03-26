@@ -2991,6 +2991,7 @@
                             }}><span style={{fontSize:8, color: playing ? '#fff' : tr ? 'rgba(255,100,100,0.6)' : hl ? '#fff' : 'var(--text-muted)', whiteSpace:'nowrap', padding:'0 2px',
                                 fontWeight: playing ? 700 : 400, textDecoration: tr ? 'line-through' : 'none'}}>{a.w}</span></div>);
                         })}
+                        {consRange && <div style={{position:'absolute',left:pct(consRange[0]),width:pct(consRange[1]-consRange[0]),top:0,bottom:0,border:'1px dashed rgba(255,255,255,0.3)',borderRadius:2,pointerEvents:'none'}} />}
                         {playbackTime >= 0 && <div style={{position:'absolute',left:pct(playbackTime),top:0,bottom:0,width:1,background:'#fff',zIndex:10,pointerEvents:'none'}} />}
                     </div>
                 </div>
@@ -3317,6 +3318,13 @@
                                                         <span style={{color: p.is_mistake ? 'rgba(210,153,34,0.9)' : 'var(--success)', fontFamily:'monospace',fontSize:13}}>{p.qwen}</span>
                                                         <div style={{flex:1}} />
                                                         <span style={{fontSize:11,color:'var(--text-muted)',fontFamily:'monospace'}}>{'\u00d7'}{p.hit_count}</span>
+                                                        <a href="#" style={{fontSize:10,color:'var(--text-muted)',marginLeft:8}} onClick={async e => {
+                                                            e.preventDefault(); e.stopPropagation();
+                                                            if (confirm(`Delete all corpus pairs for "${p.term}"?`)) {
+                                                                await api('/api/pipeline/delete-corpus-term', {method:'POST', body: JSON.stringify({term: p.term})});
+                                                                loadCorpus();
+                                                            }
+                                                        }}>{'\u2715'}</a>
                                                     </div>
                                                     {expanded && (
                                                         <div style={{padding:'4px 4px 12px 26px',fontSize:12,lineHeight:1.6}}>
@@ -3367,6 +3375,7 @@
                                                                                 }}><span style={{fontSize:8,color: isKept?'#fff':isTrimmed?'rgba(255,255,255,0.4)':'var(--text-muted)',whiteSpace:'nowrap',padding:'0 2px',
                                                                                     textDecoration:isTrimmed?'line-through':'none'}}>{a.w}</span></div>);
                                                                             })}
+                                                                            {tt && <div style={{position:'absolute',left:pct(tt[0]),width:pct(tt[1]-tt[0]),top:0,bottom:0,border:'1px dashed rgba(255,255,255,0.3)',borderRadius:2,pointerEvents:'none'}} />}
                                                                         </div>
                                                                     </div>
                                                                     </div>);

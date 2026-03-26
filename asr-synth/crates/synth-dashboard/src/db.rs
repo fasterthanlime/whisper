@@ -902,6 +902,15 @@ impl Db {
         Ok(())
     }
 
+    /// Delete all corpus pairs for a specific term.
+    pub fn delete_corpus_pairs_for_term(&self, term: &str) -> Result<usize> {
+        let n = self.conn.execute(
+            "DELETE FROM corpus_pairs WHERE LOWER(term) = LOWER(?1)",
+            params![term],
+        )?;
+        Ok(n)
+    }
+
     /// Get unique clean triplets for evaluation (deduplicated by original+qwen+parakeet).
     /// All corpus pairs for eval: (term, original, qwen, parakeet, is_mistake, hit_count).
     /// Each row is a unique (term, original, qwen) combination.

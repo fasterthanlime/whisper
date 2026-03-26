@@ -38,7 +38,7 @@ struct SpokenSentence(String);
 /// Generate a (written, spoken) sentence pair for a vocab term.
 /// Tries the LLM generator first if available, falls back to Markov chain.
 fn make_sentence_pair(
-    generator: Option<&synth_train::SentenceGenerator>,
+    generator: Option<&mut synth_train::SentenceGenerator>,
     chain: &MarkovChain,
     term: &WrittenTerm,
     spoken: &SpokenTerm,
@@ -562,10 +562,14 @@ fn trim_matching_edges(
     }
 
     let trim_info = TrimInfo { pre_orig, pre_qwen, pre_para, trimmed_left, trimmed_right };
-    let strip_edge_punct = |s: String| -> String {
-        s.trim_matches(|c: char| !c.is_alphanumeric()).to_string()
+    let clean_join = |words: &[&str]| -> String {
+        words.iter()
+            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+            .filter(|w| !w.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
     };
-    (strip_edge_punct(o.join(" ")), strip_edge_punct(q.join(" ")), strip_edge_punct(p.join(" ")), trim_info)
+    (clean_join(&o), clean_join(&q), clean_join(&p), trim_info)
 }
 
 /// Extract triplets using annotated tri-boundaries.
@@ -812,7 +816,7 @@ async fn run_corpus_job(
     let chain = MarkovChain::build(&all_texts);
 
     // Start local LLM sentence generator (falls back to Markov if it fails)
-    let generator = {
+    let mut generator = {
         let db = state.db.lock().unwrap();
         let _ = db.append_job_log(job_id, "Starting sentence generator (Qwen2.5-1.5B-Instruct)...");
         drop(db);
@@ -900,7 +904,7 @@ async fn run_corpus_job(
             let written = WrittenTerm(term.clone());
             let spoken_t = SpokenTerm(spoken_term);
             let desc = descriptions.get(&term).map(|s| s.as_str());
-            let (ws, ss) = make_sentence_pair(generator.as_ref(), &chain_clone, &written, &spoken_t, desc, &overrides_clone, &mut rng);
+            let (ws, ss) = make_sentence_pair(generator.as_mut(), &chain_clone, &written, &spoken_t, desc, &overrides_clone, &mut rng);
 
             let item = RoundItem { term, sentence: ws.0, spoken: ss.0 };
             let tx = tx.clone();
@@ -2081,9 +2085,22 @@ pub async fn api_reset_corpus(
 ) -> Result<Response, AppError> {
     let db = state.db.lock().unwrap();
     db.reset_corpus().map_err(err)?;
-    // Also clean up old JSONL file if it exists
     let _ = std::fs::remove_file("data/corpus_dashboard.jsonl");
     Ok(Json(serde_json::json!({"ok": true})).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct DeleteCorpusTermBody {
+    pub term: String,
+}
+
+pub async fn api_delete_corpus_term(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<DeleteCorpusTermBody>,
+) -> Result<Response, AppError> {
+    let db = state.db.lock().unwrap();
+    let deleted = db.delete_corpus_pairs_for_term(&body.term).map_err(err)?;
+    Ok(Json(serde_json::json!({"ok": true, "deleted": deleted})).into_response())
 }
 
 /// Preview training data: returns sample prompts from the training set so the user

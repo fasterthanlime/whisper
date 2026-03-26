@@ -2,6 +2,9 @@ use anyhow::Result;
 use rand::prelude::*;
 use std::io::Write;
 
+pub mod llm;
+mod qwen2;
+
 /// Stats returned from the prepare step
 #[derive(Debug, serde::Serialize)]
 pub struct PrepareStats {
@@ -419,8 +422,12 @@ impl Drop for InferenceServer {
 
 /// Configuration for the local LLM sentence generator.
 pub struct SentenceGeneratorConfig {
-    pub model: String,
-    pub port: u16,
+    /// HuggingFace repo containing the GGUF model file.
+    pub gguf_repo: String,
+    /// GGUF filename within the repo.
+    pub gguf_file: String,
+    /// HuggingFace repo containing tokenizer.json (usually the base model repo).
+    pub tokenizer_repo: String,
     pub max_tokens: usize,
     pub temperature: f32,
 }
@@ -428,120 +435,102 @@ pub struct SentenceGeneratorConfig {
 impl Default for SentenceGeneratorConfig {
     fn default() -> Self {
         Self {
-            model: "Qwen/Qwen2.5-1.5B-Instruct".into(),
-            port: 8890,
+            gguf_repo: "Qwen/Qwen2.5-1.5B-Instruct-GGUF".into(),
+            gguf_file: "qwen2.5-1.5b-instruct-q4_k_m.gguf".into(),
+            tokenizer_repo: "Qwen/Qwen2.5-1.5B-Instruct".into(),
             max_tokens: 128,
             temperature: 0.9,
         }
     }
 }
 
-/// A local LLM server for generating natural sentences containing vocab terms.
-/// Wraps mlx_lm.server with an instruct model.
+/// In-process LLM for generating natural sentences containing vocab terms.
+/// Uses a quantized Qwen2 model via candle (no Python subprocess).
 pub struct SentenceGenerator {
-    child: std::process::Child,
-    port: u16,
+    model: llm::Qwen2Model,
     max_tokens: usize,
     temperature: f32,
+    rng_seed: u64,
 }
 
 impl SentenceGenerator {
-    /// Start the sentence generator. Blocks until the server is ready.
+    /// Load the model. Downloads from HuggingFace Hub on first use.
     pub fn start(config: &SentenceGeneratorConfig) -> Result<Self> {
-        use std::process::{Command, Stdio};
-
-        eprintln!("[sentgen] Starting mlx_lm.server ({}) on port {}...", config.model, config.port);
-        let child = Command::new("uvx")
-            .args([
-                "--from", "mlx-lm",
-                "mlx_lm.server",
-                "--model", &config.model,
-                "--port", &config.port.to_string(),
-                "--max-tokens", &config.max_tokens.to_string(),
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-
-        let url = format!("http://127.0.0.1:{}/v1/models", config.port);
-        let start = std::time::Instant::now();
-        loop {
-            if start.elapsed() > std::time::Duration::from_secs(120) {
-                anyhow::bail!("sentence generator server failed to start within 120s");
-            }
-            if let Ok(resp) = ureq::get(&url).call() {
-                if resp.status() == 200 { break; }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
-        eprintln!("[sentgen] Server ready on port {}", config.port);
+        eprintln!(
+            "[sentgen] Loading {} (in-process candle inference)...",
+            config.gguf_file
+        );
+        let model = llm::Qwen2Model::load(
+            &config.gguf_repo,
+            &config.gguf_file,
+            &config.tokenizer_repo,
+        )?;
+        eprintln!("[sentgen] Ready.");
 
         Ok(Self {
-            child,
-            port: config.port,
+            model,
             max_tokens: config.max_tokens,
             temperature: config.temperature,
+            rng_seed: 42,
         })
     }
 
     /// Generate a single sentence containing the given term.
-    /// Uses the chat completions API with a constrained prompt.
-    /// Returns None if the model's output doesn't contain the exact term.
-    pub fn generate_sentence(&self, term: &str, description: Option<&str>) -> Result<Option<String>> {
+    /// Returns None if the model's output doesn't pass validation.
+    pub fn generate_sentence(
+        &mut self,
+        term: &str,
+        description: Option<&str>,
+    ) -> Result<Option<String>> {
         let context = description.unwrap_or("a programming/tech term");
-        let system = format!(
-            "You generate single natural English sentences for text-to-speech training data. \
-             Each sentence must sound like something a developer would say out loud, \
-             like in a podcast, code review, or tech talk. \
-             Keep sentences between 8 and 20 words. \
-             Output ONLY the sentence, nothing else."
-        );
+        let system = "You output a single English sentence. No explanations, no quotes, no prefixes \u{2014} just the sentence itself.";
         let user = format!(
-            "Write one sentence containing the exact word \"{term}\" ({context}). \
-             The word must appear exactly as written. Vary the position — \
-             don't always put it at the start."
+            "Generate a natural sentence (8-20 words) that a developer might say in a podcast or code review. \
+             It must contain the exact token: {term}\n\
+             Context: {term} is {context}.\n\
+             Just the sentence:"
         );
 
-        let url = format!("http://127.0.0.1:{}/v1/chat/completions", self.port);
-        let body = serde_json::json!({
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-        });
+        let prompt_tokens = self.model.encode_chat(system, &user)?;
 
-        let agent = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(15)))
-            .build()
-            .new_agent();
+        // Vary seed per call for diversity
+        self.rng_seed = self.rng_seed.wrapping_add(1);
 
-        let mut resp = agent.post(&url)
-            .header("Content-Type", "application/json")
-            .send_json(&body)
-            .map_err(|e| anyhow::anyhow!("sentgen request failed: {e}"))?;
+        let text = self.model.generate(
+            &prompt_tokens,
+            self.max_tokens,
+            self.temperature as f64,
+            self.rng_seed,
+        )?;
 
-        let json: serde_json::Value = resp.body_mut().read_json()
-            .map_err(|e| anyhow::anyhow!("sentgen response parse failed: {e}"))?;
+        let text = text.trim().trim_matches('"').to_string();
 
-        let text = json["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("")
-            .trim()
-            .trim_matches('"')
-            .to_string();
-
-        // Validate: must contain the exact term (case-insensitive match, then check exact)
-        if text.to_lowercase().contains(&term.to_lowercase()) {
-            Ok(Some(text))
-        } else {
-            Ok(None)
+        // Validate output
+        let lower = text.to_lowercase();
+        if !lower.contains(&term.to_lowercase()) {
+            return Ok(None);
         }
+        if lower.contains("write one sentence")
+            || lower.contains("generate a")
+            || lower.starts_with("sure")
+            || lower.starts_with("here")
+        {
+            return Ok(None);
+        }
+        let word_count = text.split_whitespace().count();
+        if word_count < 5 || word_count > 30 {
+            return Ok(None);
+        }
+        Ok(Some(text))
     }
 
-    /// Generate a sentence, retrying up to `max_attempts` if the model doesn't include the term.
-    pub fn generate_sentence_retry(&self, term: &str, description: Option<&str>, max_attempts: usize) -> Result<Option<String>> {
+    /// Generate a sentence, retrying up to `max_attempts` if validation fails.
+    pub fn generate_sentence_retry(
+        &mut self,
+        term: &str,
+        description: Option<&str>,
+        max_attempts: usize,
+    ) -> Result<Option<String>> {
         for _ in 0..max_attempts {
             match self.generate_sentence(term, description)? {
                 Some(s) => return Ok(Some(s)),
@@ -549,20 +538,6 @@ impl SentenceGenerator {
             }
         }
         Ok(None)
-    }
-
-    pub fn kill(&mut self) {
-        eprintln!("[sentgen] Killing server");
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-impl Drop for SentenceGenerator {
-    fn drop(&mut self) {
-        eprintln!("[sentgen] Shutting down server");
-        let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 
