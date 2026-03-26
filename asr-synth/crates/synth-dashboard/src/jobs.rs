@@ -884,6 +884,9 @@ async fn run_corpus_job(
             let cons_time_json = serde_json::to_string(&[cons.cons_range.0, cons.cons_range.1]).ok();
             let trim_info_json = serde_json::to_string(&cons.trim_info).ok();
 
+            // Encode audio as Ogg Opus for playback in the review UI
+            let ogg_bytes = tts::encode_ogg_opus(&audio.samples, audio.sample_rate).await.ok();
+
             let db = state.db.lock().unwrap();
             match db.upsert_corpus_pair(
                 &item.term, &cons.original, &cons.qwen, &cons.parakeet,
@@ -892,11 +895,12 @@ async fn run_corpus_job(
                 Some(&fmt_alignment(&result.qwen_alignment)),
                 Some(&fmt_alignment(&result.parakeet_alignment)),
                 cons_time_json.as_deref(), trim_info_json.as_deref(), is_mistake,
+                ogg_bytes.as_deref(),
             ) {
-                Ok((_id, is_new)) => {
+                Ok((pair_id, is_new)) => {
                     if is_mistake {
                         if is_new {
-                            let _ = db.append_job_log(job_id, &format!("NEW|{}|{}|{}", item.term, cons.original, cons.qwen));
+                            let _ = db.append_job_log(job_id, &format!("NEW|{}|{}|{}|{}", pair_id, item.term, cons.original, cons.qwen));
                             new_mistakes += 1;
                         } else {
                             dup_mistakes += 1;
@@ -1956,6 +1960,21 @@ pub async fn api_view_corpus(
     let pairs = db.corpus_pairs_query(filter_term, mistakes_only, limit, offset).map_err(err)?;
     let stats = db.corpus_stats().map_err(err)?;
     Ok(Json(serde_json::json!({"pairs": pairs, "stats": stats})).into_response())
+}
+
+pub async fn api_corpus_audio(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Response, AppError> {
+    let db = state.db.lock().unwrap();
+    let audio: Option<Vec<u8>> = db.get_corpus_audio(id).map_err(err)?;
+    match audio {
+        Some(bytes) => Ok((
+            [(axum::http::header::CONTENT_TYPE, "audio/ogg")],
+            bytes,
+        ).into_response()),
+        None => Ok(axum::http::StatusCode::NOT_FOUND.into_response()),
+    }
 }
 
 pub async fn api_reset_corpus(

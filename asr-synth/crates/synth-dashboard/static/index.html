@@ -3183,16 +3183,23 @@
                         {jobLog && corpusRunning && (() => {
                             const lines = jobLog.split('\n');
                             const mistakes = lines.filter(l => l.startsWith('NEW|')).slice(-10).map(l => {
-                                const [_, term, orig, qwen] = l.split('|');
-                                return {term, orig, qwen};
+                                const parts = l.split('|');
+                                return {id: parseInt(parts[1]), term: parts[2], orig: parts[3], qwen: parts[4]};
                             });
                             const progress = lines.filter(l => l.match(/^\[/)).slice(-1)[0] || '';
+                            const openMistake = async (m) => {
+                                const d = await api(`/api/pipeline/corpus?mistakes=1&limit=100`);
+                                setCorpusData(d.pairs); setCorpusFilter(''); setExpandedTerm(m.id);
+                                dialogRef.current?.showModal();
+                            };
                             return (<div style={{marginTop:10}}>
                                 {progress && <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:4,fontFamily:'monospace'}}>{progress}</div>}
                                 {mistakes.length > 0 && <div style={{background:'rgba(0,0,0,0.3)',borderRadius:4,padding:6,maxHeight:140,overflowY:'auto'}} ref={logRef}>
                                     <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:4}}>New unique mistakes:</div>
                                     {mistakes.map((m, i) => (
-                                        <div key={i} style={{fontSize:12,fontFamily:'monospace',lineHeight:1.5,display:'flex',gap:8}}>
+                                        <div key={i} onClick={() => openMistake(m)} style={{fontSize:12,fontFamily:'monospace',lineHeight:1.5,display:'flex',gap:8,cursor:'pointer',borderRadius:3,padding:'1px 4px'}}
+                                            onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.05)'}
+                                            onMouseLeave={e => e.currentTarget.style.background='transparent'}>
                                             <span style={{color:'var(--text-muted)',minWidth:60}}>{m.term}</span>
                                             <span style={{color:'rgba(88,166,255,0.8)'}}>{m.orig}</span>
                                             <span style={{color:'var(--text-muted)'}}>{'\u2192'}</span>
@@ -3312,7 +3319,13 @@
                                                     </div>
                                                     {expanded && (
                                                         <div style={{padding:'4px 4px 12px 26px',fontSize:12,lineHeight:1.6}}>
-                                                            {p.sentence && <div style={{color:'var(--text-muted)'}}><b>Sentence:</b> {p.sentence}</div>}
+                                                            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+                                                                {p.has_audio && <button onClick={e => { e.stopPropagation(); const a = new Audio(`/api/pipeline/corpus/${p.id}/audio`); a.play(); }}
+                                                                    style={{background:'none',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',cursor:'pointer',padding:'2px 10px',fontSize:11}}>{'\u25B6 Play'}</button>}
+                                                                <span style={{color:'var(--text-muted)',fontSize:11}}>
+                                                                    {p.sentence}
+                                                                </span>
+                                                            </div>
                                                             {p.spoken && p.spoken !== p.sentence && <div style={{color:'var(--text-muted)'}}><b>Spoken:</b> {p.spoken}</div>}
                                                             {(p.orig_alignment || p.qwen_alignment) && (() => {
                                                                 const allItems = [...(p.orig_alignment||[]),...(p.qwen_alignment||[]),...(p.parakeet_alignment||[])];

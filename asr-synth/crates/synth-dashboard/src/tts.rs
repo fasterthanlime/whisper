@@ -1,6 +1,22 @@
 use anyhow::Result;
 use std::sync::Mutex;
 
+/// Encode f32 mono samples as Ogg Opus. Returns the Ogg container bytes.
+pub async fn encode_ogg_opus(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>> {
+    use crime::{AudioFormat, AudioStream, OggContainer, OpusApplication, OpusBitrate};
+    use futures::StreamExt;
+
+    let stream = futures::stream::iter(samples.iter().copied());
+    let audio = AudioStream::new(sample_rate, stream);
+    let format = AudioFormat::Ogg(OggContainer::Opus(
+        OpusApplication::Voip,
+        OpusBitrate::Bits(24000),
+    ));
+    let encoded = audio.commit(sample_rate, 1.0, format).await;
+    let bytes: Vec<u8> = encoded.collect().await;
+    Ok(bytes)
+}
+
 /// Resample f32 mono samples to 16kHz. Returns samples unchanged if already 16kHz.
 pub fn resample_to_16k(samples: &[f32], from_rate: u32) -> Result<Vec<f32>> {
     if from_rate == 16000 {

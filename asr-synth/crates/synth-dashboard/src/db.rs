@@ -182,6 +182,7 @@ impl Db {
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN cons_time TEXT;");
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN trim_info TEXT;");
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN qwen_full TEXT;");
+        let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN audio_ogg BLOB;");
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN hit_count INTEGER NOT NULL DEFAULT 1;");
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN is_mistake INTEGER NOT NULL DEFAULT 1;");
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN updated_at TEXT;");
@@ -741,6 +742,7 @@ impl Db {
         sentence: &str, spoken: &str,
         orig_align: Option<&str>, qwen_align: Option<&str>, parakeet_align: Option<&str>,
         cons_time: Option<&str>, trim_info: Option<&str>, is_mistake: bool,
+        audio_ogg: Option<&[u8]>,
     ) -> Result<(i64, bool)> {
         let orig_lower = original.to_lowercase();
         let qwen_lower = qwen.to_lowercase();
@@ -754,25 +756,33 @@ impl Db {
         ).ok();
 
         if let Some(id) = existing {
-            // Increment hit count, update alignment to latest
+            // Increment hit count, update alignment + audio to latest
             self.conn.execute(
                 "UPDATE corpus_pairs SET hit_count = hit_count + 1, sentence = ?2, spoken = ?3, \
                  orig_alignment = ?4, qwen_alignment = ?5, parakeet_alignment = ?6, \
-                 cons_time = ?7, trim_info = ?8, updated_at = ?9 WHERE id = ?1",
-                params![id, sentence, spoken, orig_align, qwen_align, parakeet_align, cons_time, trim_info, now],
+                 cons_time = ?7, trim_info = ?8, audio_ogg = ?9, updated_at = ?10 WHERE id = ?1",
+                params![id, sentence, spoken, orig_align, qwen_align, parakeet_align, cons_time, trim_info, audio_ogg, now],
             )?;
             Ok((id, false))
         } else {
             self.conn.execute(
                 "INSERT INTO corpus_pairs (term, original, qwen, parakeet, sentence, spoken, \
                  orig_alignment, qwen_alignment, parakeet_alignment, cons_time, trim_info, \
-                 hit_count, is_mistake, created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13, ?13)",
+                 hit_count, is_mistake, audio_ogg, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13, ?14, ?14)",
                 params![term, original, qwen, parakeet, sentence, spoken, orig_align, qwen_align,
-                        parakeet_align, cons_time, trim_info, is_mistake as i32, now],
+                        parakeet_align, cons_time, trim_info, is_mistake as i32, audio_ogg, now],
             )?;
             Ok((self.conn.last_insert_rowid(), true))
         }
+    }
+
+    pub fn get_corpus_audio(&self, id: i64) -> Result<Option<Vec<u8>>> {
+        Ok(self.conn.query_row(
+            "SELECT audio_ogg FROM corpus_pairs WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        ).ok().flatten())
     }
 
     /// Count existing passes per term in corpus_pairs.
@@ -796,7 +806,7 @@ impl Db {
     /// Query corpus pairs with optional filtering. Returns newest-updated first.
     pub fn corpus_pairs_query(&self, filter_term: Option<&str>, mistakes_only: bool, limit: usize, offset: usize) -> Result<Vec<serde_json::Value>> {
         let mut sql = String::from(
-            "SELECT id, term, original, qwen, parakeet, sentence, spoken, orig_alignment, qwen_alignment, parakeet_alignment, cons_time, trim_info, hit_count, is_mistake FROM corpus_pairs WHERE 1=1"
+            "SELECT id, term, original, qwen, parakeet, sentence, spoken, orig_alignment, qwen_alignment, parakeet_alignment, cons_time, trim_info, hit_count, is_mistake, audio_ogg IS NOT NULL FROM corpus_pairs WHERE 1=1"
         );
         let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let mut param_idx = 1;
@@ -840,6 +850,7 @@ impl Db {
                 "trim_info": trim_info.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
                 "hit_count": row.get::<_, i64>(12)?,
                 "is_mistake": row.get::<_, i64>(13)? != 0,
+                "has_audio": row.get::<_, i64>(14)? != 0,
             }))
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)

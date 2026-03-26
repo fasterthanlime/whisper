@@ -1204,6 +1204,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/jobs/stop", post(jobs::api_stop_job))
         .route("/api/pipeline/status", get(jobs::api_pipeline_status))
         .route("/api/pipeline/corpus", get(jobs::api_view_corpus))
+        .route("/api/pipeline/corpus/:id/audio", get(jobs::api_corpus_audio))
         .route("/api/pipeline/reset-corpus", post(jobs::api_reset_corpus))
         .route("/api/pipeline/preview-training", get(jobs::api_preview_training))
         .route("/api/pipeline/reset-training", post(jobs::api_reset_training))
