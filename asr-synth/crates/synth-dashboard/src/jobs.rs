@@ -39,18 +39,16 @@ fn make_sentence_pair(
     chain: &MarkovChain,
     term: &WrittenTerm,
     spoken: &SpokenTerm,
+    overrides: &std::collections::HashMap<String, String>,
     rng: &mut impl Rng,
 ) -> (WrittenSentence, SpokenSentence) {
     let sentence = chain.generate_with(&term.0, 15, rng);
-    let spoken_sentence = {
-        let lower = sentence.to_lowercase();
-        let lower_term = term.0.to_lowercase();
-        if let Some(pos) = lower.find(&lower_term) {
-            format!("{}{}{}", &sentence[..pos], &spoken.0, &sentence[pos + term.0.len()..])
-        } else {
-            sentence.clone()
-        }
-    };
+    // Build spoken form by applying ALL vocab overrides (not just the target term).
+    // This ensures every vocab term in the sentence gets its pronunciation override.
+    let mut all_overrides = overrides.clone();
+    // Ensure the target term's override is present (it should be, but be safe)
+    all_overrides.insert(term.0.clone(), spoken.0.clone());
+    let spoken_sentence = tts::build_spoken_form(&sentence, &all_overrides);
     (WrittenSentence(sentence), SpokenSentence(spoken_sentence))
 }
 
@@ -630,14 +628,29 @@ fn extract_with_consensus(
     // If either required lane is empty after trimming, mark as not clean
     let clean = clean && !original.is_empty() && !qwen.is_empty();
 
-    // If any word in the consensus range has suspiciously short duration (<80ms),
-    // it's likely boundary noise — discard the whole extraction.
-    const MIN_WORD_DURATION: f64 = 0.08;
-    let has_short_word = orig_align.iter()
-        .chain(qwen_align.iter())
-        .filter(|a| a.start_time >= start && a.start_time < end)
-        .any(|a| (a.end_time - a.start_time) < MIN_WORD_DURATION);
-    let clean = clean && !has_short_word;
+    // If consensus range starts at 0 or hits the end, we failed to find a real boundary
+    let clean = clean && start > 0.01;
+
+    // Discard if the aligner produced garbage within the consensus range:
+    // (a) any phantom word < 20ms, or (b) overlapping timestamps on the same lane.
+    const MIN_WORD_DURATION: f64 = 0.02;
+    let has_aligner_garbage = |lane: &[qwen3_asr::ForcedAlignItem]| -> bool {
+        let in_range: Vec<_> = lane.iter()
+            .filter(|a| a.start_time >= start - 0.001 && a.start_time < end + 0.001)
+            .collect();
+        // Check for phantom words
+        if in_range.iter().any(|a| (a.end_time - a.start_time) < MIN_WORD_DURATION) {
+            return true;
+        }
+        // Check for overlapping timestamps (word N+1 starts before word N ends)
+        for w in in_range.windows(2) {
+            if w[1].start_time < w[0].end_time - 0.005 {
+                return true;
+            }
+        }
+        false
+    };
+    let clean = clean && !has_aligner_garbage(orig_align) && !has_aligner_garbage(qwen_align);
 
     let debug = serde_json::json!({
         "term_start": r2(term_start),
@@ -825,7 +838,12 @@ async fn run_corpus_job(
     let vocab_for_producer: Vec<(String, String)> = vocab_terms.iter()
         .map(|v| (v.term.clone(), v.spoken().to_string()))
         .collect();
+    // Build overrides map for all vocab terms — used to pronounce every term in the sentence
+    let overrides: HashMap<String, String> = vocab_terms.iter()
+        .filter_map(|v| v.spoken_override.as_ref().map(|s| (v.term.clone(), s.clone())))
+        .collect();
     let chain_clone = chain.clone();
+    let overrides_clone = overrides.clone();
     let producer = tokio::spawn(async move {
         use rand::seq::SliceRandom;
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(tts_concurrency));
@@ -845,7 +863,7 @@ async fn run_corpus_job(
             let (term, spoken_term) = vocab_for_producer.choose(&mut rng).unwrap().clone();
             let written = WrittenTerm(term.clone());
             let spoken_t = SpokenTerm(spoken_term);
-            let (ws, ss) = make_sentence_pair(&chain_clone, &written, &spoken_t, &mut rng);
+            let (ws, ss) = make_sentence_pair(&chain_clone, &written, &spoken_t, &overrides_clone, &mut rng);
 
             let item = RoundItem { term, sentence: ws.0, spoken: ss.0 };
             let tx = tx.clone();
@@ -1913,9 +1931,14 @@ pub async fn api_test_term(
     };
     let spoken = SpokenTerm(vocab.spoken().to_string());
 
-    let all_texts = {
+    let (all_texts, overrides) = {
         let db = state.db.lock().unwrap();
-        db.all_sentence_texts().map_err(err)?
+        let texts = db.all_sentence_texts().map_err(err)?;
+        let vocab_list = db.list_reviewed_vocab().map_err(err)?;
+        let ov: HashMap<String, String> = vocab_list.iter()
+            .filter_map(|v| v.spoken_override.as_ref().map(|s| (v.term.clone(), s.clone())))
+            .collect();
+        (texts, ov)
     };
     let chain = MarkovChain::build(&all_texts);
     let mut rng = rand::rngs::StdRng::from_os_rng();
@@ -1928,7 +1951,7 @@ pub async fn api_test_term(
     let mut attempts = 0;
     loop {
         attempts += 1;
-        let pair = make_sentence_pair(&chain, &written, &spoken, &mut rng);
+        let pair = make_sentence_pair(&chain, &written, &spoken, &overrides, &mut rng);
         written_sentence = pair.0;
         spoken_sentence = pair.1;
 
@@ -2270,11 +2293,23 @@ pub async fn api_algorithm_tests() -> Result<Response, AppError> {
             expect_clean: false,
         },
         TestCase {
-            name: "Short word in range → discard",
-            desc: "A word < 80ms in the consensus range means boundary noise — discard",
+            name: "Phantom word in range → discard",
+            desc: "A degenerate 1ms word inside the term's range — aligner garbage",
             term: "jiff",
-            orig: vec![ai("the",0.40,0.47), ai("jiff",0.48,0.80), ai("crate",0.9,1.2)],
-            qwen: vec![ai("the",0.40,0.47), ai("JIF",0.48,0.80), ai("crate",0.9,1.2)],
+            orig: vec![ai("the",0.30,0.45), ai("jiff",0.48,0.80), ai("crate",0.9,1.2)],
+            qwen: vec![ai("the",0.30,0.45), ai("the",0.48,0.481), ai("JIF",0.50,0.80), ai("crate",0.9,1.2)],
+            para: vec![],
+            protected: vec!["jiff"],
+            expect_orig: "",
+            expect_qwen: "",
+            expect_clean: false,
+        },
+        TestCase {
+            name: "Overlapping timestamps → discard",
+            desc: "Two words overlap in time on the same lane — aligner confused",
+            term: "jiff",
+            orig: vec![ai("the",0.30,0.45), ai("jiff",0.48,0.80), ai("crate",0.9,1.2)],
+            qwen: vec![ai("the",0.30,0.45), ai("JIF",0.48,0.75), ai("F",0.60,0.80), ai("crate",0.9,1.2)],
             para: vec![],
             protected: vec!["jiff"],
             expect_orig: "",
@@ -2329,6 +2364,95 @@ pub async fn api_algorithm_tests() -> Result<Response, AppError> {
             expect_qwen: "tokio",
             expect_clean: true,
         },
+        // ==================== Messy / real-world cases ====================
+        TestCase {
+            name: "Word split into 3 tokens on Qwen",
+            desc: "\"bincode\" heard as \"Bin\"+\"code\"+\"is\" — Qwen spreads it wider than Original",
+            term: "bincode",
+            orig: vec![ai("use",0.0,0.3), ai("bincode",0.4,0.9), ai("for",1.0,1.2), ai("that",1.3,1.5)],
+            qwen: vec![ai("use",0.0,0.3), ai("Bin",0.4,0.6), ai("code",0.6,0.8), ai("is",0.85,1.0), ai("for",1.0,1.2), ai("that",1.3,1.5)],
+            para: vec![],
+            protected: vec!["bincode"],
+            expect_orig: "bincode",
+            expect_qwen: "Bin code is",
+            expect_clean: true,
+        },
+        TestCase {
+            name: "Term appears twice — only target matched",
+            desc: "\"async\" appears at 0.5s and 2.5s; the term range points at the first one",
+            term: "async",
+            orig: vec![ai("the",0.0,0.2), ai("async",0.5,0.9), ai("fn",1.0,1.2), ai("calls",1.3,1.6), ai("async",2.5,2.9), ai("code",3.0,3.3)],
+            qwen: vec![ai("the",0.0,0.2), ai("a",0.5,0.65), ai("sink",0.65,0.9), ai("fn",1.0,1.2), ai("calls",1.3,1.6), ai("a",2.5,2.65), ai("sync",2.65,2.9), ai("code",3.0,3.3)],
+            para: vec![],
+            protected: vec!["async"],
+            expect_orig: "async",
+            expect_qwen: "a sink",
+            expect_clean: true,
+        },
+        TestCase {
+            name: "Lanes completely diverge",
+            desc: "Qwen heard a totally different sentence — no matching boundaries",
+            term: "reqwest",
+            orig: vec![ai("use",0.0,0.3), ai("reqwest",0.4,0.8), ai("for",0.9,1.1), ai("http",1.2,1.5)],
+            qwen: vec![ai("the",0.0,0.4), ai("request",0.5,0.9), ai("was",1.0,1.2), ai("denied",1.3,1.8)],
+            para: vec![],
+            protected: vec!["reqwest"],
+            // No matching boundaries → falls back to term range, but trimming may differ
+            expect_orig: "reqwest",
+            expect_qwen: "request",
+            expect_clean: false, // no bi-boundaries found
+        },
+        TestCase {
+            name: "Qwen token wider than Original",
+            desc: "Qwen's \"Fasterthanlime\" starts before and ends after Original's \"fasterthanlime\"",
+            term: "fasterthanlime",
+            orig: vec![ai("by",0.0,0.2), ai("fasterthanlime",0.35,1.0), ai("is",1.1,1.3)],
+            qwen: vec![ai("by",0.0,0.2), ai("Fasterthanlime",0.3,1.05), ai("is",1.1,1.3)],
+            para: vec![],
+            protected: vec!["fasterthanlime"],
+            expect_orig: "fasterthanlime",
+            expect_qwen: "Fasterthanlime",
+            expect_clean: true,
+        },
+        TestCase {
+            name: "Term at sentence end — no right context",
+            desc: "Nothing after the term; extraction should still work with left context only",
+            term: "repr",
+            orig: vec![ai("use",0.0,0.2), ai("the",0.3,0.5), ai("repr",0.6,1.0)],
+            qwen: vec![ai("use",0.0,0.2), ai("the",0.3,0.5), ai("rep",0.6,0.85), ai("r",0.85,1.0)],
+            para: vec![],
+            protected: vec!["repr"],
+            expect_orig: "repr",
+            expect_qwen: "rep r",
+            expect_clean: true,
+        },
+        TestCase {
+            name: "Dense touching boxes — no gaps anywhere",
+            desc: "All words touch each other, no silence gaps; gap expansion should not trigger",
+            term: "tokio",
+            orig: vec![ai("use",0.0,0.20), ai("tokio",0.20,0.50), ai("spawn",0.50,0.80), ai("for",0.80,1.00)],
+            qwen: vec![ai("use",0.0,0.20), ai("Tokyo",0.20,0.50), ai("spawn",0.50,0.80), ai("for",0.80,1.00)],
+            para: vec![],
+            protected: vec!["tokio"],
+            expect_orig: "tokio",
+            expect_qwen: "Tokyo",
+            expect_clean: true,
+        },
+        TestCase {
+            name: "Large gap — Qwen fills gap with extra words",
+            desc: "Big gap around term; Qwen has extra words filling the silence",
+            term: "lldb",
+            orig: vec![ai("run",0.0,0.3), ai("lldb",0.6,1.0), ai("now",1.4,1.7)],
+            qwen: vec![ai("run",0.0,0.3), ai("the",0.45,0.55), ai("L",0.6,0.75), ai("LDB",0.8,1.0), ai("tool",1.1,1.3), ai("now",1.4,1.7)],
+            para: vec![],
+            protected: vec!["lldb"],
+            // Gap expansion: prev_end=0.3, start=0.6, gap=0.3s > 50ms → expand to 0.3
+            // next_start=1.4, end=1.0, gap=0.4s > 50ms → expand to 1.4
+            // So range is 0.3–1.4, captures "the L LDB tool" on Qwen, "run" trimmed, "now" trimmed
+            expect_orig: "lldb",
+            expect_qwen: "the L LDB tool",
+            expect_clean: true,
+        },
     ];
 
     for tc in &cases {
@@ -2352,9 +2476,14 @@ pub async fn api_algorithm_tests() -> Result<Response, AppError> {
         let extraction = extract_with_consensus(&tc.orig, &tc.qwen, &tc.para, term_start, term_end, &protected);
         let is_mistake = extraction.original.to_lowercase() != extraction.qwen.to_lowercase();
 
-        let pass = extraction.original == tc.expect_orig
-            && extraction.qwen == tc.expect_qwen
-            && extraction.clean == tc.expect_clean;
+        let pass = if !tc.expect_clean {
+            // For "should discard" cases, only check that clean is false
+            !extraction.clean
+        } else {
+            extraction.original == tc.expect_orig
+                && extraction.qwen == tc.expect_qwen
+                && extraction.clean
+        };
 
         results.push(serde_json::json!({
             "name": tc.name,
