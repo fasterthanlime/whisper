@@ -3288,8 +3288,8 @@
                     <dialog ref={dialogRef} style={{
                         background:'var(--card-bg)', color:'var(--text)', border:'1px solid var(--border)',
                         borderRadius:12, padding:0, width:'min(90vw, 900px)', height:'90vh',
-                        display:'flex', flexDirection:'column',
                     }} onClick={e => { if (e.target === dialogRef.current) dialogRef.current.close(); }}>
+                      <div style={{display:'flex', flexDirection:'column', height:'100%'}}>
                         <div style={{padding:'16px 20px', borderBottom:'1px solid var(--border)', flexShrink:0}}>
                             <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:10}}>
                                 <h3 style={{margin:0, flex:1}}>Corpus Pairs {corpusData && <span style={{fontWeight:300,fontSize:14,color:'var(--text-muted)'}}>({corpusData.length})</span>}</h3>
@@ -3445,6 +3445,7 @@
                                 );
                             })()}
                         </div>
+                      </div>
                     </dialog>
                 </div>
             );
