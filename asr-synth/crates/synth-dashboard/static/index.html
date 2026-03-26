@@ -3307,24 +3307,34 @@
                                         {filtered.map((p, i) => {
                                             const expanded = expandedTerm === p.id;
                                             const tt = p.cons_time;
+                                            const canMarkAlt = p.is_mistake && p.original.toLowerCase() === p.term.toLowerCase();
+                                            const reloadMistakes = async () => {
+                                                const d = await api('/api/pipeline/corpus?mistakes=1&limit=100');
+                                                setCorpusData(d.pairs);
+                                            };
                                             return (
                                                 <div key={p.id || i} style={{borderBottom:'1px solid var(--border)'}}>
                                                     <div onClick={() => setExpandedTerm(expanded ? null : p.id)}
                                                         style={{display:'flex',alignItems:'center',gap:10,padding:'8px 4px',cursor:'pointer',userSelect:'none'}}>
                                                         <span style={{fontSize:11,color:'var(--text-muted)',width:12}}>{expanded ? '\u25BC' : '\u25B6'}</span>
+                                                        {p.has_audio && <button title="Play audio" onClick={e => { e.stopPropagation(); const a = new Audio(`/api/pipeline/corpus/${p.id}/audio`); a.play(); }}
+                                                            style={{background:'none',border:'1px solid var(--border)',borderRadius:4,color:'var(--text-muted)',cursor:'pointer',padding:'2px 6px',fontSize:11,flexShrink:0}}>{'\u25B6'}</button>}
                                                         <span style={{fontWeight:600,fontSize:12,minWidth:80,color:'var(--text-muted)'}}>{p.term}</span>
                                                         <span style={{color:'rgba(88,166,255,0.8)',fontFamily:'monospace',fontSize:13}}>{p.original}</span>
                                                         <span style={{color:'var(--text-muted)'}}>{'\u2192'}</span>
                                                         <span style={{color: p.is_mistake ? 'rgba(210,153,34,0.9)' : 'var(--success)', fontFamily:'monospace',fontSize:13}}>{p.qwen}</span>
                                                         <div style={{flex:1}} />
                                                         <span style={{fontSize:11,color:'var(--text-muted)',fontFamily:'monospace'}}>{'\u00d7'}{p.hit_count}</span>
-                                                        <a href="#" style={{fontSize:10,color:'var(--text-muted)',marginLeft:8}} onClick={async e => {
-                                                            e.preventDefault(); e.stopPropagation();
-                                                            if (confirm(`Delete all corpus pairs for "${p.term}"?`)) {
-                                                                await api('/api/pipeline/delete-corpus-term', {method:'POST', body: JSON.stringify({term: p.term})});
-                                                                loadCorpus();
-                                                            }
-                                                        }}>{'\u2715'}</a>
+                                                        {canMarkAlt && <button title="Mark as acceptable alternate spelling" onClick={async e => {
+                                                            e.stopPropagation();
+                                                            await api('/api/pipeline/alt-spelling', {method:'POST', body: JSON.stringify({term: p.term, alt_spelling: p.qwen})});
+                                                            reloadMistakes();
+                                                        }} style={{background:'none',border:'1px solid var(--border)',borderRadius:4,color:'var(--success)',cursor:'pointer',padding:'2px 8px',fontSize:11,fontWeight:600,flexShrink:0}}>alt</button>}
+                                                        <button title="Reject this pair" onClick={async e => {
+                                                            e.stopPropagation();
+                                                            await api('/api/pipeline/reject-corpus-pair', {method:'POST', body: JSON.stringify({id: p.id})});
+                                                            reloadMistakes();
+                                                        }} style={{background:'none',border:'1px solid rgba(255,100,100,0.4)',borderRadius:4,color:'rgba(255,100,100,0.7)',cursor:'pointer',padding:'2px 8px',fontSize:11,flexShrink:0}}>{'\u2715'} reject</button>
                                                     </div>
                                                     {expanded && (
                                                         <div style={{padding:'4px 4px 12px 26px',fontSize:12,lineHeight:1.6}}>

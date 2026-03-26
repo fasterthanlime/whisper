@@ -196,6 +196,7 @@ impl Db {
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN hit_count INTEGER NOT NULL DEFAULT 1;");
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN is_mistake INTEGER NOT NULL DEFAULT 1;");
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN updated_at TEXT;");
+        let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN rejected INTEGER NOT NULL DEFAULT 0;");
 
         // Migration: case-insensitive dedup of vocab terms.
         // For each group of case-insensitive duplicates, keep the row that has
@@ -235,6 +236,16 @@ impl Db {
             "CREATE TABLE IF NOT EXISTS rejected_suggestions (
                 term TEXT PRIMARY KEY COLLATE NOCASE,
                 rejected_at TEXT NOT NULL
+            )"
+        ).ok();
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS vocab_alt_spellings (
+                id INTEGER PRIMARY KEY,
+                term TEXT NOT NULL COLLATE NOCASE,
+                alt_spelling TEXT NOT NULL COLLATE NOCASE,
+                created_at TEXT NOT NULL,
+                UNIQUE(term, alt_spelling)
             )"
         ).ok();
 
@@ -813,10 +824,11 @@ impl Db {
         Ok(self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs", [], |r| r.get(0))?)
     }
 
-    /// Query corpus pairs with optional filtering. Returns newest-updated first.
+    /// Query corpus pairs with optional filtering.
+    /// Mistakes sorted by hit_count DESC (most common first), others by newest first.
     pub fn corpus_pairs_query(&self, filter_term: Option<&str>, mistakes_only: bool, limit: usize, offset: usize) -> Result<Vec<serde_json::Value>> {
         let mut sql = String::from(
-            "SELECT id, term, original, qwen, parakeet, sentence, spoken, orig_alignment, qwen_alignment, parakeet_alignment, cons_time, trim_info, hit_count, is_mistake, audio_ogg IS NOT NULL FROM corpus_pairs WHERE 1=1"
+            "SELECT id, term, original, qwen, parakeet, sentence, spoken, orig_alignment, qwen_alignment, parakeet_alignment, cons_time, trim_info, hit_count, is_mistake, audio_ogg IS NOT NULL FROM corpus_pairs WHERE rejected = 0"
         );
         let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let mut param_idx = 1;
@@ -830,8 +842,10 @@ impl Db {
         }
         if mistakes_only {
             sql.push_str(" AND is_mistake = 1");
+            sql.push_str(" ORDER BY hit_count DESC");
+        } else {
+            sql.push_str(" ORDER BY COALESCE(updated_at, created_at) DESC");
         }
-        sql.push_str(" ORDER BY COALESCE(updated_at, created_at) DESC");
         sql.push_str(&format!(" LIMIT ?{param_idx} OFFSET ?{}", param_idx + 1));
         params_vec.push(Box::new(limit as i64));
         params_vec.push(Box::new(offset as i64));
@@ -867,17 +881,18 @@ impl Db {
     }
 
     /// Summary stats for corpus: total pairs, mistakes, correct, per-term error rates.
+    /// Excludes rejected pairs.
     pub fn corpus_stats(&self) -> Result<serde_json::Value> {
-        let total: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs", [], |r| r.get(0))?;
-        let mistakes: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 1", [], |r| r.get(0))?;
-        let correct: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 0", [], |r| r.get(0))?;
-        let total_hits: i64 = self.conn.query_row("SELECT COALESCE(SUM(hit_count), 0) FROM corpus_pairs", [], |r| r.get(0))?;
+        let total: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs WHERE rejected = 0", [], |r| r.get(0))?;
+        let mistakes: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 1 AND rejected = 0", [], |r| r.get(0))?;
+        let correct: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 0 AND rejected = 0", [], |r| r.get(0))?;
+        let total_hits: i64 = self.conn.query_row("SELECT COALESCE(SUM(hit_count), 0) FROM corpus_pairs WHERE rejected = 0", [], |r| r.get(0))?;
 
         // Per-term stats: mistake_count, correct_count, total_hits
         let mut stmt = self.conn.prepare(
             "SELECT term, SUM(CASE WHEN is_mistake = 1 THEN 1 ELSE 0 END), \
              SUM(CASE WHEN is_mistake = 0 THEN 1 ELSE 0 END), \
-             SUM(hit_count) FROM corpus_pairs GROUP BY term ORDER BY term COLLATE NOCASE"
+             SUM(hit_count) FROM corpus_pairs WHERE rejected = 0 GROUP BY term ORDER BY term COLLATE NOCASE"
         )?;
         let term_stats: Vec<serde_json::Value> = stmt.query_map([], |row| {
             Ok(serde_json::json!({
@@ -909,6 +924,80 @@ impl Db {
             params![term],
         )?;
         Ok(n)
+    }
+
+    /// Mark a corpus pair as rejected (hidden from mistakes, not deleted).
+    pub fn reject_corpus_pair(&self, id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE corpus_pairs SET rejected = 1 WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    // ==================== ALTERNATE SPELLINGS ====================
+
+    /// Add an alternate acceptable spelling for a vocab term.
+    /// Also retroactively marks existing corpus pairs as non-mistakes if they match.
+    pub fn add_alt_spelling(&self, term: &str, alt_spelling: &str) -> Result<usize> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO vocab_alt_spellings (term, alt_spelling, created_at) VALUES (?1, ?2, ?3)",
+            params![term, alt_spelling, now_str()],
+        )?;
+        // Retroactively mark matching corpus pairs as non-mistakes
+        let updated = self.conn.execute(
+            "UPDATE corpus_pairs SET is_mistake = 0 WHERE LOWER(term) = LOWER(?1) AND LOWER(qwen) = LOWER(?2)",
+            params![term, alt_spelling],
+        )?;
+        Ok(updated)
+    }
+
+    /// Get all alternate spellings for a term.
+    pub fn get_alt_spellings_for_term(&self, term: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT alt_spelling FROM vocab_alt_spellings WHERE LOWER(term) = LOWER(?1)"
+        )?;
+        let rows = stmt.query_map(params![term], |row| row.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Get all alternate spellings as a map: term → set of acceptable spellings.
+    /// The original term itself is included in each set.
+    pub fn get_all_alt_spellings(&self) -> Result<HashMap<String, Vec<String>>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT term, alt_spelling FROM vocab_alt_spellings"
+        )?;
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (term, alt) = row?;
+            map.entry(term.to_lowercase()).or_default().push(alt);
+        }
+        Ok(map)
+    }
+
+    /// Delete an alternate spelling.
+    pub fn delete_alt_spelling(&self, term: &str, alt_spelling: &str) -> Result<usize> {
+        let n = self.conn.execute(
+            "DELETE FROM vocab_alt_spellings WHERE LOWER(term) = LOWER(?1) AND LOWER(alt_spelling) = LOWER(?2)",
+            params![term, alt_spelling],
+        )?;
+        Ok(n)
+    }
+
+    /// Check if a qwen output matches the original or any alt spelling for a term.
+    pub fn is_acceptable_spelling(&self, term: &str, original: &str, qwen: &str) -> Result<bool> {
+        if original.to_lowercase() == qwen.to_lowercase() {
+            return Ok(true);
+        }
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM vocab_alt_spellings WHERE LOWER(term) = LOWER(?1) AND LOWER(alt_spelling) = LOWER(?2)",
+            params![term, qwen],
+            |r| r.get(0),
+        )?;
+        Ok(count > 0)
     }
 
     /// Get unique clean triplets for evaluation (deduplicated by original+qwen+parakeet).

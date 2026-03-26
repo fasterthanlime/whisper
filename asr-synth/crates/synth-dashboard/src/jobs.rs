@@ -967,7 +967,10 @@ async fn run_corpus_job(
 
         if result.extraction.clean {
             let cons = &result.extraction;
-            let is_mistake = cons.original.to_lowercase() != cons.qwen.to_lowercase();
+            let is_mistake = {
+                let db = state.db.lock().unwrap();
+                !db.is_acceptable_spelling(&item.term, &cons.original, &cons.qwen).unwrap_or(false)
+            };
             let cons_time_json = serde_json::to_string(&[cons.cons_range.0, cons.cons_range.1]).ok();
             let trim_info_json = serde_json::to_string(&cons.trim_info).ok();
 
@@ -2101,6 +2104,35 @@ pub async fn api_delete_corpus_term(
     let db = state.db.lock().unwrap();
     let deleted = db.delete_corpus_pairs_for_term(&body.term).map_err(err)?;
     Ok(Json(serde_json::json!({"ok": true, "deleted": deleted})).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct RejectCorpusPairBody {
+    pub id: i64,
+}
+
+pub async fn api_reject_corpus_pair(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<RejectCorpusPairBody>,
+) -> Result<Response, AppError> {
+    let db = state.db.lock().unwrap();
+    db.reject_corpus_pair(body.id).map_err(err)?;
+    Ok(Json(serde_json::json!({"ok": true})).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct AddAltSpellingBody {
+    pub term: String,
+    pub alt_spelling: String,
+}
+
+pub async fn api_add_alt_spelling(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<AddAltSpellingBody>,
+) -> Result<Response, AppError> {
+    let db = state.db.lock().unwrap();
+    let updated = db.add_alt_spelling(&body.term, &body.alt_spelling).map_err(err)?;
+    Ok(Json(serde_json::json!({"ok": true, "retroactive_updates": updated})).into_response())
 }
 
 /// Preview training data: returns sample prompts from the training set so the user
