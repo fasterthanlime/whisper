@@ -197,6 +197,7 @@ impl Db {
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN is_mistake INTEGER NOT NULL DEFAULT 1;");
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN updated_at TEXT;");
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN rejected INTEGER NOT NULL DEFAULT 0;");
+        let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN review_status TEXT;");
 
         // Migration: case-insensitive dedup of vocab terms.
         // For each group of case-insensitive duplicates, keep the row that has
@@ -825,10 +826,11 @@ impl Db {
     }
 
     /// Query corpus pairs with optional filtering.
-    /// Mistakes sorted by hit_count DESC (most common first), others by newest first.
-    pub fn corpus_pairs_query(&self, filter_term: Option<&str>, mistakes_only: bool, limit: usize, offset: usize) -> Result<Vec<serde_json::Value>> {
+    /// `review_filter`: None = all non-rejected, Some("unreviewed") = unreviewed mistakes only,
+    /// Some("approved") = approved only, Some("rejected") = rejected only.
+    pub fn corpus_pairs_query(&self, filter_term: Option<&str>, mistakes_only: bool, review_filter: Option<&str>, limit: usize, offset: usize) -> Result<Vec<serde_json::Value>> {
         let mut sql = String::from(
-            "SELECT id, term, original, qwen, parakeet, sentence, spoken, orig_alignment, qwen_alignment, parakeet_alignment, cons_time, trim_info, hit_count, is_mistake, audio_ogg IS NOT NULL FROM corpus_pairs WHERE rejected = 0"
+            "SELECT id, term, original, qwen, parakeet, sentence, spoken, orig_alignment, qwen_alignment, parakeet_alignment, cons_time, trim_info, hit_count, is_mistake, audio_ogg IS NOT NULL, review_status FROM corpus_pairs WHERE 1=1"
         );
         let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let mut param_idx = 1;
@@ -842,6 +844,14 @@ impl Db {
         }
         if mistakes_only {
             sql.push_str(" AND is_mistake = 1");
+        }
+        match review_filter {
+            Some("unreviewed") => sql.push_str(" AND review_status IS NULL AND is_mistake = 1"),
+            Some("approved") => sql.push_str(" AND review_status = 'approved'"),
+            Some("rejected") => sql.push_str(" AND review_status = 'rejected'"),
+            _ => sql.push_str(" AND (review_status IS NULL OR review_status != 'rejected')"),
+        }
+        if mistakes_only || review_filter == Some("unreviewed") {
             sql.push_str(" ORDER BY hit_count DESC");
         } else {
             sql.push_str(" ORDER BY COALESCE(updated_at, created_at) DESC");
@@ -875,6 +885,7 @@ impl Db {
                 "hit_count": row.get::<_, i64>(12)?,
                 "is_mistake": row.get::<_, i64>(13)? != 0,
                 "has_audio": row.get::<_, i64>(14)? != 0,
+                "review_status": row.get::<_, Option<String>>(15)?,
             }))
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -883,16 +894,17 @@ impl Db {
     /// Summary stats for corpus: total pairs, mistakes, correct, per-term error rates.
     /// Excludes rejected pairs.
     pub fn corpus_stats(&self) -> Result<serde_json::Value> {
-        let total: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs WHERE rejected = 0", [], |r| r.get(0))?;
-        let mistakes: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 1 AND rejected = 0", [], |r| r.get(0))?;
-        let correct: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 0 AND rejected = 0", [], |r| r.get(0))?;
-        let total_hits: i64 = self.conn.query_row("SELECT COALESCE(SUM(hit_count), 0) FROM corpus_pairs WHERE rejected = 0", [], |r| r.get(0))?;
+        let total: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs WHERE review_status IS NULL OR review_status != 'rejected'", [], |r| r.get(0))?;
+        let mistakes: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 1 AND (review_status IS NULL OR review_status != 'rejected')", [], |r| r.get(0))?;
+        let correct: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 0 AND (review_status IS NULL OR review_status != 'rejected')", [], |r| r.get(0))?;
+        let total_hits: i64 = self.conn.query_row("SELECT COALESCE(SUM(hit_count), 0) FROM corpus_pairs WHERE review_status IS NULL OR review_status != 'rejected'", [], |r| r.get(0))?;
+        let unreviewed: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 1 AND review_status IS NULL", [], |r| r.get(0))?;
 
         // Per-term stats: mistake_count, correct_count, total_hits
         let mut stmt = self.conn.prepare(
             "SELECT term, SUM(CASE WHEN is_mistake = 1 THEN 1 ELSE 0 END), \
              SUM(CASE WHEN is_mistake = 0 THEN 1 ELSE 0 END), \
-             SUM(hit_count) FROM corpus_pairs WHERE rejected = 0 GROUP BY term ORDER BY term COLLATE NOCASE"
+             SUM(hit_count) FROM corpus_pairs WHERE review_status IS NULL OR review_status != 'rejected' GROUP BY term ORDER BY term COLLATE NOCASE"
         )?;
         let term_stats: Vec<serde_json::Value> = stmt.query_map([], |row| {
             Ok(serde_json::json!({
@@ -907,6 +919,7 @@ impl Db {
             "unique_pairs": total,
             "unique_mistakes": mistakes,
             "unique_correct": correct,
+            "unreviewed_mistakes": unreviewed,
             "total_hits": total_hits,
             "terms": term_stats,
         }))
@@ -926,10 +939,19 @@ impl Db {
         Ok(n)
     }
 
-    /// Mark a corpus pair as rejected (hidden from mistakes, not deleted).
+    /// Mark a corpus pair as rejected (hidden from default mistakes view).
     pub fn reject_corpus_pair(&self, id: i64) -> Result<()> {
         self.conn.execute(
-            "UPDATE corpus_pairs SET rejected = 1 WHERE id = ?1",
+            "UPDATE corpus_pairs SET rejected = 1, review_status = 'rejected' WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    /// Mark a corpus pair as approved (confirmed real mistake, good training data).
+    pub fn approve_corpus_pair(&self, id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE corpus_pairs SET review_status = 'approved' WHERE id = ?1",
             params![id],
         )?;
         Ok(())

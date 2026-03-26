@@ -2059,11 +2059,12 @@ pub async fn api_view_corpus(
 ) -> Result<Response, AppError> {
     let filter_term = params.get("term").map(|s| s.as_str()).filter(|s| !s.is_empty());
     let mistakes_only = params.get("mistakes").map(|s| s == "1").unwrap_or(false);
+    let review_filter = params.get("review").map(|s| s.as_str());
     let limit: usize = params.get("limit").and_then(|s| s.parse().ok()).unwrap_or(50);
     let offset: usize = params.get("offset").and_then(|s| s.parse().ok()).unwrap_or(0);
 
     let db = state.db.lock().unwrap();
-    let pairs = db.corpus_pairs_query(filter_term, mistakes_only, limit, offset).map_err(err)?;
+    let pairs = db.corpus_pairs_query(filter_term, mistakes_only, review_filter, limit, offset).map_err(err)?;
     let stats = db.corpus_stats().map_err(err)?;
     Ok(Json(serde_json::json!({"pairs": pairs, "stats": stats})).into_response())
 }
@@ -2117,6 +2118,20 @@ pub async fn api_reject_corpus_pair(
 ) -> Result<Response, AppError> {
     let db = state.db.lock().unwrap();
     db.reject_corpus_pair(body.id).map_err(err)?;
+    Ok(Json(serde_json::json!({"ok": true})).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct ApproveCorpusPairBody {
+    pub id: i64,
+}
+
+pub async fn api_approve_corpus_pair(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ApproveCorpusPairBody>,
+) -> Result<Response, AppError> {
+    let db = state.db.lock().unwrap();
+    db.approve_corpus_pair(body.id).map_err(err)?;
     Ok(Json(serde_json::json!({"ok": true})).into_response())
 }
 

@@ -3068,6 +3068,7 @@
             const [corpusData, setCorpusData] = useState(null);
             const [corpusFilter, setCorpusFilter] = useState('');
             const [expandedTerm, setExpandedTerm] = useState(null);
+            const [reviewTab, setReviewTab] = useState('unreviewed');
             const [showNoisy, setShowNoisy] = useState(false);
             const dialogRef = useRef(null);
             const [backend, setBackend] = useState('pocket-hq');
@@ -3137,7 +3138,8 @@
                             {(status.corpus_exists || liveStats?.new_mistakes > 0) && <>
                                 <a href="#" style={{color:'var(--success)',fontSize:13,fontWeight:600}} onClick={async e => {
                                     e.preventDefault();
-                                    const d = await api('/api/pipeline/corpus?mistakes=1&limit=100');
+                                    setReviewTab('unreviewed');
+                                    const d = await api('/api/pipeline/corpus?mistakes=1&review=unreviewed&limit=200');
                                     setCorpusData(d.pairs); setCorpusFilter(''); setExpandedTerm(null);
                                     dialogRef.current?.showModal();
                                 }}>{liveStats?.new_mistakes ?? status.corpus_lines} mistakes</a>
@@ -3190,7 +3192,8 @@
                             });
                             const progress = lines.filter(l => l.match(/^\[/)).slice(-1)[0] || '';
                             const openMistake = async (m) => {
-                                const d = await api(`/api/pipeline/corpus?mistakes=1&limit=100`);
+                                setReviewTab('unreviewed');
+                                const d = await api(`/api/pipeline/corpus?mistakes=1&review=unreviewed&limit=200`);
                                 setCorpusData(d.pairs); setCorpusFilter(''); setExpandedTerm(m.id);
                                 dialogRef.current?.showModal();
                             };
@@ -3286,11 +3289,29 @@
                         background:'var(--card-bg)', color:'var(--text)', border:'1px solid var(--border)',
                         borderRadius:12, padding:0, width:'min(90vw, 900px)', maxHeight:'80vh',
                     }} onClick={e => { if (e.target === dialogRef.current) dialogRef.current.close(); }}>
-                        <div style={{padding:'16px 20px', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', gap:12}}>
-                            <h3 style={{margin:0, flex:1}}>Corpus Pairs {corpusData && <span style={{fontWeight:300,fontSize:14,color:'var(--text-muted)'}}>({corpusData.length})</span>}</h3>
-                            <input type="text" placeholder="Filter by term..." value={corpusFilter} onChange={e => setCorpusFilter(e.target.value)}
-                                style={{padding:'4px 10px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontFamily:'Jost,sans-serif',fontSize:13,width:200}} />
-                            <button onClick={() => dialogRef.current.close()} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:18}}>&times;</button>
+                        <div style={{padding:'16px 20px', borderBottom:'1px solid var(--border)'}}>
+                            <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:10}}>
+                                <h3 style={{margin:0, flex:1}}>Corpus Pairs {corpusData && <span style={{fontWeight:300,fontSize:14,color:'var(--text-muted)'}}>({corpusData.length})</span>}</h3>
+                                <input type="text" placeholder="Filter by term..." value={corpusFilter} onChange={e => setCorpusFilter(e.target.value)}
+                                    style={{padding:'4px 10px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontFamily:'Jost,sans-serif',fontSize:13,width:200}} />
+                                <button onClick={() => dialogRef.current.close()} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:18}}>&times;</button>
+                            </div>
+                            <div style={{display:'flex',gap:4}}>
+                                {['unreviewed','approved','rejected'].map(tab => {
+                                    const active = reviewTab === tab;
+                                    return (<button key={tab} onClick={async () => {
+                                        setReviewTab(tab);
+                                        const q = tab === 'unreviewed' ? 'mistakes=1&review=unreviewed' : `review=${tab}`;
+                                        const d = await api(`/api/pipeline/corpus?${q}&limit=200`);
+                                        setCorpusData(d.pairs); setExpandedTerm(null);
+                                    }} style={{
+                                        padding:'4px 12px', fontSize:12, borderRadius:4, cursor:'pointer', border:'1px solid var(--border)',
+                                        background: active ? 'var(--text)' : 'transparent',
+                                        color: active ? 'var(--bg)' : 'var(--text-muted)',
+                                        fontWeight: active ? 700 : 400,
+                                    }}>{tab}</button>);
+                                })}
+                            </div>
                         </div>
                         <div style={{overflow:'auto', maxHeight:'calc(80vh - 60px)', padding:'0 20px 16px'}}>
                             {corpusData && (() => {
@@ -3308,8 +3329,9 @@
                                             const expanded = expandedTerm === p.id;
                                             const tt = p.cons_time;
                                             const canMarkAlt = p.is_mistake && p.original.toLowerCase() === p.term.toLowerCase();
-                                            const reloadMistakes = async () => {
-                                                const d = await api('/api/pipeline/corpus?mistakes=1&limit=100');
+                                            const reloadTab = async () => {
+                                                const q = reviewTab === 'unreviewed' ? 'mistakes=1&review=unreviewed' : `review=${reviewTab}`;
+                                                const d = await api(`/api/pipeline/corpus?${q}&limit=200`);
                                                 setCorpusData(d.pairs);
                                             };
                                             return (
@@ -3328,13 +3350,18 @@
                                                         {canMarkAlt && <button title="Mark as acceptable alternate spelling" onClick={async e => {
                                                             e.stopPropagation();
                                                             await api('/api/pipeline/alt-spelling', {method:'POST', body: JSON.stringify({term: p.term, alt_spelling: p.qwen})});
-                                                            reloadMistakes();
+                                                            reloadTab();
                                                         }} style={{background:'none',border:'1px solid var(--border)',borderRadius:4,color:'var(--success)',cursor:'pointer',padding:'2px 8px',fontSize:11,fontWeight:600,flexShrink:0}}>alt</button>}
-                                                        <button title="Reject this pair" onClick={async e => {
+                                                        {p.review_status !== 'approved' && <button title="Approve — confirmed real mistake" onClick={async e => {
+                                                            e.stopPropagation();
+                                                            await api('/api/pipeline/approve-corpus-pair', {method:'POST', body: JSON.stringify({id: p.id})});
+                                                            reloadTab();
+                                                        }} style={{background:'none',border:'1px solid rgba(100,200,100,0.4)',borderRadius:4,color:'rgba(100,200,100,0.7)',cursor:'pointer',padding:'2px 8px',fontSize:11,flexShrink:0}}>{'\u2713'}</button>}
+                                                        {p.review_status !== 'rejected' && <button title="Reject this pair" onClick={async e => {
                                                             e.stopPropagation();
                                                             await api('/api/pipeline/reject-corpus-pair', {method:'POST', body: JSON.stringify({id: p.id})});
-                                                            reloadMistakes();
-                                                        }} style={{background:'none',border:'1px solid rgba(255,100,100,0.4)',borderRadius:4,color:'rgba(255,100,100,0.7)',cursor:'pointer',padding:'2px 8px',fontSize:11,flexShrink:0}}>{'\u2715'} reject</button>
+                                                            reloadTab();
+                                                        }} style={{background:'none',border:'1px solid rgba(255,100,100,0.4)',borderRadius:4,color:'rgba(255,100,100,0.7)',cursor:'pointer',padding:'2px 8px',fontSize:11,flexShrink:0}}>{'\u2715'}</button>}
                                                     </div>
                                                     {expanded && (
                                                         <div style={{padding:'4px 4px 12px 26px',fontSize:12,lineHeight:1.6}}>

@@ -1209,6 +1209,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pipeline/reset-corpus", post(jobs::api_reset_corpus))
         .route("/api/pipeline/delete-corpus-term", post(jobs::api_delete_corpus_term))
         .route("/api/pipeline/reject-corpus-pair", post(jobs::api_reject_corpus_pair))
+        .route("/api/pipeline/approve-corpus-pair", post(jobs::api_approve_corpus_pair))
         .route("/api/pipeline/alt-spelling", post(jobs::api_add_alt_spelling))
         .route("/api/pipeline/preview-training", get(jobs::api_preview_training))
         .route("/api/pipeline/reset-training", post(jobs::api_reset_training))
