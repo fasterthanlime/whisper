@@ -124,11 +124,33 @@ async fn run_corpus_pass(
     let orig_alignment = state.aligner.align(full_16k, &written.0).unwrap_or_default();
     let spoken_alignment = state.aligner.align(full_16k, &spoken.0).unwrap_or_default();
 
-    // Find the WRITTEN term in the original alignment
+    // Find the WRITTEN term in the original alignment, then expand into neighboring gaps.
+    // The forced aligner's word boundaries are imprecise — the actual audio for a term
+    // often bleeds into the silence gaps between alignment boxes. By expanding into those
+    // gaps we capture the full extent of what was spoken, which helps match the Qwen lane
+    // where the same audio might be split differently (e.g. "lldb" → "L" + "LDB").
     let term_lower = term.0.to_lowercase();
     let term_found_range = find_term_time_range(&orig_alignment, &term_lower);
-    let (term_start, term_end) = term_found_range
-        .unwrap_or((0.0, full_16k.len() as f64 / 16000.0));
+    let (term_start, term_end) = match term_found_range {
+        Some((start, end)) => {
+            const MIN_GAP: f64 = 0.05; // only expand into gaps > 50ms
+            // Expand left: if there's a real gap before the term, claim it
+            let prev_end = orig_alignment.iter()
+                .filter(|a| a.end_time < start - 0.001)
+                .last()
+                .map(|a| a.end_time)
+                .unwrap_or(start);
+            let expanded_start = if start - prev_end > MIN_GAP { prev_end } else { start };
+            // Expand right: if there's a real gap after the term, claim it
+            let next_start = orig_alignment.iter()
+                .find(|a| a.start_time > end + 0.001)
+                .map(|a| a.start_time)
+                .unwrap_or(end);
+            let expanded_end = if next_start - end > MIN_GAP { next_start } else { end };
+            (expanded_start, expanded_end)
+        }
+        None => (0.0, full_16k.len() as f64 / 16000.0),
+    };
 
     let qwen_alignment = state.aligner.align(full_16k, &qwen_full).unwrap_or_default();
     let parakeet_alignment = if dual_asr {
@@ -2146,6 +2168,229 @@ pub async fn api_pipeline_status(
         "last_train": last_train,
     }))
     .into_response())
+}
+
+// ==================== Algorithm Test Suite ====================
+
+fn ai(word: &str, start: f64, end: f64) -> qwen3_asr::ForcedAlignItem {
+    qwen3_asr::ForcedAlignItem { word: word.to_string(), start_time: start, end_time: end }
+}
+
+fn fmt_align_json(items: &[qwen3_asr::ForcedAlignItem]) -> serde_json::Value {
+    serde_json::Value::Array(items.iter().map(|a| serde_json::json!({"w": a.word, "s": a.start_time, "e": a.end_time})).collect())
+}
+
+pub async fn api_algorithm_tests() -> Result<Response, AppError> {
+    let mut results = Vec::new();
+
+    struct TestCase {
+        name: &'static str,
+        desc: &'static str,
+        term: &'static str,
+        orig: Vec<qwen3_asr::ForcedAlignItem>,
+        qwen: Vec<qwen3_asr::ForcedAlignItem>,
+        para: Vec<qwen3_asr::ForcedAlignItem>,
+        protected: Vec<&'static str>,
+        expect_orig: &'static str,
+        expect_qwen: &'static str,
+        expect_clean: bool,
+    }
+
+    let cases = vec![
+        TestCase {
+            name: "Basic single word",
+            desc: "Simple term in the middle, same words on both sides",
+            term: "tokio",
+            orig: vec![ai("the",0.0,0.2), ai("tokio",0.3,0.7), ai("crate",0.8,1.1)],
+            qwen: vec![ai("the",0.0,0.2), ai("Tokyo",0.3,0.7), ai("crate",0.8,1.1)],
+            para: vec![],
+            protected: vec!["tokio"],
+            expect_orig: "tokio",
+            expect_qwen: "Tokyo",
+            expect_clean: true,
+        },
+        TestCase {
+            name: "Edge trimming — matching context",
+            desc: "\"the\" and \"crate\" match on both sides and should be trimmed",
+            term: "reqwest",
+            orig: vec![ai("use",0.0,0.2), ai("the",0.3,0.5), ai("reqwest",0.6,1.0), ai("crate",1.1,1.4), ai("for",1.5,1.7)],
+            qwen: vec![ai("use",0.0,0.2), ai("the",0.3,0.5), ai("request",0.6,1.0), ai("crate",1.1,1.4), ai("for",1.5,1.7)],
+            para: vec![],
+            protected: vec!["reqwest"],
+            expect_orig: "reqwest",
+            expect_qwen: "request",
+            expect_clean: true,
+        },
+        TestCase {
+            name: "Protected term not trimmed",
+            desc: "\"async\" is protected — should not be trimmed even though it matches",
+            term: "async",
+            orig: vec![ai("use",0.0,0.2), ai("async",0.3,0.7), ai("fn",0.8,1.0)],
+            qwen: vec![ai("use",0.0,0.2), ai("a",0.3,0.5), ai("sync",0.5,0.7), ai("fn",0.8,1.0)],
+            para: vec![],
+            protected: vec!["async"],
+            expect_orig: "async",
+            expect_qwen: "a sync",
+            expect_clean: true,
+        },
+        TestCase {
+            name: "Gap expansion — term with gaps",
+            desc: "Gaps around the term in Original; Qwen splits it into two words in the gap space",
+            term: "lldb",
+            orig: vec![ai("but",0.0,0.3), ai("lldb",0.5,0.8), ai("is",1.1,1.3)],
+            qwen: vec![ai("but",0.0,0.3), ai("L",0.5,0.7), ai("LDB",0.8,1.0), ai("is",1.1,1.3)],
+            para: vec![],
+            protected: vec!["lldb"],
+            expect_orig: "lldb",
+            expect_qwen: "L LDB",
+            expect_clean: true,
+        },
+        TestCase {
+            name: "No gap — no expansion",
+            desc: "No gap between term and next word; should NOT swallow the adjacent word",
+            term: "bumpalo",
+            orig: vec![ai("use",0.0,0.3), ai("bumpalo",0.4,0.8), ai("to",0.81,1.0), ai("format",1.1,1.4)],
+            qwen: vec![ai("use",0.0,0.3), ai("Bumpalo",0.4,0.8), ai("to",0.81,1.0), ai("format",1.1,1.4)],
+            para: vec![],
+            protected: vec!["bumpalo"],
+            expect_orig: "bumpalo",
+            expect_qwen: "Bumpalo",
+            expect_clean: true,
+        },
+        TestCase {
+            name: "Empty Qwen lane → discard",
+            desc: "Qwen has nothing in the consensus range — extraction should be noisy",
+            term: "QEMU",
+            orig: vec![ai("the",0.0,0.2), ai("QEMU",0.3,0.7), ai("vm",0.8,1.0)],
+            qwen: vec![ai("the",0.0,0.2), ai("vm",0.8,1.0)],
+            para: vec![],
+            protected: vec!["qemu"],
+            expect_orig: "QEMU",
+            expect_qwen: "",
+            expect_clean: false,
+        },
+        TestCase {
+            name: "Short word in range → discard",
+            desc: "A word < 80ms in the consensus range means boundary noise — discard",
+            term: "jiff",
+            orig: vec![ai("the",0.40,0.47), ai("jiff",0.48,0.80), ai("crate",0.9,1.2)],
+            qwen: vec![ai("the",0.40,0.47), ai("JIF",0.48,0.80), ai("crate",0.9,1.2)],
+            para: vec![],
+            protected: vec!["jiff"],
+            expect_orig: "",
+            expect_qwen: "",
+            expect_clean: false,
+        },
+        TestCase {
+            name: "Punctuation stripping",
+            desc: "Trailing punctuation on extracted words should be stripped",
+            term: "rustc",
+            orig: vec![ai("is",0.0,0.2), ai("rustc,",0.3,0.7), ai("which",0.8,1.1)],
+            qwen: vec![ai("is",0.0,0.2), ai("Rust",0.3,0.5), ai("C,",0.5,0.7), ai("which",0.8,1.1)],
+            para: vec![],
+            protected: vec!["rustc"],
+            expect_orig: "rustc",
+            expect_qwen: "Rust C",
+            expect_clean: true,
+        },
+        TestCase {
+            name: "Two-lane trimming (no Parakeet)",
+            desc: "Single-lane mode: trimming works with just orig + qwen",
+            term: "serde",
+            orig: vec![ai("the",0.0,0.2), ai("serde",0.3,0.7), ai("lib",0.8,1.0), ai("is",1.1,1.3)],
+            qwen: vec![ai("the",0.0,0.2), ai("sturdy",0.3,0.7), ai("lib",0.8,1.0), ai("is",1.1,1.3)],
+            para: vec![],
+            protected: vec!["serde"],
+            expect_orig: "serde",
+            expect_qwen: "sturdy",
+            expect_clean: true,
+        },
+        TestCase {
+            name: "Three-lane requires all match to trim",
+            desc: "Right edge: orig+qwen match but parakeet differs → no trim",
+            term: "JIT",
+            orig: vec![ai("the",0.0,0.2), ai("JIT",0.3,0.6), ai("for",0.7,0.9)],
+            qwen: vec![ai("the",0.0,0.2), ai("jiff",0.3,0.6), ai("for",0.7,0.9)],
+            para: vec![ai("the",0.0,0.2), ai("jit",0.3,0.6), ai("four",0.7,0.9)],
+            protected: vec!["jit"],
+            expect_orig: "JIT for",
+            expect_qwen: "jiff for",
+            expect_clean: true,
+        },
+        TestCase {
+            name: "Identity match (not a mistake)",
+            desc: "Qwen heard it correctly — stored as correct, not a mistake",
+            term: "tokio",
+            orig: vec![ai("use",0.0,0.2), ai("tokio",0.3,0.7), ai("runtime",0.8,1.2)],
+            qwen: vec![ai("use",0.0,0.2), ai("tokio",0.3,0.7), ai("runtime",0.8,1.2)],
+            para: vec![],
+            protected: vec!["tokio"],
+            expect_orig: "tokio",
+            expect_qwen: "tokio",
+            expect_clean: true,
+        },
+    ];
+
+    for tc in &cases {
+        let protected: std::collections::HashSet<String> = tc.protected.iter().map(|s| s.to_lowercase()).collect();
+
+        // Simulate gap expansion (same logic as run_corpus_pass)
+        let term_lower = tc.term.to_lowercase();
+        let term_range = find_term_time_range(&tc.orig, &term_lower);
+        let (term_start, term_end) = match term_range {
+            Some((start, end)) => {
+                const MIN_GAP: f64 = 0.05;
+                let prev_end = tc.orig.iter().filter(|a| a.end_time < start - 0.001).last().map(|a| a.end_time).unwrap_or(start);
+                let expanded_start = if start - prev_end > MIN_GAP { prev_end } else { start };
+                let next_start = tc.orig.iter().find(|a| a.start_time > end + 0.001).map(|a| a.start_time).unwrap_or(end);
+                let expanded_end = if next_start - end > MIN_GAP { next_start } else { end };
+                (expanded_start, expanded_end)
+            }
+            None => (0.0, 10.0),
+        };
+
+        let extraction = extract_with_consensus(&tc.orig, &tc.qwen, &tc.para, term_start, term_end, &protected);
+        let is_mistake = extraction.original.to_lowercase() != extraction.qwen.to_lowercase();
+
+        let pass = extraction.original == tc.expect_orig
+            && extraction.qwen == tc.expect_qwen
+            && extraction.clean == tc.expect_clean;
+
+        results.push(serde_json::json!({
+            "name": tc.name,
+            "desc": tc.desc,
+            "term": tc.term,
+            "pass": pass,
+            "term_range": [term_start, term_end],
+            "extraction": {
+                "original": extraction.original,
+                "qwen": extraction.qwen,
+                "parakeet": extraction.parakeet,
+                "clean": extraction.clean,
+                "cons_range": [extraction.cons_range.0, extraction.cons_range.1],
+            },
+            "expected": {
+                "original": tc.expect_orig,
+                "qwen": tc.expect_qwen,
+                "clean": tc.expect_clean,
+            },
+            "is_mistake": is_mistake,
+            "trim_info": extraction.trim_info,
+            "alignments": {
+                "original": fmt_align_json(&tc.orig),
+                "qwen": fmt_align_json(&tc.qwen),
+                "parakeet": fmt_align_json(&tc.para),
+            },
+        }));
+    }
+
+    let all_pass = results.iter().all(|r| r["pass"].as_bool().unwrap_or(false));
+    Ok(Json(serde_json::json!({
+        "all_pass": all_pass,
+        "total": results.len(),
+        "passed": results.iter().filter(|r| r["pass"].as_bool().unwrap_or(false)).count(),
+        "tests": results,
+    })).into_response())
 }
 
 #[cfg(test)]

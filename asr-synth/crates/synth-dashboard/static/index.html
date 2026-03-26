@@ -1769,6 +1769,7 @@
                 ['#/corpus', 'Corpus'],
                 ['#/train', 'Train'],
                 ['#/eval', 'Eval'],
+                ['#/tests', 'Tests'],
                 ['#/jobs', 'Jobs'],
             ];
             return (
@@ -4267,6 +4268,110 @@
         }
 
         // ==================== APP ====================
+        // ==================== ALGORITHM TESTS PAGE ====================
+        function AlgorithmTestsPage() {
+            const [data, setData] = useState(null);
+            const [expanded, setExpanded] = useState(null);
+            useEffect(() => { api('/api/algorithm-tests').then(setData); }, []);
+
+            if (!data) return <div className="container"><p>Loading tests...</p></div>;
+
+            return (
+                <div className="container">
+                    <h2>Algorithm Tests
+                        <span style={{marginLeft:12,fontSize:16,fontWeight:400,color: data.all_pass ? 'var(--success)' : 'var(--error)'}}>
+                            {data.passed}/{data.total} passed
+                        </span>
+                    </h2>
+                    {data.tests.map((t, i) => {
+                        const isExpanded = expanded === i;
+                        const ex = t.extraction;
+                        const al = t.alignments;
+                        const allItems = [...(al.original||[]),...(al.qwen||[]),...(al.parakeet||[])];
+                        const maxTime = allItems.length ? Math.max(...allItems.map(a=>a.e)) : 1;
+                        const pct = v => (v/maxTime*100).toFixed(2)+'%';
+                        const ti = t.trim_info;
+                        const tl = ti?.trimmed_left || 0;
+                        const tr = ti?.trimmed_right || 0;
+                        const consRange = ex.cons_range;
+                        const classify = (items) => {
+                            if (!consRange) return {kept: new Set(), trimmed: new Set()};
+                            const inRange = [];
+                            for (let j=0;j<items.length;j++) if (items[j].e>consRange[0]&&items[j].s<consRange[1]) inRange.push(j);
+                            const kept = new Set(), trimmed = new Set();
+                            for (let j=0;j<inRange.length;j++) {
+                                if (j < tl || j >= inRange.length - tr) trimmed.add(inRange[j]);
+                                else kept.add(inRange[j]);
+                            }
+                            return {kept, trimmed};
+                        };
+                        const renderTL = (label, items, color) => {
+                            if (!items || !items.length) return null;
+                            const {kept, trimmed} = classify(items);
+                            return (
+                            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3}}>
+                                <span style={{fontSize:9,color:'var(--text-muted)',width:55,textAlign:'right',flexShrink:0,fontWeight:600}}>{label}</span>
+                                <div style={{position:'relative',flex:1,height:22,background:'rgba(255,255,255,0.03)',borderRadius:3,overflow:'hidden'}}>
+                                    {items.map((a,j) => {
+                                        const isKept = kept.has(j);
+                                        const isTrimmed = trimmed.has(j);
+                                        return (<div key={j} title={`${a.w} (${a.s.toFixed(3)}s\u2013${a.e.toFixed(3)}s)${isTrimmed?' [trimmed]':''}`} style={{
+                                            position:'absolute',left:pct(a.s),width:pct(Math.max(a.e-a.s,0.02)),top:2,bottom:2,borderRadius:2,
+                                            background: isKept ? color : isTrimmed ? color.replace(/[\d.]+\)$/,'0.2)') : 'rgba(255,255,255,0.08)',
+                                            border:`1px solid ${isKept ? color : isTrimmed ? color.replace(/[\d.]+\)$/,'0.3)') : 'rgba(255,255,255,0.12)'}`,
+                                            display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden',
+                                        }}><span style={{fontSize:8,color: isKept?'#fff':isTrimmed?'rgba(255,255,255,0.4)':'var(--text-muted)',whiteSpace:'nowrap',padding:'0 2px',
+                                            textDecoration:isTrimmed?'line-through':'none'}}>{a.w}</span></div>);
+                                    })}
+                                    {/* Term range indicator */}
+                                    {t.term_range && <div style={{position:'absolute',left:pct(t.term_range[0]),width:pct(t.term_range[1]-t.term_range[0]),top:0,bottom:0,border:'1px dashed rgba(255,255,255,0.3)',borderRadius:2,pointerEvents:'none'}} />}
+                                </div>
+                            </div>);
+                        };
+
+                        return (
+                            <div key={i} style={{marginBottom:2,borderBottom:'1px solid var(--border)'}}>
+                                <div onClick={() => setExpanded(isExpanded ? null : i)}
+                                    style={{display:'flex',alignItems:'center',gap:10,padding:'8px 4px',cursor:'pointer',userSelect:'none'}}>
+                                    <span style={{fontSize:16,fontWeight:700,color: t.pass ? 'var(--success)' : 'var(--error)'}}>{t.pass ? '\u2713' : '\u2717'}</span>
+                                    <span style={{fontWeight:600,fontSize:13}}>{t.name}</span>
+                                    <span style={{color:'var(--text-muted)',fontSize:11,flex:1}}>{t.desc}</span>
+                                    <span style={{fontFamily:'monospace',fontSize:12}}>
+                                        <span style={{color:'rgba(88,166,255,0.8)'}}>{ex.original || '\u2014'}</span>
+                                        {' \u2192 '}
+                                        <span style={{color:'rgba(210,153,34,0.9)'}}>{ex.qwen || '\u2014'}</span>
+                                    </span>
+                                    <span style={{fontSize:11,color: ex.clean ? 'var(--success)' : 'var(--warning)'}}>{ex.clean ? 'clean' : 'noisy'}</span>
+                                </div>
+                                {isExpanded && (
+                                    <div style={{padding:'4px 4px 12px 30px',fontSize:12,lineHeight:1.6}}>
+                                        <div style={{marginBottom:4,color:'var(--text-muted)'}}>
+                                            <b>Term:</b> {t.term} | <b>Range:</b> {t.term_range[0].toFixed(3)}s \u2013 {t.term_range[1].toFixed(3)}s
+                                            {' | '}<b>Cons:</b> {consRange[0].toFixed(3)}s \u2013 {consRange[1].toFixed(3)}s
+                                        </div>
+                                        <div style={{marginTop:6}}>
+                                            {renderTL('Original', al.original, 'rgba(88,166,255,0.6)')}
+                                            {renderTL('Qwen', al.qwen, 'rgba(210,153,34,0.7)')}
+                                            {renderTL('Parakeet', al.parakeet, 'rgba(163,113,247,0.7)')}
+                                            <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:'var(--text-muted)',marginTop:1,paddingLeft:61}}>
+                                                <span>0s</span><span>{maxTime.toFixed(1)}s</span>
+                                            </div>
+                                        </div>
+                                        {!t.pass && (
+                                            <div style={{marginTop:8,padding:6,background:'rgba(255,50,50,0.1)',borderRadius:4,fontSize:11}}>
+                                                <b>Expected:</b> orig="{t.expected.original}" qwen="{t.expected.qwen}" clean={t.expected.clean ? 'true' : 'false'}
+                                                <br/><b>Got:</b> orig="{ex.original}" qwen="{ex.qwen}" clean={ex.clean ? 'true' : 'false'}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            );
+        }
+
         function App() {
             const hash = useHash();
             let page;
@@ -4278,6 +4383,7 @@
             else if (hash.startsWith('#/corpus')) page = <CorpusPage />;
             else if (hash.startsWith('#/train')) page = <TrainPage />;
             else if (hash.startsWith('#/eval')) page = <EvalPage />;
+            else if (hash.startsWith('#/tests')) page = <AlgorithmTestsPage />;
             else if (hash.startsWith('#/jobs')) page = <JobsPage />;
             else page = <VocabPage />;
             return (<><Nav />{page}</>);
