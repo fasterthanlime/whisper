@@ -1745,6 +1745,7 @@
                             })}
                         </div>
                     </div>
+
                 </div>
             );
         }
@@ -2604,6 +2605,12 @@
             const [sentSuggestIdx, setSentSuggestIdx] = useState(0);
             const sentSuggestRef = useRef(null);
             const inputRef = useRef(null);
+            const [recordingSentence, setRecordingSentence] = useState(null);
+            const [recordings, setRecordings] = useState([]);
+            const [recording, setRecording] = useState(false);
+            const [recordingBusy, setRecordingBusy] = useState(false);
+            const [recordingError, setRecordingError] = useState(null);
+            const recordingRecorderRef = useRef(null);
 
             const loadNext = () => {
                 api('/api/author/next').then(r => {
@@ -2615,6 +2622,88 @@
             };
 
             const loadStats = () => api('/api/author/stats').then(setStats).catch(() => {});
+
+            const loadRecordings = async (row) => {
+                const res = await api(`/api/author/sentences/${row.id}/recordings`);
+                setRecordings(res.recordings || []);
+            };
+
+            const openRecordings = async (row) => {
+                setRecordingSentence(row);
+                setRecordingError(null);
+                setRecordings([]);
+                try {
+                    await loadRecordings(row);
+                } catch (e) {
+                    setRecordingError(e.message);
+                }
+            };
+
+            const closeRecordings = () => {
+                stopSentenceRecording();
+                setRecordingSentence(null);
+                setRecordings([]);
+                setRecordingError(null);
+            };
+
+            const stopSentenceRecording = () => {
+                if (recordingRecorderRef.current && recordingRecorderRef.current.state !== 'inactive') {
+                    recordingRecorderRef.current.stop();
+                }
+                setRecording(false);
+            };
+
+            const startSentenceRecording = async () => {
+                if (!recordingSentence) return;
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+                    const mediaRecorder = new MediaRecorder(stream, {mimeType: 'audio/webm'});
+                    const chunks = [];
+                    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+                    mediaRecorder.onstop = async () => {
+                        stream.getTracks().forEach(t => t.stop());
+                        try {
+                            setRecordingBusy(true);
+                            const blob = new Blob(chunks, {type: 'audio/webm'});
+                            const arrayBuf = await blob.arrayBuffer();
+                            const decoded = await audioCtx.decodeAudioData(arrayBuf);
+                            const wavBytes = audioBufferToWav(decoded);
+                            const res = await fetch(`/api/author/sentences/${recordingSentence.id}/recordings`, {
+                                method: 'POST',
+                                headers: {'Content-Type': 'audio/wav'},
+                                body: wavBytes,
+                            });
+                            if (!res.ok) {
+                                const text = await res.text();
+                                throw new Error(text || 'failed to save recording');
+                            }
+                            const data = await res.json();
+                            setRecordings(data.recordings || []);
+                            api('/api/author/sentences').then(setSentences).catch(() => {});
+                            loadStats();
+                            setRecordingError(null);
+                        } catch (e) {
+                            setRecordingError(e.message);
+                        } finally {
+                            setRecording(false);
+                            setRecordingBusy(false);
+                        }
+                    };
+                    recordingRecorderRef.current = mediaRecorder;
+                    mediaRecorder.start();
+                    setRecording(true);
+                } catch (e) {
+                    setRecordingError('Microphone access denied');
+                }
+            };
+
+            const deleteRecording = async (recordingRow) => {
+                if (!confirm(`Delete take #${recordingRow.take_no}?`)) return;
+                await api(`/api/author/recordings/${recordingRow.id}`, {method: 'POST'});
+                if (recordingSentence) await loadRecordings(recordingSentence);
+                api('/api/author/sentences').then(setSentences).catch(() => {});
+                loadStats();
+            };
 
             useEffect(() => { loadNext(); loadStats(); }, []);
 
@@ -2648,6 +2737,7 @@
                             <div className="stat-card"><div className="value" style={{color:'var(--success)'}}>{stats.total_sentences}</div><div className="label">Sentences</div></div>
                             <div className="stat-card"><div className="value">{stats.terms?.length || 0}</div><div className="label">Terms Covered</div></div>
                             <div className="stat-card"><div className="value">{stats.vocab_count || 0}</div><div className="label">Vocab Total</div></div>
+                            <div className="stat-card"><div className="value" style={{color:'var(--accent)'}}>{stats.recordings_total || 0}</div><div className="label">Recordings</div></div>
                         </div>
                     )}
 
@@ -2909,6 +2999,7 @@
                                             ) : (
                                                 <span style={{flex:1,cursor:'pointer'}} onClick={() => { setEditingId(s.id); setEditValue(s.sentence); }}>{s.sentence}</span>
                                             )}
+                                            <button className="btn btn-sm" onClick={() => openRecordings(s)} style={{fontSize:11,padding:'2px 8px'}}>Record{(s.recording_count || 0) > 0 ? ` (${s.recording_count})` : ''}</button>
                                             <button onClick={async () => {
                                                 await api(`/api/author/sentences/${s.id}/delete`, {method:'POST'});
                                                 api('/api/author/sentences').then(setSentences); loadStats();
@@ -2920,6 +3011,54 @@
                             );
                         })()}
                     </div>
+
+                    {recordingSentence && (
+                        <div className="vocab-overlay" onClick={e => { if (e.target === e.currentTarget) closeRecordings(); }}>
+                            <div className="vocab-editor" style={{maxWidth: 860, width: '92vw'}}>
+                                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+                                    <div className="term" style={{flex:1,textAlign:'left'}}>{recordingSentence.term}</div>
+                                    <button onClick={closeRecordings} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:18}}>&times;</button>
+                                </div>
+                                <div style={{color:'var(--text-muted)',fontSize:13,marginBottom:12,lineHeight:1.5}}>
+                                    Record multiple takes of the same sentence. These recordings are stored separately and eval will use them instead of synthetic TTS audio.
+                                </div>
+                                <div style={{fontSize:18,lineHeight:1.6,marginBottom:12,textAlign:'center'}}>{recordingSentence.sentence}</div>
+                                {recordingError && <div className="pipeline-error" style={{marginBottom:12}}>{recordingError}</div>}
+                                <div style={{display:'flex',gap:8,alignItems:'center',justifyContent:'center',marginBottom:12}}>
+                                    <button className={`record-btn ${recording ? 'active' : ''}`} onClick={recording ? stopSentenceRecording : startSentenceRecording} disabled={recordingBusy}
+                                        title={recording ? 'Stop recording' : 'Record another take'}>
+                                        {recordingBusy ? '…' : recording ? '\u25A0' : '\u25CF'}
+                                    </button>
+                                    <span style={{fontSize:12,color:'var(--text-muted)'}}>
+                                        {recording ? 'Recording... press the button again to stop' : recordingBusy ? 'Saving take...' : 'Press the button to record another take'}
+                                    </span>
+                                </div>
+                                <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:8}}>
+                                    <div style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1}}>Takes</div>
+                                    <div style={{fontSize:11,color:'var(--text-muted)'}}>{recordings.length} saved</div>
+                                </div>
+                                <div style={{maxHeight:320,overflow:'auto',border:'1px solid var(--border)',borderRadius:8,background:'var(--bg)'}}>
+                                    {recordings.length === 0 ? (
+                                        <div style={{padding:16,textAlign:'center',color:'var(--text-muted)'}}>No takes yet.</div>
+                                    ) : recordings.map(r => (
+                                        <div key={r.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 10px',borderBottom:'1px solid rgba(255,255,255,0.04)'}}>
+                                            <span style={{minWidth:70,fontFamily:'monospace',color:'var(--accent)',fontWeight:600}}>Take {r.take_no}</span>
+                                            <span style={{flex:1,color:'var(--text-muted)',fontSize:12}}>{r.created_at}</span>
+                                            <button className="btn btn-sm" onClick={async () => {
+                                                if (!r.audio_b64) return;
+                                                const buf = await decodeAudioB64(r.audio_b64);
+                                                playBuffer(buf);
+                                            }}>Play</button>
+                                            <button className="btn btn-sm" onClick={() => deleteRecording(r)} style={{color:'var(--danger)'}}>Delete</button>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="actions" style={{marginTop:12}}>
+                                    <button className="btn btn-sm" onClick={closeRecordings}>Close</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         }

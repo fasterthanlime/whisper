@@ -938,11 +938,141 @@ async fn main() -> anyhow::Result<()> {
         Ok(Json(serde_json::json!({"id": id})).into_response())
     }
 
-    async fn api_author_sentences(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
+async fn api_author_sentences(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
+    let db = state.db.lock().unwrap();
+    let sentences = db.list_authored_sentences().map_err(err)?;
+    Ok(Json(sentences).into_response())
+}
+
+async fn api_author_sentence_recordings(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let db = state.db.lock().unwrap();
+    let Some((term, sentence)) = db.get_authored_sentence(id).map_err(err)? else {
+        return Ok(Json(serde_json::json!({"error": "sentence not found"})).into_response());
+    };
+    let recordings = db.authored_sentence_recordings_for_sentence(&sentence).map_err(err)?;
+    use base64::Engine as _;
+    let recordings = recordings.into_iter().map(|r| {
+        let audio_b64 = std::fs::read(&r.wav_path)
+            .ok()
+            .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes));
+        serde_json::json!({
+            "id": r.id,
+            "term": r.term,
+            "sentence": r.sentence,
+            "take_no": r.take_no,
+            "created_at": r.created_at,
+            "audio_b64": audio_b64,
+        })
+    }).collect::<Vec<_>>();
+    Ok(Json(serde_json::json!({
+        "sentence": sentence,
+        "term": term,
+        "recordings": recordings,
+    })).into_response())
+}
+
+async fn api_author_sentence_recording_upload(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    body: axum::body::Bytes,
+) -> Result<Response, AppError> {
+    let (term, sentence) = {
         let db = state.db.lock().unwrap();
-        let sentences = db.list_authored_sentences().map_err(err)?;
-        Ok(Json(sentences).into_response())
-    }
+        db.get_authored_sentence(id).map_err(err)?
+            .ok_or_else(|| err("sentence not found"))?
+    };
+
+    let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, AppError> {
+        let cursor = std::io::Cursor::new(body.to_vec());
+        let mut reader = hound::WavReader::new(cursor).map_err(err)?;
+        let spec = reader.spec();
+
+        let samples_f32: Vec<f32> = match spec.sample_format {
+            hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
+            hound::SampleFormat::Int => {
+                let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
+                reader.samples::<i32>().filter_map(|s| s.ok()).map(|s| s as f32 / max).collect()
+            }
+        };
+
+        let mut mono: Vec<f32> = if spec.channels > 1 {
+            samples_f32.chunks(spec.channels as usize)
+                .map(|ch| ch.iter().sum::<f32>() / ch.len() as f32)
+                .collect()
+        } else {
+            samples_f32
+        };
+
+        let peak = mono.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        if peak > 0.001 {
+            let gain = 0.95 / peak;
+            for s in &mut mono { *s *= gain; }
+        }
+
+        let audio_dir = state.audio_dir.clone();
+        std::fs::create_dir_all(&audio_dir).ok();
+        let (recording_id, take_no) = {
+            let db = state.db.lock().unwrap();
+            let take_no = db.next_authored_sentence_recording_take_no(&sentence).map_err(err)?;
+            let wav_path = format!("{}/authored_{}_take_{}.wav", audio_dir, id, take_no);
+            let audio = tts::TtsAudio { samples: mono.clone(), sample_rate: spec.sample_rate };
+            let wav_bytes = audio.to_wav().map_err(err)?;
+            std::fs::write(&wav_path, &wav_bytes).map_err(err)?;
+            let recording_id = db.insert_authored_sentence_recording(&term, &sentence, take_no, &wav_path).map_err(err)?;
+            (recording_id, take_no)
+        };
+
+        let recordings = {
+            let db = state.db.lock().unwrap();
+            db.authored_sentence_recordings_for_sentence(&sentence).map_err(err)?
+        };
+        use base64::Engine as _;
+
+        Ok(serde_json::json!({
+            "id": recording_id,
+            "take_no": take_no,
+            "sentence": sentence,
+            "term": term,
+            "recordings": recordings.into_iter().map(|r| {
+                let audio_b64 = std::fs::read(&r.wav_path)
+                    .ok()
+                    .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes));
+                serde_json::json!({
+                    "id": r.id,
+                    "term": r.term,
+                    "sentence": r.sentence,
+                    "take_no": r.take_no,
+                    "created_at": r.created_at,
+                    "audio_b64": audio_b64,
+                })
+            }).collect::<Vec<_>>()
+        }))
+    })
+    .await
+    .map_err(|e| err(e))??;
+
+    Ok(Json(result).into_response())
+}
+
+async fn api_author_sentence_recording_delete(
+    State(state): State<Arc<AppState>>,
+    Path(recording_id): Path<i64>,
+) -> Result<Response, AppError> {
+    let recording = {
+        let db = state.db.lock().unwrap();
+        db.get_authored_sentence_recording(recording_id).map_err(err)?
+    };
+    let Some(recording) = recording else {
+        return Ok(Json(serde_json::json!({"error": "recording not found"})).into_response());
+    };
+    let _ = std::fs::remove_file(&recording.wav_path);
+    let db = state.db.lock().unwrap();
+    db.delete_authored_sentence_recording(recording_id).map_err(err)?;
+    Ok(Json(serde_json::json!({"ok": true})).into_response())
+}
 
     #[derive(Deserialize)]
     struct AuthorSentenceUpdateBody {
@@ -980,17 +1110,21 @@ async fn main() -> anyhow::Result<()> {
         Ok(Json(serde_json::json!({"ok": true})).into_response())
     }
 
-    async fn api_author_stats(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
-        let db = state.db.lock().unwrap();
-        let total = db.authored_sentence_count().map_err(err)?;
-        let terms = db.authored_sentence_term_counts().map_err(err)?;
-        let vocab_count = db.list_reviewed_vocab().map_err(err)?.len();
-        Ok(Json(serde_json::json!({
-            "total_sentences": total,
-            "vocab_count": vocab_count,
-            "terms": terms,
-        })).into_response())
-    }
+async fn api_author_stats(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
+    let db = state.db.lock().unwrap();
+    let total = db.authored_sentence_count().map_err(err)?;
+    let terms = db.authored_sentence_term_counts().map_err(err)?;
+    let recordings_total = db.authored_sentence_recordings_count().map_err(err)?;
+    let sentences_with_recordings = db.authored_sentences_with_recordings_count().map_err(err)?;
+    let vocab_count = db.list_reviewed_vocab().map_err(err)?.len();
+    Ok(Json(serde_json::json!({
+        "total_sentences": total,
+        "vocab_count": vocab_count,
+        "terms": terms,
+        "recordings_total": recordings_total,
+        "sentences_with_recordings": sentences_with_recordings,
+    })).into_response())
+}
 
     /// Ask OpenAI to generate sentences for terms that need more coverage.
     async fn api_author_suggest_sentences(
@@ -1222,8 +1356,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/author/submit", post(api_author_submit))
         .route("/api/author/stats", get(api_author_stats))
         .route("/api/author/sentences", get(api_author_sentences))
+        .route("/api/author/sentences/{id}/recordings", get(api_author_sentence_recordings))
+        .route("/api/author/sentences/{id}/recordings", post(api_author_sentence_recording_upload))
         .route("/api/author/sentences/{id}", post(api_author_sentence_update))
         .route("/api/author/sentences/{id}/delete", post(api_author_sentence_delete))
+        .route("/api/author/recordings/{id}", post(api_author_sentence_recording_delete))
         .route("/api/author/spellcheck", post(api_author_spellcheck))
         .route("/api/author/suggest-vocab", post(api_author_suggest_vocab))
         .route("/api/author/reject-suggestion", post(api_author_reject_suggestion))

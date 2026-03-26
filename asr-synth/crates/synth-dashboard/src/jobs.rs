@@ -16,6 +16,36 @@ use parakeet_rs::Transcriber;
 
 use std::sync::atomic::Ordering;
 
+fn decode_wav_mono(wav_bytes: &[u8]) -> anyhow::Result<(Vec<f32>, u32)> {
+    let cursor = std::io::Cursor::new(wav_bytes);
+    let mut reader = hound::WavReader::new(cursor)?;
+    let spec = reader.spec();
+
+    let samples_f32: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
+        hound::SampleFormat::Int => {
+            let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
+            reader.samples::<i32>().filter_map(|s| s.ok()).map(|s| s as f32 / max).collect()
+        }
+    };
+
+    let mut mono: Vec<f32> = if spec.channels > 1 {
+        samples_f32.chunks(spec.channels as usize)
+            .map(|ch| ch.iter().sum::<f32>() / ch.len() as f32)
+            .collect()
+    } else {
+        samples_f32
+    };
+
+    let peak = mono.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+    if peak > 0.001 {
+        let gain = 0.95 / peak;
+        for s in &mut mono { *s *= gain; }
+    }
+
+    Ok((mono, spec.sample_rate))
+}
+
 // ==================== Domain Types ====================
 
 /// The canonical written form of a term (e.g. "serde", "facet-json")
@@ -1732,23 +1762,23 @@ pub async fn api_start_eval_job(
         db.create_job("eval", Some(&serde_json::json!({"model": config.model, "adapters": config.adapters}).to_string())).map_err(err)?
     };
 
-    // Gather eval data: authored sentences + overrides
-    let (sentences, overrides) = {
+    // Gather eval data: human-recorded takes + overrides
+    let (recordings, overrides) = {
         let db = state.db.lock().unwrap();
-        let sentences = db.authored_sentences_for_eval().map_err(err)?;
+        let recordings = db.authored_sentence_recordings_for_eval().map_err(err)?;
         let overrides = db.get_spoken_overrides().map_err(err)?;
-        (sentences, overrides)
+        (recordings, overrides)
     };
 
-    if sentences.is_empty() {
+    if recordings.is_empty() {
         let db = state.db.lock().unwrap();
-        let _ = db.append_job_log(job_id, "No authored sentences to evaluate.");
+        let _ = db.append_job_log(job_id, "No human recordings to evaluate.");
         let _ = db.finish_job(job_id, "failed", None);
-        return Ok(Json(serde_json::json!({"job_id": job_id, "error": "No authored sentences. Write some in the Author tab first."})).into_response());
+        return Ok(Json(serde_json::json!({"job_id": job_id, "error": "No human recordings. Record some takes in the Author tab first."})).into_response());
     }
 
     let state2 = state.clone();
-    eprintln!("[eval] Job {job_id} created with {} sentences, {} overrides", sentences.len(), overrides.len());
+    eprintln!("[eval] Job {job_id} created with {} recordings, {} overrides", recordings.len(), overrides.len());
     tokio::spawn(async move {
         // Ensure shared inference server is running before the loop
         {
@@ -1772,7 +1802,7 @@ pub async fn api_start_eval_job(
             }
         }
 
-        let total = sentences.len();
+        let total = recordings.len();
         let mut correct = 0usize;
         let mut wrong = 0usize;
         let mut blank = 0usize;
@@ -1783,30 +1813,31 @@ pub async fn api_start_eval_job(
 
         {
             let db = state2.db.lock().unwrap();
-            let _ = db.append_job_log(job_id, &format!("Evaluating {total} authored sentences (TTS \u{2192} ASR \u{2192} correct, pipelined)..."));
+            let _ = db.append_job_log(job_id, &format!("Evaluating {total} human recordings (ASR \u{2192} correct, pipelined)..."));
         }
 
-        for (i, (sentence, term)) in sentences.iter().enumerate() {
+        for (i, rec) in recordings.iter().enumerate() {
             if state2.job_cancel.load(Ordering::Relaxed) {
                 let db = state2.db.lock().unwrap();
                 let _ = db.append_job_log(job_id, "Stopped by user.");
                 break;
             }
 
-            // TTS
-            let spoken = tts::build_spoken_form(sentence, &overrides);
-            let audio = match state2.tts.generate("pocket-hq", &spoken).await {
-                Ok(mut a) => { a.normalize(); a }
+            let wav_bytes = match std::fs::read(&rec.wav_path) {
+                Ok(bytes) => bytes,
                 Err(e) => {
                     let db = state2.db.lock().unwrap();
-                    let _ = db.append_job_log(job_id, &format!("[{}/{}] TTS failed: {e}", i+1, total));
+                    let _ = db.append_job_log(job_id, &format!("[{}/{}] Missing recording file: {}", i+1, total, e));
                     skipped += 1;
                     continue;
                 }
             };
 
-            // Resample + ASR
-            let full_16k = match tts::resample_to_16k(&audio.samples, audio.sample_rate) {
+            let (mono, sample_rate) = match decode_wav_mono(&wav_bytes) {
+                Ok(v) => v,
+                Err(_) => { skipped += 1; continue; }
+            };
+            let full_16k = match tts::resample_to_16k(&mono, sample_rate) {
                 Ok(s) => s,
                 Err(_) => { skipped += 1; continue; }
             };
@@ -1819,7 +1850,7 @@ pub async fn api_start_eval_job(
             }).await.unwrap_or_default();
 
             // Correct
-            let orig_lower = sentence.trim().to_lowercase();
+            let orig_lower = rec.sentence.trim().to_lowercase();
             let asr_lower = asr_qwen.trim().to_lowercase();
             let asr_was_correct = asr_lower == orig_lower;
             if asr_was_correct { asr_correct += 1; }
@@ -1869,10 +1900,10 @@ pub async fn api_start_eval_job(
             }).to_string());
 
             let _ = db.append_job_log(job_id, &format!(
-                "[{}/{}] [{}] {}: \"{}\" \u{2192} \"{}\"{}",
-                i+1, total, category, term, asr_qwen, corrected_text.trim(),
+                "[{}/{}] [{}] {} (take {}): \"{}\" \u{2192} \"{}\"{}",
+                i+1, total, category, rec.term, rec.take_no, asr_qwen, corrected_text.trim(),
                 if category == "fixed" || category == "kept" { String::new() }
-                else { format!(" (expected \"{}\")", sentence) }
+                else { format!(" (expected \"{}\")", rec.sentence) }
             ));
         }
 
@@ -1881,7 +1912,7 @@ pub async fn api_start_eval_job(
 
         let db = state2.db.lock().unwrap();
         let _ = db.append_job_log(job_id, &format!(
-            "\n=== RESULTS ({evaluated} sentences, {skipped} skipped) ===\n\
+            "\n=== RESULTS ({evaluated} recordings, {skipped} skipped) ===\n\
              ASR accuracy (baseline):     {asr_accuracy:.1}% ({asr_correct}/{evaluated})\n\
              Post-correction accuracy:    {post_accuracy:.1}% ({correct}/{evaluated})\n\
              \n\

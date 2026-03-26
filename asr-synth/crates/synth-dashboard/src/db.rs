@@ -60,6 +60,15 @@ CREATE TABLE IF NOT EXISTS candidate_sentences (
     imported_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS authored_sentence_recordings (
+    id INTEGER PRIMARY KEY,
+    term TEXT NOT NULL,
+    sentence TEXT NOT NULL COLLATE NOCASE,
+    take_no INTEGER NOT NULL,
+    wav_path TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS corpus_pairs (
     id INTEGER PRIMARY KEY,
     term TEXT NOT NULL,
@@ -127,6 +136,16 @@ pub struct SentenceRow {
     pub parakeet_output: Option<String>,
     pub qwen_output: Option<String>,
     pub human_wav_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthoredSentenceRecordingRow {
+    pub id: i64,
+    pub term: String,
+    pub sentence: String,
+    pub take_no: i64,
+    pub wav_path: String,
+    pub created_at: String,
 }
 
 // --- Stats ---
@@ -233,6 +252,16 @@ impl Db {
                 created_at TEXT NOT NULL
             )"
         ).ok();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS authored_sentence_recordings (
+                id INTEGER PRIMARY KEY,
+                term TEXT NOT NULL,
+                sentence TEXT NOT NULL COLLATE NOCASE,
+                take_no INTEGER NOT NULL,
+                wav_path TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )"
+        ).ok();
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS rejected_suggestions (
@@ -335,7 +364,14 @@ impl Db {
 
     pub fn list_authored_sentences(&self) -> Result<Vec<serde_json::Value>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, term, sentence, created_at FROM authored_sentences ORDER BY id DESC"
+            "SELECT a.id, a.term, a.sentence, a.created_at, COALESCE(r.cnt, 0) as recording_count
+             FROM authored_sentences a
+             LEFT JOIN (
+                 SELECT LOWER(sentence) as sentence_key, COUNT(*) as cnt
+                 FROM authored_sentence_recordings
+                 GROUP BY LOWER(sentence)
+             ) r ON r.sentence_key = LOWER(a.sentence)
+             ORDER BY a.id DESC"
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(serde_json::json!({
@@ -343,9 +379,113 @@ impl Db {
                 "term": row.get::<_, String>(1)?,
                 "sentence": row.get::<_, String>(2)?,
                 "created_at": row.get::<_, String>(3)?,
+                "recording_count": row.get::<_, i64>(4)?,
             }))
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn authored_sentence_recordings_for_sentence(&self, sentence: &str) -> Result<Vec<AuthoredSentenceRecordingRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, term, sentence, take_no, wav_path, created_at
+             FROM authored_sentence_recordings
+             WHERE LOWER(sentence) = LOWER(?1)
+             ORDER BY take_no DESC, id DESC"
+        )?;
+        let rows = stmt.query_map(params![sentence], |row| {
+            Ok(AuthoredSentenceRecordingRow {
+                id: row.get(0)?,
+                term: row.get(1)?,
+                sentence: row.get(2)?,
+                take_no: row.get(3)?,
+                wav_path: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Get all authored sentence recordings for eval. One row per take.
+    pub fn authored_sentence_recordings_for_eval(&self) -> Result<Vec<AuthoredSentenceRecordingRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, term, sentence, take_no, wav_path, created_at
+             FROM authored_sentence_recordings
+             ORDER BY created_at ASC, id ASC"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(AuthoredSentenceRecordingRow {
+                id: row.get(0)?,
+                term: row.get(1)?,
+                sentence: row.get(2)?,
+                take_no: row.get(3)?,
+                wav_path: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn authored_sentence_recordings_count(&self) -> Result<i64> {
+        Ok(self.conn.query_row("SELECT COUNT(*) FROM authored_sentence_recordings", [], |r| r.get(0))?)
+    }
+
+    pub fn authored_sentences_with_recordings_count(&self) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(DISTINCT sentence) FROM authored_sentence_recordings",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+
+    pub fn add_authored_sentence_recording(&self, term: &str, sentence: &str, wav_path: &str) -> Result<i64> {
+        let take_no = self.next_authored_sentence_recording_take_no(sentence)?;
+        self.insert_authored_sentence_recording(term, sentence, take_no, wav_path)
+    }
+
+    pub fn insert_authored_sentence_recording(&self, term: &str, sentence: &str, take_no: i64, wav_path: &str) -> Result<i64> {
+        let now = now_str();
+        self.conn.execute(
+            "INSERT INTO authored_sentence_recordings (term, sentence, take_no, wav_path, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![term, sentence, take_no, wav_path, now],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn next_authored_sentence_recording_take_no(&self, sentence: &str) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(MAX(take_no), 0) + 1 FROM authored_sentence_recordings WHERE LOWER(sentence) = LOWER(?1)",
+            params![sentence],
+            |r| r.get(0),
+        )?)
+    }
+
+    pub fn get_authored_sentence_recording(&self, id: i64) -> Result<Option<AuthoredSentenceRecordingRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, term, sentence, take_no, wav_path, created_at
+             FROM authored_sentence_recordings
+             WHERE id = ?1"
+        )?;
+        let mut rows = stmt.query(params![id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(AuthoredSentenceRecordingRow {
+                id: row.get(0)?,
+                term: row.get(1)?,
+                sentence: row.get(2)?,
+                take_no: row.get(3)?,
+                wav_path: row.get(4)?,
+                created_at: row.get(5)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn delete_authored_sentence_recording(&self, id: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM authored_sentence_recordings WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
     }
 
     /// Get unique authored sentences for eval. Returns (sentence, primary_term).
@@ -365,6 +505,16 @@ impl Db {
             params![sentence, id],
         )?;
         Ok(())
+    }
+
+    pub fn get_authored_sentence(&self, id: i64) -> Result<Option<(String, String)>> {
+        let mut stmt = self.conn.prepare("SELECT term, sentence FROM authored_sentences WHERE id = ?1")?;
+        let mut rows = stmt.query(params![id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some((row.get(0)?, row.get(1)?)))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn delete_authored_sentence(&self, id: i64) -> Result<()> {
