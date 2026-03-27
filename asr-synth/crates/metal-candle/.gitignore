@@ -1,0 +1,63 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+*.profraw
+*.profdata
+lcov.info
+coverage.json
+/target/llvm-cov/
+/target/debug/coverage/
+
+# Benchmarks
+/target/criterion/
+
+# Benchmark results - ignore old/incomplete runs
+# (official release benchmarks are explicitly tracked)
+benchmark_results/20251210_222755/
+benchmark_results/20251211_225926/
+
+# Release notes drafts (use CHANGELOG.md and RELEASE_*.md)
+release_notes_*.md
+
+# Examples output
+examples/output/
+test_output/
+
+# Model files (large)
+*.safetensors
+*.gguf
+*.bin
+
+# Test fixtures (commit small ones, ignore large)
+tests/fixtures/*.safetensors
+tests/fixtures/*.gguf
+tests/fixtures/*.bin
+
+# Logs
+*.log
+
+# Local development
+.env
+.env.local
+scratch/
+tmp/
+
+
+# Documentation build output
+docs/book/
+

@@ -1808,6 +1808,7 @@
                 ['#/confusions', 'Confusions'],
                 ['#/train', 'Train'],
                 ['#/eval', 'Eval'],
+                ['#/settings', 'Settings'],
                 ['#/tests', 'Tests'],
                 ['#/jobs', 'Jobs'],
             ];
@@ -1897,8 +1898,10 @@
             const pageSize = 50;
             const [editingId, setEditingId] = useState(null);
             const [editValue, setEditValue] = useState('');
+            const [editDescription, setEditDescription] = useState('');
             const [newTerm, setNewTerm] = useState('');
             const [newOverride, setNewOverride] = useState('');
+            const [newDescription, setNewDescription] = useState('');
             const [newPreviewed, setNewPreviewed] = useState(false);
             const [newTermExists, setNewTermExists] = useState(false);
             const newTermRef = useRef(null);
@@ -1926,9 +1929,19 @@
             // Reset page when filter/search changes
             useEffect(() => { setPage(0); }, [search, filter, sort]);
 
-            const startEdit = (row) => {setEditingId(row.id); setEditValue(row.spoken_override || row.spoken_auto);};
+            const startEdit = (row) => {
+                setEditingId(row.id);
+                setEditValue(row.spoken_override || row.spoken_auto);
+                setEditDescription(row.description || '');
+            };
             const saveEdit = async (id) => {
-                await api(`/api/vocab/${id}`, {method: 'POST', body: JSON.stringify({spoken_override: editValue})});
+                await api(`/api/vocab/${id}`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        spoken_override: editValue,
+                        description: editDescription,
+                    }),
+                });
                 setEditingId(null); load();
             };
             const toggleReviewed = async (row) => {
@@ -1944,8 +1957,15 @@
             const addTerm = async () => {
                 if (!newTerm.trim()) return;
                 if (!newPreviewed) {previewNewTerm(); return;}
-                await api('/api/vocab', {method: 'POST', body: JSON.stringify({term: newTerm.trim(), spoken_override: newOverride.trim() || undefined})});
-                setNewTerm(''); setNewOverride(''); setNewPreviewed(false); setNewTermExists(false); load();
+                await api('/api/vocab', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        term: newTerm.trim(),
+                        spoken_override: newOverride.trim() || undefined,
+                        description: newDescription.trim() || undefined,
+                    }),
+                });
+                setNewTerm(''); setNewOverride(''); setNewDescription(''); setNewPreviewed(false); setNewTermExists(false); load();
                 setTimeout(() => newTermRef.current?.focus(), 50);
             };
             const altListFor = (term) => altSpellings[term.toLowerCase()] || [];
@@ -2018,7 +2038,7 @@
                             {sort === 'recent' ? 'Recent first' : 'A\u2013Z'}
                         </button>
                     </div>
-                    <div className="search-bar" style={{display: 'flex', gap: 8, alignItems: 'center', marginTop: 8}}>
+                    <div className="search-bar" style={{display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap'}}>
                         <input ref={newTermRef} placeholder="New term..." value={newTerm} onChange={e => {
                                 setNewTerm(e.target.value); setNewPreviewed(false);
                                 const v = e.target.value.trim();
@@ -2035,6 +2055,10 @@
                                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addTerm(); }
                                 else if (e.key === 'Enter') { e.preventDefault(); previewNewTerm(); }
                             }} />
+                        <input style={{flex: 2, minWidth: 260}} placeholder="Description (optional)" value={newDescription} onChange={e => setNewDescription(e.target.value)}
+                            onKeyDown={e => {
+                                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addTerm(); }
+                            }} />
                         <button className="btn btn-sm btn-primary" onClick={addTerm} disabled={!newTerm.trim()}>{newPreviewed ? <>Save ({'\u2318\u23CE'})</> : <>Preview ({'\u23CE'})</>}</button>
                         {newTermExists && <span style={{fontSize:11,color:'var(--warning)'}}>already exists</span>}
                     </div>
@@ -2043,7 +2067,7 @@
                     ) : (
                         <div className="card" style={{padding: 0, overflow: 'hidden'}}>
                             <table>
-                                <thead><tr><th>Term</th><th>Auto</th><th>Override</th><th style={{width: 36}}></th></tr></thead>
+                                <thead><tr><th>Term</th><th>Auto</th><th>Override</th><th>Description</th><th style={{width: 36}}></th><th style={{width: 36}}></th></tr></thead>
                                 <tbody>
                                     {vocab.map(row => (
                                         <tr key={row.id}>
@@ -2099,6 +2123,20 @@
                                                     <span style={{cursor: 'pointer', color: row.spoken_override ? 'var(--accent)' : 'var(--text-muted)', fontStyle: row.spoken_override ? 'normal' : 'italic'}}
                                                         onClick={() => startEdit(row)}>
                                                         {row.spoken_override || 'click to set'}
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td>
+                                                {editingId === row.id ? (
+                                                    <input style={{width: '100%', padding: '3px 6px', fontSize: 13, background: 'var(--bg)', border: '1px solid var(--accent)', borderRadius: 3, color: 'var(--text)', outline: 'none', fontFamily: 'Jost,sans-serif'}}
+                                                        placeholder="Add description..."
+                                                        value={editDescription}
+                                                        onChange={e => setEditDescription(e.target.value)}
+                                                        onKeyDown={e => {if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveEdit(row.id); if (e.key === 'Escape') setEditingId(null);}} />
+                                                ) : (
+                                                    <span style={{cursor: 'pointer', color: row.description ? 'var(--text)' : 'var(--text-muted)', fontStyle: row.description ? 'normal' : 'italic'}}
+                                                        onClick={() => startEdit(row)}>
+                                                        {row.description || 'click to set'}
                                                     </span>
                                                 )}
                                             </td>
@@ -2205,6 +2243,174 @@
                 v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
             }
             return buf;
+        }
+
+        function monoSamplesToWav(samples, sampleRate) {
+            const dataLen = samples.length * 2, buf = new ArrayBuffer(44 + dataLen), v = new DataView(buf);
+            const ws = (o, s) => {for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i));};
+            ws(0, 'RIFF'); v.setUint32(4, 36 + dataLen, true); ws(8, 'WAVE'); ws(12, 'fmt ');
+            v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+            v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
+            v.setUint16(32, 2, true); v.setUint16(34, 16, true); ws(36, 'data'); v.setUint32(40, dataLen, true);
+            for (let i = 0; i < samples.length; i++) {
+                const s = Math.max(-1, Math.min(1, samples[i]));
+                v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+            }
+            return buf;
+        }
+
+        const rawMicAudioConstraints = {
+            channelCount: 1,
+            sampleRate: 48000,
+            sampleSize: 16,
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+        };
+
+        async function getRecordingStream() {
+            const stream = await navigator.mediaDevices.getUserMedia({audio: rawMicAudioConstraints});
+            const [track] = stream.getAudioTracks();
+            if (track?.applyConstraints) {
+                try {
+                    await track.applyConstraints(rawMicAudioConstraints);
+                } catch (e) {
+                    console.warn('applyConstraints failed', e);
+                }
+            }
+            return stream;
+        }
+
+        async function startMonoWavRecording(onStop) {
+            const stream = await getRecordingStream();
+            const recordingCtx = new (window.AudioContext || window.webkitAudioContext)();
+            await recordingCtx.resume();
+            const source = recordingCtx.createMediaStreamSource(stream);
+            const processor = recordingCtx.createScriptProcessor(4096, source.channelCount || 1, 1);
+            const sink = recordingCtx.createGain();
+            sink.gain.value = 0;
+            const chunks = [];
+            let state = 'recording';
+
+            processor.onaudioprocess = (event) => {
+                if (state !== 'recording') return;
+                const input = event.inputBuffer;
+                const len = input.length;
+                const channels = input.numberOfChannels || 1;
+                const mono = new Float32Array(len);
+                for (let ch = 0; ch < channels; ch++) {
+                    const data = input.getChannelData(ch);
+                    for (let i = 0; i < len; i++) mono[i] += data[i];
+                }
+                const scale = 1 / channels;
+                for (let i = 0; i < len; i++) mono[i] *= scale;
+                chunks.push(mono);
+            };
+
+            source.connect(processor);
+            processor.connect(sink);
+            sink.connect(recordingCtx.destination);
+
+            return {
+                get state() { return state; },
+                async stop(options = {}) {
+                    if (state !== 'recording') return;
+                    state = 'inactive';
+                    processor.disconnect();
+                    source.disconnect();
+                    sink.disconnect();
+                    stream.getTracks().forEach(t => t.stop());
+                    const sampleRate = recordingCtx.sampleRate;
+                    await recordingCtx.close();
+                    if (options.discard) return;
+                    const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+                    const mono = new Float32Array(total);
+                    let offset = 0;
+                    for (const chunk of chunks) {
+                        mono.set(chunk, offset);
+                        offset += chunk.length;
+                    }
+                    await onStop({
+                        wavBytes: monoSamplesToWav(mono, sampleRate),
+                        sampleRate,
+                        samples: mono,
+                    });
+                },
+            };
+        }
+
+        async function createWarmMonoRecorder() {
+            const stream = await getRecordingStream();
+            const recordingCtx = new (window.AudioContext || window.webkitAudioContext)();
+            await recordingCtx.resume();
+            const source = recordingCtx.createMediaStreamSource(stream);
+            const processor = recordingCtx.createScriptProcessor(4096, source.channelCount || 1, 1);
+            const sink = recordingCtx.createGain();
+            sink.gain.value = 0;
+            const chunks = [];
+            let state = 'idle';
+            let segmentStartChunk = 0;
+
+            processor.onaudioprocess = (event) => {
+                if (state === 'closed') return;
+                const input = event.inputBuffer;
+                const len = input.length;
+                const channels = input.numberOfChannels || 1;
+                const mono = new Float32Array(len);
+                for (let ch = 0; ch < channels; ch++) {
+                    const data = input.getChannelData(ch);
+                    for (let i = 0; i < len; i++) mono[i] += data[i];
+                }
+                const scale = 1 / channels;
+                for (let i = 0; i < len; i++) mono[i] *= scale;
+                chunks.push(mono);
+            };
+
+            source.connect(processor);
+            processor.connect(sink);
+            sink.connect(recordingCtx.destination);
+
+            const buildSegment = (segmentChunks) => {
+                const total = segmentChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+                const mono = new Float32Array(total);
+                let offset = 0;
+                for (const chunk of segmentChunks) {
+                    mono.set(chunk, offset);
+                    offset += chunk.length;
+                }
+                return {
+                    wavBytes: monoSamplesToWav(mono, recordingCtx.sampleRate),
+                    sampleRate: recordingCtx.sampleRate,
+                    samples: mono,
+                };
+            };
+
+            return {
+                get state() { return state; },
+                start() {
+                    if (state === 'closed') throw new Error('recorder closed');
+                    if (state === 'recording') return;
+                    segmentStartChunk = chunks.length;
+                    state = 'recording';
+                },
+                async stop(options = {}) {
+                    if (state !== 'recording') return null;
+                    const segmentChunks = chunks.slice(segmentStartChunk);
+                    chunks.splice(0, chunks.length);
+                    segmentStartChunk = 0;
+                    state = 'idle';
+                    if (options.discard || segmentChunks.length === 0) return null;
+                    return buildSegment(segmentChunks);
+                },
+                async shutdown() {
+                    state = 'closed';
+                    processor.disconnect();
+                    source.disconnect();
+                    sink.disconnect();
+                    stream.getTracks().forEach(t => t.stop());
+                    await recordingCtx.close();
+                },
+            };
         }
 
         // ==================== FULL-SCREEN SENTENCE REVIEW ====================
@@ -2400,7 +2606,7 @@
             // --- Recording ---
             const startRecording = async () => {
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+                    const stream = await getRecordingStream();
                     const mediaRecorder = new MediaRecorder(stream, {mimeType: 'audio/webm'});
                     const chunks = [];
                     mediaRecorder.ondataavailable = (e) => {if (e.data.size > 0) chunks.push(e.data);};
@@ -2465,7 +2671,7 @@
             const startSentenceRecording = async () => {
                 stopAudio(true);
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+                    const stream = await getRecordingStream();
                     const mediaRecorder = new MediaRecorder(stream, {mimeType: 'audio/webm'});
                     const chunks = [];
                     mediaRecorder.ondataavailable = (e) => {if (e.data.size > 0) chunks.push(e.data);};
@@ -2706,10 +2912,15 @@
         function AuthorPage() {
             const [term, setTerm] = useState(null);
             const [sentence, setSentence] = useState('');
+            const [authorMode, setAuthorMode] = useState('term');
+            const [counterSurface, setCounterSurface] = useState('');
             const [sentenceCount, setSentenceCount] = useState(0);
             const [stats, setStats] = useState(null);
             const [error, setError] = useState(null);
             const [saving, setSaving] = useState(false);
+            const [authorTerms, setAuthorTerms] = useState([]);
+            const [termPicker, setTermPicker] = useState('');
+            const [termLocked, setTermLocked] = useState(false);
             const [sentences, setSentences] = useState(null);
             const [editingId, setEditingId] = useState(null);
             const [editValue, setEditValue] = useState('');
@@ -2735,6 +2946,8 @@
             const [rapidFireError, setRapidFireError] = useState(null);
             const [rapidFireBusy, setRapidFireBusy] = useState(false);
             const recordingRecorderRef = useRef(null);
+            const rapidFireRecorderRef = useRef(null);
+            const rapidFireAutostartRef = useRef(false);
 
             const spellIssueList = Array.isArray(spellIssues) ? spellIssues : (spellIssues?.issues || []);
 
@@ -2799,16 +3012,61 @@
                 });
             };
 
-            const loadNext = () => {
+            const authoredCountForTerm = (termName, nextStats = stats) => {
+                const rows = nextStats?.terms || [];
+                const found = rows.find(([t]) => t.toLowerCase() === termName.toLowerCase());
+                return found ? found[1] : 0;
+            };
+
+            const termFromVocabRow = (row, nextStats = stats) => ({
+                term: row.term,
+                spoken: row.spoken_override || row.spoken_auto || row.term,
+                sentence_count: authoredCountForTerm(row.term, nextStats),
+            });
+
+            const loadAuthorTerms = async (nextStats = stats) => {
+                const rows = await api('/api/vocab?reviewed=true&limit=5000');
+                setAuthorTerms(rows);
+                return rows;
+            };
+
+            const focusTermByName = async (name, nextStats = stats, existingRows = authorTerms) => {
+                const trimmed = name.trim();
+                if (!trimmed) return false;
+                const rows = existingRows.length > 0 ? existingRows : await loadAuthorTerms(nextStats);
+                const match = rows.find(r => r.term.toLowerCase() === trimmed.toLowerCase());
+                if (!match) {
+                    setError(`Unknown term: ${trimmed}`);
+                    return false;
+                }
+                setTerm(termFromVocabRow(match, nextStats));
+                setSentenceCount(authoredCountForTerm(match.term, nextStats));
+                setSentence('');
+                setCounterSurface('');
+                setTimeout(() => inputRef.current?.focus(), 50);
+                return true;
+            };
+
+            const loadNext = async () => {
+                if (termLocked && termPicker.trim()) {
+                    await focusTermByName(termPicker, stats);
+                    return;
+                }
                 api('/api/author/next').then(r => {
                     if (r.done) { setTerm(null); }
                     else { setTerm(r); setSentenceCount(r.sentence_count); }
                     setSentence('');
+                    setAuthorMode('term');
+                    setCounterSurface('');
+                    setTermPicker(r.term || '');
                     setTimeout(() => inputRef.current?.focus(), 50);
                 }).catch(e => setError(e.message));
             };
 
-            const loadStats = () => api('/api/author/stats').then(setStats).catch(() => {});
+            const loadStats = () => api('/api/author/stats').then(s => {
+                setStats(s);
+                return s;
+            }).catch(() => {});
 
             const loadSentences = async () => {
                 const rows = await api('/api/author/sentences');
@@ -2849,46 +3107,52 @@
                 setRecordingError(null);
             };
 
-            const closeRapidFire = () => {
-                stopSentenceRecording();
+            const closeRapidFire = async () => {
+                rapidFireAutostartRef.current = false;
+                if (recording) {
+                    await finishRapidFireRecording({discard: true});
+                }
+                if (rapidFireRecorderRef.current) {
+                    await rapidFireRecorderRef.current.shutdown();
+                    rapidFireRecorderRef.current = null;
+                }
                 setRapidFireOpen(false);
                 setRapidFireSentence(null);
                 setRapidFireError(null);
                 setRapidFireBusy(false);
             };
 
-            const stopSentenceRecording = () => {
+            const stopSentenceRecording = async (options = {}) => {
+                if (options.autoRestartRapidFire) rapidFireAutostartRef.current = true;
+                if (options.discard) rapidFireAutostartRef.current = false;
                 if (recordingRecorderRef.current && recordingRecorderRef.current.state !== 'inactive') {
-                    recordingRecorderRef.current.stop();
+                    const recorder = recordingRecorderRef.current;
+                    recordingRecorderRef.current = null;
+                    await recorder.stop(options);
                 }
                 setRecording(false);
+            };
+
+            const uploadSentenceTake = async (row, wavBytes) => {
+                const res = await fetch(`/api/author/sentences/${row.id}/recordings`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'audio/wav'},
+                    body: wavBytes,
+                });
+                if (!res.ok) {
+                    const text = await res.text();
+                    throw new Error(text || 'failed to save recording');
+                }
+                return res.json();
             };
 
             const saveSentenceTake = async (row, onSaved) => {
                 if (!row) return;
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
-                    const mediaRecorder = new MediaRecorder(stream, {mimeType: 'audio/webm'});
-                    const chunks = [];
-                    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-                    mediaRecorder.onstop = async () => {
-                        stream.getTracks().forEach(t => t.stop());
+                    const recorder = await startMonoWavRecording(async ({wavBytes}) => {
                         try {
                             setRecordingBusy(true);
-                            const blob = new Blob(chunks, {type: 'audio/webm'});
-                            const arrayBuf = await blob.arrayBuffer();
-                            const decoded = await audioCtx.decodeAudioData(arrayBuf);
-                            const wavBytes = audioBufferToWav(decoded);
-                            const res = await fetch(`/api/author/sentences/${row.id}/recordings`, {
-                                method: 'POST',
-                                headers: {'Content-Type': 'audio/wav'},
-                                body: wavBytes,
-                            });
-                            if (!res.ok) {
-                                const text = await res.text();
-                                throw new Error(text || 'failed to save recording');
-                            }
-                            const data = await res.json();
+                            const data = await uploadSentenceTake(row, wavBytes);
                             await onSaved?.(data);
                             loadSentences().catch(() => {});
                             loadStats();
@@ -2900,9 +3164,8 @@
                             setRecording(false);
                             setRecordingBusy(false);
                         }
-                    };
-                    recordingRecorderRef.current = mediaRecorder;
-                    mediaRecorder.start();
+                    });
+                    recordingRecorderRef.current = recorder;
                     setRecording(true);
                 } catch (e) {
                     if (row.id === recordingSentence?.id) setRecordingError('Microphone access denied');
@@ -2919,26 +3182,66 @@
 
             const startRapidFireRecording = async () => {
                 if (!rapidFireSentence) return;
+                try {
+                    let recorder = rapidFireRecorderRef.current;
+                    if (!recorder) {
+                        setRapidFireBusy(true);
+                        recorder = await createWarmMonoRecorder();
+                        rapidFireRecorderRef.current = recorder;
+                        setRapidFireBusy(false);
+                    }
+                    recorder.start();
+                    setRecording(true);
+                    setRapidFireError(null);
+                } catch (e) {
+                    setRapidFireBusy(false);
+                    setRapidFireError('Microphone access denied');
+                }
+            };
+
+            const finishRapidFireRecording = async (options = {}) => {
+                const recorder = rapidFireRecorderRef.current;
+                if (!recorder || recorder.state !== 'recording') {
+                    setRecording(false);
+                    return;
+                }
+                if (options.autoRestartRapidFire) rapidFireAutostartRef.current = true;
+                if (options.discard) rapidFireAutostartRef.current = false;
+                setRecording(false);
+                const segment = await recorder.stop({discard: options.discard});
+                if (!segment || !rapidFireSentence) return;
                 setRapidFireBusy(true);
-                await saveSentenceTake(rapidFireSentence, async data => {
+                try {
+                    await uploadSentenceTake(rapidFireSentence, segment.wavBytes);
                     setRapidFireError(null);
                     const rows = await loadSentences();
                     const refreshed = rows.find(s => s.id === rapidFireSentence.id) || rapidFireSentence;
                     setRapidFireSentence(pickRapidFireSentence(rows, refreshed.id));
-                });
-                setRapidFireBusy(false);
+                    loadStats();
+                } catch (e) {
+                    rapidFireAutostartRef.current = false;
+                    setRapidFireError(e.message);
+                } finally {
+                    setRapidFireBusy(false);
+                }
             };
 
             const openRapidFire = async () => {
                 closeRecordings();
+                rapidFireAutostartRef.current = false;
                 setRapidFireOpen(true);
                 setRapidFireError(null);
-                setRapidFireBusy(false);
+                setRapidFireBusy(true);
                 try {
                     const rows = sentences || await loadSentences();
                     setRapidFireSentence(pickRapidFireSentence(rows));
+                    if (!rapidFireRecorderRef.current) {
+                        rapidFireRecorderRef.current = await createWarmMonoRecorder();
+                    }
                 } catch (e) {
                     setRapidFireError(e.message);
+                } finally {
+                    setRapidFireBusy(false);
                 }
             };
 
@@ -2950,10 +3253,14 @@
                         e.preventDefault();
                         e.stopPropagation();
                         if (recording) {
-                            stopSentenceRecording();
+                            finishRapidFireRecording({autoRestartRapidFire: true});
                         } else if (!recordingBusy && !rapidFireBusy && rapidFireSentence) {
                             startRapidFireRecording();
                         }
+                    } else if ((e.key === 'r' || e.key === 'R') && recording) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        finishRapidFireRecording({discard: true}).then(() => startRapidFireRecording());
                     } else if (e.key === 'Escape') {
                         e.preventDefault();
                         e.stopPropagation();
@@ -2964,6 +3271,13 @@
                 return () => window.removeEventListener('keydown', onKeyDown, true);
             }, [rapidFireOpen, recording, recordingBusy, rapidFireBusy, rapidFireSentence?.id]);
 
+            useEffect(() => {
+                if (!rapidFireOpen || !rapidFireAutostartRef.current) return;
+                if (recording || recordingBusy || rapidFireBusy || !rapidFireSentence) return;
+                rapidFireAutostartRef.current = false;
+                startRapidFireRecording();
+            }, [rapidFireOpen, recording, recordingBusy, rapidFireBusy, rapidFireSentence?.id]);
+
             const deleteRecording = async (recordingRow) => {
                 if (!confirm(`Delete take #${recordingRow.take_no}?`)) return;
                 await api(`/api/author/recordings/${recordingRow.id}`, {method: 'POST'});
@@ -2972,20 +3286,35 @@
                 loadStats();
             };
 
-            useEffect(() => { loadNext(); loadStats(); }, []);
+            useEffect(() => {
+                (async () => {
+                    const nextStats = await loadStats();
+                    await loadAuthorTerms(nextStats);
+                    await loadNext();
+                })();
+            }, []);
 
             const submit = async () => {
                 if (!sentence.trim() || !term) return;
                 setSaving(true); setError(null);
                 try {
-                    const res = await api('/api/author/submit', {method: 'POST', body: JSON.stringify({term: term.term, sentence: sentence.trim()})});
+                    const payload = {
+                        term: term.term,
+                        sentence: sentence.trim(),
+                        kind: authorMode,
+                        surface_form: authorMode === 'counterexample' ? counterSurface.trim() : null,
+                    };
+                    const res = await api('/api/author/submit', {method: 'POST', body: JSON.stringify(payload)});
                     if (res.error) { setError(res.error); setSaving(false); return; }
                     setSentence('');
-                    setSentenceCount(c => c + 1);
-                    loadStats();
+                    if (authorMode === 'counterexample') setCounterSurface('');
+                    if (authorMode === 'term') setSentenceCount(c => c + 1);
+                    const nextStats = await loadStats();
                     // 50% chance to move to next term (so you write multiple per term)
-                    if (Math.random() < 0.5 || sentenceCount >= 4) {
-                        loadNext();
+                    if (termLocked) {
+                        await focusTermByName(termPicker || term.term, nextStats);
+                    } else if (Math.random() < 0.5 || sentenceCount >= 4) {
+                        await loadNext();
                     } else {
                         setTimeout(() => inputRef.current?.focus(), 50);
                     }
@@ -2993,7 +3322,15 @@
                 setSaving(false);
             };
 
-            const skip = () => loadNext();
+            const skip = async () => {
+                if (termLocked && termPicker.trim()) {
+                    setSentence('');
+                    setCounterSurface('');
+                    setTimeout(() => inputRef.current?.focus(), 50);
+                    return;
+                }
+                await loadNext();
+            };
 
             return (
                 <div className="container">
@@ -3002,11 +3339,44 @@
                     {stats && (
                         <div className="stats-grid" style={{marginBottom:16}}>
                             <div className="stat-card"><div className="value" style={{color:'var(--success)'}}>{stats.total_sentences}</div><div className="label">Sentences</div></div>
+                            <div className="stat-card"><div className="value" style={{color:'var(--accent)'}}>{stats.counterexample_total || 0}</div><div className="label">Counterexamples</div></div>
                             <div className="stat-card"><div className="value">{stats.terms?.length || 0}</div><div className="label">Terms Covered</div></div>
                             <div className="stat-card"><div className="value">{stats.vocab_count || 0}</div><div className="label">Vocab Total</div></div>
                             <div className="stat-card"><div className="value" style={{color:'var(--accent)'}}>{stats.recordings_total || 0}</div><div className="label">Recordings</div></div>
                         </div>
                     )}
+
+                    <div className="card" style={{marginBottom:12}}>
+                        <div style={{display:'flex',alignItems:'end',gap:8,flexWrap:'wrap'}}>
+                            <div style={{display:'grid',gap:6,flex:'1 1 320px'}}>
+                                <label style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1}}>Focus term</label>
+                                <input
+                                    list="author-term-options"
+                                    value={termPicker}
+                                    onChange={e => setTermPicker(e.target.value)}
+                                    placeholder="Pick a term to stay on, e.g. reqwest"
+                                    style={{padding:'8px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontFamily:'Jost,sans-serif',fontSize:14}}
+                                />
+                                <datalist id="author-term-options">
+                                    {authorTerms.map(row => <option key={row.term} value={row.term} />)}
+                                </datalist>
+                            </div>
+                            <button className={`btn btn-sm ${termLocked ? 'btn-primary' : ''}`} onClick={async () => {
+                                const ok = await focusTermByName(termPicker || term?.term || '', stats);
+                                if (ok) setTermLocked(true);
+                            }}>Lock to term</button>
+                            <button className="btn btn-sm" onClick={() => {
+                                setTermLocked(false);
+                                setError(null);
+                                loadNext();
+                            }}>Random queue</button>
+                        </div>
+                        <div style={{marginTop:8,fontSize:12,color:'var(--text-muted)'}}>
+                            {termLocked
+                                ? `Locked to ${termPicker || term?.term || 'selected term'}. Save/skip will stay on this term.`
+                                : 'Unlocked. The page will keep pulling random terms that need more coverage.'}
+                        </div>
+                    </div>
 
                     <div style={{display:'flex',gap:8,marginBottom:12}}>
                         <button className="btn btn-sm" disabled={spellLoading} onClick={async () => {
@@ -3217,15 +3587,55 @@
                                 {term.spoken !== term.term && <div style={{fontSize:13,color:'var(--text-muted)',marginTop:4}}>pronounced "{term.spoken}"</div>}
                                 <div style={{fontSize:11,color:'var(--text-muted)',marginTop:8}}>{sentenceCount} sentence{sentenceCount !== 1 ? 's' : ''} so far</div>
                             </div>
-                            <div style={{display:'flex',gap:8}}>
-                                <input ref={inputRef} type="text" value={sentence} onChange={e => setSentence(e.target.value)}
-                                    placeholder={`Type a sentence containing "${term.term}"...`}
-                                    onKeyDown={e => {
-                                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && sentence.trim()) { e.preventDefault(); submit(); }
-                                    }}
-                                    style={{flex:1,padding:'10px 14px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontFamily:'Jost,sans-serif',fontSize:15}} />
-                                <button className="btn btn-primary" onClick={submit} disabled={saving || !sentence.trim()}>Save ({'\u2318\u23CE'})</button>
-                                <button className="btn" onClick={skip} style={{color:'var(--text-muted)'}}>Skip</button>
+                            <div style={{display:'flex',gap:8,justifyContent:'center',marginBottom:12}}>
+                                <button className={`btn btn-sm ${authorMode === 'term' ? 'btn-primary' : ''}`} onClick={() => setAuthorMode('term')}>Term sentence</button>
+                                <button className={`btn btn-sm ${authorMode === 'counterexample' ? 'btn-primary' : ''}`} onClick={() => setAuthorMode('counterexample')}>Counterexample</button>
+                            </div>
+                            {authorMode === 'counterexample' && (
+                                <div style={{display:'grid',gap:8,marginBottom:12}}>
+                                    <div style={{fontSize:12,color:'var(--text-muted)',textAlign:'center'}}>
+                                        Write a sentence where the ambiguous ASR surface is correct and should not be rewritten to <span style={{color:'var(--accent)',fontFamily:'monospace'}}>{term.term}</span>.
+                                    </div>
+                                    <div style={{fontSize:11,color:'var(--text-muted)',textAlign:'center'}}>
+                                        Example: canonical <span style={{fontFamily:'monospace',color:'var(--accent)'}}>reqwest</span>, surface form <span style={{fontFamily:'monospace'}}>request</span>, sentence: <span style={{fontStyle:'italic'}}>I put in a request for vacation time.</span>
+                                    </div>
+                                    <div style={{display:'grid',gap:6}}>
+                                        <label style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1}}>Ambiguous surface form</label>
+                                        <input
+                                            value={counterSurface}
+                                            onChange={e => setCounterSurface(e.target.value)}
+                                            placeholder={`What should stay unchanged here? e.g. dwarf`}
+                                            style={{padding:'8px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontFamily:'Jost,sans-serif',fontSize:14}}
+                                        />
+                                    </div>
+                                    <input
+                                        readOnly
+                                        value={counterSurface
+                                            ? `This sentence must contain "${counterSurface}" and must not contain "${term.term}".`
+                                            : `Enter the ambiguous surface form first.`}
+                                        style={{padding:'8px 12px',background:'rgba(255,255,255,0.03)',border:'1px dashed var(--border)',borderRadius:6,color:'var(--text-muted)',fontFamily:'Jost,sans-serif',fontSize:13}}
+                                    />
+                                </div>
+                            )}
+                            <div style={{display:'grid',gap:6}}>
+                                <label style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1}}>
+                                    {authorMode === 'counterexample' ? 'Counterexample sentence' : 'Sentence'}
+                                </label>
+                                <div style={{display:'flex',gap:8}}>
+                                    <input ref={inputRef} type="text" value={sentence} onChange={e => setSentence(e.target.value)}
+                                        placeholder={authorMode === 'counterexample'
+                                            ? (counterSurface.trim()
+                                                ? `Type a sentence containing "${counterSurface.trim()}" but not "${term.term}"...`
+                                                : `Enter the ambiguous surface form above first...`)
+                                            : `Type a sentence containing "${term.term}"...`}
+                                        onKeyDown={e => {
+                                            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && sentence.trim()) { e.preventDefault(); submit(); }
+                                        }}
+                                        disabled={authorMode === 'counterexample' && !counterSurface.trim()}
+                                        style={{flex:1,padding:'10px 14px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontFamily:'Jost,sans-serif',fontSize:15}} />
+                                    <button className="btn btn-primary" onClick={submit} disabled={saving || !sentence.trim() || (authorMode === 'counterexample' && !counterSurface.trim())}>Save ({'\u2318\u23CE'})</button>
+                                    <button className="btn" onClick={skip} style={{color:'var(--text-muted)'}}>Skip</button>
+                                </div>
                             </div>
                         </div>
                     )}
@@ -3263,6 +3673,15 @@
                                     {filtered.map(s => (
                                         <div key={s.id} style={{padding:'6px 10px',borderBottom:'1px solid rgba(255,255,255,0.04)',fontSize:12,display:'flex',alignItems:'center',gap:8}}>
                                             <span style={{color:'var(--accent)',fontWeight:600,minWidth:80,fontFamily:'monospace'}}>{s.term}</span>
+                                            <span style={{
+                                                fontSize:10,
+                                                padding:'2px 6px',
+                                                borderRadius:999,
+                                                border:'1px solid var(--border)',
+                                                color:s.kind === 'counterexample' ? 'var(--warning)' : 'var(--text-muted)'
+                                            }}>
+                                                {s.kind === 'counterexample' ? `counterexample${s.surface_form ? `: ${s.surface_form}` : ''}` : 'term'}
+                                            </span>
                                             {editingId === s.id ? (
                                                 <input value={editValue} onChange={e => setEditValue(e.target.value)} autoFocus
                                                     onKeyDown={async e => {
@@ -3294,6 +3713,11 @@
                             <div className="vocab-editor" style={{maxWidth: 860, width: '92vw'}}>
                                 <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
                                     <div className="term" style={{flex:1,textAlign:'left'}}>{recordingSentence.term}</div>
+                                    {recordingSentence.kind === 'counterexample' && (
+                                        <span style={{fontSize:11,color:'var(--warning)',border:'1px solid var(--border)',borderRadius:999,padding:'2px 8px'}}>
+                                            counterexample{recordingSentence.surface_form ? `: ${recordingSentence.surface_form}` : ''}
+                                        </span>
+                                    )}
                                     <button onClick={closeRecordings} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:18}}>&times;</button>
                                 </div>
                                 <div style={{color:'var(--text-muted)',fontSize:13,marginBottom:12,lineHeight:1.5}}>
@@ -3358,19 +3782,27 @@
                                     </div>
                                     {rapidFireError && <div className="pipeline-error" style={{marginBottom:12}}>{rapidFireError}</div>}
                                     <div style={{display:'flex',gap:10,alignItems:'center',justifyContent:'center',marginBottom:18}}>
-                                        <button className={`record-btn ${recording ? 'active' : ''}`} onClick={recording ? stopSentenceRecording : startRapidFireRecording} disabled={recordingBusy || rapidFireBusy}
-                                            title={recording ? 'Stop recording' : 'Record this take'}>
+                                        <button className={`record-btn ${recording ? 'active' : ''}`} onClick={recording ? () => finishRapidFireRecording({autoRestartRapidFire: true}) : startRapidFireRecording} disabled={recordingBusy || rapidFireBusy}
+                                            title={recording ? 'Stop recording and keep this take' : 'Record this take'}>
                                             {recordingBusy || rapidFireBusy ? '…' : recording ? '\u25A0' : '\u25CF'}
                                         </button>
                                         <span style={{fontSize:13,color:'var(--text-muted)'}}>
-                                            {recording ? 'Recording...' : recordingBusy || rapidFireBusy ? 'Saving take...' : 'Click or press space to record, then it jumps to the next sentence'}
+                                            {recording ? 'Recording... press Space to keep & next, or R to retry' : recordingBusy || rapidFireBusy ? 'Preparing or saving...' : 'Press Space to record, R to retry, Esc to close'}
                                         </span>
                                     </div>
                                     <div style={{display:'flex',gap:8,justifyContent:'center',flexWrap:'wrap'}}>
-                                        <button className="btn btn-primary btn-sm" onClick={startRapidFireRecording} disabled={recording || recordingBusy || rapidFireBusy}>Record</button>
+                                        <button className="btn btn-primary btn-sm" onClick={recording ? () => finishRapidFireRecording({autoRestartRapidFire: true}) : startRapidFireRecording} disabled={recordingBusy || rapidFireBusy}>
+                                            {recording ? 'Keep & next' : 'Record'}
+                                        </button>
                                         <button className="btn btn-sm" onClick={() => {
-                                            stopSentenceRecording();
-                                            if (sentences && sentences.length > 0) {
+                                            if (recording) {
+                                                finishRapidFireRecording({discard: true}).then(() => startRapidFireRecording());
+                                            }
+                                        }} disabled={!recording || recordingBusy || rapidFireBusy}>Retry (R)</button>
+                                        <button className="btn btn-sm" onClick={() => {
+                                            if (recording) {
+                                                finishRapidFireRecording({discard: true});
+                                            } else if (sentences && sentences.length > 0) {
                                                 setRapidFireSentence(pickRapidFireSentence(sentences, rapidFireSentence.id));
                                             }
                                         }} disabled={recordingBusy || rapidFireBusy}>Skip</button>
@@ -3921,10 +4353,11 @@
         // ==================== TRAIN PAGE ====================
         function TrainPage() {
             const [status, setStatus] = useState(null);
+            const [jobs, setJobs] = useState([]);
             const [runningJob, setRunningJob] = useState(null);
             const [jobLog, setJobLog] = useState('');
             const [error, setError] = useState(null);
-            const [model, setModel] = useState('Qwen/Qwen2.5-0.5B');
+            const [model, setModel] = useState('Qwen/Qwen3.5-0.8B');
             const [iters, setIters] = useState(2000);
             const [batch, setBatch] = useState(4);
             const [layers, setLayers] = useState(8);
@@ -3944,9 +4377,11 @@
             const load = () => Promise.all([
                 api('/api/pipeline/status'),
                 api('/api/pipeline/template-coverage').catch(() => null),
-            ]).then(([s, coverage]) => {
+                api('/api/jobs').catch(() => []),
+            ]).then(([s, coverage, jobList]) => {
                 setStatus(s);
                 setTemplateCoverage(coverage);
+                setJobs(Array.isArray(jobList) ? jobList : []);
                 if (s.running_job && !runningJob) setRunningJob(s.running_job);
             });
             useEffect(() => { load(); }, []);
@@ -3956,6 +4391,10 @@
                 const poll = async () => {
                     const job = await api(`/api/jobs/${runningJob.id}`);
                     setJobLog(job.log);
+                    setJobs(prev => {
+                        const rest = prev.filter(j => j.id !== job.id);
+                        return [job, ...rest].sort((a, b) => b.id - a.id).slice(0, 50);
+                    });
                     if (job.status !== 'running') { setRunningJob(null); load(); }
                 };
                 poll(); pollRef.current = setInterval(poll, 2000);
@@ -3983,15 +4422,59 @@
             const helpStyle = {fontSize:11,color:'var(--text-muted)',lineHeight:1.4,marginTop:2};
             const paramRow = {display:'flex',gap:12,alignItems:'flex-start',marginBottom:12};
             const paramLabel = {fontSize:12,color:'var(--text-muted)',fontWeight:600,minWidth:90,paddingTop:6};
+            const subtleCard = {padding:'10px 12px',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:10};
+
+            const parseJobConfig = job => {
+                if (!job?.config) return null;
+                try { return JSON.parse(job.config); } catch (_) { return null; }
+            };
+            const formatTrainConfig = cfg => {
+                if (!cfg) return [];
+                return [
+                    ['Model', cfg.model || ''],
+                    ['Batch', cfg.batch_size ?? ''],
+                    ['Layers', cfg.num_layers ?? ''],
+                    ['Iters', cfg.iters ?? ''],
+                    ['Patience', cfg.patience ?? cfg.early_stop_patience ?? ''],
+                    ['Eval interval', cfg.steps_per_eval ?? ''],
+                ].filter(([, value]) => value !== '' && value !== null && value !== undefined);
+            };
+            const renderTrainConfigCard = (title, job, tone) => {
+                const cfg = parseJobConfig(job);
+                if (!cfg) return null;
+                const valueColor = tone === 'running' ? 'var(--warning)' : 'var(--text)';
+                return (
+                    <div style={subtleCard}>
+                        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+                            <b style={{fontSize:12}}>{title}</b>
+                            <span style={{fontSize:11,color:'var(--text-muted)'}}>job #{job.id}</span>
+                            {job.status === 'running' && <span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:'var(--warning)'}} />}
+                        </div>
+                        <div style={{display:'grid',gridTemplateColumns:'repeat(3, minmax(0, 1fr))',gap:'6px 12px',fontSize:12}}>
+                            {formatTrainConfig(cfg).map(([label, value]) => (
+                                <div key={label}>
+                                    <div style={{fontSize:10,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.04em'}}>{label}</div>
+                                    <div style={{color:valueColor,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{String(value)}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                );
+            };
 
             const trainMetrics = (() => {
                 const lines = (jobLog || '').split('\n');
                 const train = [];
                 const val = [];
+                const resources = [];
                 let totalIters = null;
                 for (const line of lines) {
                     const start = line.match(/Starting training: .*iters=(\d+)/);
                     if (start) totalIters = parseInt(start[1], 10) || totalIters;
+                    if (line.startsWith('RESOURCE ')) {
+                        try { resources.push(JSON.parse(line.slice('RESOURCE '.length))); } catch (_) {}
+                        continue;
+                    }
                     const trainMatch = line.match(/^Iter\s+(\d+):\s+Train loss\s+([0-9.]+),\s+Learning Rate\s+([0-9.eE+-]+),\s+It\/sec\s+([0-9.]+),\s+Tokens\/sec\s+([0-9.]+),\s+Trained Tokens\s+([0-9,]+),\s+Peak mem\s+([0-9.]+)\s+GB/);
                     if (trainMatch) {
                         train.push({
@@ -4016,9 +4499,12 @@
                 }
                 const latestTrain = train[train.length - 1] || null;
                 const latestVal = val[val.length - 1] || null;
+                const latestResource = resources[resources.length - 1] || null;
                 const bestVal = val.length ? val.reduce((best, p) => p.loss < best.loss ? p : best, val[0]) : null;
                 const currentIter = Math.max(latestTrain?.iter || 0, latestVal?.iter || 0);
-                return {train, val, latestTrain, latestVal, bestVal, totalIters, currentIter};
+                const peakProcessTreeRssMb = resources.reduce((best, sample) => Math.max(best, sample.process_tree_rss_mb || 0), 0);
+                const peakGpuUtilPercent = resources.reduce((best, sample) => Math.max(best, sample.gpu_device_util_percent || 0), 0);
+                return {train, val, resources, latestTrain, latestVal, latestResource, bestVal, totalIters, currentIter, peakProcessTreeRssMb, peakGpuUtilPercent};
             })();
 
             const renderLossChart = () => {
@@ -4029,14 +4515,23 @@
                 const pad = 24;
                 const maxIter = Math.max(trainMetrics.totalIters || 0, trainMetrics.currentIter || 1, 1);
                 const losses = series.map(p => p.loss).filter(Number.isFinite);
-                const minLoss = Math.min(...losses);
                 const maxLoss = Math.max(...losses);
-                const span = Math.max(maxLoss - minLoss, 0.02);
+                const positiveLosses = losses.filter(loss => loss > 0);
+                const lossFloor = positiveLosses.length
+                    ? Math.min(1e-2, Math.max(Math.min(...positiveLosses) / 2, 1e-4))
+                    : 1e-4;
+                const logMin = Math.log10(lossFloor);
+                const logMax = Math.log10(Math.max(maxLoss, lossFloor * 10));
+                const logSpan = Math.max(logMax - logMin, 1);
+                const formatLossTick = loss => (loss < 0.01 ? loss.toFixed(4) : loss.toFixed(3));
                 const x = iter => pad + (iter / maxIter) * (width - pad * 2);
-                const y = loss => height - pad - ((loss - minLoss) / span) * (height - pad * 2);
+                const y = loss => {
+                    const clamped = Math.max(loss, lossFloor);
+                    return height - pad - ((Math.log10(clamped) - logMin) / logSpan) * (height - pad * 2);
+                };
                 const pts = arr => arr.map(p => `${x(p.iter).toFixed(1)},${y(p.loss).toFixed(1)}`).join(' ');
                 const grid = [0, 0.25, 0.5, 0.75, 1].map(t => {
-                    const loss = minLoss + span * t;
+                    const loss = 10 ** (logMin + logSpan * t);
                     const yy = y(loss);
                     return {loss, yy};
                 });
@@ -4052,7 +4547,7 @@
                             {grid.map((g, i) => (
                                 <g key={i}>
                                     <line x1={pad} y1={g.yy} x2={width - pad} y2={g.yy} stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
-                                    <text x={8} y={g.yy + 4} fill="var(--text-muted)" fontSize="10">{g.loss.toFixed(3)}</text>
+                                    <text x={8} y={g.yy + 4} fill="var(--text-muted)" fontSize="10">{formatLossTick(g.loss)}</text>
                                 </g>
                             ))}
                             <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
@@ -4066,6 +4561,7 @@
                         <div style={{display:'flex',gap:14,marginTop:8,flexWrap:'wrap',fontSize:12,color:'var(--text-muted)'}}>
                             <span><span style={{display:'inline-block',width:10,height:10,background:'rgba(88,166,255,0.95)',borderRadius:2,marginRight:6,verticalAlign:'middle'}} />Train loss</span>
                             <span><span style={{display:'inline-block',width:10,height:10,background:'rgba(126,231,135,0.95)',borderRadius:2,marginRight:6,verticalAlign:'middle'}} />Val loss</span>
+                            <span>Log scale</span>
                             {trainMetrics.bestVal && <span>Best val at iter {trainMetrics.bestVal.iter.toLocaleString()}</span>}
                         </div>
                     </div>
@@ -4074,6 +4570,8 @@
 
             const rt = runningJob?.job_type;
             const prepareRunning = rt === 'prepare';
+            const runningTrainJob = jobs.find(j => j.job_type === 'train' && j.status === 'running') || null;
+            const lastCompletedTrainJob = jobs.find(j => j.job_type === 'train' && j.status === 'completed') || null;
 
             return (
                 <div className="container">
@@ -4262,6 +4760,22 @@
                         </div>
                     )}
 
+                    {trainMetrics.latestResource && (
+                        <div className="stats-grid" style={{marginBottom:16}}>
+                            <div className="stat-card"><div className="value">{(trainMetrics.latestResource.process_tree_rss_mb / 1024).toFixed(2)}GB</div><div className="label">MLX RSS</div></div>
+                            {trainMetrics.peakProcessTreeRssMb > 0 && <div className="stat-card"><div className="value">{(trainMetrics.peakProcessTreeRssMb / 1024).toFixed(2)}GB</div><div className="label">Peak MLX RSS</div></div>}
+                            <div className="stat-card"><div className="value">{(trainMetrics.latestResource.system_used_memory_mb / 1024).toFixed(1)}GB</div><div className="label">System Used</div></div>
+                            <div className="stat-card"><div className="value">{(trainMetrics.latestResource.system_available_memory_mb / 1024).toFixed(1)}GB</div><div className="label">System Avail</div></div>
+                            <div className="stat-card"><div className="value">{(trainMetrics.latestResource.system_free_memory_mb / 1024).toFixed(1)}GB</div><div className="label">System Free</div></div>
+                            <div className="stat-card"><div className="value">{(trainMetrics.latestResource.system_total_memory_mb / 1024).toFixed(1)}GB</div><div className="label">System Total</div></div>
+                            {Number.isFinite(trainMetrics.latestResource.gpu_device_util_percent) && <div className="stat-card"><div className="value">{Math.round(trainMetrics.latestResource.gpu_device_util_percent)}%</div><div className="label">GPU Util</div></div>}
+                            {trainMetrics.peakGpuUtilPercent > 0 && <div className="stat-card"><div className="value">{Math.round(trainMetrics.peakGpuUtilPercent)}%</div><div className="label">Peak GPU</div></div>}
+                            {Number.isFinite(trainMetrics.latestResource.gpu_in_use_system_memory_mb) && <div className="stat-card"><div className="value">{(trainMetrics.latestResource.gpu_in_use_system_memory_mb / 1024).toFixed(2)}GB</div><div className="label">GPU In Use</div></div>}
+                            {Number.isFinite(trainMetrics.latestResource.gpu_alloc_system_memory_mb) && <div className="stat-card"><div className="value">{(trainMetrics.latestResource.gpu_alloc_system_memory_mb / 1024).toFixed(2)}GB</div><div className="label">GPU Alloc</div></div>}
+                            {Number.isFinite(trainMetrics.latestResource.gpu_driver_system_memory_mb) && <div className="stat-card"><div className="value">{(trainMetrics.latestResource.gpu_driver_system_memory_mb / 1024).toFixed(2)}GB</div><div className="label">GPU Driver</div></div>}
+                        </div>
+                    )}
+
                     {renderLossChart()}
 
                     {trainExamples > 0 && (
@@ -4271,6 +4785,19 @@
                                 {' '}At batch={batch}, 1 epoch = <b>{epochSteps.toLocaleString()}</b> steps.
                                 {' '}{iters} iters = <b>{epochs} epochs</b>.
                             </span>
+                        </div>
+                    )}
+
+                    {(runningTrainJob || lastCompletedTrainJob) && (
+                        <div className="card" style={{marginBottom:16}}>
+                            <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10,flexWrap:'wrap'}}>
+                                <h3 style={{margin:0,flex:1}}>Train Config Reality Check</h3>
+                                <span style={{fontSize:11,color:'var(--text-muted)'}}>Form fields below are editable defaults. These cards show the actual persisted job configs.</span>
+                            </div>
+                            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))',gap:12}}>
+                                {renderTrainConfigCard('Running train', runningTrainJob, 'running')}
+                                {renderTrainConfigCard('Last completed train', lastCompletedTrainJob, 'completed')}
+                            </div>
                         </div>
                     )}
 
@@ -4359,8 +4886,9 @@
             const [previewLabel, setPreviewLabel] = useState('');
             const [previewBuffer, setPreviewBuffer] = useState(null);
             const [expandedEntry, setExpandedEntry] = useState(null);
+            const [feedbackBusy, setFeedbackBusy] = useState({});
+            const [feedbackAdded, setFeedbackAdded] = useState({});
             const pollRef = useRef(null);
-            const logRef = useRef(null);
             const recordingCacheRef = useRef(new Map());
             const activePreset = evalPresets.find(p => p.repeats === repeats && Math.abs(p.noise - noiseLevel) < 0.0001)?.id || null;
 
@@ -4369,7 +4897,6 @@
                 if (s.running_job && !runningJob) setRunningJob(s.running_job);
             });
             useEffect(() => { load(); }, []);
-            useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [jobLog]);
             useEffect(() => {
                 if (!runningJob) { setLiveEval(null); return; }
                 const poll = async () => {
@@ -4442,6 +4969,36 @@
                 } catch (e) { setError(e.message); }
             };
             const stopJob = async () => { try { await api('/api/jobs/stop', {method: 'POST'}); } catch (e) {} };
+            const evalFeedbackKey = (e) => [e.recording_id || '', e.term || '', e.take_no || '', e.run_no || '', e.qwen || '', e.expected || ''].join('|');
+            const addEvalMistake = async (e) => {
+                const key = evalFeedbackKey(e);
+                setFeedbackBusy(prev => ({...prev, [key]: true}));
+                try {
+                    const res = await api('/api/pipeline/eval-add-mistake', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            recording_id: e.recording_id,
+                            term: e.term,
+                            kind: e.kind,
+                            surface_form: e.surface_form,
+                            sentence: e.sentence,
+                            expected: e.expected,
+                            qwen: e.qwen,
+                            alignment_failed: !!e.alignment_failed,
+                            alignments: e.alignments,
+                            cons_time: e.cons_time,
+                            trim_info: e.trim_info,
+                            trace: e.trace,
+                        }),
+                    });
+                    if (!res.ok) throw new Error(res.error || 'Failed to add eval mistake.');
+                    setFeedbackAdded(prev => ({...prev, [key]: {id: res.id, is_new: res.is_new}}));
+                } catch (err) {
+                    alert(err.message);
+                } finally {
+                    setFeedbackBusy(prev => ({...prev, [key]: false}));
+                }
+            };
 
             if (!status) return <div className="container"><p>Loading...</p></div>;
             const isRunning = !!runningJob;
@@ -4466,8 +5023,8 @@
             }).filter(Boolean) : [];
             const entries = ev?.entries || parsedLogEntries;
 
-            const catColors = {fixed:'#7ee787', kept:'#58a6ff', broken:'#f85149', wrong:'#d29922', wrong_fix:'#d29922', blank:'#8b949e', timeout:'#8b949e'};
-            const catLabels = {fixed:'Fixed', kept:'Kept', broken:'Broken', wrong:'Wrong', wrong_fix:'Wrong fix', blank:'Blank', timeout:'Timeout'};
+            const catColors = {fixed:'#7ee787', kept:'#58a6ff', broken:'#f85149', wrong:'#d29922', align_fail:'#ff7b72', wrong_fix:'#d29922', blank:'#8b949e', timeout:'#8b949e'};
+            const catLabels = {fixed:'Fixed', kept:'Kept', broken:'Broken', wrong:'Wrong', align_fail:'Align fail', wrong_fix:'Wrong fix', blank:'Blank', timeout:'Timeout'};
             const filtered = filter === 'all' ? entries : entries.filter(e => e.cat === filter);
 
             const progress = ev ? (ev.total || 0) : 0;
@@ -4558,6 +5115,7 @@
                                 <div className="stat-card"><div className="value" style={{color:'var(--success)',fontSize:28}}>{ev.post_accuracy?.toFixed(1) ?? '?'}%</div><div className="label">Post-correction</div></div>
                                 <div className="stat-card"><div className="value" style={{color:catColors.fixed}}>{ev.correct||0}</div><div className="label">Correct</div></div>
                                 <div className="stat-card"><div className="value" style={{color:catColors.wrong}}>{ev.wrong||0}</div><div className="label">Wrong</div></div>
+                                <div className="stat-card"><div className="value" style={{color:catColors.align_fail}}>{ev.alignment_failed||0}</div><div className="label">Align fail</div></div>
                                 <div className="stat-card"><div className="value" style={{color:catColors.blank}}>{ev.blank||0}</div><div className="label">Blank</div></div>
                             </div>
                             <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:8}}>
@@ -4567,8 +5125,8 @@
                             </div>
                             {ev.total > 0 && (() => {
                                 const total = ev.total;
-                                const segments = ['correct','wrong','blank','timeouts'].filter(k => ev[k] > 0);
-                                const colors = {correct:'#7ee787', wrong:'#d29922', blank:'#8b949e', timeouts:'#8b949e'};
+                                const segments = ['correct','wrong','alignment_failed','blank','timeouts'].filter(k => ev[k] > 0);
+                                const colors = {correct:'#7ee787', wrong:'#d29922', alignment_failed:'#ff7b72', blank:'#8b949e', timeouts:'#8b949e'};
                                 return <div style={{display:'flex',height:6,borderRadius:3,overflow:'hidden',marginBottom:4}}>
                                     {segments.map(k => <div key={k} style={{width:`${ev[k]/total*100}%`,background:colors[k]}} title={`${k}: ${ev[k]}`} />)}
                                 </div>;
@@ -4579,7 +5137,7 @@
                     {entries.length > 0 && (
                         <div>
                             <div style={{display:'flex',gap:4,marginBottom:8,flexWrap:'wrap'}}>
-                                {['all','fixed','kept','broken','wrong','wrong_fix','blank'].map(cat => {
+                                {['all','fixed','kept','broken','wrong','align_fail','wrong_fix','blank'].map(cat => {
                                     const count = cat === 'all' ? entries.length : entries.filter(e => e.cat === cat).length;
                                     if (count === 0 && cat !== 'all') return null;
                                     return <button key={cat} onClick={() => setFilter(cat)}
@@ -4591,24 +5149,60 @@
                                     </button>;
                                 })}
                             </div>
-                            <div ref={logRef} style={{maxHeight:600,overflow:'auto',border:'1px solid var(--border)',borderRadius:8,background:'var(--bg)'}}>
+                            <div style={{maxHeight:600,overflow:'auto',border:'1px solid var(--border)',borderRadius:8,background:'var(--bg)'}}>
                                 {filtered.map((e, i) => (
                                     <div key={i} style={{padding:'8px 12px',borderBottom:'1px solid rgba(255,255,255,0.08)',fontSize:12,fontFamily:'monospace',lineHeight:1.5}}>
+                                        {(() => {
+                                            const feedbackKey = evalFeedbackKey(e);
+                                            const canAddMistake =
+                                                e.cat === 'wrong' &&
+                                                !e.alignment_failed &&
+                                                e.kind !== 'counterexample' &&
+                                                !!String(e.expected || '').trim() &&
+                                                !!String(e.qwen || '').trim();
+                                            const feedbackState = feedbackAdded[feedbackKey];
+                                            const isFeedbackBusy = !!feedbackBusy[feedbackKey];
+                                            return (
                                         <div style={{display:'flex',gap:8,alignItems:'baseline',marginBottom:4}}>
                                             <span style={{color:catColors[e.cat],fontWeight:700,fontSize:11,minWidth:65}}>[{e.cat}]</span>
                                             <span style={{color:'var(--text)',fontWeight:600}}>{e.term}</span>
                                             {e.run_no && e.take_no && <span style={{color:'var(--text-muted)',fontSize:11}}>(take {e.take_no}, run {e.run_no})</span>}
                                             {e.variant_no && <span style={{color:'var(--text-muted)',fontSize:11}}>(synthetic {e.variant_no})</span>}
-                                            {(e.cat === 'wrong' || e.cat === 'broken') && e.alignments && (
+                                            {canAddMistake && (
+                                                feedbackState ? (
+                                                    <span style={{fontSize:11,color:'var(--success)'}}>
+                                                        {feedbackState.is_new ? 'Added to mistakes' : 'Mistake hit-count bumped'}
+                                                    </span>
+                                                ) : (
+                                                    <button
+                                                        className="btn"
+                                                        style={{padding:'2px 8px',minHeight:'auto',fontSize:11}}
+                                                        onClick={() => addEvalMistake(e)}
+                                                        disabled={isFeedbackBusy}
+                                                        title={`Add mistake pair ${e.qwen} → ${e.expected} to corpus_pairs`}
+                                                    >
+                                                        {isFeedbackBusy ? 'Adding…' : 'Add to mistakes'}
+                                                    </button>
+                                                )
+                                            )}
+                                            {(e.cat === 'wrong' || e.cat === 'broken') && (e.alignments || e.trace) && (
                                                 <button className="btn" style={{padding:'2px 8px',minHeight:'auto',fontSize:11}} onClick={() => setExpandedEntry(expandedEntry === i ? null : i)}>
                                                     {expandedEntry === i ? 'Hide details' : 'Details'}
                                                 </button>
                                             )}
                                         </div>
+                                            );
+                                        })()}
                                         <div style={{paddingLeft:8,borderLeft:'2px solid rgba(255,255,255,0.08)'}}>
                                             <div><span style={{color:'var(--text-muted)',fontSize:10,display:'inline-block',width:55}}>ASR:</span> <span style={{color:'#58a6ff'}}>{e.qwen}</span></div>
                                             <div><span style={{color:'var(--text-muted)',fontSize:10,display:'inline-block',width:55}}>model:</span> <span style={{color: e.cat === 'fixed' || e.cat === 'kept' ? 'var(--success)' : e.cat === 'blank' ? 'var(--text-muted)' : 'var(--error)', fontWeight: 400}}>{e.output || '(empty)'}</span></div>
                                             {e.expected && <div><span style={{color:'var(--text-muted)',fontSize:10,display:'inline-block',width:55}}>expected:</span> <span style={{color:'var(--text-muted)'}}>{e.expected}</span></div>}
+                                            {e.extracted_expected && e.extracted_expected !== e.expected && (
+                                                <div><span style={{color:'var(--text-muted)',fontSize:10,display:'inline-block',width:55}}>extract:</span> <span style={{color:'var(--warning)'}}>{e.extracted_expected}</span></div>
+                                            )}
+                                            {e.alignment_failed && (
+                                                <div><span style={{color:'var(--text-muted)',fontSize:10,display:'inline-block',width:55}}>trace:</span> <span style={{color:'var(--warning)'}}>alignment failed or expected fragment mismatch</span></div>
+                                            )}
                                             {expandedEntry === i && e.alignments && (() => {
                                                 const tt = e.cons_time;
                                                 const ti = e.trim_info;
@@ -4668,6 +5262,25 @@
                                                     {renderTL('Expected', e.alignments.expected, 'rgba(88,166,255,0.6)')}
                                                     {renderTL('ASR', e.alignments.asr, 'rgba(210,153,34,0.7)')}
                                                     {renderTL('Model', e.alignments.corrected, 'rgba(126,231,135,0.7)')}
+                                                    {e.trace && (
+                                                        <div style={{marginTop:10}}>
+                                                            <div style={{fontSize:11,fontWeight:600,color:'var(--text-muted)',marginBottom:6}}>Decision trace</div>
+                                                            <pre style={{
+                                                                margin:0,
+                                                                padding:'10px 12px',
+                                                                whiteSpace:'pre-wrap',
+                                                                wordBreak:'break-word',
+                                                                fontSize:11,
+                                                                lineHeight:1.45,
+                                                                background:'rgba(255,255,255,0.03)',
+                                                                border:'1px solid rgba(255,255,255,0.08)',
+                                                                borderRadius:6,
+                                                                color:'var(--text-muted)',
+                                                                overflow:'auto',
+                                                                maxHeight:280,
+                                                            }}>{JSON.stringify(e.trace, null, 2)}</pre>
+                                                        </div>
+                                                    )}
                                                 </div>;
                                             })()}
                                         </div>
@@ -4717,6 +5330,44 @@
             const [transcribing, setTranscribing] = useState(false);
             const mediaRef = useRef(null);
 
+            const demoRowLabelStyle = {
+                fontSize: 11,
+                letterSpacing: '0.5px',
+                textTransform: 'uppercase',
+                opacity: 0.7,
+                width: 132,
+                flexShrink: 0,
+                paddingTop: 2,
+            };
+
+            const demoRowStyle = {
+                display: 'flex',
+                gap: 12,
+                alignItems: 'flex-start',
+            };
+
+            const renderCorrectedDiff = (baseline, corrected) => {
+                const segments = diffSegments(corrected || '', baseline || '');
+                return segments.map((seg, idx) => {
+                    if (seg.same) {
+                        return <React.Fragment key={idx}>{seg.written}{' '}</React.Fragment>;
+                    }
+                    if (!seg.written || seg.written === '\u2014') {
+                        return null;
+                    }
+                    return (
+                        <React.Fragment key={idx}>
+                            <span style={{
+                                textDecorationLine: 'underline',
+                                textDecorationThickness: '2px',
+                                textUnderlineOffset: '0.18em',
+                                textDecorationColor: 'rgba(126,231,135,0.8)',
+                            }}>{seg.written}</span>{' '}
+                        </React.Fragment>
+                    );
+                });
+            };
+
             const correct = async (parakeet, qwen) => {
                 setCorrecting(true);
                 try {
@@ -4730,7 +5381,7 @@
 
             const startRec = async () => {
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+                    const stream = await getRecordingStream();
                     const mr = new MediaRecorder(stream, {mimeType: 'audio/webm'});
                     const chunks = [];
                     mr.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
@@ -4801,16 +5452,27 @@
                             </button>
                         </div>
                         {result && (
-                            <div style={{padding: '12px 16px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: '1px solid rgba(88,166,255,0.1)', fontSize: 13, lineHeight: 1.8}}>
+                            <div style={{padding: '14px 16px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: '1px solid rgba(88,166,255,0.1)', fontSize: 13, lineHeight: 1.8}}>
                                 {result.parakeet !== result.qwen ? (<>
-                                    <div><span style={{color: '#7ee787', opacity: 0.6, fontSize: 11, letterSpacing: '0.5px', textTransform: 'uppercase'}}>Parakeet raw</span> {result.parakeet}</div>
-                                    <div><span style={{color: '#58a6ff', opacity: 0.6, fontSize: 11, letterSpacing: '0.5px', textTransform: 'uppercase'}}>Qwen raw</span> {result.qwen}</div>
+                                    <div style={demoRowStyle}>
+                                        <span style={{...demoRowLabelStyle, color: '#7ee787'}}>Parakeet raw</span>
+                                        <div style={{flex: 1}}>{result.parakeet}</div>
+                                    </div>
+                                    <div style={demoRowStyle}>
+                                        <span style={{...demoRowLabelStyle, color: '#58a6ff'}}>Qwen raw</span>
+                                        <div style={{flex: 1}}>{result.qwen}</div>
+                                    </div>
                                 </>) : (
-                                    <div><span style={{opacity: 0.6, fontSize: 11, letterSpacing: '0.5px', textTransform: 'uppercase'}}>Qwen input</span> {result.qwen}</div>
+                                    <div style={demoRowStyle}>
+                                        <span style={{...demoRowLabelStyle, color: '#58a6ff'}}>Qwen input</span>
+                                        <div style={{flex: 1}}>{result.qwen}</div>
+                                    </div>
                                 )}
-                                <div style={{marginTop: 4, paddingTop: 4, borderTop: '1px solid rgba(88,166,255,0.1)'}}>
-                                    <span style={{color: 'var(--success)', fontSize: 11, letterSpacing: '0.5px', textTransform: 'uppercase'}}>Corrected qwen</span>{' '}
-                                    <span style={{fontWeight: 600}}>{result.corrected}</span>
+                                <div style={{marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(88,166,255,0.1)'}}>
+                                    <div style={demoRowStyle}>
+                                        <span style={{...demoRowLabelStyle, color: 'var(--success)'}}>Corrected qwen</span>
+                                        <div style={{flex: 1}}>{renderCorrectedDiff(result.qwen, result.corrected)}</div>
+                                    </div>
                                 </div>
                             </div>
                         )}
@@ -4830,7 +5492,7 @@
             const [trainIters, setTrainIters] = useState(1000);
             const [trainBatch, setTrainBatch] = useState(1);
             const [trainLayers, setTrainLayers] = useState(4);
-            const [trainModel, setTrainModel] = useState('Qwen/Qwen2.5-0.5B');
+            const [trainModel, setTrainModel] = useState('Qwen/Qwen3.5-0.8B');
             const [identityCount, setIdentityCount] = useState(95000);
             // Vocab scan config
             const [scanBatch, setScanBatch] = useState(20);
@@ -5488,6 +6150,76 @@
             );
         }
 
+        function SettingsPage() {
+            const [settings, setSettings] = useState(null);
+            const [templateTarget, setTemplateTarget] = useState('200');
+            const [confusionTarget, setConfusionTarget] = useState('8');
+            const [saving, setSaving] = useState(false);
+
+            const load = async () => {
+                const data = await api('/api/settings');
+                setSettings(data);
+                setTemplateTarget(String(data.background_template_target_per_term ?? 200));
+                setConfusionTarget(String(data.background_confusion_target_per_term ?? 8));
+            };
+
+            useEffect(() => { load(); }, []);
+
+            const save = async () => {
+                setSaving(true);
+                try {
+                    const data = await api('/api/settings', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            background_template_target_per_term: parseInt(templateTarget, 10) || 200,
+                            background_confusion_target_per_term: parseInt(confusionTarget, 10) || 8,
+                        }),
+                    });
+                    setSettings(data);
+                    setTemplateTarget(String(data.background_template_target_per_term ?? 200));
+                    setConfusionTarget(String(data.background_confusion_target_per_term ?? 8));
+                } catch (e) {
+                    alert(`Save failed: ${e.message}`);
+                }
+                setSaving(false);
+            };
+
+            const inputStyle = {
+                width: 140,
+                padding: '8px 10px',
+                background: 'var(--bg)',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                color: 'var(--text)',
+                fontFamily: 'Jost,sans-serif',
+                fontSize: 14,
+            };
+
+            return (
+                <div className="page">
+                    <h2>Settings</h2>
+                    <div className="card" style={{maxWidth: 760}}>
+                        <h3 style={{marginTop: 0}}>Background Maintenance</h3>
+                        <div style={{display:'grid',gridTemplateColumns:'220px 160px 1fr',gap:12,alignItems:'center'}}>
+                            <div>Template target per term</div>
+                            <input type="number" min="1" max="1000" value={templateTarget} onChange={e => setTemplateTarget(e.target.value)} style={inputStyle} />
+                            <div style={{color:'var(--text-muted)',fontSize:13}}>Background hydration keeps filling reviewed terms until they reach this many total template sentences.</div>
+
+                            <div>Confusion scans per term</div>
+                            <input type="number" min="1" max="1000" value={confusionTarget} onChange={e => setConfusionTarget(e.target.value)} style={inputStyle} />
+                            <div style={{color:'var(--text-muted)',fontSize:13}}>Background confusion scan keeps sampling reviewed terms until each term has this many total scan passes.</div>
+                        </div>
+                        <div style={{marginTop: 16, display:'flex', gap:12, alignItems:'center'}}>
+                            <button className="btn" onClick={save} disabled={saving || !settings}>{saving ? 'Saving…' : 'Save'} </button>
+                            {settings && <span style={{color:'var(--text-muted)',fontSize:13}}>
+                                Current: {settings.background_template_target_per_term} templates/term, {settings.background_confusion_target_per_term} scans/term
+                            </span>}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         function App() {
             const hash = useHash();
             let page;
@@ -5500,6 +6232,7 @@
             else if (hash.startsWith('#/confusions')) page = <CorpusPage />;
             else if (hash.startsWith('#/train')) page = <TrainPage />;
             else if (hash.startsWith('#/eval')) page = <EvalPage />;
+            else if (hash.startsWith('#/settings')) page = <SettingsPage />;
             else if (hash.startsWith('#/tests')) page = <AlgorithmTestsPage />;
             else if (hash.startsWith('#/jobs')) page = <JobsPage />;
             else page = <VocabPage />;

@@ -2,10 +2,12 @@
 //!
 //! Replaces the flaky mlx_lm.server Python subprocess with direct GGUF model loading.
 
+use crate::adapter_import;
 use crate::qwen2::ModelWeights;
 use anyhow::{Context, Result};
 use candle_core::{Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
+use std::path::Path;
 
 /// Download model files from HuggingFace Hub if not cached.
 /// Returns `(model_path, tokenizer_path)`.
@@ -51,6 +53,13 @@ pub struct Qwen2Model {
 }
 
 impl Qwen2Model {
+    fn sample_next_token(logits_processor: &mut LogitsProcessor, logits: Tensor) -> Result<u32> {
+        let logits = logits.squeeze(0)?;
+        logits_processor
+            .sample(&logits)
+            .map_err(|e| anyhow::anyhow!("sample failed: {e}"))
+    }
+
     /// Load a quantized Qwen2 model from HuggingFace Hub.
     pub fn load(gguf_repo: &str, gguf_file: &str, tokenizer_repo: &str) -> Result<Self> {
         let device = best_device();
@@ -78,6 +87,29 @@ impl Qwen2Model {
         })
     }
 
+    pub fn attach_mlx_adapters(&mut self, adapter_dir: impl AsRef<Path>) -> Result<()> {
+        let imported = adapter_import::load_mlx_lora_dir(adapter_dir.as_ref(), &self.device)?;
+        let layer_count = imported.layers.len();
+        self.model.set_lora_layers(imported.layers);
+        eprintln!(
+            "[llm] Attached {} LoRA modules from {}",
+            layer_count,
+            imported.weights_path.display()
+        );
+        Ok(())
+    }
+
+    pub fn load_with_mlx_adapters(
+        gguf_repo: &str,
+        gguf_file: &str,
+        tokenizer_repo: &str,
+        adapter_dir: impl AsRef<Path>,
+    ) -> Result<Self> {
+        let mut model = Self::load(gguf_repo, gguf_file, tokenizer_repo)?;
+        model.attach_mlx_adapters(adapter_dir)?;
+        Ok(model)
+    }
+
     /// Build a Qwen2.5 ChatML prompt from system + user messages, encode to token IDs.
     pub fn encode_chat(&self, system: &str, user: &str) -> Result<Vec<u32>> {
         let prompt = format!(
@@ -88,6 +120,15 @@ impl Qwen2Model {
         let encoding = self
             .tokenizer
             .encode(prompt.as_str(), true)
+            .map_err(|e| anyhow::anyhow!("tokenizer encode failed: {e}"))?;
+        Ok(encoding.get_ids().to_vec())
+    }
+
+    /// Encode a plain prompt without adding a chat template.
+    pub fn encode_text(&self, prompt: &str) -> Result<Vec<u32>> {
+        let encoding = self
+            .tokenizer
+            .encode(prompt, true)
             .map_err(|e| anyhow::anyhow!("tokenizer encode failed: {e}"))?;
         Ok(encoding.get_ids().to_vec())
     }
@@ -121,9 +162,7 @@ impl Qwen2Model {
             .model
             .forward(&input, 0)
             .map_err(|e| anyhow::anyhow!("forward (prefill) failed: {e}"))?;
-        let mut next_token = logits_processor
-            .sample(&logits)
-            .map_err(|e| anyhow::anyhow!("sample failed: {e}"))?;
+        let mut next_token = Self::sample_next_token(&mut logits_processor, logits)?;
 
         let mut generated_tokens = Vec::new();
 
@@ -139,9 +178,7 @@ impl Qwen2Model {
                 .model
                 .forward(&input, prompt_tokens.len() + i + 1)
                 .map_err(|e| anyhow::anyhow!("forward (decode step {i}) failed: {e}"))?;
-            next_token = logits_processor
-                .sample(&logits)
-                .map_err(|e| anyhow::anyhow!("sample failed: {e}"))?;
+            next_token = Self::sample_next_token(&mut logits_processor, logits)?;
 
             if next_token == IM_END_TOKEN || next_token == ENDOFTEXT_TOKEN {
                 break;

@@ -123,7 +123,9 @@ pub fn load_mlx_lora_dir(dir: impl AsRef<Path>, device: &Device) -> Result<Impor
                 lora_b_dims
             );
         }
-        if lora_a_dims[0] != config.lora_parameters.rank || lora_b_dims[1] != config.lora_parameters.rank {
+        if lora_a_dims[0] != config.lora_parameters.rank
+            || lora_b_dims[1] != config.lora_parameters.rank
+        {
             bail!(
                 "rank mismatch for {module_name}: config rank {}, tensors {:?} and {:?}",
                 config.lora_parameters.rank,
@@ -170,7 +172,10 @@ mod tests {
             parse_module_tensor_name("model.layers.23.mlp.down_proj.lora_b"),
             Some(("model.layers.23.mlp.down_proj", TensorKind::B))
         );
-        assert_eq!(parse_module_tensor_name("model.layers.23.mlp.down_proj.weight"), None);
+        assert_eq!(
+            parse_module_tensor_name("model.layers.23.mlp.down_proj.weight"),
+            None
+        );
     }
 
     #[test]

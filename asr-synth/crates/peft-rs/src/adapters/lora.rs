@@ -760,8 +760,14 @@ mod tests {
         // Verify the loaded layer's state dict has the same tensor values.
         let loaded_state = loaded_layer.state_dict()?;
         assert_eq!(loaded_state.len(), original_state.len());
-        assert_eq!(loaded_state["lora_a.weight"].dims(), original_state["lora_a.weight"].dims());
-        assert_eq!(loaded_state["lora_b.weight"].dims(), original_state["lora_b.weight"].dims());
+        assert_eq!(
+            loaded_state["lora_a.weight"].dims(),
+            original_state["lora_a.weight"].dims()
+        );
+        assert_eq!(
+            loaded_state["lora_b.weight"].dims(),
+            original_state["lora_b.weight"].dims()
+        );
         let lora_a_diff = loaded_state["lora_a.weight"]
             .sub(&original_state["lora_a.weight"])?
             .abs()?

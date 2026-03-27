@@ -1386,6 +1386,7 @@ pub async fn api_vocab_review_approve(
         review.vocab_precomputed.remove(&id);
     }
     state.vocab_precompute_notify.notify_one();
+    state.background_work_notify.notify_one();
     Ok(Json(serde_json::json!({"ok": true})).into_response())
 }
 
@@ -1406,6 +1407,7 @@ pub async fn api_vocab_review_reject(
         review.vocab_precomputed.remove(&id);
     }
     state.vocab_precompute_notify.notify_one();
+    state.background_work_notify.notify_one();
     Ok(Json(serde_json::json!({"ok": true})).into_response())
 }
 
@@ -1424,6 +1426,7 @@ pub async fn api_vocab_review_pronunciation(
             .map_err(err)?;
         vocab.id
     };
+    state.background_work_notify.notify_one();
     // Recompute for the SAME term (don't advance to next)
     serve_vocab_review(&state, vocab_id, false).await
 }

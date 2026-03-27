@@ -20,6 +20,13 @@ use std::sync::atomic::Ordering;
 struct PreparedExample {
     prompt: String,
     completion: String,
+    allow_repeat: bool,
+}
+
+#[derive(Clone)]
+struct CounterexampleExample {
+    sentence: String,
+    weight: u32,
 }
 
 fn normalize_prepare_text(text: &str) -> String {
@@ -27,7 +34,8 @@ fn normalize_prepare_text(text: &str) -> String {
 }
 
 fn normalized_token(token: &str) -> String {
-    token.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != ':' && c != '-')
+    token
+        .trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != ':' && c != '-')
         .to_ascii_lowercase()
 }
 
@@ -60,7 +68,11 @@ fn is_prepare_example_reasonable(qwen: &str, expected: &str) -> bool {
     if qwen.is_empty() || expected.is_empty() {
         return false;
     }
-    if qwen.contains('\n') || expected.contains('\n') || qwen.contains("<|") || expected.contains("<|") {
+    if qwen.contains('\n')
+        || expected.contains('\n')
+        || qwen.contains("<|")
+        || expected.contains("<|")
+    {
         return false;
     }
 
@@ -96,6 +108,20 @@ fn sample_weighted_index(weights: &[u32], rng: &mut impl Rng) -> usize {
         pick -= weight;
     }
     weights.len().saturating_sub(1)
+}
+
+fn correction_example_repeat_count(item: &crate::db::EvalItem, eval_bonus: usize) -> usize {
+    let hit_bonus = item.hit_count.clamp(1, 5) as usize;
+    let repeat = 1 + (hit_bonus.saturating_sub(1) / 2) + eval_bonus.min(3);
+    repeat.clamp(1, 4)
+}
+
+fn counterexample_example_repeat_count(weight: u32) -> usize {
+    match weight {
+        0..=3 => 1,
+        4..=8 => 2,
+        _ => 3,
+    }
 }
 
 fn latest_eval_failure_term_weights(state: &AppState) -> HashMap<String, usize> {
@@ -146,6 +172,47 @@ const TEMPLATE_TARGET_PER_TERM: usize = 200;
 const TEMPLATE_BATCH_TERMS: usize = 4;
 const TEMPLATE_BATCH_SIZE: usize = 25;
 const TEMPLATE_MAX_ROUNDS: usize = 8;
+const COUNTEREXAMPLE_SHARE_OF_NOCHANGE: f64 = 0.5;
+const BG_TEMPLATE_TARGET_PER_TERM_DEFAULT: usize = 200;
+const BG_CONFUSION_TARGET_PER_TERM_DEFAULT: usize = 8;
+const BG_TEMPLATE_TERM_BATCH: usize = 2;
+const BG_TEMPLATE_LOCAL_ATTEMPTS_PER_TERM: usize = 4;
+const BG_TEMPLATE_OPENAI_PER_TERM: usize = 4;
+const BG_CONFUSION_BATCH_TERMS: usize = 12;
+
+struct BackgroundMaintenanceSettings {
+    template_target_per_term: usize,
+    confusion_target_per_term: usize,
+}
+
+fn load_background_maintenance_settings(state: &Arc<AppState>) -> BackgroundMaintenanceSettings {
+    let db = state.db.lock().unwrap();
+    let template_target_per_term = db
+        .get_setting_usize("background_template_target_per_term")
+        .ok()
+        .flatten()
+        .unwrap_or(BG_TEMPLATE_TARGET_PER_TERM_DEFAULT)
+        .clamp(1, 1000);
+    let confusion_target_per_term = db
+        .get_setting_usize("background_confusion_target_per_term")
+        .ok()
+        .flatten()
+        .unwrap_or(BG_CONFUSION_TARGET_PER_TERM_DEFAULT)
+        .clamp(1, 1000);
+    BackgroundMaintenanceSettings {
+        template_target_per_term,
+        confusion_target_per_term,
+    }
+}
+
+fn pick_local_tts_backend(state: &AppState) -> Option<&'static str> {
+    let names = state.tts.available_backends();
+    if names.contains(&"pocket-hq") {
+        Some("pocket-hq")
+    } else {
+        None
+    }
+}
 
 fn sentence_contains_term(sentence: &str, term: &str) -> bool {
     let sentence_lower = sentence.to_ascii_lowercase();
@@ -202,7 +269,10 @@ pub async fn api_template_coverage(
 
     let ready_terms = rows
         .iter()
-        .filter(|row| row.get("total_count").and_then(|v| v.as_i64()).unwrap_or(0) >= TEMPLATE_TARGET_PER_TERM as i64)
+        .filter(|row| {
+            row.get("total_count").and_then(|v| v.as_i64()).unwrap_or(0)
+                >= TEMPLATE_TARGET_PER_TERM as i64
+        })
         .count();
 
     Ok(Json(serde_json::json!({
@@ -210,7 +280,8 @@ pub async fn api_template_coverage(
         "ready_terms": ready_terms,
         "total_terms": rows.len(),
         "terms": rows,
-    })).into_response())
+    }))
+    .into_response())
 }
 
 pub async fn api_template_sentences(
@@ -224,7 +295,8 @@ pub async fn api_template_sentences(
         "term": term,
         "authored": authored,
         "cached": cached,
-    })).into_response())
+    }))
+    .into_response())
 }
 
 fn is_template_sentence_reasonable(sentence: &str, term: &str) -> bool {
@@ -250,7 +322,10 @@ fn is_template_sentence_reasonable(sentence: &str, term: &str) -> bool {
 
 fn merge_template_sentence(bank: &mut Vec<String>, sentence: &str) -> bool {
     let sentence = normalize_prepare_text(sentence);
-    if bank.iter().any(|existing| existing.eq_ignore_ascii_case(&sentence)) {
+    if bank
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(&sentence))
+    {
         return false;
     }
     bank.push(sentence);
@@ -439,7 +514,11 @@ async fn hydrate_prepare_template_bank(
                             continue;
                         }
                         if merge_template_sentence(existing, &sentence) {
-                            let _ = db.insert_template_sentence(&resolved_term, &sentence, "gpt-5-mini");
+                            let _ = db.insert_template_sentence(
+                                &resolved_term,
+                                &sentence,
+                                "gpt-5-mini",
+                            );
                             inserted += 1;
                         }
                     }
@@ -448,17 +527,18 @@ async fn hydrate_prepare_template_bank(
                         job_id,
                         &format!(
                             "Template batch [{}] -> {} new sentences",
-                            batch.iter().map(|(term, _)| term.as_str()).collect::<Vec<_>>().join(", "),
+                            batch
+                                .iter()
+                                .map(|(term, _)| term.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", "),
                             inserted
                         ),
                     );
                 }
                 Err(e) => {
                     let db = state.db.lock().unwrap();
-                    let _ = db.append_job_log(
-                        job_id,
-                        &format!("Template generation failed: {e}"),
-                    );
+                    let _ = db.append_job_log(job_id, &format!("Template generation failed: {e}"));
                     return bank;
                 }
             }
@@ -475,6 +555,336 @@ async fn hydrate_prepare_template_bank(
         ),
     );
     bank
+}
+
+fn background_template_candidates(
+    state: &Arc<AppState>,
+) -> anyhow::Result<Vec<(String, Option<String>)>> {
+    let settings = load_background_maintenance_settings(state);
+    let db = state.db.lock().unwrap();
+    let vocab = db.list_reviewed_vocab()?;
+    let authored = db.authored_sentence_term_counts()?;
+    let templates = db.template_sentence_term_counts()?;
+    drop(db);
+
+    let authored_map = authored
+        .into_iter()
+        .map(|(term, count)| (term.to_ascii_lowercase(), count as usize))
+        .collect::<HashMap<_, _>>();
+    let template_map = templates
+        .into_iter()
+        .map(|(term, count)| (term.to_ascii_lowercase(), count as usize))
+        .collect::<HashMap<_, _>>();
+
+    let mut needing = vocab
+        .into_iter()
+        .filter_map(|row| {
+            let key = row.term.to_ascii_lowercase();
+            let total = authored_map.get(&key).copied().unwrap_or(0)
+                + template_map.get(&key).copied().unwrap_or(0);
+            (total < settings.template_target_per_term).then_some((
+                row.term,
+                row.description,
+                total,
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    needing.sort_by_key(|(_, _, total)| *total);
+    Ok(needing
+        .into_iter()
+        .take(BG_TEMPLATE_TERM_BATCH)
+        .map(|(term, desc, _)| (term, desc))
+        .collect())
+}
+
+async fn background_hydrate_templates_once(state: &Arc<AppState>) -> anyhow::Result<bool> {
+    let settings = load_background_maintenance_settings(state);
+    let batch = background_template_candidates(state)?;
+    if batch.is_empty() {
+        return Ok(false);
+    }
+
+    let (style_examples, mut bank) = {
+        let db = state.db.lock().unwrap();
+        let mut bank = HashMap::<String, Vec<String>>::new();
+        for (term, _) in &batch {
+            let mut merged = Vec::new();
+            for sentence in db.authored_sentences_for_term(term).unwrap_or_default() {
+                if is_template_sentence_reasonable(&sentence, term) {
+                    let _ = merge_template_sentence(&mut merged, &sentence);
+                }
+            }
+            for sentence in db.template_sentences_for_term(term).unwrap_or_default() {
+                if is_template_sentence_reasonable(&sentence, term) {
+                    let _ = merge_template_sentence(&mut merged, &sentence);
+                }
+            }
+            bank.insert(term.to_ascii_lowercase(), merged);
+        }
+        (db.all_authored_sentences().unwrap_or_default(), bank)
+    };
+
+    let mut made_progress = false;
+    let mut generator =
+        synth_train::SentenceGenerator::start(&synth_train::SentenceGeneratorConfig::default())
+            .ok();
+
+    for (term, desc) in &batch {
+        let key = term.to_ascii_lowercase();
+        let Some(existing) = bank.get_mut(&key) else {
+            continue;
+        };
+        if existing.len() >= settings.template_target_per_term {
+            continue;
+        }
+        if let Some(gen) = generator.as_mut() {
+            for _ in 0..BG_TEMPLATE_LOCAL_ATTEMPTS_PER_TERM {
+                if existing.len() >= settings.template_target_per_term {
+                    break;
+                }
+                let Some(sentence) = gen.generate_sentence_retry(term, desc.as_deref(), 2)? else {
+                    continue;
+                };
+                if !is_template_sentence_reasonable(&sentence, term) {
+                    continue;
+                }
+                if merge_template_sentence(existing, &sentence) {
+                    let db = state.db.lock().unwrap();
+                    let _ = db.insert_template_sentence(term, &sentence, "local-sentgen");
+                    made_progress = true;
+                }
+            }
+        }
+    }
+
+    let needing_openai = batch
+        .iter()
+        .filter_map(|(term, desc)| {
+            let count = bank
+                .get(&term.to_ascii_lowercase())
+                .map(|items| items.len())
+                .unwrap_or(0);
+            (count < settings.template_target_per_term).then_some((term.clone(), desc.clone()))
+        })
+        .collect::<Vec<_>>();
+
+    if !needing_openai.is_empty() {
+        if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
+            if let Ok(items) = fetch_openai_template_batch(
+                &api_key,
+                &needing_openai,
+                &style_examples,
+                BG_TEMPLATE_OPENAI_PER_TERM,
+            )
+            .await
+            {
+                let db = state.db.lock().unwrap();
+                for (term, sentence) in items {
+                    let key = term.to_ascii_lowercase();
+                    let resolved_key = if bank.contains_key(&key) {
+                        Some(key)
+                    } else {
+                        needing_openai
+                            .iter()
+                            .map(|(candidate, _)| candidate.to_ascii_lowercase())
+                            .find(|candidate| sentence_contains_term(&sentence, candidate))
+                    };
+                    let Some(resolved_key) = resolved_key else {
+                        continue;
+                    };
+                    let resolved_term = needing_openai
+                        .iter()
+                        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(&resolved_key))
+                        .map(|(candidate, _)| candidate.clone())
+                        .unwrap_or_else(|| resolved_key.clone());
+                    let Some(existing) = bank.get_mut(&resolved_key) else {
+                        continue;
+                    };
+                    if existing.len() >= settings.template_target_per_term {
+                        continue;
+                    }
+                    if !is_template_sentence_reasonable(&sentence, &resolved_term) {
+                        continue;
+                    }
+                    if merge_template_sentence(existing, &sentence) {
+                        let _ =
+                            db.insert_template_sentence(&resolved_term, &sentence, "gpt-5-mini");
+                        made_progress = true;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(made_progress)
+}
+
+async fn scan_vocab_terms_incremental(
+    state: &Arc<AppState>,
+    batch: &[(String, Option<String>)],
+    tts_backend: &str,
+) -> anyhow::Result<usize> {
+    if batch.is_empty() {
+        return Ok(0);
+    }
+
+    let batch_spoken: Vec<String> = batch
+        .iter()
+        .map(|(t, ovr)| ovr.as_deref().unwrap_or(t).to_string())
+        .collect();
+    let tts_text = batch_spoken.join(", ");
+
+    let mut audio = state.tts.generate(tts_backend, &tts_text).await?;
+    audio.normalize();
+    let samples_16k = tts::resample_to_16k(&audio.samples, audio.sample_rate)?;
+    let align_items = {
+        let state2 = state.clone();
+        let samples = samples_16k.clone();
+        let text = tts_text.clone();
+        tokio::task::spawn_blocking(move || state2.aligner.align(&samples, &text)).await??
+    };
+
+    let mut scanned = 0usize;
+    let mut align_idx = 0usize;
+    for (ti, (term, _spoken_override)) in batch.iter().enumerate() {
+        let spoken = &batch_spoken[ti];
+        let spoken_words: Vec<&str> = spoken.split_whitespace().collect();
+        let num_words = spoken_words.len();
+        if align_idx + num_words > align_items.len() {
+            continue;
+        }
+
+        let start_time = align_items[align_idx].start_time;
+        let end_time = align_items[align_idx + num_words - 1].end_time;
+        align_idx += num_words;
+
+        if align_idx < align_items.len() {
+            let next_word = &align_items[align_idx].word;
+            if next_word == "," || next_word.starts_with(',') {
+                align_idx += 1;
+            }
+        }
+
+        let start_sample = (start_time * 16000.0).max(0.0) as usize;
+        let end_sample = ((end_time + 0.05) * 16000.0).min(samples_16k.len() as f64) as usize;
+        if start_sample >= end_sample || end_sample > samples_16k.len() {
+            continue;
+        }
+        let segment = samples_16k[start_sample..end_sample].to_vec();
+
+        let state_q = state.clone();
+        let seg_q = segment.clone();
+        let state_p = state.clone();
+        let seg_p = segment;
+        let qwen_task = tokio::task::spawn_blocking(move || -> String {
+            state_q
+                .asr
+                .transcribe_samples(
+                    &seg_q,
+                    qwen3_asr::TranscribeOptions::default().with_language("english"),
+                )
+                .map(|r| r.text)
+                .unwrap_or_default()
+        });
+        let parakeet_task = tokio::task::spawn_blocking(move || -> String {
+            let mut p = state_p.parakeet.lock().unwrap();
+            p.transcribe_samples(seg_p, 16000, 1, None)
+                .map(|r| r.text)
+                .unwrap_or_default()
+        });
+
+        let (qwen, parakeet) = tokio::join!(qwen_task, parakeet_task);
+        let qwen = qwen.unwrap_or_default();
+        let parakeet = parakeet.unwrap_or_default();
+        let term_lower = term.to_lowercase();
+        let qwen_match = qwen.trim().to_lowercase() == term_lower;
+        let parakeet_match = parakeet.trim().to_lowercase() == term_lower;
+
+        let db = state.db.lock().unwrap();
+        let _ = db.insert_confusion(
+            term,
+            qwen.trim(),
+            parakeet.trim(),
+            qwen_match,
+            parakeet_match,
+            tts_backend,
+        );
+        scanned += 1;
+    }
+
+    Ok(scanned)
+}
+
+async fn background_confusion_scan_once(state: &Arc<AppState>) -> anyhow::Result<bool> {
+    let Some(tts_backend) = pick_local_tts_backend(state) else {
+        return Ok(false);
+    };
+    let settings = load_background_maintenance_settings(state);
+
+    let batch = {
+        let db = state.db.lock().unwrap();
+        let vocab = db.list_reviewed_vocab()?;
+        let scanned_counts = db
+            .vocab_scan_results()?
+            .into_iter()
+            .map(|(term, total, _, _)| (term.to_ascii_lowercase(), total as usize))
+            .collect::<HashMap<_, _>>();
+        let mut candidates = vocab
+            .into_iter()
+            .filter_map(|row| {
+                let scans = scanned_counts
+                    .get(&row.term.to_ascii_lowercase())
+                    .copied()
+                    .unwrap_or(0);
+                (scans < settings.confusion_target_per_term).then_some((
+                    row.term,
+                    row.spoken_override,
+                    scans,
+                ))
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.0.cmp(&b.0)));
+        candidates
+            .into_iter()
+            .take(BG_CONFUSION_BATCH_TERMS)
+            .map(|(term, spoken_override, _)| (term, spoken_override))
+            .collect::<Vec<_>>()
+    };
+
+    if batch.is_empty() {
+        return Ok(false);
+    }
+
+    let scanned = scan_vocab_terms_incremental(state, &batch, tts_backend).await?;
+    Ok(scanned > 0)
+}
+
+pub fn spawn_background_maintenance_loop(state: Arc<AppState>, notify: Arc<tokio::sync::Notify>) {
+    tokio::spawn(async move {
+        loop {
+            notify.notified().await;
+
+            loop {
+                let mut made_progress = false;
+
+                match background_confusion_scan_once(&state).await {
+                    Ok(progress) => made_progress |= progress,
+                    Err(e) => eprintln!("[background] confusion scan failed: {e}"),
+                }
+                match background_hydrate_templates_once(&state).await {
+                    Ok(progress) => made_progress |= progress,
+                    Err(e) => eprintln!("[background] template hydration failed: {e}"),
+                }
+
+                if !made_progress {
+                    break;
+                }
+
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+        }
+    });
 }
 
 fn decode_wav_mono(wav_bytes: &[u8]) -> anyhow::Result<(Vec<f32>, u32)> {
@@ -512,6 +922,73 @@ fn decode_wav_mono(wav_bytes: &[u8]) -> anyhow::Result<(Vec<f32>, u32)> {
     }
 
     Ok((mono, spec.sample_rate))
+}
+
+fn load_authored_recording_16k(path: &str) -> anyhow::Result<Vec<f32>> {
+    let wav_bytes = std::fs::read(path)?;
+    let (mono, sample_rate) = if path.ends_with(".ogg") {
+        tts::decode_ogg_opus_mono(&wav_bytes)?
+    } else {
+        decode_wav_mono(&wav_bytes)?
+    };
+    tts::resample_to_16k(&mono, sample_rate)
+}
+
+pub fn spawn_authored_asr_precompute_loop(state: Arc<AppState>, notify: Arc<tokio::sync::Notify>) {
+    tokio::spawn(async move {
+        loop {
+            notify.notified().await;
+
+            loop {
+                let pending = {
+                    let db = state.db.lock().unwrap();
+                    db.authored_recordings_needing_qwen_clean(&state.qwen_model_key, 4)
+                };
+                let pending = match pending {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        eprintln!("[authored-asr] failed to query pending recordings: {e}");
+                        break;
+                    }
+                };
+
+                if pending.is_empty() {
+                    break;
+                }
+
+                for rec in pending {
+                    let state2 = state.clone();
+                    let model_key = state.qwen_model_key.clone();
+                    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+                        let samples_16k = load_authored_recording_16k(&rec.wav_path)?;
+                        let qwen = state2
+                            .asr
+                            .transcribe_samples(
+                                &samples_16k,
+                                qwen3_asr::TranscribeOptions::default().with_language("english"),
+                            )?
+                            .text;
+                        let db = state2.db.lock().unwrap();
+                        db.update_authored_recording_qwen_clean(rec.id, &qwen, &model_key)?;
+                        Ok(qwen)
+                    })
+                    .await;
+
+                    match result {
+                        Ok(Ok(_)) => {
+                            eprintln!("[authored-asr] cached clean qwen for recording {}", rec.id);
+                        }
+                        Ok(Err(e)) => {
+                            eprintln!("[authored-asr] failed to cache recording {}: {e}", rec.id);
+                        }
+                        Err(e) => {
+                            eprintln!("[authored-asr] task failed for recording {}: {e}", rec.id);
+                        }
+                    }
+                }
+            }
+        }
+    });
 }
 
 // ==================== Domain Types ====================
@@ -640,43 +1117,14 @@ async fn run_corpus_pass(
         .unwrap_or_default();
     let spoken_alignment = state.aligner.align(full_16k, &spoken.0).unwrap_or_default();
 
-    // Find the WRITTEN term in the original alignment, then expand into neighboring gaps.
-    // The forced aligner's word boundaries are imprecise — the actual audio for a term
-    // often bleeds into the silence gaps between alignment boxes. By expanding into those
-    // gaps we capture the full extent of what was spoken, which helps match the Qwen lane
-    // where the same audio might be split differently (e.g. "lldb" → "L" + "LDB").
     let term_lower = term.0.to_lowercase();
     let term_found_range = find_term_time_range(&orig_alignment, &term_lower);
-    let (term_start, term_end) = match term_found_range {
-        Some((start, end)) => {
-            const MIN_GAP: f64 = 0.05; // only expand into gaps > 50ms
-                                       // Expand left: if there's a real gap before the term, claim it
-            let prev_end = orig_alignment
-                .iter()
-                .filter(|a| a.end_time < start - 0.001)
-                .last()
-                .map(|a| a.end_time)
-                .unwrap_or(start);
-            let expanded_start = if start - prev_end > MIN_GAP {
-                prev_end
-            } else {
-                start
-            };
-            // Expand right: if there's a real gap after the term, claim it
-            let next_start = orig_alignment
-                .iter()
-                .find(|a| a.start_time > end + 0.001)
-                .map(|a| a.start_time)
-                .unwrap_or(end);
-            let expanded_end = if next_start - end > MIN_GAP {
-                next_start
-            } else {
-                end
-            };
-            (expanded_start, expanded_end)
-        }
-        None => (0.0, full_16k.len() as f64 / 16000.0),
-    };
+    let (term_start, term_end) = expanded_term_time_range(
+        &orig_alignment,
+        &term_lower,
+        full_16k.len() as f64 / 16000.0,
+    )
+    .unwrap_or((0.0, full_16k.len() as f64 / 16000.0));
 
     let qwen_alignment = state
         .aligner
@@ -1010,6 +1458,7 @@ fn extract_synthetic_fragment(sentence: &str, term: &str, full_text: &str) -> St
 
 struct EvalFocus {
     expected: String,
+    extracted_expected: String,
     asr: String,
     corrected: String,
     expected_alignment: serde_json::Value,
@@ -1017,6 +1466,8 @@ struct EvalFocus {
     corrected_alignment: serde_json::Value,
     cons_range: (f64, f64),
     trim_info: TrimInfo,
+    alignment_failed: bool,
+    trace: serde_json::Value,
 }
 
 fn apply_eval_noise(samples: &[f32], noise_level: f32) -> Vec<f32> {
@@ -1037,11 +1488,22 @@ fn extract_eval_focus(
     expected: &str,
     asr: &str,
     corrected: Option<&str>,
-    term: &str,
+    target_fragment: &str,
 ) -> anyhow::Result<EvalFocus> {
     let expected_align = state.aligner.align(audio_16k, expected)?;
-    let term_range = find_term_time_range(&expected_align, &term.to_lowercase())
-        .ok_or_else(|| anyhow::anyhow!("term '{}' not found in expected alignment", term))?;
+    let target_fragment_lower = target_fragment.to_lowercase();
+    let raw_term_range = find_term_time_range(&expected_align, &target_fragment_lower);
+    let term_range = expanded_term_time_range(
+        &expected_align,
+        &target_fragment_lower,
+        audio_16k.len() as f64 / 16000.0,
+    )
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "target '{}' not found in expected alignment",
+            target_fragment
+        )
+    })?;
     let asr_align = state.aligner.align(audio_16k, asr)?;
     let corrected_align = if let Some(corrected) = corrected.filter(|s| !s.trim().is_empty()) {
         state.aligner.align(audio_16k, corrected)?
@@ -1049,7 +1511,7 @@ fn extract_eval_focus(
         Vec::new()
     };
 
-    let protected_terms = std::iter::once(term.to_lowercase()).collect();
+    let protected_terms = std::iter::once(target_fragment.to_lowercase()).collect();
     let extracted = extract_with_consensus(
         &expected_align,
         &asr_align,
@@ -1059,16 +1521,28 @@ fn extract_eval_focus(
         &protected_terms,
     );
 
-    let expected_norm = normalize_eval_fragment(term);
+    let expected_norm = normalize_eval_fragment(target_fragment);
     let extracted_expected_norm = normalize_eval_fragment(&extracted.original);
-    let overlap_asr = words_overlapping_range(&asr_align, term_range.0, term_range.1, 0.03);
-    let overlap_corrected =
-        words_overlapping_range(&corrected_align, term_range.0, term_range.1, 0.03);
-    let use_overlap_fallback =
-        extracted.original.trim().is_empty() || extracted_expected_norm != expected_norm;
+    let alignment_failed = extracted.original.trim().is_empty();
+    let overlap_asr = words_inside_range(&asr_align, term_range.0, term_range.1);
+    let overlap_corrected = words_inside_range(&corrected_align, term_range.0, term_range.1);
+    let use_overlap_fallback = alignment_failed;
+    let trace = serde_json::json!({
+        "target_fragment": target_fragment,
+        "raw_term_range": raw_term_range.map(|(s, e)| serde_json::json!([s, e])),
+        "expanded_term_range": [term_range.0, term_range.1],
+        "expected_norm": expected_norm,
+        "extracted_expected_norm": extracted_expected_norm,
+        "alignment_failed": alignment_failed,
+        "used_overlap_fallback": use_overlap_fallback,
+        "overlap_asr": overlap_asr,
+        "overlap_corrected": overlap_corrected,
+        "consensus": extracted.debug,
+    });
 
     Ok(EvalFocus {
-        expected: term.to_string(),
+        expected: target_fragment.to_string(),
+        extracted_expected: extracted.original.clone(),
         asr: if use_overlap_fallback && !overlap_asr.is_empty() {
             overlap_asr
         } else {
@@ -1088,6 +1562,8 @@ fn extract_eval_focus(
             extracted.cons_range
         },
         trim_info: extracted.trim_info,
+        alignment_failed: alignment_failed || extracted_expected_norm != expected_norm,
+        trace,
     })
 }
 
@@ -1136,6 +1612,46 @@ fn find_term_time_range(
     None
 }
 
+/// Find the term range, then expand into neighboring silence gaps exactly like corpus extraction.
+///
+/// The forced aligner's word boundaries are imprecise. Short technical terms often bleed into
+/// the surrounding silence gaps, and the ASR/model lanes may place their recovered word slightly
+/// outside the narrow expected box. Expanding into real neighboring gaps gives eval the same
+/// boundary semantics as corpus extraction instead of a stricter, mismatched slice.
+fn expanded_term_time_range(
+    align_items: &[qwen3_asr::ForcedAlignItem],
+    spoken_term_lower: &str,
+    audio_duration: f64,
+) -> Option<(f64, f64)> {
+    let (start, end) = find_term_time_range(align_items, spoken_term_lower)?;
+    const MIN_GAP: f64 = 0.05; // only expand into gaps > 50ms
+
+    let prev_end = align_items
+        .iter()
+        .filter(|a| a.end_time <= start + 0.001)
+        .last()
+        .map(|a| a.end_time)
+        .unwrap_or(start);
+    let expanded_start = if start - prev_end > MIN_GAP {
+        prev_end
+    } else {
+        start
+    };
+
+    let next_start = align_items
+        .iter()
+        .find(|a| a.start_time >= end - 0.001)
+        .map(|a| a.start_time)
+        .unwrap_or(end);
+    let expanded_end = if next_start - end > MIN_GAP {
+        next_start
+    } else {
+        end
+    };
+
+    Some((expanded_start.max(0.0), expanded_end.min(audio_duration)))
+}
+
 fn words_overlapping_range(
     items: &[qwen3_asr::ForcedAlignItem],
     start: f64,
@@ -1144,7 +1660,33 @@ fn words_overlapping_range(
 ) -> String {
     items
         .iter()
-        .filter(|a| a.end_time > start - epsilon && a.start_time < end + epsilon)
+        .filter(|a| overlaps_range_eps(a, start, end, epsilon))
+        .map(|a| {
+            a.word
+                .trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+        })
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn overlaps_range(item: &qwen3_asr::ForcedAlignItem, start: f64, end: f64) -> bool {
+    item.end_time > start && item.start_time < end
+}
+
+fn overlaps_range_eps(
+    item: &qwen3_asr::ForcedAlignItem,
+    start: f64,
+    end: f64,
+    epsilon: f64,
+) -> bool {
+    item.end_time > start - epsilon && item.start_time < end + epsilon
+}
+
+fn words_inside_range(items: &[qwen3_asr::ForcedAlignItem], start: f64, end: f64) -> String {
+    items
+        .iter()
+        .filter(|a| overlaps_range(a, start, end))
         .map(|a| {
             a.word
                 .trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
@@ -1286,6 +1828,8 @@ struct TrimInfo {
     trimmed_left: usize,
     /// How many words trimmed from right
     trimmed_right: usize,
+    left_trace: serde_json::Value,
+    right_trace: serde_json::Value,
 }
 
 /// Trim matching words from alignment item slices.
@@ -1301,17 +1845,17 @@ fn trim_matching_edges(
 ) -> (String, String, String, TrimInfo) {
     let mut o: Vec<&str> = orig
         .iter()
-        .filter(|a| a.start_time >= start && a.start_time < end)
+        .filter(|a| overlaps_range(a, start, end))
         .map(|a| a.word.as_str())
         .collect();
     let mut q: Vec<&str> = qwen
         .iter()
-        .filter(|a| a.start_time >= start && a.start_time < end)
+        .filter(|a| overlaps_range(a, start, end))
         .map(|a| a.word.as_str())
         .collect();
     let mut p: Vec<&str> = para
         .iter()
-        .filter(|a| a.start_time >= start && a.start_time < end)
+        .filter(|a| overlaps_range(a, start, end))
         .map(|a| a.word.as_str())
         .collect();
     let has_para = !p.is_empty();
@@ -1319,24 +1863,35 @@ fn trim_matching_edges(
     let pre_orig: Vec<String> = o.iter().map(|s| s.to_string()).collect();
     let pre_qwen: Vec<String> = q.iter().map(|s| s.to_string()).collect();
     let pre_para: Vec<String> = p.iter().map(|s| s.to_string()).collect();
+    let mut left_trace = Vec::new();
+    let mut right_trace = Vec::new();
 
     let mut trimmed_left = 0;
     while o.len() > 1 && q.len() > 1 && (!has_para || p.len() > 1) {
         let ow = o[0].to_lowercase();
+        let qw = q[0].to_lowercase();
+        let pw = if has_para {
+            Some(p[0].to_lowercase())
+        } else {
+            None
+        };
         if protected.contains(&ow) {
+            left_trace.push(serde_json::json!({"action":"stop","reason":"protected_term","orig":ow,"qwen":qw,"para":pw}));
             break;
         }
-        let qw = q[0].to_lowercase();
         if ow != qw {
+            left_trace.push(serde_json::json!({"action":"stop","reason":"orig_qwen_mismatch","orig":ow,"qwen":qw,"para":pw}));
             break;
         }
         if has_para {
-            let pw = p[0].to_lowercase();
-            if ow != pw {
+            let pw_value = pw.clone().unwrap_or_default();
+            if ow != pw_value {
+                left_trace.push(serde_json::json!({"action":"stop","reason":"orig_para_mismatch","orig":ow,"qwen":qw,"para":pw}));
                 break;
             }
             p.remove(0);
         }
+        left_trace.push(serde_json::json!({"action":"trim","reason":"all_lanes_match","orig":ow,"qwen":qw,"para":pw}));
         o.remove(0);
         q.remove(0);
         trimmed_left += 1;
@@ -1345,20 +1900,29 @@ fn trim_matching_edges(
     let mut trimmed_right = 0;
     while o.len() > 1 && q.len() > 1 && (!has_para || p.len() > 1) {
         let ow = o.last().unwrap().to_lowercase();
+        let qw = q.last().unwrap().to_lowercase();
+        let pw = if has_para {
+            p.last().map(|w| w.to_lowercase())
+        } else {
+            None
+        };
         if protected.contains(&ow) {
+            right_trace.push(serde_json::json!({"action":"stop","reason":"protected_term","orig":ow,"qwen":qw,"para":pw}));
             break;
         }
-        let qw = q.last().unwrap().to_lowercase();
         if ow != qw {
+            right_trace.push(serde_json::json!({"action":"stop","reason":"orig_qwen_mismatch","orig":ow,"qwen":qw,"para":pw}));
             break;
         }
         if has_para {
-            let pw = p.last().unwrap().to_lowercase();
-            if ow != pw {
+            let pw_value = pw.clone().unwrap_or_default();
+            if ow != pw_value {
+                right_trace.push(serde_json::json!({"action":"stop","reason":"orig_para_mismatch","orig":ow,"qwen":qw,"para":pw}));
                 break;
             }
             p.pop();
         }
+        right_trace.push(serde_json::json!({"action":"trim","reason":"all_lanes_match","orig":ow,"qwen":qw,"para":pw}));
         o.pop();
         q.pop();
         trimmed_right += 1;
@@ -1370,6 +1934,8 @@ fn trim_matching_edges(
         pre_para,
         trimmed_left,
         trimmed_right,
+        left_trace: serde_json::json!(left_trace),
+        right_trace: serde_json::json!(right_trace),
     };
     let clean_join = |words: &[&str]| -> String {
         words
@@ -1400,6 +1966,7 @@ fn extract_with_consensus(
 ) -> ConsensusResult {
     let r2 = |v: f64| (v * 1000.0).round() / 1000.0;
     let has_parakeet = !parakeet_align.is_empty();
+    let boundary_trace;
 
     let (start, end, clean) = if has_parakeet {
         // Tri-boundary consensus: all 3 lanes must agree
@@ -1426,6 +1993,20 @@ fn extract_with_consensus(
             .iter()
             .find(|tb| tb.time >= term_end - 0.01 && tb.after_matches())
             .map(|tb| tb.time);
+        boundary_trace = serde_json::json!({
+            "mode": "tri_boundary",
+            "candidates": tris.iter().map(|tb| serde_json::json!({
+                "time": tb.time,
+                "before": [tb.before.0.clone(), tb.before.1.clone(), tb.before.2.clone()],
+                "after": [tb.after.0.clone(), tb.after.1.clone(), tb.after.2.clone()],
+                "before_matches": tb.before_matches(),
+                "after_matches": tb.after_matches(),
+                "eligible_left": tb.time <= term_start + 0.01,
+                "eligible_right": tb.time >= term_end - 0.01,
+            })).collect::<Vec<_>>(),
+            "selected_left": left,
+            "selected_right": right,
+        });
 
         (
             left.unwrap_or(term_start),
@@ -1455,6 +2036,17 @@ fn extract_with_consensus(
             .iter()
             .find(|&&t| t >= term_end - 0.01)
             .copied();
+        boundary_trace = serde_json::json!({
+            "mode": "bi_boundary",
+            "epsilon": epsilon,
+            "candidates": bi_boundaries.iter().map(|t| serde_json::json!({
+                "time": t,
+                "eligible_left": *t <= term_start + 0.01,
+                "eligible_right": *t >= term_end - 0.01,
+            })).collect::<Vec<_>>(),
+            "selected_left": left,
+            "selected_right": right,
+        });
 
         (
             left.unwrap_or(term_start),
@@ -1484,27 +2076,57 @@ fn extract_with_consensus(
     // Discard if the aligner produced garbage within the consensus range:
     // (a) any phantom word < 20ms, or (b) overlapping timestamps on the same lane.
     const MIN_WORD_DURATION: f64 = 0.02;
-    let has_aligner_garbage = |lane: &[qwen3_asr::ForcedAlignItem]| -> bool {
+    let has_aligner_garbage = |lane: &[qwen3_asr::ForcedAlignItem]| -> (bool, serde_json::Value) {
         let in_range: Vec<_> = lane
             .iter()
             .filter(|a| a.start_time >= start - 0.001 && a.start_time < end + 0.001)
             .collect();
-        // Check for phantom words
-        if in_range
+        let too_short = in_range
             .iter()
-            .any(|a| (a.end_time - a.start_time) < MIN_WORD_DURATION)
-        {
-            return true;
-        }
-        // Check for overlapping timestamps (word N+1 starts before word N ends)
+            .filter(|a| (a.end_time - a.start_time) < MIN_WORD_DURATION)
+            .map(|a| {
+                serde_json::json!({
+                    "word": a.word,
+                    "start": a.start_time,
+                    "end": a.end_time,
+                    "duration": a.end_time - a.start_time,
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut overlaps = Vec::new();
         for w in in_range.windows(2) {
             if w[1].start_time < w[0].end_time - 0.005 {
-                return true;
+                overlaps.push(serde_json::json!({
+                    "left": {"word": w[0].word, "start": w[0].start_time, "end": w[0].end_time},
+                    "right": {"word": w[1].word, "start": w[1].start_time, "end": w[1].end_time},
+                }));
             }
         }
-        false
+        let trace = serde_json::json!({
+            "in_range": in_range.iter().map(|a| serde_json::json!({
+                "word": a.word,
+                "start": a.start_time,
+                "end": a.end_time,
+                "duration": a.end_time - a.start_time,
+            })).collect::<Vec<_>>(),
+            "too_short": too_short,
+            "overlaps": overlaps,
+        });
+        (
+            trace["too_short"]
+                .as_array()
+                .map(|v| !v.is_empty())
+                .unwrap_or(false)
+                || trace["overlaps"]
+                    .as_array()
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false),
+            trace,
+        )
     };
-    let clean = clean && !has_aligner_garbage(orig_align) && !has_aligner_garbage(qwen_align);
+    let (orig_garbage, orig_garbage_trace) = has_aligner_garbage(orig_align);
+    let (qwen_garbage, qwen_garbage_trace) = has_aligner_garbage(qwen_align);
+    let clean = clean && !orig_garbage && !qwen_garbage;
 
     let debug = serde_json::json!({
         "term_start": r2(term_start),
@@ -1513,6 +2135,23 @@ fn extract_with_consensus(
         "cons_end": r2(end),
         "clean": clean,
         "has_parakeet": has_parakeet,
+        "boundary_trace": boundary_trace,
+        "trim": {
+            "pre_orig": trim_info.pre_orig,
+            "pre_qwen": trim_info.pre_qwen,
+            "pre_para": trim_info.pre_para,
+            "trimmed_left": trim_info.trimmed_left,
+            "trimmed_right": trim_info.trimmed_right,
+            "left_trace": trim_info.left_trace,
+            "right_trace": trim_info.right_trace,
+            "post_orig": original,
+            "post_qwen": qwen,
+            "post_para": parakeet,
+        },
+        "aligner_garbage": {
+            "orig": orig_garbage_trace,
+            "qwen": qwen_garbage_trace,
+        },
     });
 
     ConsensusResult {
@@ -2054,66 +2693,66 @@ pub async fn api_start_prepare_job(
         let state3 = state2.clone();
 
         let handle = tokio::task::spawn_blocking(move || {
-        // Load corpus pairs: term + fragment errors
-        let corpus_pairs = {
-            let db = state3.db.lock().unwrap();
-            db.corpus_eval_set().unwrap_or_default()
-        };
+            // Load corpus pairs: term + fragment errors
+            let corpus_pairs = {
+                let db = state3.db.lock().unwrap();
+                db.corpus_eval_set().unwrap_or_default()
+            };
 
-        if corpus_pairs.is_empty() {
-            let db = state3.db.lock().unwrap();
-            let _ = db.append_job_log(job_id, "ERROR: No corpus pairs. Generate corpus first.");
-            let _ = db.finish_job(job_id, "failed", None);
-            return;
-        }
+            if corpus_pairs.is_empty() {
+                let db = state3.db.lock().unwrap();
+                let _ = db.append_job_log(job_id, "ERROR: No corpus pairs. Generate corpus first.");
+                let _ = db.finish_job(job_id, "failed", None);
+                return;
+            }
 
-        {
-            let db = state3.db.lock().unwrap();
-            let _ = db.append_job_log(
-                job_id,
-                &format!(
-                    "Preparing from {} corpus pairs with template-backed sentence bank...",
-                    corpus_pairs.len()
-                ),
-            );
-        }
-        let mut rng = rand::rngs::StdRng::from_os_rng();
+            {
+                let db = state3.db.lock().unwrap();
+                let _ = db.append_job_log(
+                    job_id,
+                    &format!(
+                        "Preparing from {} corpus pairs with template-backed sentence bank...",
+                        corpus_pairs.len()
+                    ),
+                );
+            }
+            let mut rng = rand::rngs::StdRng::from_os_rng();
 
-        let mistake_pairs: Vec<_> = corpus_pairs
-            .into_iter()
-            .filter(|item| item.is_mistake && !item.original.eq_ignore_ascii_case(&item.qwen))
-            .collect();
+            let mistake_pairs: Vec<_> = corpus_pairs
+                .into_iter()
+                .filter(|item| item.is_mistake && !item.original.eq_ignore_ascii_case(&item.qwen))
+                .collect();
 
-        if mistake_pairs.is_empty() {
-            let db = state3.db.lock().unwrap();
-            let _ = db.append_job_log(
-                job_id,
-                "ERROR: No mistaken corpus pairs. Generate or review corpus first.",
-            );
-            let _ = db.finish_job(job_id, "failed", None);
-            return;
-        }
+            if mistake_pairs.is_empty() {
+                let db = state3.db.lock().unwrap();
+                let _ = db.append_job_log(
+                    job_id,
+                    "ERROR: No mistaken corpus pairs. Generate or review corpus first.",
+                );
+                let _ = db.finish_job(job_id, "failed", None);
+                return;
+            }
 
-        let eval_failure_weights = latest_eval_failure_term_weights(&state3);
-        let weighted_terms = eval_failure_weights.len();
-        let pair_weights: Vec<u32> = mistake_pairs
-            .iter()
-            .map(|item| {
-                let hit_bonus = item.hit_count.clamp(1, 5) as u32;
-                let eval_bonus = eval_failure_weights
-                    .get(&item.term.to_ascii_lowercase())
-                    .copied()
-                    .unwrap_or(0) as u32;
-                1 + hit_bonus + eval_bonus.saturating_mul(6)
-            })
-            .collect();
+            let eval_failure_weights = latest_eval_failure_term_weights(&state3);
+            let weighted_terms = eval_failure_weights.len();
+            let pair_weights: Vec<u32> = mistake_pairs
+                .iter()
+                .map(|item| {
+                    let hit_bonus = item.hit_count.clamp(1, 5) as u32;
+                    let eval_bonus = eval_failure_weights
+                        .get(&item.term.to_ascii_lowercase())
+                        .copied()
+                        .unwrap_or(0) as u32;
+                    1 + hit_bonus + eval_bonus.saturating_mul(6)
+                })
+                .collect();
 
-        let n_error = (total_examples as f64 * error_rate).round() as usize;
-        let n_identity = total_examples - n_error;
+            let n_error = (total_examples as f64 * error_rate).round() as usize;
+            let n_identity = total_examples - n_error;
 
-        {
-            let db = state3.db.lock().unwrap();
-            let _ = db.append_job_log(
+            {
+                let db = state3.db.lock().unwrap();
+                let _ = db.append_job_log(
                 job_id,
                 &format!(
                     "Generating {} error + {} identity = {} total examples ({} mistake pairs, {} eval-weighted terms)",
@@ -2124,172 +2763,296 @@ pub async fn api_start_prepare_job(
                     weighted_terms
                 ),
             );
-        }
-
-        let mut examples = Vec::with_capacity(total_examples);
-        let mut correction_count = 0usize;
-        let mut identity_count = 0usize;
-        let mut duplicate_skips = 0usize;
-        let mut conflict_skips = 0usize;
-        let mut quality_skips = 0usize;
-        let mut missing_template_skips = 0usize;
-        let mut seen_prompts = HashMap::<String, String>::new();
-        let identity_terms: Vec<String> = mistake_pairs
-            .iter()
-            .map(|item| item.term.clone())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        let template_terms = template_bank_fallback
-            .values()
-            .filter(|items| !items.is_empty())
-            .count();
-
-        // Helper: splice a fragment into a Markov sentence at the term position
-        let splice_fragment = |sentence: &str, term: &str, fragment: &str| -> String {
-            let lower = sentence.to_lowercase();
-            let lower_term = term.to_lowercase();
-            if let Some(pos) = lower.find(&lower_term) {
-                format!(
-                    "{}{}{}",
-                    &sentence[..pos],
-                    fragment,
-                    &sentence[pos + term.len()..]
-                )
-            } else {
-                // Term not found in sentence — just use the fragment
-                fragment.to_string()
             }
-        };
 
-        let sample_template_sentence = |term: &str, rng: &mut rand::rngs::StdRng| -> Option<String> {
-            let key = term.to_ascii_lowercase();
-            template_bank_fallback.get(&key).and_then(|items| {
-                if items.is_empty() {
-                    None
+            let mut examples = Vec::with_capacity(total_examples);
+            let mut correction_count = 0usize;
+            let mut identity_count = 0usize;
+            let mut counterexample_count = 0usize;
+            let mut duplicate_skips = 0usize;
+            let mut conflict_skips = 0usize;
+            let mut quality_skips = 0usize;
+            let mut missing_template_skips = 0usize;
+            let mut weighted_repeat_pushes = 0usize;
+            let mut seen_prompts = HashMap::<String, String>::new();
+            let identity_terms: Vec<String> = mistake_pairs
+                .iter()
+                .map(|item| item.term.clone())
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            let counterexample_weight_map: HashMap<(String, String), u32> =
+                mistake_pairs.iter().fold(HashMap::new(), |mut acc, item| {
+                    let key = (
+                        item.term.to_ascii_lowercase(),
+                        normalize_prepare_text(&item.qwen).to_ascii_lowercase(),
+                    );
+                    *acc.entry(key).or_insert(0) += item.hit_count.clamp(1, 5) as u32;
+                    acc
+                });
+            let counterexamples: Vec<CounterexampleExample> = {
+                let db = state3.db.lock().unwrap();
+                let mut rows = Vec::new();
+                for term in &identity_terms {
+                    let eval_bonus_for_term = eval_failure_weights
+                        .get(&term.to_ascii_lowercase())
+                        .copied()
+                        .unwrap_or(0) as u32;
+                    for (sentence, surface_form) in db
+                        .authored_counterexamples_for_term(term)
+                        .unwrap_or_default()
+                    {
+                        let sentence = normalize_prepare_text(&sentence);
+                        if sentence.is_empty()
+                            || !sentence
+                                .to_ascii_lowercase()
+                                .contains(&surface_form.to_ascii_lowercase())
+                        {
+                            continue;
+                        }
+                        let surface_hits = counterexample_weight_map
+                            .get(&(
+                                term.to_ascii_lowercase(),
+                                normalize_prepare_text(&surface_form).to_ascii_lowercase(),
+                            ))
+                            .copied()
+                            .unwrap_or(0);
+                        rows.push(CounterexampleExample {
+                            sentence,
+                            weight: 1 + surface_hits + eval_bonus_for_term.saturating_mul(2),
+                        });
+                    }
+                }
+                rows
+            };
+            let counterexample_weights: Vec<u32> = counterexamples
+                .iter()
+                .map(|item| item.weight.max(1))
+                .collect();
+            let template_terms = template_bank_fallback
+                .values()
+                .filter(|items| !items.is_empty())
+                .count();
+
+            // Helper: splice a fragment into a Markov sentence at the term position
+            let splice_fragment = |sentence: &str, term: &str, fragment: &str| -> String {
+                let lower = sentence.to_lowercase();
+                let lower_term = term.to_lowercase();
+                if let Some(pos) = lower.find(&lower_term) {
+                    format!(
+                        "{}{}{}",
+                        &sentence[..pos],
+                        fragment,
+                        &sentence[pos + term.len()..]
+                    )
                 } else {
-                    Some(items[rng.random_range(0..items.len())].clone())
+                    // Term not found in sentence — just use the fragment
+                    fragment.to_string()
                 }
-            })
-        };
-
-        let mut push_example = |example: PreparedExample| {
-            match seen_prompts.get(&example.prompt) {
-                Some(existing) if existing == &example.completion => {
-                    duplicate_skips += 1;
-                    false
-                }
-                Some(_) => {
-                    conflict_skips += 1;
-                    false
-                }
-                None => {
-                    seen_prompts.insert(example.prompt.clone(), example.completion.clone());
-                    examples.push(serde_json::json!({
-                        "prompt": example.prompt,
-                        "completion": example.completion,
-                    }));
-                    true
-                }
-            }
-        };
-
-        // Error examples: pick a mistaken corpus pair, generate a sentence, splice errors in
-        let max_error_attempts = n_error.saturating_mul(40).max(2000);
-        let mut error_attempts = 0usize;
-        while correction_count < n_error && error_attempts < max_error_attempts {
-            error_attempts += 1;
-            let item = &mistake_pairs[sample_weighted_index(&pair_weights, &mut rng)];
-            let Some(sentence) = sample_template_sentence(&item.term, &mut rng) else {
-                missing_template_skips += 1;
-                continue;
             };
 
-            let full_original =
-                normalize_prepare_text(&splice_fragment(&sentence, &item.term, &item.original));
-            let full_qwen =
-                normalize_prepare_text(&splice_fragment(&sentence, &item.term, &item.qwen));
+            let sample_template_sentence =
+                |term: &str, rng: &mut rand::rngs::StdRng| -> Option<String> {
+                    let key = term.to_ascii_lowercase();
+                    template_bank_fallback.get(&key).and_then(|items| {
+                        if items.is_empty() {
+                            None
+                        } else {
+                            Some(items[rng.random_range(0..items.len())].clone())
+                        }
+                    })
+                };
 
-            if !is_prepare_example_reasonable(&full_qwen, &full_original) {
-                quality_skips += 1;
-                continue;
+            let mut push_example =
+                |example: PreparedExample| match seen_prompts.get(&example.prompt) {
+                    Some(existing) if existing == &example.completion => {
+                        if example.allow_repeat {
+                            examples.push(serde_json::json!({
+                                "prompt": example.prompt,
+                                "completion": example.completion,
+                            }));
+                            weighted_repeat_pushes += 1;
+                            true
+                        } else {
+                            duplicate_skips += 1;
+                            false
+                        }
+                    }
+                    Some(_) => {
+                        conflict_skips += 1;
+                        false
+                    }
+                    None => {
+                        seen_prompts.insert(example.prompt.clone(), example.completion.clone());
+                        examples.push(serde_json::json!({
+                            "prompt": example.prompt,
+                            "completion": example.completion,
+                        }));
+                        true
+                    }
+                };
+
+            // Error examples: pick a mistaken corpus pair, generate a sentence, splice errors in
+            let max_error_attempts = n_error.saturating_mul(40).max(2000);
+            let mut error_attempts = 0usize;
+            while correction_count < n_error && error_attempts < max_error_attempts {
+                error_attempts += 1;
+                let item = &mistake_pairs[sample_weighted_index(&pair_weights, &mut rng)];
+                let Some(sentence) = sample_template_sentence(&item.term, &mut rng) else {
+                    missing_template_skips += 1;
+                    continue;
+                };
+
+                let full_original =
+                    normalize_prepare_text(&splice_fragment(&sentence, &item.term, &item.original));
+                let full_qwen =
+                    normalize_prepare_text(&splice_fragment(&sentence, &item.term, &item.qwen));
+
+                if !is_prepare_example_reasonable(&full_qwen, &full_original) {
+                    quality_skips += 1;
+                    continue;
+                }
+
+                let prompt = synth_train::build_correction_prompt("", &full_qwen);
+                let eval_bonus = eval_failure_weights
+                    .get(&item.term.to_ascii_lowercase())
+                    .copied()
+                    .unwrap_or(0);
+                let repeats = correction_example_repeat_count(item, eval_bonus);
+                let mut added = 0usize;
+                for _ in 0..repeats {
+                    if correction_count + added >= n_error {
+                        break;
+                    }
+                    if push_example(PreparedExample {
+                        prompt: prompt.clone(),
+                        completion: format!(" {}<|endoftext|>", full_original),
+                        allow_repeat: true,
+                    }) {
+                        added += 1;
+                    }
+                }
+                if added > 0 {
+                    correction_count += added;
+                }
             }
 
-            let prompt = synth_train::build_correction_prompt("", &full_qwen);
-            if push_example(PreparedExample {
-                prompt,
-                completion: format!(" {}<|endoftext|>", full_original),
-            }) {
-                correction_count += 1;
-            }
-        }
-
-        // Identity examples: generate a sentence, all lanes are the same
-        let max_identity_attempts = n_identity.saturating_mul(30).max(1000);
-        let mut identity_attempts = 0usize;
-        while identity_count < n_identity && identity_attempts < max_identity_attempts {
-            identity_attempts += 1;
-            let term = &identity_terms[rng.random_range(0..identity_terms.len())];
-            let Some(sentence) = sample_template_sentence(term, &mut rng) else {
-                missing_template_skips += 1;
-                continue;
+            let n_counterexample_target = if counterexamples.is_empty() {
+                0
+            } else {
+                ((n_identity as f64) * COUNTEREXAMPLE_SHARE_OF_NOCHANGE).round() as usize
             };
-            let sentence = normalize_prepare_text(&sentence);
-            if !is_prepare_example_reasonable(&sentence, &sentence) {
-                quality_skips += 1;
-                continue;
+            let n_plain_identity_target = n_identity.saturating_sub(n_counterexample_target);
+
+            let max_counterexample_attempts = n_counterexample_target.saturating_mul(20).max(200);
+            let mut counterexample_attempts = 0usize;
+            while counterexample_count < n_counterexample_target
+                && counterexample_attempts < max_counterexample_attempts
+            {
+                counterexample_attempts += 1;
+                let item =
+                    &counterexamples[sample_weighted_index(&counterexample_weights, &mut rng)];
+                if !is_prepare_example_reasonable(&item.sentence, &item.sentence) {
+                    quality_skips += 1;
+                    continue;
+                }
+                let prompt = synth_train::build_correction_prompt("", &item.sentence);
+                let repeats = counterexample_example_repeat_count(item.weight);
+                let mut added = 0usize;
+                for _ in 0..repeats {
+                    if counterexample_count + added >= n_counterexample_target {
+                        break;
+                    }
+                    if push_example(PreparedExample {
+                        prompt: prompt.clone(),
+                        completion: format!(" {}<|endoftext|>", item.sentence),
+                        allow_repeat: true,
+                    }) {
+                        added += 1;
+                    }
+                }
+                if added > 0 {
+                    counterexample_count += added;
+                }
             }
 
-            let prompt = synth_train::build_correction_prompt("", &sentence);
-            if push_example(PreparedExample {
-                prompt,
-                completion: format!(" {}<|endoftext|>", sentence),
-            }) {
-                identity_count += 1;
+            // Identity examples: generate a sentence, all lanes are the same
+            let max_identity_attempts = n_plain_identity_target.saturating_mul(30).max(1000);
+            let mut identity_attempts = 0usize;
+            while identity_count < n_plain_identity_target
+                && identity_attempts < max_identity_attempts
+            {
+                identity_attempts += 1;
+                let term = &identity_terms[rng.random_range(0..identity_terms.len())];
+                let Some(sentence) = sample_template_sentence(term, &mut rng) else {
+                    missing_template_skips += 1;
+                    continue;
+                };
+                let sentence = normalize_prepare_text(&sentence);
+                if !is_prepare_example_reasonable(&sentence, &sentence) {
+                    quality_skips += 1;
+                    continue;
+                }
+
+                let prompt = synth_train::build_correction_prompt("", &sentence);
+                if push_example(PreparedExample {
+                    prompt,
+                    completion: format!(" {}<|endoftext|>", sentence),
+                    allow_repeat: false,
+                }) {
+                    identity_count += 1;
+                }
             }
-        }
 
-        examples.shuffle(&mut rng);
+            examples.shuffle(&mut rng);
 
-        // Fixed 90/10 train/valid split
-        let n = examples.len();
-        let n_train = (n as f64 * 0.9) as usize;
-        let train = &examples[..n_train];
-        let valid = &examples[n_train..];
+            // Fixed 90/10 train/valid split
+            let n = examples.len();
+            let n_train = (n as f64 * 0.9) as usize;
+            let train = &examples[..n_train];
+            let valid = &examples[n_train..];
 
-        std::fs::create_dir_all("training/data").ok();
-        synth_train::write_jsonl("training/data/train.jsonl", train).ok();
-        synth_train::write_jsonl("training/data/valid.jsonl", valid).ok();
+            std::fs::create_dir_all("training/data").ok();
+            synth_train::write_jsonl("training/data/train.jsonl", train).ok();
+            synth_train::write_jsonl("training/data/valid.jsonl", valid).ok();
 
-        let stats = serde_json::json!({
-            "correction_examples": correction_count,
-            "identity_examples": identity_count,
-            "duplicate_skips": duplicate_skips,
-            "conflict_skips": conflict_skips,
-            "quality_skips": quality_skips,
-            "missing_template_skips": missing_template_skips,
-            "requested_total": total_examples,
-            "total": n,
-            "train_count": train.len(),
-            "valid_count": valid.len(),
-        });
+            let stats = serde_json::json!({
+                "correction_examples": correction_count,
+                "identity_examples": identity_count + counterexample_count,
+                "plain_identity_examples": identity_count,
+                "counterexample_examples": counterexample_count,
+                "duplicate_skips": duplicate_skips,
+                "conflict_skips": conflict_skips,
+                "quality_skips": quality_skips,
+                "missing_template_skips": missing_template_skips,
+                "weighted_repeat_pushes": weighted_repeat_pushes,
+                "requested_total": total_examples,
+                "total": n,
+                "train_count": train.len(),
+                "valid_count": valid.len(),
+            });
 
-        let db = state3.db.lock().unwrap();
-        let _ = db.append_job_log(
+            let db = state3.db.lock().unwrap();
+            let _ = db.append_job_log(
             job_id,
             &format!(
-                "Done: {} error + {} identity = {} total ({} train / {} valid, {} terms with cached templates)\n\
-                 Skipped: {} duplicate, {} conflicting prompt, {} quality filter, {} missing template",
+                "Done: {} error + {} no-change ({} plain identity, {} counterexample) = {} total ({} train / {} valid, {} terms with cached templates, {} authored counterexamples)\n\
+                 Skipped: {} duplicate, {} conflicting prompt, {} quality filter, {} missing template\n\
+                 Weighted repeats kept: {}",
                 correction_count,
+                identity_count + counterexample_count,
                 identity_count,
+                counterexample_count,
                 n,
                 train.len(),
                 valid.len(),
                 template_terms,
+                counterexamples.len(),
                 duplicate_skips,
                 conflict_skips,
                 quality_skips,
                 missing_template_skips,
+                weighted_repeat_pushes,
             ),
         );
             let _ = db.finish_job(job_id, "completed", Some(&stats.to_string()));
@@ -2321,7 +3084,7 @@ pub async fn api_start_train_job(
     }
 
     let config = synth_train::TrainConfig {
-        model: body.model.unwrap_or_else(|| "Qwen/Qwen2.5-0.5B".into()),
+        model: body.model.unwrap_or_else(|| "Qwen/Qwen3.5-0.8B".into()),
         iters: body.iters.unwrap_or(2000),
         batch_size: body.batch_size.unwrap_or(4),
         num_layers: body.num_layers.unwrap_or(8),
@@ -2362,8 +3125,8 @@ pub async fn api_start_train_job(
             &config,
             || state2.job_cancel.load(Ordering::Relaxed),
             |line| {
-            let db = state2.db.lock().unwrap();
-            let _ = db.append_job_log(job_id, line);
+                let db = state2.db.lock().unwrap();
+                let _ = db.append_job_log(job_id, line);
             },
         );
 
@@ -2968,7 +3731,7 @@ pub async fn api_start_eval_job(
     check_no_running_jobs(&state)?;
 
     let config = synth_train::InferenceConfig {
-        model: body.model.unwrap_or_else(|| "Qwen/Qwen2.5-0.5B".into()),
+        model: body.model.unwrap_or_else(|| "Qwen/Qwen3.5-0.8B".into()),
         adapters: body.adapters.unwrap_or_else(|| "training/adapters".into()),
         ..Default::default()
     };
@@ -3025,7 +3788,9 @@ pub async fn api_start_eval_job(
     let synthetic_mistakes: Vec<_> = synthetic_items
         .into_iter()
         .filter(|item| item.is_mistake)
-        .filter(|item| !eval_fragment_matches(&alt_spellings, &item.term, &item.original, &item.qwen))
+        .filter(|item| {
+            !eval_fragment_matches(&alt_spellings, &item.term, &item.original, &item.qwen)
+        })
         .collect();
 
     if source == "synthetic" && synthetic_mistakes.is_empty() {
@@ -3091,9 +3856,11 @@ pub async fn api_start_eval_job(
         };
         let mut correct = 0usize;
         let mut wrong = 0usize;
+        let mut alignment_failed_count = 0usize;
         let mut blank = 0usize;
         let mut timeouts = 0usize;
         let mut evaluated = 0usize;
+        let mut scorable = 0usize;
         let mut asr_correct = 0usize;
         let mut skipped = 0usize;
         let mut entries: Vec<serde_json::Value> = Vec::new();
@@ -3141,14 +3908,18 @@ pub async fn api_start_eval_job(
                     let full_asr = splice_fragment(&template_sentence, &item.term, &item.qwen);
                     let prompt = synth_train::build_correction_prompt("", &full_asr);
                     let result = {
-                        let guard = state2.inference_server.lock().unwrap();
-                        guard.as_ref().unwrap().infer(&prompt)
+                        let mut guard = state2.inference_server.lock().unwrap();
+                        guard.as_mut().unwrap().infer(&prompt)
                     };
                     evaluated += 1;
 
                     let expected_norm = normalize_eval_fragment(&item.original);
-                    let asr_was_correct =
-                        eval_fragment_matches(&alt_spellings, &item.term, &item.original, &item.qwen);
+                    let asr_was_correct = eval_fragment_matches(
+                        &alt_spellings,
+                        &item.term,
+                        &item.original,
+                        &item.qwen,
+                    );
                     if asr_was_correct {
                         asr_correct += 1;
                     }
@@ -3164,8 +3935,11 @@ pub async fn api_start_eval_job(
                             ("blank", String::new(), String::new())
                         }
                         Ok(corrected) => {
-                            let corrected_fragment =
-                                extract_synthetic_fragment(&template_sentence, &item.term, &corrected);
+                            let corrected_fragment = extract_synthetic_fragment(
+                                &template_sentence,
+                                &item.term,
+                                &corrected,
+                            );
                             if eval_fragment_matches(
                                 &alt_spellings,
                                 &item.term,
@@ -3193,7 +3967,11 @@ pub async fn api_start_eval_job(
                             if msg.contains("timeout") {
                                 ("timeout", "(timeout)".into(), "(timeout)".into())
                             } else {
-                                ("error", format!("(error: {msg})"), format!("(error: {msg})"))
+                                (
+                                    "error",
+                                    format!("(error: {msg})"),
+                                    format!("(error: {msg})"),
+                                )
                             }
                         }
                     };
@@ -3309,6 +4087,12 @@ pub async fn api_start_eval_job(
                 let _ = db.append_job_log(job_id, "Stopped by user.");
                 break;
             }
+            let expected_fragment = rec
+                .surface_form
+                .as_deref()
+                .filter(|_| rec.kind == "counterexample")
+                .unwrap_or(&rec.term)
+                .to_string();
 
             let wav_bytes = match std::fs::read(&rec.wav_path) {
                 Ok(bytes) => bytes,
@@ -3369,6 +4153,7 @@ pub async fn api_start_eval_job(
                     continue;
                 }
             };
+            let use_cached_clean_qwen = noise_level == 0.0 && repeats == 1;
 
             for repeat_idx in 0..repeats {
                 attempt_idx += 1;
@@ -3378,30 +4163,48 @@ pub async fn api_start_eval_job(
                     break;
                 }
 
-                let state_q = state2.clone();
                 let samples = apply_eval_noise(&clean_16k, noise_level);
-                let asr_samples = samples.clone();
-                let asr_qwen = tokio::task::spawn_blocking(move || -> String {
-                    state_q
-                        .asr
-                        .transcribe_samples(
-                            &asr_samples,
-                            qwen3_asr::TranscribeOptions::default().with_language("english"),
-                        )
-                        .map(|r| r.text)
-                        .unwrap_or_default()
-                })
-                .await
-                .unwrap_or_default();
+                let asr_qwen = if use_cached_clean_qwen
+                    && rec.qwen_clean_model.as_deref() == Some(&state2.qwen_model_key)
+                {
+                    rec.qwen_clean.clone().unwrap_or_default()
+                } else {
+                    let state_q = state2.clone();
+                    let asr_samples = samples.clone();
+                    let qwen = tokio::task::spawn_blocking(move || -> String {
+                        state_q
+                            .asr
+                            .transcribe_samples(
+                                &asr_samples,
+                                qwen3_asr::TranscribeOptions::default().with_language("english"),
+                            )
+                            .map(|r| r.text)
+                            .unwrap_or_default()
+                    })
+                    .await
+                    .unwrap_or_default();
+
+                    if use_cached_clean_qwen && !qwen.trim().is_empty() {
+                        let db = state2.db.lock().unwrap();
+                        let _ = db.update_authored_recording_qwen_clean(
+                            rec.id,
+                            &qwen,
+                            &state2.qwen_model_key,
+                        );
+                    }
+
+                    qwen
+                };
 
                 let prompt = synth_train::build_correction_prompt("", &asr_qwen);
                 let result = {
-                    let guard = state2.inference_server.lock().unwrap();
-                    guard.as_ref().unwrap().infer(&prompt)
+                    let mut guard = state2.inference_server.lock().unwrap();
+                    guard.as_mut().unwrap().infer(&prompt)
                 };
                 evaluated += 1;
 
-                let (category, corrected_text, expected_text, asr_focus_text, focus) = match result {
+                let (category, corrected_text, expected_text, asr_focus_text, focus) = match result
+                {
                     Ok(ref c) if c.trim().is_empty() => {
                         let focus = match extract_eval_focus(
                             &state2,
@@ -3409,7 +4212,7 @@ pub async fn api_start_eval_job(
                             &rec.sentence,
                             &asr_qwen,
                             None,
-                            &rec.term,
+                            &expected_fragment,
                         ) {
                             Ok(focus) => focus,
                             Err(e) => {
@@ -3440,7 +4243,13 @@ pub async fn api_start_eval_job(
                             asr_correct += 1;
                         }
                         blank += 1;
-                        ("blank", String::new(), focus.expected.clone(), focus.asr.clone(), focus)
+                        (
+                            "blank",
+                            String::new(),
+                            focus.expected.clone(),
+                            focus.asr.clone(),
+                            focus,
+                        )
                     }
                     Ok(corrected) => {
                         let focus = match extract_eval_focus(
@@ -3449,7 +4258,7 @@ pub async fn api_start_eval_job(
                             &rec.sentence,
                             &asr_qwen,
                             Some(&corrected),
-                            &rec.term,
+                            &expected_fragment,
                         ) {
                             Ok(focus) => focus,
                             Err(e) => {
@@ -3477,7 +4286,10 @@ pub async fn api_start_eval_job(
                             &focus.expected,
                             &focus.asr,
                         );
-                        if asr_was_correct {
+                        if !focus.alignment_failed {
+                            scorable += 1;
+                        }
+                        if !focus.alignment_failed && asr_was_correct {
                             asr_correct += 1;
                         }
                         if eval_fragment_matches(
@@ -3488,16 +4300,51 @@ pub async fn api_start_eval_job(
                         ) {
                             correct += 1;
                             if asr_was_correct {
-                                ("kept", focus.corrected.clone(), focus.expected.clone(), focus.asr.clone(), focus)
+                                (
+                                    "kept",
+                                    focus.corrected.clone(),
+                                    focus.expected.clone(),
+                                    focus.asr.clone(),
+                                    focus,
+                                )
                             } else {
-                                ("fixed", focus.corrected.clone(), focus.expected.clone(), focus.asr.clone(), focus)
+                                (
+                                    "fixed",
+                                    focus.corrected.clone(),
+                                    focus.expected.clone(),
+                                    focus.asr.clone(),
+                                    focus,
+                                )
                             }
                         } else {
-                            wrong += 1;
-                            if asr_was_correct {
-                                ("broken", focus.corrected.clone(), focus.expected.clone(), focus.asr.clone(), focus)
+                            if focus.alignment_failed {
+                                alignment_failed_count += 1;
+                                (
+                                    "align_fail",
+                                    focus.corrected.clone(),
+                                    focus.expected.clone(),
+                                    focus.asr.clone(),
+                                    focus,
+                                )
                             } else {
-                                ("wrong", focus.corrected.clone(), focus.expected.clone(), focus.asr.clone(), focus)
+                                wrong += 1;
+                                if asr_was_correct {
+                                    (
+                                        "broken",
+                                        focus.corrected.clone(),
+                                        focus.expected.clone(),
+                                        focus.asr.clone(),
+                                        focus,
+                                    )
+                                } else {
+                                    (
+                                        "wrong",
+                                        focus.corrected.clone(),
+                                        focus.expected.clone(),
+                                        focus.asr.clone(),
+                                        focus,
+                                    )
+                                }
                             }
                         }
                     }
@@ -3508,7 +4355,7 @@ pub async fn api_start_eval_job(
                             &rec.sentence,
                             &asr_qwen,
                             None,
-                            &rec.term,
+                            &expected_fragment,
                         ) {
                             Ok(focus) => focus,
                             Err(extract_err) => {
@@ -3541,7 +4388,13 @@ pub async fn api_start_eval_job(
                         let msg = e.to_string();
                         timeouts += 1;
                         if msg.contains("timeout") {
-                            ("timeout", "(timeout)".into(), focus.expected.clone(), focus.asr.clone(), focus)
+                            (
+                                "timeout",
+                                "(timeout)".into(),
+                                focus.expected.clone(),
+                                focus.asr.clone(),
+                                focus,
+                            )
                         } else {
                             (
                                 "error",
@@ -3554,13 +4407,13 @@ pub async fn api_start_eval_job(
                     }
                 };
 
-                let asr_accuracy = if evaluated > 0 {
-                    asr_correct as f64 / evaluated as f64 * 100.0
+                let asr_accuracy = if scorable > 0 {
+                    asr_correct as f64 / scorable as f64 * 100.0
                 } else {
                     0.0
                 };
-                let post_accuracy = if evaluated > 0 {
-                    correct as f64 / evaluated as f64 * 100.0
+                let post_accuracy = if scorable > 0 {
+                    correct as f64 / scorable as f64 * 100.0
                 } else {
                     0.0
                 };
@@ -3568,6 +4421,8 @@ pub async fn api_start_eval_job(
                 entries.push(serde_json::json!({
                     "recording_id": rec.id,
                     "term": rec.term,
+                    "kind": rec.kind,
+                    "surface_form": rec.surface_form,
                     "sentence": rec.sentence,
                     "take_no": rec.take_no,
                     "run_no": repeat_idx + 1,
@@ -3575,8 +4430,11 @@ pub async fn api_start_eval_job(
                     "qwen": asr_focus_text,
                     "output": corrected_text.trim(),
                     "expected": expected_text,
+                    "extracted_expected": focus.extracted_expected,
+                    "alignment_failed": focus.alignment_failed,
                     "cons_time": [focus.cons_range.0, focus.cons_range.1],
                     "trim_info": focus.trim_info,
+                    "trace": focus.trace,
                     "alignments": {
                         "expected": focus.expected_alignment,
                         "asr": focus.asr_alignment,
@@ -3590,10 +4448,11 @@ pub async fn api_start_eval_job(
                     &serde_json::json!({
                         "source": "human",
                         "total": evaluated,
+                        "scorable": scorable,
                         "source_recordings": total,
                         "repeats": repeats,
                         "noise_level": noise_level,
-                        "correct": correct, "wrong": wrong, "blank": blank, "timeouts": timeouts,
+                        "correct": correct, "wrong": wrong, "alignment_failed": alignment_failed_count, "blank": blank, "timeouts": timeouts,
                         "asr_correct": asr_correct,
                         "asr_accuracy": (asr_accuracy * 10.0).round() / 10.0,
                         "post_accuracy": (post_accuracy * 10.0).round() / 10.0,
@@ -3620,13 +4479,13 @@ pub async fn api_start_eval_job(
             }
         }
 
-        let asr_accuracy = if evaluated > 0 {
-            asr_correct as f64 / evaluated as f64 * 100.0
+        let asr_accuracy = if scorable > 0 {
+            asr_correct as f64 / scorable as f64 * 100.0
         } else {
             0.0
         };
-        let post_accuracy = if evaluated > 0 {
-            correct as f64 / evaluated as f64 * 100.0
+        let post_accuracy = if scorable > 0 {
+            correct as f64 / scorable as f64 * 100.0
         } else {
             0.0
         };
@@ -3635,11 +4494,11 @@ pub async fn api_start_eval_job(
         let _ = db.append_job_log(
             job_id,
             &format!(
-                "\n=== RESULTS ({evaluated} attempts from {total} recordings, {skipped} skipped) ===\n\
-             ASR accuracy (baseline):     {asr_accuracy:.1}% ({asr_correct}/{evaluated})\n\
-             Post-correction accuracy:    {post_accuracy:.1}% ({correct}/{evaluated})\n\
+                "\n=== RESULTS ({evaluated} attempts from {total} recordings, {skipped} skipped, {scorable} scored) ===\n\
+             ASR accuracy (baseline):     {asr_accuracy:.1}% ({asr_correct}/{scorable})\n\
+             Post-correction accuracy:    {post_accuracy:.1}% ({correct}/{scorable})\n\
              \n\
-             Correct: {correct} | Wrong: {wrong} | Blank: {blank} | Timeouts: {timeouts}"
+             Correct: {correct} | Wrong: {wrong} | Align-failed: {alignment_failed_count} | Blank: {blank} | Timeouts: {timeouts}"
             ),
         );
         let _ = db.finish_job(
@@ -3649,10 +4508,11 @@ pub async fn api_start_eval_job(
                 &serde_json::json!({
                     "source": "human",
                     "total": evaluated,
+                    "scorable": scorable,
                     "source_recordings": total,
                     "repeats": repeats,
                     "noise_level": noise_level,
-                    "correct": correct, "wrong": wrong, "blank": blank, "timeouts": timeouts,
+                    "correct": correct, "wrong": wrong, "alignment_failed": alignment_failed_count, "blank": blank, "timeouts": timeouts,
                     "asr_correct": asr_correct,
                     "asr_accuracy": asr_accuracy,
                     "post_accuracy": post_accuracy,
@@ -3697,7 +4557,7 @@ pub async fn api_correct(
             *server_guard = Some(synth_train::InferenceServer::start(&config)?);
             eprintln!("[correct] Inference server ready");
         }
-        let server = server_guard.as_ref().unwrap();
+        let server = server_guard.as_mut().unwrap();
         let prompt = synth_train::build_correction_prompt(&body.parakeet, &body.qwen);
         server.infer(&prompt)
     })
@@ -3948,6 +4808,106 @@ pub async fn api_approve_corpus_pair(
     let db = state.db.lock().unwrap();
     db.approve_corpus_pair(body.id).map_err(err)?;
     Ok(Json(serde_json::json!({"ok": true})).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct AddEvalMistakeBody {
+    pub term: String,
+    pub expected: String,
+    pub qwen: String,
+    pub sentence: String,
+    pub recording_id: Option<i64>,
+    pub kind: Option<String>,
+    pub surface_form: Option<String>,
+    pub alignment_failed: bool,
+    pub alignments: Option<serde_json::Value>,
+    pub cons_time: Option<serde_json::Value>,
+    pub trim_info: Option<serde_json::Value>,
+    pub trace: Option<serde_json::Value>,
+}
+
+pub async fn api_add_eval_mistake(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<AddEvalMistakeBody>,
+) -> Result<Response, AppError> {
+    let term = body.term.trim();
+    let expected = body.expected.trim();
+    let qwen = body.qwen.trim();
+    let sentence = body.sentence.trim();
+
+    if body.alignment_failed {
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": "Cannot add eval rows with alignment failure."
+        }))
+        .into_response());
+    }
+    if body.kind.as_deref() == Some("counterexample") {
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": "Counterexample eval rows should not be added as mistakes."
+        }))
+        .into_response());
+    }
+    if term.is_empty() || expected.is_empty() || qwen.is_empty() || sentence.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": "Missing required eval feedback fields."
+        }))
+        .into_response());
+    }
+    if normalize_eval_fragment(expected) == normalize_eval_fragment(qwen) {
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": "This eval row is not a mistake."
+        }))
+        .into_response());
+    }
+
+    let (orig_align, qwen_align) = if let Some(alignments) = body.alignments.as_ref() {
+        (
+            alignments.get("expected").cloned(),
+            alignments.get("asr").cloned(),
+        )
+    } else {
+        (None, None)
+    };
+    let mut trim_info = body.trim_info.unwrap_or_else(|| serde_json::json!({}));
+    if !trim_info.is_object() {
+        trim_info = serde_json::json!({ "raw": trim_info });
+    }
+    if let Some(obj) = trim_info.as_object_mut() {
+        obj.insert("source".into(), serde_json::json!("eval_feedback"));
+        obj.insert("recording_id".into(), serde_json::json!(body.recording_id));
+        obj.insert("kind".into(), serde_json::json!(body.kind));
+        obj.insert("surface_form".into(), serde_json::json!(body.surface_form));
+        obj.insert(
+            "trace".into(),
+            body.trace.unwrap_or(serde_json::Value::Null),
+        );
+    }
+
+    let db = state.db.lock().unwrap();
+    let (id, is_new) = db
+        .add_eval_feedback_mistake(
+            term,
+            expected,
+            qwen,
+            sentence,
+            sentence,
+            orig_align.as_ref().map(|v| v.to_string()).as_deref(),
+            qwen_align.as_ref().map(|v| v.to_string()).as_deref(),
+            body.cons_time.as_ref().map(|v| v.to_string()).as_deref(),
+            Some(&trim_info.to_string()),
+        )
+        .map_err(err)?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "id": id,
+        "is_new": is_new
+    }))
+    .into_response())
 }
 
 #[derive(Deserialize)]

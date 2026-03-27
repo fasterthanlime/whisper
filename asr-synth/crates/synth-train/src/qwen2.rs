@@ -9,7 +9,8 @@ use candle_core::{
     quantized::{QMatMul, QTensor, gguf_file},
 };
 use candle_nn::Embedding;
-use std::collections::HashMap;
+use peft_rs::{Adapter, LoraLayer};
+use std::collections::{BTreeMap, HashMap};
 
 // ── Inlined helpers (from candle-transformers) ──────────────────────────
 
@@ -50,12 +51,32 @@ struct Mlp {
     feed_forward_w3: QMatMul,
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let w1 = self.feed_forward_w1.forward(xs)?;
-        let w3 = self.feed_forward_w3.forward(xs)?;
-        self.feed_forward_w2
-            .forward(&(candle_nn::ops::silu(&w1)? * w3)?)
+impl Mlp {
+    fn forward(
+        &self,
+        xs: &Tensor,
+        layer_idx: usize,
+        lora_layers: &HashMap<String, LoraLayer>,
+    ) -> Result<Tensor> {
+        let w1 = apply_lora(
+            lora_layers,
+            mlp_module_name(layer_idx, "gate_proj"),
+            xs,
+            self.feed_forward_w1.forward(xs)?,
+        )?;
+        let w3 = apply_lora(
+            lora_layers,
+            mlp_module_name(layer_idx, "up_proj"),
+            xs,
+            self.feed_forward_w3.forward(xs)?,
+        )?;
+        let hidden = (candle_nn::ops::silu(&w1)? * w3)?;
+        apply_lora(
+            lora_layers,
+            mlp_module_name(layer_idx, "down_proj"),
+            &hidden,
+            self.feed_forward_w2.forward(&hidden)?,
+        )
     }
 }
 
@@ -86,6 +107,28 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Ten
     Ok(m)
 }
 
+fn attention_module_name(layer_idx: usize, projection: &str) -> String {
+    format!("model.layers.{layer_idx}.self_attn.{projection}")
+}
+
+fn mlp_module_name(layer_idx: usize, projection: &str) -> String {
+    format!("model.layers.{layer_idx}.mlp.{projection}")
+}
+
+fn apply_lora(
+    lora_layers: &HashMap<String, LoraLayer>,
+    module_name: String,
+    input: &Tensor,
+    base_output: Tensor,
+) -> Result<Tensor> {
+    match lora_layers.get(&module_name) {
+        Some(layer) => layer
+            .forward(input, Some(&base_output))
+            .map_err(|e| candle_core::Error::Msg(e.to_string()).bt()),
+        None => Ok(base_output),
+    }
+}
+
 impl LayerWeights {
     fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, _n_head, seq_len, _n_embd) = x.dims4()?;
@@ -99,12 +142,29 @@ impl LayerWeights {
         x: &Tensor,
         mask: Option<&Tensor>,
         index_pos: usize,
+        layer_idx: usize,
+        lora_layers: &HashMap<String, LoraLayer>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
 
-        let q = self.attention_wq.forward(x)?;
-        let k = self.attention_wk.forward(x)?;
-        let v = self.attention_wv.forward(x)?;
+        let q = apply_lora(
+            lora_layers,
+            attention_module_name(layer_idx, "q_proj"),
+            x,
+            self.attention_wq.forward(x)?,
+        )?;
+        let k = apply_lora(
+            lora_layers,
+            attention_module_name(layer_idx, "k_proj"),
+            x,
+            self.attention_wk.forward(x)?,
+        )?;
+        let v = apply_lora(
+            lora_layers,
+            attention_module_name(layer_idx, "v_proj"),
+            x,
+            self.attention_wv.forward(x)?,
+        )?;
 
         let q = q.broadcast_add(&self.attention_bq)?;
         let k = k.broadcast_add(&self.attention_bk)?;
@@ -154,7 +214,12 @@ impl LayerWeights {
         let att = candle_nn::ops::softmax_last_dim(&att)?;
         let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        let y = self.attention_wo.forward(&y)?;
+        let y = apply_lora(
+            lora_layers,
+            attention_module_name(layer_idx, "o_proj"),
+            &y,
+            self.attention_wo.forward(&y)?,
+        )?;
         Ok(y)
     }
 
@@ -169,6 +234,7 @@ pub struct ModelWeights {
     norm: RmsNorm,
     output: QMatMul,
     masks: HashMap<usize, Tensor>,
+    lora_layers: HashMap<String, LoraLayer>,
 }
 
 fn precompute_freqs_cis(
@@ -288,6 +354,7 @@ impl ModelWeights {
             norm,
             output,
             masks: HashMap::new(),
+            lora_layers: HashMap::new(),
         })
     }
 
@@ -312,23 +379,28 @@ impl ModelWeights {
             Some(self.mask(seq_len, x.device())?)
         };
         let mut layer_in = self.tok_embeddings.forward(x)?;
-        for layer in self.layers.iter_mut() {
+        let lora_layers = &self.lora_layers;
+        for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
             let x = layer_in;
             let residual = &x;
             let x = layer.attention_norm.forward(&x)?;
-            let attn = layer.forward_attn(&x, mask.as_ref(), index_pos)?;
+            let attn = layer.forward_attn(&x, mask.as_ref(), index_pos, layer_idx, lora_layers)?;
             let x = (attn + residual)?;
 
             // MLP
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
-            let x = layer.mlp.forward(&x)?;
+            let x = layer.mlp.forward(&x, layer_idx, lora_layers)?;
             let x = (x + residual)?;
             layer_in = x
         }
         let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;
         self.output.forward(&x)
+    }
+
+    pub fn set_lora_layers(&mut self, layers: BTreeMap<String, LoraLayer>) {
+        self.lora_layers = layers.into_iter().collect();
     }
 
     /// Clear the KV cache between independent generations.

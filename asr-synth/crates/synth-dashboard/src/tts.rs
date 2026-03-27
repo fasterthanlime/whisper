@@ -42,8 +42,13 @@ fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32>> {
         oversampling_factor: 256,
         window: WindowFunction::BlackmanHarris2,
     };
-    let mut resampler =
-        SincFixedIn::<f32>::new(to_rate as f64 / from_rate as f64, 2.0, params, samples.len(), 1)?;
+    let mut resampler = SincFixedIn::<f32>::new(
+        to_rate as f64 / from_rate as f64,
+        2.0,
+        params,
+        samples.len(),
+        1,
+    )?;
     let output = resampler.process(&[samples], None)?;
     Ok(output.into_iter().next().unwrap_or_default())
 }
@@ -77,12 +82,7 @@ fn encode_ogg_opus_with_libopus(samples: &[f32]) -> Result<Vec<u8>> {
         PacketWriteEndInfo::EndPage,
         0,
     )?;
-    writer.write_packet(
-        build_opus_tags(),
-        serial,
-        PacketWriteEndInfo::EndPage,
-        0,
-    )?;
+    writer.write_packet(build_opus_tags(), serial, PacketWriteEndInfo::EndPage, 0)?;
 
     let total_samples = samples.len();
     let mut emitted_samples = 0usize;
@@ -123,7 +123,9 @@ fn decode_ogg_opus_with_libopus(bytes: &[u8]) -> Result<(Vec<f32>, u32)> {
         .ok_or_else(|| anyhow!("Missing OpusHead packet"))?;
     let (channels, pre_skip) = parse_opus_head(&head.data)?;
     if channels != 1 {
-        return Err(anyhow!("Only mono Opus recordings are supported, got {channels} channels"));
+        return Err(anyhow!(
+            "Only mono Opus recordings are supported, got {channels} channels"
+        ));
     }
 
     let tags = reader
@@ -140,7 +142,10 @@ fn decode_ogg_opus_with_libopus(bytes: &[u8]) -> Result<(Vec<f32>, u32)> {
     let mut decoded_packet = vec![0.0f32; OPUS_FRAME_SAMPLES * 6];
     let mut final_granule = None;
 
-    while let Some(packet) = reader.read_packet().map_err(|e| anyhow!("Ogg read packet: {e}"))? {
+    while let Some(packet) = reader
+        .read_packet()
+        .map_err(|e| anyhow!("Ogg read packet: {e}"))?
+    {
         let len = decoder
             .decode_float(&packet.data, &mut decoded_packet, false)
             .map_err(|e| anyhow!("Opus decode: {e}"))?;

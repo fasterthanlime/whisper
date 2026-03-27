@@ -6,6 +6,8 @@ set -euo pipefail
 # Uses Qwen2.5-0.5B (smallest Qwen model) to minimize memory usage.
 # The model learns: given two noisy ASR transcripts + vocab → corrected text
 
+export AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1
+
 MODEL="Qwen/Qwen2.5-0.5B"
 DATA_DIR="training/data"
 ADAPTER_DIR="training/adapters"
@@ -18,7 +20,7 @@ echo "Adapters: $ADAPTER_DIR"
 echo "Iters:    $ITERS"
 echo ""
 
-uvx --from 'mlx-lm' mlx_lm.lora \
+uvx --refresh --from 'mlx-lm==0.31.1' mlx_lm.lora \
   --model "$MODEL" \
   --data "$DATA_DIR" \
   --train \

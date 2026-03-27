@@ -7,6 +7,8 @@ pub mod llm;
 mod qwen2;
 
 const MLX_LM_PACKAGE: &str = "mlx-lm==0.31.1";
+const AGX_RELAX_CDM_CTXSTORE_TIMEOUT_ENV: &str = "AGX_RELAX_CDM_CTXSTORE_TIMEOUT";
+const AGX_RELAX_CDM_CTXSTORE_TIMEOUT_VALUE: &str = "1";
 
 /// Stats returned from the prepare step
 #[derive(Debug, serde::Serialize)]
@@ -66,6 +68,169 @@ impl Default for TrainConfig {
             steps_per_eval: 500,
         }
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct TrainingResourceSample {
+    timestamp_ms: u64,
+    launcher_pid: u32,
+    process_tree_pids: Vec<u32>,
+    launcher_rss_mb: f64,
+    process_tree_rss_mb: f64,
+    system_total_memory_mb: f64,
+    system_used_memory_mb: f64,
+    system_free_memory_mb: f64,
+    system_available_memory_mb: f64,
+    gpu_device_util_percent: Option<f64>,
+    gpu_in_use_system_memory_mb: Option<f64>,
+    gpu_alloc_system_memory_mb: Option<f64>,
+    gpu_driver_system_memory_mb: Option<f64>,
+}
+
+fn mlx_uvx_command() -> std::process::Command {
+    let mut command = std::process::Command::new("uvx");
+    command.env(
+        AGX_RELAX_CDM_CTXSTORE_TIMEOUT_ENV,
+        AGX_RELAX_CDM_CTXSTORE_TIMEOUT_VALUE,
+    );
+    command
+}
+
+fn kb_to_mb(value_kb: u64) -> f64 {
+    value_kb as f64 / 1024.0
+}
+
+fn bytes_to_mb(value_bytes: u64) -> f64 {
+    value_bytes as f64 / (1024.0 * 1024.0)
+}
+
+fn process_tree_rss_kb(root_pid: u32) -> Result<(Vec<u32>, u64, u64)> {
+    let output = std::process::Command::new("ps")
+        .args(["-axo", "pid=,ppid=,rss="])
+        .output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut snapshots = std::collections::HashMap::<u32, (u32, u64)>::new();
+    for line in stdout.lines() {
+        let mut parts = line.split_whitespace();
+        let Some(pid) = parts.next().and_then(|v| v.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Some(ppid) = parts.next().and_then(|v| v.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Some(rss_kb) = parts.next().and_then(|v| v.parse::<u64>().ok()) else {
+            continue;
+        };
+        snapshots.insert(pid, (ppid, rss_kb));
+    }
+
+    let mut queue = std::collections::VecDeque::from([root_pid]);
+    let mut tree_pids = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut tree_rss_kb = 0u64;
+    let mut launcher_rss_kb = 0u64;
+
+    while let Some(pid) = queue.pop_front() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        tree_pids.push(pid);
+        if let Some((_, rss_kb)) = snapshots.get(&pid).copied() {
+            tree_rss_kb += rss_kb;
+            if pid == root_pid {
+                launcher_rss_kb = rss_kb;
+            }
+        }
+        for (&child_pid, &(ppid, _)) in &snapshots {
+            if ppid == pid && !seen.contains(&child_pid) {
+                queue.push_back(child_pid);
+            }
+        }
+    }
+
+    tree_pids.sort_unstable();
+    Ok((tree_pids, launcher_rss_kb, tree_rss_kb))
+}
+
+fn performance_statistics_block(ioreg_output: &str) -> Option<&str> {
+    let start = ioreg_output.find("\"PerformanceStatistics\"")?;
+    let rest = &ioreg_output[start..];
+    let open = rest.find('{')?;
+    let stats = &rest[open + 1..];
+    let close = stats.find('}')?;
+    Some(&stats[..close])
+}
+
+fn extract_stat_number(stats: &str, key: &str) -> Option<f64> {
+    let key_pos = stats.find(&format!("\"{key}\""))?;
+    let rest = &stats[key_pos + key.len() + 2..];
+    let eq = rest.find('=')?;
+    let value = rest[eq + 1..].trim_start();
+    let digits: String = value
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+        .collect();
+    digits.parse::<f64>().ok()
+}
+
+fn sample_gpu_metrics() -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
+    let output = std::process::Command::new("ioreg")
+        .args(["-r", "-d", "1", "-c", "IOAccelerator"])
+        .output();
+    let Ok(output) = output else {
+        return (None, None, None, None);
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_gpu_metrics(&stdout)
+}
+
+fn parse_gpu_metrics(ioreg_output: &str) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
+    let Some(stats) = performance_statistics_block(ioreg_output) else {
+        return (None, None, None, None);
+    };
+
+    let device_util_percent = extract_stat_number(stats, "Device Utilization %");
+    let in_use_mb =
+        extract_stat_number(stats, "In use system memory").map(|bytes| bytes / (1024.0 * 1024.0));
+    let alloc_mb =
+        extract_stat_number(stats, "Alloc system memory").map(|bytes| bytes / (1024.0 * 1024.0));
+    let driver_mb = extract_stat_number(stats, "In use system memory (driver)")
+        .map(|bytes| bytes / (1024.0 * 1024.0));
+    (device_util_percent, in_use_mb, alloc_mb, driver_mb)
+}
+
+fn sample_training_resources(root_pid: u32, system: &mut sysinfo::System) -> Result<String> {
+    system.refresh_memory();
+    let (tree_pids, launcher_rss_kb, tree_rss_kb) = process_tree_rss_kb(root_pid)?;
+    let (
+        gpu_device_util_percent,
+        gpu_in_use_system_memory_mb,
+        gpu_alloc_system_memory_mb,
+        gpu_driver_system_memory_mb,
+    ) = sample_gpu_metrics();
+
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    let sample = TrainingResourceSample {
+        timestamp_ms,
+        launcher_pid: root_pid,
+        process_tree_pids: tree_pids,
+        launcher_rss_mb: kb_to_mb(launcher_rss_kb),
+        process_tree_rss_mb: kb_to_mb(tree_rss_kb),
+        system_total_memory_mb: bytes_to_mb(system.total_memory()),
+        system_used_memory_mb: bytes_to_mb(system.used_memory()),
+        system_free_memory_mb: bytes_to_mb(system.free_memory()),
+        system_available_memory_mb: bytes_to_mb(system.available_memory()),
+        gpu_device_util_percent,
+        gpu_in_use_system_memory_mb,
+        gpu_alloc_system_memory_mb,
+        gpu_driver_system_memory_mb,
+    };
+
+    Ok(format!("RESOURCE {}", serde_json::to_string(&sample)?))
 }
 
 /// Prepare training data from corpus JSONL → MLX-LM completions format.
@@ -169,7 +334,8 @@ pub fn prepare(config: &PrepareConfig, mut on_status: impl FnMut(&str)) -> Resul
 
 /// Run MLX-LM LoRA training (wraps uvx)
 pub fn train(config: &TrainConfig) -> Result<std::process::ExitStatus> {
-    let status = std::process::Command::new("uvx")
+    let mut command = mlx_uvx_command();
+    let status = command
         .args([
             "--refresh",
             "--from",
@@ -201,11 +367,12 @@ pub fn train_streaming(
     should_cancel: impl Fn() -> bool,
     mut on_line: impl FnMut(&str),
 ) -> Result<std::process::ExitStatus> {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::sync::mpsc::RecvTimeoutError;
     use std::time::Duration;
 
-    let mut child = Command::new("uvx")
+    let mut command = mlx_uvx_command();
+    let mut child = command
         .args([
             "--refresh",
             "--from",
@@ -231,6 +398,9 @@ pub fn train_streaming(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+
+    let mut system = sysinfo::System::new();
+    let mut last_resource_sample = std::time::Instant::now() - Duration::from_secs(1);
 
     // MLX-LM writes progress bars to stderr (with \r) and training results to stdout.
     // Merge both streams and parse line-by-line, monitoring val loss for early stopping.
@@ -323,6 +493,12 @@ pub fn train_streaming(
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
+                if last_resource_sample.elapsed() >= Duration::from_secs(1) {
+                    last_resource_sample = std::time::Instant::now();
+                    if let Ok(line) = sample_training_resources(child.id(), &mut system) {
+                        on_line(&line);
+                    }
+                }
                 if should_cancel() {
                     on_line("Stop requested. Terminating training process...");
                     let _ = child.kill();
@@ -352,7 +528,7 @@ pub struct InferenceConfig {
 impl Default for InferenceConfig {
     fn default() -> Self {
         Self {
-            model: "Qwen/Qwen3.5-0.8B".into(),
+            model: "Qwen/Qwen2.5-0.5B".into(),
             adapters: "training/adapters".into(),
             max_tokens: 64,
             port: 8899,
@@ -387,7 +563,8 @@ pub fn build_correction_prompt(parakeet: &str, qwen: &str) -> String {
 fn normalized_words(text: &str) -> Vec<String> {
     text.split_whitespace()
         .map(|token| {
-            token.chars()
+            token
+                .chars()
                 .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '\'')
                 .collect::<String>()
                 .to_ascii_lowercase()
@@ -467,7 +644,9 @@ fn strip_explanatory_prefixes(mut text: String) -> String {
             text = trimmed[prefix.len()..].trim().trim_matches('"').to_string();
             continue;
         }
-        if lower.starts_with("the sentence is correct.") || lower.starts_with("the sentence is correct,") {
+        if lower.starts_with("the sentence is correct.")
+            || lower.starts_with("the sentence is correct,")
+        {
             if let Some(idx) = trimmed.find(':') {
                 text = trimmed[idx + 1..].trim().trim_matches('"').to_string();
                 continue;
@@ -512,9 +691,44 @@ fn sanitize_correction_output(prompt: &str, raw: &str) -> String {
     text
 }
 
-/// An inference server that keeps the model loaded. Wraps mlx_lm.server.
+#[derive(Debug, Clone)]
+struct CorrectionModelSpec {
+    base_model: String,
+    gguf_repo: String,
+    gguf_file: String,
+    tokenizer_repo: String,
+}
+
+fn load_adapter_base_model(adapters_dir: &str) -> Option<String> {
+    let path = std::path::Path::new(adapters_dir).join("adapter_config.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    let cfg: adapter_import::MlxAdapterConfig = serde_json::from_str(&text).ok()?;
+    Some(cfg.model)
+}
+
+fn resolve_correction_model(config: &InferenceConfig) -> Result<CorrectionModelSpec> {
+    let base_model =
+        load_adapter_base_model(&config.adapters).unwrap_or_else(|| config.model.clone());
+    match base_model.as_str() {
+        "Qwen/Qwen2.5-0.5B" => Ok(CorrectionModelSpec {
+            base_model,
+            gguf_repo: "QuantFactory/Qwen2.5-0.5B-GGUF".into(),
+            gguf_file: "Qwen2.5-0.5B.Q4_K_M.gguf".into(),
+            tokenizer_repo: "Qwen/Qwen2.5-0.5B".into(),
+        }),
+        "Qwen/Qwen2.5-0.5B-Instruct" => Ok(CorrectionModelSpec {
+            base_model,
+            gguf_repo: "Qwen/Qwen2.5-0.5B-Instruct-GGUF".into(),
+            gguf_file: "qwen2.5-0.5b-instruct-q4_k_m.gguf".into(),
+            tokenizer_repo: "Qwen/Qwen2.5-0.5B-Instruct".into(),
+        }),
+        other => anyhow::bail!("unsupported correction base model: {other}"),
+    }
+}
+
+/// An in-process correction model that keeps the GGUF weights loaded in Rust.
 pub struct InferenceServer {
-    child: std::process::Child,
+    model_runtime: llm::Qwen2Model,
     pub port: u16,
     pub max_tokens: usize,
     pub model: String,
@@ -522,98 +736,44 @@ pub struct InferenceServer {
 }
 
 impl InferenceServer {
-    /// Start the mlx_lm.server subprocess. Blocks until the server is ready.
+    /// Load the correction model and attach the current MLX LoRA adapters.
     pub fn start(config: &InferenceConfig) -> Result<Self> {
-        use std::process::{Command, Stdio};
-
+        let spec = resolve_correction_model(config)?;
         eprintln!(
-            "[inference] Starting mlx_lm.server on port {}...",
-            config.port
+            "[inference] Loading in-process correction model {} from {}/{}...",
+            spec.base_model, spec.gguf_repo, spec.gguf_file
         );
-        let child = Command::new("uvx")
-            .args([
-                "--refresh",
-                "--from",
-                MLX_LM_PACKAGE,
-                "mlx_lm.server",
-                "--model",
-                &config.model,
-                "--adapter-path",
-                &config.adapters,
-                "--port",
-                &config.port.to_string(),
-                "--max-tokens",
-                &config.max_tokens.to_string(),
-                "--temp",
-                "0",
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-
-        // Wait for the server to be ready (poll /v1/models)
-        let url = format!("http://127.0.0.1:{}/v1/models", config.port);
-        let start = std::time::Instant::now();
-        loop {
-            if start.elapsed() > std::time::Duration::from_secs(120) {
-                anyhow::bail!("mlx_lm.server failed to start within 120s");
-            }
-            if let Ok(resp) = ureq::get(&url).call() {
-                if resp.status() == 200 {
-                    break;
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
-        eprintln!("[inference] Server ready on port {}", config.port);
+        let model_runtime = llm::Qwen2Model::load_with_mlx_adapters(
+            &spec.gguf_repo,
+            &spec.gguf_file,
+            &spec.tokenizer_repo,
+            &config.adapters,
+        )?;
+        eprintln!("[inference] Correction model ready");
 
         Ok(Self {
-            child,
+            model_runtime,
             port: config.port,
             max_tokens: config.max_tokens,
-            model: config.model.clone(),
+            model: spec.base_model,
             adapters: config.adapters.clone(),
         })
     }
 
     /// Run inference on a single prompt. Returns the corrected text.
-    /// Times out after 30 seconds to prevent hangs on degenerate inputs.
-    pub fn infer(&self, prompt: &str) -> Result<String> {
-        let url = format!("http://127.0.0.1:{}/v1/completions", self.port);
-        let body = serde_json::json!({
-            "prompt": prompt,
-            "max_tokens": self.max_tokens,
-            "temperature": 0.0,
-            "stop": ["<|endoftext|>", "<|end_of_text|>", "<fixd>", "<qwen>", "<keet>"],
-        });
+    pub fn infer(&mut self, prompt: &str) -> Result<String> {
+        let prompt_tokens = self.model_runtime.encode_text(prompt)?;
+        let mut text = self
+            .model_runtime
+            .generate(&prompt_tokens, self.max_tokens, 0.0, 0)?;
 
-        let agent = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(10)))
-            .build()
-            .new_agent();
-
-        let mut resp = agent
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .send_json(&body)
-            .map_err(|e| anyhow::anyhow!("inference request failed: {e}"))?;
-
-        let json: serde_json::Value = resp
-            .body_mut()
-            .read_json()
-            .map_err(|e| anyhow::anyhow!("inference response parse failed: {e}"))?;
-
-        let mut text = json["choices"][0]["text"]
-            .as_str()
-            .unwrap_or("")
-            .replace("<|endoftext|>", "")
-            .replace("<|end_of_text|>", "");
-
-        if let Some(stripped) = text.strip_prefix(prompt) {
-            text = stripped.to_string();
-        }
-
-        for marker in ["<fixd>", "<qwen>", "<keet>"] {
+        for marker in [
+            "<|endoftext|>",
+            "<|end_of_text|>",
+            "<fixd>",
+            "<qwen>",
+            "<keet>",
+        ] {
             if let Some(idx) = text.find(marker) {
                 text.truncate(idx);
             }
@@ -624,11 +784,8 @@ impl InferenceServer {
 }
 
 impl InferenceServer {
-    /// Force-kill the server process immediately.
     pub fn kill(&mut self) {
-        eprintln!("[inference] Killing mlx_lm.server");
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        eprintln!("[inference] Releasing in-process correction model");
     }
 
     pub fn matches(&self, config: &InferenceConfig) -> bool {
@@ -641,9 +798,7 @@ impl InferenceServer {
 
 impl Drop for InferenceServer {
     fn drop(&mut self) {
-        eprintln!("[inference] Shutting down mlx_lm.server");
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        eprintln!("[inference] Releasing in-process correction model");
     }
 }
 
@@ -775,4 +930,21 @@ pub fn write_jsonl(path: &str, entries: &[serde_json::Value]) -> Result<()> {
     }
     f.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_gpu_metrics;
+
+    #[test]
+    fn parses_ioreg_performance_statistics() {
+        let sample = r#"
+            "PerformanceStatistics" = {"In use system memory (driver)"=1048576,"Alloc system memory"=8589934592,"In use system memory"=2147483648,"Device Utilization %"=67}
+        "#;
+        let (util, in_use, alloc, driver) = parse_gpu_metrics(sample);
+        assert_eq!(util, Some(67.0));
+        assert_eq!(in_use, Some(2048.0));
+        assert_eq!(alloc, Some(8192.0));
+        assert_eq!(driver, Some(1.0));
+    }
 }

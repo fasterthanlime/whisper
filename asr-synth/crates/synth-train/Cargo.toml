@@ -23,3 +23,4 @@ tokenizers = { version = "0.22", features = ["onig"] }
 hf-hub = "0.4"
 tracing = "0.1"
 peft-rs = { path = "../peft-rs" }
+sysinfo = "0.37"

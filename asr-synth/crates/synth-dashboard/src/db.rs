@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use base64::Engine as _;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -60,12 +60,21 @@ CREATE TABLE IF NOT EXISTS candidate_sentences (
     imported_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS authored_sentence_recordings (
     id INTEGER PRIMARY KEY,
     term TEXT NOT NULL,
     sentence TEXT NOT NULL COLLATE NOCASE,
     take_no INTEGER NOT NULL,
     wav_path TEXT NOT NULL,
+    qwen_clean TEXT,
+    qwen_clean_model TEXT,
+    qwen_clean_updated_at TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -144,8 +153,12 @@ pub struct AuthoredSentenceRecordingRow {
     pub id: i64,
     pub term: String,
     pub sentence: String,
+    pub kind: String,
+    pub surface_form: Option<String>,
     pub take_no: i64,
     pub wav_path: String,
+    pub qwen_clean: Option<String>,
+    pub qwen_clean_model: Option<String>,
     pub created_at: String,
 }
 
@@ -209,6 +222,14 @@ impl Db {
         let _ = conn.execute_batch("ALTER TABLE sentences ADD COLUMN human_wav_path TEXT;");
         let _ = conn.execute_batch("ALTER TABLE vocab ADD COLUMN curated TEXT;"); // 'kept', 'removed', or NULL
         let _ = conn.execute_batch("ALTER TABLE vocab ADD COLUMN description TEXT;");
+        let _ = conn
+            .execute_batch("ALTER TABLE authored_sentence_recordings ADD COLUMN qwen_clean TEXT;");
+        let _ = conn.execute_batch(
+            "ALTER TABLE authored_sentence_recordings ADD COLUMN qwen_clean_model TEXT;",
+        );
+        let _ = conn.execute_batch(
+            "ALTER TABLE authored_sentence_recordings ADD COLUMN qwen_clean_updated_at TEXT;",
+        );
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN orig_alignment TEXT;");
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN qwen_alignment TEXT;");
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN parakeet_alignment TEXT;");
@@ -264,6 +285,10 @@ impl Db {
             )",
         )
         .ok();
+        let _ = conn.execute_batch(
+            "ALTER TABLE authored_sentences ADD COLUMN kind TEXT NOT NULL DEFAULT 'term'",
+        );
+        let _ = conn.execute_batch("ALTER TABLE authored_sentences ADD COLUMN surface_form TEXT");
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS authored_sentence_recordings (
                 id INTEGER PRIMARY KEY,
@@ -309,12 +334,65 @@ impl Db {
         Ok(Db { conn })
     }
 
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn get_setting_usize(&self, key: &str) -> Result<Option<usize>> {
+        Ok(self
+            .get_setting(key)?
+            .and_then(|value| value.parse::<usize>().ok()))
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET
+               value = excluded.value,
+               updated_at = excluded.updated_at",
+            params![key, value, now_str()],
+        )?;
+        Ok(())
+    }
+
     // ==================== AUTHORED SENTENCES ====================
 
     /// Insert an authored sentence, linking it to ALL vocab terms it contains.
     /// The `primary_term` is the one that was prompted, but we also scan for others.
     pub fn insert_authored_sentence(&self, primary_term: &str, sentence: &str) -> Result<i64> {
+        self.insert_authored_sentence_with_kind(primary_term, sentence, "term", None)
+    }
+
+    pub fn insert_authored_sentence_with_kind(
+        &self,
+        primary_term: &str,
+        sentence: &str,
+        kind: &str,
+        surface_form: Option<&str>,
+    ) -> Result<i64> {
         let now = now_str();
+        let kind = if kind.eq_ignore_ascii_case("counterexample") {
+            "counterexample"
+        } else {
+            "term"
+        };
+
+        if kind == "counterexample" {
+            self.conn.execute(
+                "INSERT INTO authored_sentences (term, sentence, kind, surface_form, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![primary_term, sentence, kind, surface_form, now],
+            )?;
+            return Ok(self.conn.last_insert_rowid());
+        }
+
         let lower = sentence.to_lowercase();
 
         // Find all vocab terms present in this sentence
@@ -341,7 +419,7 @@ impl Db {
         let mut last_id = 0i64;
         for term in &matched_terms {
             self.conn.execute(
-                "INSERT INTO authored_sentences (term, sentence, created_at) VALUES (?1, ?2, ?3)",
+                "INSERT INTO authored_sentences (term, sentence, kind, created_at) VALUES (?1, ?2, 'term', ?3)",
                 params![term, sentence, now],
             )?;
             last_id = self.conn.last_insert_rowid();
@@ -392,9 +470,25 @@ impl Db {
         )?)
     }
 
+    pub fn authored_counterexample_count(&self) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(DISTINCT sentence) FROM authored_sentences WHERE COALESCE(kind, 'term') = 'counterexample'",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+
     pub fn authored_sentence_term_counts(&self) -> Result<Vec<(String, i64)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT term, COUNT(*) FROM authored_sentences GROUP BY term ORDER BY COUNT(*) DESC",
+            "SELECT term, COUNT(*) FROM authored_sentences WHERE COALESCE(kind, 'term') = 'term' GROUP BY term ORDER BY COUNT(*) DESC",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn authored_counterexample_term_counts(&self) -> Result<Vec<(String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT term, COUNT(*) FROM authored_sentences WHERE COALESCE(kind, 'term') = 'counterexample' GROUP BY term ORDER BY COUNT(*) DESC",
         )?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -402,7 +496,7 @@ impl Db {
 
     pub fn list_authored_sentences(&self) -> Result<Vec<serde_json::Value>> {
         let mut stmt = self.conn.prepare(
-            "SELECT a.id, a.term, a.sentence, a.created_at, COALESCE(r.cnt, 0) as recording_count
+            "SELECT a.id, a.term, a.sentence, a.created_at, COALESCE(a.kind, 'term') as kind, a.surface_form, COALESCE(r.cnt, 0) as recording_count
              FROM authored_sentences a
              LEFT JOIN (
                  SELECT LOWER(sentence) as sentence_key, COUNT(*) as cnt
@@ -417,7 +511,9 @@ impl Db {
                 "term": row.get::<_, String>(1)?,
                 "sentence": row.get::<_, String>(2)?,
                 "created_at": row.get::<_, String>(3)?,
-                "recording_count": row.get::<_, i64>(4)?,
+                "kind": row.get::<_, String>(4)?,
+                "surface_form": row.get::<_, Option<String>>(5)?,
+                "recording_count": row.get::<_, i64>(6)?,
             }))
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -428,19 +524,28 @@ impl Db {
         sentence: &str,
     ) -> Result<Vec<AuthoredSentenceRecordingRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, term, sentence, take_no, wav_path, created_at
-             FROM authored_sentence_recordings
-             WHERE LOWER(sentence) = LOWER(?1)
-             ORDER BY take_no DESC, id DESC",
+            "SELECT r.id, r.term, r.sentence,
+                    COALESCE(a.kind, 'term') as kind,
+                    a.surface_form,
+                    r.take_no, r.wav_path, r.qwen_clean, r.qwen_clean_model, r.created_at
+             FROM authored_sentence_recordings r
+             LEFT JOIN authored_sentences a
+               ON LOWER(a.term) = LOWER(r.term) AND LOWER(a.sentence) = LOWER(r.sentence)
+             WHERE LOWER(r.sentence) = LOWER(?1)
+             ORDER BY r.take_no DESC, r.id DESC",
         )?;
         let rows = stmt.query_map(params![sentence], |row| {
             Ok(AuthoredSentenceRecordingRow {
                 id: row.get(0)?,
                 term: row.get(1)?,
                 sentence: row.get(2)?,
-                take_no: row.get(3)?,
-                wav_path: row.get(4)?,
-                created_at: row.get(5)?,
+                kind: row.get(3)?,
+                surface_form: row.get(4)?,
+                take_no: row.get(5)?,
+                wav_path: row.get(6)?,
+                qwen_clean: row.get(7)?,
+                qwen_clean_model: row.get(8)?,
+                created_at: row.get(9)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -451,18 +556,27 @@ impl Db {
         &self,
     ) -> Result<Vec<AuthoredSentenceRecordingRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, term, sentence, take_no, wav_path, created_at
-             FROM authored_sentence_recordings
-             ORDER BY created_at ASC, id ASC",
+            "SELECT r.id, r.term, r.sentence,
+                    COALESCE(a.kind, 'term') as kind,
+                    a.surface_form,
+                    r.take_no, r.wav_path, r.qwen_clean, r.qwen_clean_model, r.created_at
+             FROM authored_sentence_recordings r
+             LEFT JOIN authored_sentences a
+               ON LOWER(a.term) = LOWER(r.term) AND LOWER(a.sentence) = LOWER(r.sentence)
+             ORDER BY r.created_at ASC, r.id ASC",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(AuthoredSentenceRecordingRow {
                 id: row.get(0)?,
                 term: row.get(1)?,
                 sentence: row.get(2)?,
-                take_no: row.get(3)?,
-                wav_path: row.get(4)?,
-                created_at: row.get(5)?,
+                kind: row.get(3)?,
+                surface_form: row.get(4)?,
+                take_no: row.get(5)?,
+                wav_path: row.get(6)?,
+                qwen_clean: row.get(7)?,
+                qwen_clean_model: row.get(8)?,
+                created_at: row.get(9)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -522,9 +636,14 @@ impl Db {
         id: i64,
     ) -> Result<Option<AuthoredSentenceRecordingRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, term, sentence, take_no, wav_path, created_at
-             FROM authored_sentence_recordings
-             WHERE id = ?1",
+            "SELECT r.id, r.term, r.sentence,
+                    COALESCE(a.kind, 'term') as kind,
+                    a.surface_form,
+                    r.take_no, r.wav_path, r.qwen_clean, r.qwen_clean_model, r.created_at
+             FROM authored_sentence_recordings r
+             LEFT JOIN authored_sentences a
+               ON LOWER(a.term) = LOWER(r.term) AND LOWER(a.sentence) = LOWER(r.sentence)
+             WHERE r.id = ?1",
         )?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
@@ -532,13 +651,68 @@ impl Db {
                 id: row.get(0)?,
                 term: row.get(1)?,
                 sentence: row.get(2)?,
-                take_no: row.get(3)?,
-                wav_path: row.get(4)?,
-                created_at: row.get(5)?,
+                kind: row.get(3)?,
+                surface_form: row.get(4)?,
+                take_no: row.get(5)?,
+                wav_path: row.get(6)?,
+                qwen_clean: row.get(7)?,
+                qwen_clean_model: row.get(8)?,
+                created_at: row.get(9)?,
             }))
         } else {
             Ok(None)
         }
+    }
+
+    pub fn authored_recordings_needing_qwen_clean(
+        &self,
+        model_key: &str,
+        limit: i64,
+    ) -> Result<Vec<AuthoredSentenceRecordingRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT r.id, r.term, r.sentence,
+                    COALESCE(a.kind, 'term') as kind,
+                    a.surface_form,
+                    r.take_no, r.wav_path, r.qwen_clean, r.qwen_clean_model, r.created_at
+             FROM authored_sentence_recordings r
+             LEFT JOIN authored_sentences a
+               ON LOWER(a.term) = LOWER(r.term) AND LOWER(a.sentence) = LOWER(r.sentence)
+             WHERE r.qwen_clean IS NULL
+                OR r.qwen_clean_model IS NULL
+                OR r.qwen_clean_model != ?1
+             ORDER BY r.created_at ASC, r.id ASC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![model_key, limit], |row| {
+            Ok(AuthoredSentenceRecordingRow {
+                id: row.get(0)?,
+                term: row.get(1)?,
+                sentence: row.get(2)?,
+                kind: row.get(3)?,
+                surface_form: row.get(4)?,
+                take_no: row.get(5)?,
+                wav_path: row.get(6)?,
+                qwen_clean: row.get(7)?,
+                qwen_clean_model: row.get(8)?,
+                created_at: row.get(9)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn update_authored_recording_qwen_clean(
+        &self,
+        id: i64,
+        qwen_clean: &str,
+        model_key: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE authored_sentence_recordings
+             SET qwen_clean = ?1, qwen_clean_model = ?2, qwen_clean_updated_at = ?3
+             WHERE id = ?4",
+            params![qwen_clean, model_key, now_str(), id],
+        )?;
+        Ok(())
     }
 
     pub fn delete_authored_sentence_recording(&self, id: i64) -> Result<()> {
@@ -552,7 +726,7 @@ impl Db {
     /// Get unique authored sentences for eval. Returns (sentence, primary_term).
     pub fn authored_sentences_for_eval(&self) -> Result<Vec<(String, String)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT sentence, term FROM authored_sentences GROUP BY sentence ORDER BY id",
+            "SELECT sentence, term FROM authored_sentences WHERE COALESCE(kind, 'term') = 'term' GROUP BY sentence ORDER BY id",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -568,13 +742,18 @@ impl Db {
         Ok(())
     }
 
-    pub fn get_authored_sentence(&self, id: i64) -> Result<Option<(String, String)>> {
+    pub fn get_authored_sentence(
+        &self,
+        id: i64,
+    ) -> Result<Option<(String, String, String, Option<String>)>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT term, sentence FROM authored_sentences WHERE id = ?1")?;
+            .prepare(
+                "SELECT term, sentence, COALESCE(kind, 'term'), surface_form FROM authored_sentences WHERE id = ?1",
+            )?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
-            Ok(Some((row.get(0)?, row.get(1)?)))
+            Ok(Some((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
         } else {
             Ok(None)
         }
@@ -597,9 +776,22 @@ impl Db {
 
     pub fn authored_sentences_for_term(&self, term: &str) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT sentence FROM authored_sentences WHERE LOWER(term) = LOWER(?1) ORDER BY id DESC",
+            "SELECT DISTINCT sentence FROM authored_sentences WHERE LOWER(term) = LOWER(?1) AND COALESCE(kind, 'term') = 'term' ORDER BY id DESC",
         )?;
         let rows = stmt.query_map(params![term], |row| row.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn authored_counterexamples_for_term(&self, term: &str) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT sentence, surface_form
+             FROM authored_sentences
+             WHERE LOWER(term) = LOWER(?1)
+               AND COALESCE(kind, 'term') = 'counterexample'
+               AND surface_form IS NOT NULL
+             ORDER BY id DESC",
+        )?;
+        let rows = stmt.query_map(params![term], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -619,7 +811,12 @@ impl Db {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    pub fn insert_template_sentence(&self, term: &str, sentence: &str, source: &str) -> Result<bool> {
+    pub fn insert_template_sentence(
+        &self,
+        term: &str,
+        sentence: &str,
+        source: &str,
+    ) -> Result<bool> {
         let changed = self.conn.execute(
             "INSERT OR IGNORE INTO template_sentences (term, sentence, source, created_at) VALUES (?1, ?2, ?3, ?4)",
             params![term, sentence, source, now_str()],
@@ -1393,6 +1590,26 @@ impl Db {
             params![id],
         )?;
         Ok(())
+    }
+
+    pub fn add_eval_feedback_mistake(
+        &self,
+        term: &str,
+        original: &str,
+        qwen: &str,
+        sentence: &str,
+        spoken: &str,
+        orig_align: Option<&str>,
+        qwen_align: Option<&str>,
+        cons_time: Option<&str>,
+        trim_info: Option<&str>,
+    ) -> Result<(i64, bool)> {
+        let (id, is_new) = self.upsert_corpus_pair(
+            term, original, qwen, "", sentence, spoken, orig_align, qwen_align, None, cons_time,
+            trim_info, true, None,
+        )?;
+        self.approve_corpus_pair(id)?;
+        Ok((id, is_new))
     }
 
     // ==================== ALTERNATE SPELLINGS ====================

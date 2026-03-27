@@ -29,7 +29,10 @@ pub struct AppState {
     review: Mutex<review::ReviewSession>,
     precompute_notify: std::sync::Arc<tokio::sync::Notify>,
     vocab_precompute_notify: std::sync::Arc<tokio::sync::Notify>,
+    authored_asr_notify: std::sync::Arc<tokio::sync::Notify>,
+    background_work_notify: std::sync::Arc<tokio::sync::Notify>,
     audio_dir: String,
+    qwen_model_key: String,
     job_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Shared inference server for live correction (started on first use)
     inference_server: std::sync::Mutex<Option<synth_train::InferenceServer>>,
@@ -67,6 +70,12 @@ struct VocabAddBody {
 }
 
 #[derive(Deserialize)]
+struct SettingsUpdateBody {
+    background_template_target_per_term: Option<usize>,
+    background_confusion_target_per_term: Option<usize>,
+}
+
+#[derive(Deserialize)]
 struct AltSpellingBody {
     term: String,
     alt_spelling: String,
@@ -99,7 +108,9 @@ pub fn err(e: impl std::fmt::Display) -> AppError {
 
 fn normalize_suggested_term(term: &str) -> String {
     term.trim()
-        .trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-' && c != '(' && c != ')')
+        .trim_matches(|c: char| {
+            !c.is_alphanumeric() && c != '_' && c != '-' && c != '(' && c != ')'
+        })
         .to_lowercase()
 }
 
@@ -235,6 +246,8 @@ async fn api_vocab_update(
         };
         db.update_vocab_description(id, val).map_err(err)?;
     }
+    drop(db);
+    state.background_work_notify.notify_one();
     Ok(Json(serde_json::json!({ "ok": true })).into_response())
 }
 
@@ -247,6 +260,48 @@ async fn api_vocab_delete(
         db.delete_vocab_by_term(&row.term).map_err(err)?;
     }
     Ok(Json(serde_json::json!({"ok": true})).into_response())
+}
+
+async fn api_settings_get(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
+    let db = state.db.lock().unwrap();
+    let template_target = db
+        .get_setting_usize("background_template_target_per_term")
+        .map_err(err)?
+        .unwrap_or(200);
+    let confusion_target = db
+        .get_setting_usize("background_confusion_target_per_term")
+        .map_err(err)?
+        .unwrap_or(8);
+    Ok(Json(serde_json::json!({
+        "background_template_target_per_term": template_target,
+        "background_confusion_target_per_term": confusion_target,
+    }))
+    .into_response())
+}
+
+async fn api_settings_update(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SettingsUpdateBody>,
+) -> Result<Response, AppError> {
+    {
+        let db = state.db.lock().unwrap();
+        if let Some(value) = body.background_template_target_per_term {
+            db.set_setting(
+                "background_template_target_per_term",
+                &value.clamp(1, 1000).to_string(),
+            )
+            .map_err(err)?;
+        }
+        if let Some(value) = body.background_confusion_target_per_term {
+            db.set_setting(
+                "background_confusion_target_per_term",
+                &value.clamp(1, 1000).to_string(),
+            )
+            .map_err(err)?;
+        }
+    }
+    state.background_work_notify.notify_one();
+    api_settings_get(State(state)).await
 }
 
 async fn api_vocab_add(
@@ -278,12 +333,12 @@ async fn api_vocab_add(
             }
         }
     }
+    drop(db);
+    state.background_work_notify.notify_one();
     Ok(Json(serde_json::json!({"ok": true})).into_response())
 }
 
-async fn api_vocab_alt_spellings(
-    State(state): State<Arc<AppState>>,
-) -> Result<Response, AppError> {
+async fn api_vocab_alt_spellings(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
     let db = state.db.lock().unwrap();
     let alt_spellings = db.get_all_alt_spellings().map_err(err)?;
     Ok(Json(alt_spellings).into_response())
@@ -1048,6 +1103,8 @@ async fn main() -> anyhow::Result<()> {
 
     let precompute_notify = std::sync::Arc::new(tokio::sync::Notify::new());
     let vocab_precompute_notify = std::sync::Arc::new(tokio::sync::Notify::new());
+    let authored_asr_notify = std::sync::Arc::new(tokio::sync::Notify::new());
+    let background_work_notify = std::sync::Arc::new(tokio::sync::Notify::new());
     let audio_dir = "audio".to_string();
     std::fs::create_dir_all(&audio_dir).ok();
 
@@ -1062,7 +1119,10 @@ async fn main() -> anyhow::Result<()> {
         review: Mutex::new(review::ReviewSession::new()),
         precompute_notify: precompute_notify.clone(),
         vocab_precompute_notify: vocab_precompute_notify.clone(),
+        authored_asr_notify: authored_asr_notify.clone(),
+        background_work_notify: background_work_notify.clone(),
         audio_dir: audio_dir.clone(),
+        qwen_model_key: qwen_model_dir.clone(),
         job_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         inference_server: std::sync::Mutex::new(None),
     });
@@ -1070,6 +1130,10 @@ async fn main() -> anyhow::Result<()> {
     // Start background pre-computation loop
     review::spawn_precompute_loop(state.clone(), precompute_notify, audio_dir.clone());
     review::spawn_vocab_precompute_loop(state.clone(), vocab_precompute_notify, audio_dir);
+    jobs::spawn_authored_asr_precompute_loop(state.clone(), authored_asr_notify.clone());
+    jobs::spawn_background_maintenance_loop(state.clone(), background_work_notify.clone());
+    authored_asr_notify.notify_one();
+    background_work_notify.notify_one();
 
     // ==================== AUTHORING ====================
 
@@ -1090,6 +1154,8 @@ async fn main() -> anyhow::Result<()> {
     struct AuthorSubmitBody {
         term: String,
         sentence: String,
+        kind: Option<String>,
+        surface_form: Option<String>,
     }
 
     async fn api_author_submit(
@@ -1097,11 +1163,36 @@ async fn main() -> anyhow::Result<()> {
         Json(body): Json<AuthorSubmitBody>,
     ) -> Result<Response, AppError> {
         let sentence = body.sentence.trim().to_string();
+        let kind = body.kind.as_deref().unwrap_or("term");
+        let surface_form = body
+            .surface_form
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         if sentence.is_empty() {
             return Ok(Json(serde_json::json!({"error": "empty sentence"})).into_response());
         }
-        // Verify the sentence contains the term (case-insensitive)
-        if !sentence.to_lowercase().contains(&body.term.to_lowercase()) {
+        if kind.eq_ignore_ascii_case("counterexample") {
+            let Some(surface) = surface_form.as_deref() else {
+                return Ok(Json(
+                    serde_json::json!({"error": "counterexample requires a surface form"}),
+                )
+                .into_response());
+            };
+            if !sentence.to_lowercase().contains(&surface.to_lowercase()) {
+                return Ok(Json(
+                    serde_json::json!({"error": format!("Counterexample sentence must contain '{}'", surface)}),
+                )
+                .into_response());
+            }
+            if sentence.to_lowercase().contains(&body.term.to_lowercase()) {
+                return Ok(Json(
+                    serde_json::json!({"error": format!("Counterexample sentence must not contain canonical term '{}'", body.term)}),
+                )
+                .into_response());
+            }
+        } else if !sentence.to_lowercase().contains(&body.term.to_lowercase()) {
             return Ok(Json(
                 serde_json::json!({"error": format!("Sentence must contain '{}'", body.term)}),
             )
@@ -1109,7 +1200,12 @@ async fn main() -> anyhow::Result<()> {
         }
         let db = state.db.lock().unwrap();
         let id = db
-            .insert_authored_sentence(&body.term, &sentence)
+            .insert_authored_sentence_with_kind(
+                &body.term,
+                &sentence,
+                kind,
+                surface_form.as_deref(),
+            )
             .map_err(err)?;
         Ok(Json(serde_json::json!({"id": id})).into_response())
     }
@@ -1127,7 +1223,9 @@ async fn main() -> anyhow::Result<()> {
         Path(id): Path<i64>,
     ) -> Result<Response, AppError> {
         let db = state.db.lock().unwrap();
-        let Some((term, sentence)) = db.get_authored_sentence(id).map_err(err)? else {
+        let Some((term, sentence, kind, surface_form)) =
+            db.get_authored_sentence(id).map_err(err)?
+        else {
             return Ok(Json(serde_json::json!({"error": "sentence not found"})).into_response());
         };
         let recordings = db
@@ -1149,6 +1247,8 @@ async fn main() -> anyhow::Result<()> {
                     "id": r.id,
                     "term": r.term,
                     "sentence": r.sentence,
+                    "kind": r.kind,
+                    "surface_form": r.surface_form,
                     "take_no": r.take_no,
                     "created_at": r.created_at,
                     "audio_b64": audio_b64,
@@ -1159,6 +1259,8 @@ async fn main() -> anyhow::Result<()> {
         Ok(Json(serde_json::json!({
             "sentence": sentence,
             "term": term,
+            "kind": kind,
+            "surface_form": surface_form,
             "recordings": recordings,
         }))
         .into_response())
@@ -1173,6 +1275,7 @@ async fn main() -> anyhow::Result<()> {
             let db = state.db.lock().unwrap();
             db.get_authored_sentence(id)
                 .map_err(err)?
+                .map(|(term, sentence, _kind, _surface_form)| (term, sentence))
                 .ok_or_else(|| err("sentence not found"))?
         };
 
@@ -1236,6 +1339,7 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(err)?;
             (recording_id, take_no)
         };
+        state.authored_asr_notify.notify_one();
 
         let recordings = {
             let db = state.db.lock().unwrap();
@@ -1352,14 +1456,18 @@ async fn main() -> anyhow::Result<()> {
         let db = state.db.lock().unwrap();
         let total = db.authored_sentence_count().map_err(err)?;
         let terms = db.authored_sentence_term_counts().map_err(err)?;
+        let counterexamples_total = db.authored_counterexample_count().map_err(err)?;
+        let counterexample_terms = db.authored_counterexample_term_counts().map_err(err)?;
         let recordings_total = db.authored_sentence_recordings_count().map_err(err)?;
         let sentences_with_recordings =
             db.authored_sentences_with_recordings_count().map_err(err)?;
         let vocab_count = db.list_reviewed_vocab().map_err(err)?.len();
         Ok(Json(serde_json::json!({
             "total_sentences": total,
+            "counterexample_total": counterexamples_total,
             "vocab_count": vocab_count,
             "terms": terms,
+            "counterexample_terms": counterexample_terms,
             "recordings_total": recordings_total,
             "sentences_with_recordings": sentences_with_recordings,
         }))
@@ -1593,6 +1701,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/vocab/import", post(api_vocab_import))
         .route("/api/vocab/{id}", post(api_vocab_update))
         .route("/api/vocab/{id}/delete", post(api_vocab_delete))
+        .route(
+            "/api/settings",
+            get(api_settings_get).post(api_settings_update),
+        )
         // Candidates + Sentences
         .route("/api/candidates/import", post(api_candidates_import))
         .route("/api/sentences", get(api_sentences_list))
@@ -1665,7 +1777,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/jobs/curate", post(jobs::api_start_curate_job))
         .route("/api/jobs/stop", post(jobs::api_stop_job))
         .route("/api/pipeline/status", get(jobs::api_pipeline_status))
-        .route("/api/pipeline/template-coverage", get(jobs::api_template_coverage))
+        .route(
+            "/api/pipeline/template-coverage",
+            get(jobs::api_template_coverage),
+        )
         .route(
             "/api/pipeline/template-coverage/{term}",
             get(jobs::api_template_sentences),
@@ -1688,6 +1803,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/pipeline/approve-corpus-pair",
             post(jobs::api_approve_corpus_pair),
+        )
+        .route(
+            "/api/pipeline/eval-add-mistake",
+            post(jobs::api_add_eval_mistake),
         )
         .route(
             "/api/pipeline/alt-spelling",
