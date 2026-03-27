@@ -2,8 +2,11 @@ use anyhow::Result;
 use rand::prelude::*;
 use std::io::Write;
 
+pub mod adapter_import;
 pub mod llm;
 mod qwen2;
+
+const MLX_LM_PACKAGE: &str = "mlx-lm==0.31.1";
 
 /// Stats returned from the prepare step
 #[derive(Debug, serde::Serialize)]
@@ -168,8 +171,9 @@ pub fn prepare(config: &PrepareConfig, mut on_status: impl FnMut(&str)) -> Resul
 pub fn train(config: &TrainConfig) -> Result<std::process::ExitStatus> {
     let status = std::process::Command::new("uvx")
         .args([
+            "--refresh",
             "--from",
-            "mlx-lm",
+            MLX_LM_PACKAGE,
             "mlx_lm.lora",
             "--model",
             &config.model,
@@ -203,8 +207,9 @@ pub fn train_streaming(
 
     let mut child = Command::new("uvx")
         .args([
+            "--refresh",
             "--from",
-            "mlx-lm",
+            MLX_LM_PACKAGE,
             "mlx_lm.lora",
             "--model",
             &config.model,
@@ -379,6 +384,134 @@ pub fn build_correction_prompt(parakeet: &str, qwen: &str) -> String {
     }
 }
 
+fn normalized_words(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .map(|token| {
+            token.chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '\'')
+                .collect::<String>()
+                .to_ascii_lowercase()
+        })
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+fn shared_word_ratio(candidate: &str, source: &str) -> f32 {
+    let candidate_words = normalized_words(candidate);
+    if candidate_words.is_empty() {
+        return 0.0;
+    }
+    let source_words: std::collections::HashSet<_> = normalized_words(source).into_iter().collect();
+    let shared = candidate_words
+        .iter()
+        .filter(|word| source_words.contains(*word))
+        .count();
+    shared as f32 / candidate_words.len() as f32
+}
+
+fn has_excessive_char_run(text: &str) -> bool {
+    let mut prev = '\0';
+    let mut run = 0usize;
+    for ch in text.chars() {
+        if ch == prev {
+            run += 1;
+            if run >= 7 {
+                return true;
+            }
+        } else {
+            prev = ch;
+            run = 1;
+        }
+    }
+    false
+}
+
+fn has_repeated_token_run(text: &str) -> bool {
+    let words = normalized_words(text);
+    let mut prev = "";
+    let mut run = 0usize;
+    for word in &words {
+        if word == prev {
+            run += 1;
+            if run >= 4 {
+                return true;
+            }
+        } else {
+            prev = word;
+            run = 1;
+        }
+    }
+    false
+}
+
+fn extract_qwen_from_prompt(prompt: &str) -> &str {
+    prompt
+        .lines()
+        .find_map(|line| line.strip_prefix("<qwen> "))
+        .unwrap_or("")
+}
+
+fn strip_explanatory_prefixes(mut text: String) -> String {
+    loop {
+        let trimmed = text.trim().to_string();
+        let lower = trimmed.to_ascii_lowercase();
+        let prefixes = [
+            "the corrected sentence is:",
+            "corrected sentence:",
+            "corrected:",
+            "correction:",
+            "assistant:",
+            "answer:",
+        ];
+        if let Some(prefix) = prefixes.iter().find(|prefix| lower.starts_with(**prefix)) {
+            text = trimmed[prefix.len()..].trim().trim_matches('"').to_string();
+            continue;
+        }
+        if lower.starts_with("the sentence is correct.") || lower.starts_with("the sentence is correct,") {
+            if let Some(idx) = trimmed.find(':') {
+                text = trimmed[idx + 1..].trim().trim_matches('"').to_string();
+                continue;
+            }
+        }
+        return trimmed.trim_matches('"').to_string();
+    }
+}
+
+fn sanitize_correction_output(prompt: &str, raw: &str) -> String {
+    let mut text = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
+        .to_string();
+    text = strip_explanatory_prefixes(text);
+    if let Some(idx) = text.find('\n') {
+        text.truncate(idx);
+    }
+    text = text.trim().trim_matches('"').to_string();
+    if text.is_empty() {
+        return String::new();
+    }
+    if has_excessive_char_run(&text) || has_repeated_token_run(&text) {
+        return String::new();
+    }
+
+    let qwen = extract_qwen_from_prompt(prompt);
+    let output_words = normalized_words(&text);
+    let qwen_words = normalized_words(qwen);
+    if !output_words.is_empty() && !qwen_words.is_empty() {
+        let ratio = shared_word_ratio(&text, qwen);
+        if output_words.len() >= 3 && ratio < 0.34 {
+            return String::new();
+        }
+        if output_words.len() > qwen_words.len().saturating_add(4) {
+            return String::new();
+        }
+    }
+
+    text
+}
+
 /// An inference server that keeps the model loaded. Wraps mlx_lm.server.
 pub struct InferenceServer {
     child: std::process::Child,
@@ -399,8 +532,9 @@ impl InferenceServer {
         );
         let child = Command::new("uvx")
             .args([
+                "--refresh",
                 "--from",
-                "mlx-lm",
+                MLX_LM_PACKAGE,
                 "mlx_lm.server",
                 "--model",
                 &config.model,
@@ -485,7 +619,7 @@ impl InferenceServer {
             }
         }
 
-        Ok(text.trim().to_string())
+        Ok(sanitize_correction_output(prompt, text.trim()))
     }
 }
 

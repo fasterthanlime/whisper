@@ -1,0 +1,49 @@
+[package]
+name = "peft-rs"
+version = "1.0.1"
+edition = "2021"
+rust-version = "1.92"
+license = "MIT"
+description = "Comprehensive PEFT (Parameter-Efficient Fine-Tuning) adapter library for Rust"
+authors = ["Tyler Zervas <tz-dev@vectorweight.com>"]
+repository = "https://github.com/tzervas/peft-rs"
+keywords = ["peft", "lora", "machine-learning", "fine-tuning", "llm"]
+categories = ["science"]
+
+[dependencies]
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+safetensors = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
+anyhow = "1.0"
+tempfile = "3.0"
+
+[features]
+default = []
+cuda = ["candle-core/cuda"]
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "adapters"
+harness = false
+
+[[example]]
+name = "basic_lora"
+path = "examples/basic_lora.rs"
+
+[[example]]
+name = "multi_adapter"
+path = "examples/multi_adapter.rs"
+
+[[example]]
+name = "save_load"
+path = "examples/save_load.rs"
