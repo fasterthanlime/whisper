@@ -78,8 +78,8 @@ pub extern "C" fn asr_engine_load(
             .to_str()
             .map_err(|e| format!("invalid model_dir: {e}"))?;
         let device = qwen3_asr::best_device();
-        let inference = AsrInference::load(std::path::Path::new(dir), device)
-            .map_err(|e| format!("{e:#}"))?;
+        let inference =
+            AsrInference::load(std::path::Path::new(dir), device).map_err(|e| format!("{e:#}"))?;
         Ok::<_, String>(Box::into_raw(Box::new(AsrEngine {
             inner: Arc::new(inference),
         })))
@@ -122,13 +122,12 @@ pub extern "C" fn asr_engine_from_pretrained(
         eprintln!("[qwen3-asr-ffi] from_pretrained: model_id={id:?} cache_dir={dir:?}");
         let device = qwen3_asr::best_device();
         eprintln!("[qwen3-asr-ffi] device: {device:?}");
-        let inference =
-            AsrInference::from_pretrained(id, std::path::Path::new(dir), device)
-                .map_err(|e| {
-                    let msg = format!("{e:#}");
-                    eprintln!("[qwen3-asr-ffi] from_pretrained FAILED: {msg}");
-                    msg
-                })?;
+        let inference = AsrInference::from_pretrained(id, std::path::Path::new(dir), device)
+            .map_err(|e| {
+                let msg = format!("{e:#}");
+                eprintln!("[qwen3-asr-ffi] from_pretrained FAILED: {msg}");
+                msg
+            })?;
         eprintln!("[qwen3-asr-ffi] model loaded successfully");
         Ok::<_, String>(Box::into_raw(Box::new(AsrEngine {
             inner: Arc::new(inference),
@@ -269,8 +268,7 @@ pub extern "C" fn asr_session_create(
 ) -> *mut AsrSession {
     let engine_ref = unsafe { &*engine };
     let arc = engine_ref.inner.clone();
-    let mut streaming_opts = StreamingOptions::default()
-        .with_chunk_size_sec(opts.chunk_size_sec);
+    let mut streaming_opts = StreamingOptions::default().with_chunk_size_sec(opts.chunk_size_sec);
     if !opts.language.is_null() {
         if let Ok(lang) = unsafe { CStr::from_ptr(opts.language) }.to_str() {
             if !lang.is_empty() {

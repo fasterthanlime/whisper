@@ -87,29 +87,51 @@ fn main() -> Result<()> {
     eprintln!("Ready");
 
     match args.cmd {
-        Cmd::Term { word, max_cost, max_results } => {
+        Cmd::Term {
+            word,
+            max_cost,
+            max_results,
+        } => {
             let max_dist = (max_cost * 100.0) as usize;
             let phonemes = g2p.phonemize(&word, &dict);
             let ipa = g2p.ipa(&word);
-            println!("\nTerm: {}  →  IPA: {}  ARPAbet: {}", word, ipa, phonemes.join(" "));
+            println!(
+                "\nTerm: {}  →  IPA: {}  ARPAbet: {}",
+                word,
+                ipa,
+                phonemes.join(" ")
+            );
             let singles = index.find_single_word(&phonemes, max_dist, max_results);
             let doubles = index.find_two_word(&phonemes, max_dist, max_results);
             if !singles.is_empty() {
                 println!("  Single-word:");
-                for (w, d) in &singles { println!("    {:<25} (cost={:.2})", w, *d as f32 / 100.0); }
+                for (w, d) in &singles {
+                    println!("    {:<25} (cost={:.2})", w, *d as f32 / 100.0);
+                }
             }
             if !doubles.is_empty() {
                 println!("  Two-word:");
-                for (p, d) in &doubles { println!("    {:<30} (cost={:.2})", p, *d as f32 / 100.0); }
+                for (p, d) in &doubles {
+                    println!("    {:<30} (cost={:.2})", p, *d as f32 / 100.0);
+                }
             }
         }
-        Cmd::Batch { input, output, max_cost, max_results } => {
+        Cmd::Batch {
+            input,
+            output,
+            max_cost,
+            max_results,
+        } => {
             let max_dist = (max_cost * 100.0) as usize;
             let content = std::fs::read_to_string(&input)?;
-            let terms: Vec<String> = content.lines()
+            let terms: Vec<String> = content
+                .lines()
                 .filter(|l| !l.trim().is_empty())
-                .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()
-                    .and_then(|v| v["term"].as_str().map(String::from)))
+                .filter_map(|l| {
+                    serde_json::from_str::<serde_json::Value>(l)
+                        .ok()
+                        .and_then(|v| v["term"].as_str().map(String::from))
+                })
                 .collect();
             eprintln!("Processing {} terms...", terms.len());
             let results: Vec<_> = terms.par_iter().map(|term| {
@@ -128,18 +150,34 @@ fn main() -> Result<()> {
                 })
             }).collect();
             let mut out: Box<dyn std::io::Write> = match &output {
-                Some(p) => { std::fs::create_dir_all(std::path::Path::new(p).parent().unwrap_or(std::path::Path::new(".")))?; Box::new(std::fs::File::create(p)?) }
+                Some(p) => {
+                    std::fs::create_dir_all(
+                        std::path::Path::new(p)
+                            .parent()
+                            .unwrap_or(std::path::Path::new(".")),
+                    )?;
+                    Box::new(std::fs::File::create(p)?)
+                }
                 None => Box::new(std::io::stdout()),
             };
             let mut with = 0;
             for r in &results {
-                if !r["confusions"].as_array().unwrap().is_empty() { with += 1; }
+                if !r["confusions"].as_array().unwrap().is_empty() {
+                    with += 1;
+                }
                 serde_json::to_writer(&mut out, r)?;
                 std::io::Write::write_all(&mut out, b"\n")?;
             }
             eprintln!("Done: {with}/{} terms have confusions", results.len());
         }
-        Cmd::Generate { claude_history, codex_history, corruptions, count, output, corrupt_prob } => {
+        Cmd::Generate {
+            claude_history,
+            codex_history,
+            corruptions,
+            count,
+            output,
+            corrupt_prob,
+        } => {
             // Load corruption table
             let corruption_map = load_corruption_map(&corruptions)?;
             eprintln!("Loaded corruptions for {} terms", corruption_map.len());
@@ -151,10 +189,12 @@ fn main() -> Result<()> {
                 if let Ok(content) = std::fs::read_to_string(&expanded) {
                     for line in content.lines() {
                         if let Ok(d) = serde_json::from_str::<serde_json::Value>(line) {
-                            let text = d["display"].as_str()
+                            let text = d["display"]
+                                .as_str()
                                 .or_else(|| d["text"].as_str())
                                 .unwrap_or("");
-                            if text.len() > 20 && text.len() < 300
+                            if text.len() > 20
+                                && text.len() < 300
                                 && !text.contains("[Pasted")
                                 && !text.contains("[Image")
                                 && !text.starts_with('/')
@@ -173,7 +213,9 @@ fn main() -> Result<()> {
             let mut generated = 0;
 
             for _ in 0..count * 3 {
-                if generated >= count { break; }
+                if generated >= count {
+                    break;
+                }
 
                 let target_len = 12 + rng.random_range(0..10);
                 let Some(sentence) = chain.generate(&mut rng, target_len) else {
@@ -181,31 +223,32 @@ fn main() -> Result<()> {
                 };
 
                 // Generate two independent corruptions (simulating Parakeet + Qwen)
-                let corrupt_once = |rng: &mut rand::rngs::ThreadRng| -> (String, Vec<serde_json::Value>) {
-                    let mut corrupted = sentence.clone();
-                    let mut applied = Vec::new();
-                    for (term, confusions) in &corruption_map {
-                        let lower_sent = corrupted.to_lowercase();
-                        let lower_term = term.to_lowercase();
-                        if lower_sent.contains(&lower_term) && rng.random_bool(corrupt_prob) {
-                            if let Some(replacement) = confusions.choose(rng) {
-                                if let Some(pos) = lower_sent.find(&lower_term) {
-                                    corrupted = format!(
-                                        "{}{}{}",
-                                        &corrupted[..pos],
-                                        replacement,
-                                        &corrupted[pos + term.len()..]
-                                    );
-                                    applied.push(serde_json::json!({
-                                        "term": term,
-                                        "replacement": replacement,
-                                    }));
+                let corrupt_once =
+                    |rng: &mut rand::rngs::ThreadRng| -> (String, Vec<serde_json::Value>) {
+                        let mut corrupted = sentence.clone();
+                        let mut applied = Vec::new();
+                        for (term, confusions) in &corruption_map {
+                            let lower_sent = corrupted.to_lowercase();
+                            let lower_term = term.to_lowercase();
+                            if lower_sent.contains(&lower_term) && rng.random_bool(corrupt_prob) {
+                                if let Some(replacement) = confusions.choose(rng) {
+                                    if let Some(pos) = lower_sent.find(&lower_term) {
+                                        corrupted = format!(
+                                            "{}{}{}",
+                                            &corrupted[..pos],
+                                            replacement,
+                                            &corrupted[pos + term.len()..]
+                                        );
+                                        applied.push(serde_json::json!({
+                                            "term": term,
+                                            "replacement": replacement,
+                                        }));
+                                    }
                                 }
                             }
                         }
-                    }
-                    (corrupted, applied)
-                };
+                        (corrupted, applied)
+                    };
 
                 let (parakeet, parakeet_applied) = corrupt_once(&mut rng);
                 let (qwen, qwen_applied) = corrupt_once(&mut rng);
@@ -238,7 +281,11 @@ fn load_corruption_map(path: &str) -> Result<std::collections::HashMap<String, V
             let term = v["term"].as_str().unwrap_or("").to_string();
             let confusions: Vec<String> = v["confusions"]
                 .as_array()
-                .map(|arr| arr.iter().filter_map(|c| c["text"].as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|c| c["text"].as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             if !term.is_empty() && !confusions.is_empty() {
                 map.insert(term, confusions);

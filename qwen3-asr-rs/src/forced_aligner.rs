@@ -54,16 +54,16 @@ impl ForcedAligner {
             .context("load config")
             .map_err(AsrError::ModelLoad)?;
 
-        let timestamp_token_id = config
-            .timestamp_token_id
-            .ok_or_else(|| AsrError::ModelLoad(anyhow::anyhow!(
+        let timestamp_token_id = config.timestamp_token_id.ok_or_else(|| {
+            AsrError::ModelLoad(anyhow::anyhow!(
                 "config.json missing `timestamp_token_id` — is this a ForcedAligner model?"
-            )))?;
-        let timestamp_segment_time = config
-            .timestamp_segment_time
-            .ok_or_else(|| AsrError::ModelLoad(anyhow::anyhow!(
+            ))
+        })?;
+        let timestamp_segment_time = config.timestamp_segment_time.ok_or_else(|| {
+            AsrError::ModelLoad(anyhow::anyhow!(
                 "config.json missing `timestamp_segment_time`"
-            )))?;
+            ))
+        })?;
 
         info!("Loading weights...");
         let mut weights = load_safetensors_weights(model_dir, &device)
@@ -71,22 +71,31 @@ impl ForcedAligner {
             .map_err(AsrError::ModelLoad)?;
         info!(
             "Loaded {} weight tensors",
-            match &weights { Weights::Dense(m) => m.len(), _ => 0 }
+            match &weights {
+                Weights::Dense(m) => m.len(),
+                _ => 0,
+            }
         );
         weights.maybe_convert_for_cpu(&device);
 
         // classify_num: prefer config, fall back to lm_head output dimension
         let classify_num = config.classify_num.unwrap_or_else(|| {
-            let shape = weights.get_tensor("thinker.lm_head.weight")
+            let shape = weights
+                .get_tensor("thinker.lm_head.weight")
                 .map(|t| t.dims().to_vec())
                 .unwrap_or_default();
             let n = shape.first().copied().unwrap_or(5000);
-            info!("classify_num not in config, inferred {} from lm_head shape {:?}", n, shape);
+            info!(
+                "classify_num not in config, inferred {} from lm_head shape {:?}",
+                n, shape
+            );
             n
         });
 
-        info!("ForcedAligner: classify_num={}, ts_token={}, segment_time={}ms",
-            classify_num, timestamp_token_id, timestamp_segment_time);
+        info!(
+            "ForcedAligner: classify_num={}, ts_token={}, segment_time={}ms",
+            classify_num, timestamp_token_id, timestamp_segment_time
+        );
 
         info!("Loading tokenizer...");
         let tokenizer_path = model_dir.join("tokenizer.json");
@@ -183,11 +192,7 @@ impl ForcedAligner {
     ///
     /// `samples` must be 16 kHz mono f32.
     /// Returns one [`ForcedAlignItem`] per word with start/end times in seconds.
-    pub fn align(
-        &self,
-        samples: &[f32],
-        text: &str,
-    ) -> crate::Result<Vec<ForcedAlignItem>> {
+    pub fn align(&self, samples: &[f32], text: &str) -> crate::Result<Vec<ForcedAlignItem>> {
         let inner = self
             .inner
             .lock()
@@ -209,18 +214,16 @@ impl ForcedAlignerInner {
         info!("Audio tokens: {}", num_audio_tokens);
 
         // Build prompt (no chat template — raw audio + word + timestamp tokens)
-        let (input_ids, audio_start_pos) =
-            self.build_aligner_prompt(num_audio_tokens, &words)?;
+        let (input_ids, audio_start_pos) = self.build_aligner_prompt(num_audio_tokens, &words)?;
         let seq_len = input_ids.len();
         info!("Prompt length: {} tokens ({} words)", seq_len, words.len());
 
         // Build embeddings with audio injection
         let before_ids: Vec<i64> = input_ids[..audio_start_pos].to_vec();
-        let after_ids: Vec<i64> =
-            input_ids[audio_start_pos + num_audio_tokens..].to_vec();
+        let after_ids: Vec<i64> = input_ids[audio_start_pos + num_audio_tokens..].to_vec();
 
-        let before_t = Tensor::from_vec(before_ids, (audio_start_pos,), &self.device)?
-            .to_dtype(DType::U32)?;
+        let before_t =
+            Tensor::from_vec(before_ids, (audio_start_pos,), &self.device)?.to_dtype(DType::U32)?;
         let after_t = Tensor::from_vec(
             after_ids,
             (seq_len - audio_start_pos - num_audio_tokens,),
@@ -232,8 +235,7 @@ impl ForcedAlignerInner {
         let after_emb = self.text_decoder.embed(&after_t)?;
         let audio_emb = audio_embeds.to_dtype(before_emb.dtype())?;
 
-        let hidden_states =
-            Tensor::cat(&[&before_emb, &audio_emb, &after_emb], 0)?.unsqueeze(0)?;
+        let hidden_states = Tensor::cat(&[&before_emb, &audio_emb, &after_emb], 0)?.unsqueeze(0)?;
 
         // MRoPE cos/sin
         let text_cfg = &self.config.thinker_config.text_config;
@@ -252,9 +254,13 @@ impl ForcedAlignerInner {
         let mask = create_causal_mask(seq_len, 0, &self.device)?;
         let mut kv_cache = KvCache::new(text_cfg.num_hidden_layers);
 
-        let hidden =
-            self.text_decoder
-                .forward_hidden(&hidden_states, &cos, &sin, &mut kv_cache, Some(&mask))?;
+        let hidden = self.text_decoder.forward_hidden(
+            &hidden_states,
+            &cos,
+            &sin,
+            &mut kv_cache,
+            Some(&mask),
+        )?;
         let logits = self.aligner_lm_head.forward(&hidden)?; // [1, seq_len, classify_num]
         let output_ids = logits.argmax(2)?.squeeze(0)?; // [seq_len]
         let output_ids_vec = output_ids.to_vec1::<u32>()?;

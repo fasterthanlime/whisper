@@ -10,13 +10,16 @@ use serde::Deserialize;
 use tokio::sync::Notify;
 
 use crate::db::{Db, SentenceRow};
-use parakeet_rs::Transcriber;
 use crate::tts;
-use crate::{AppState, err, AppError};
+use crate::{err, AppError, AppState};
+use parakeet_rs::Transcriber;
 
 /// Clean a word for comparison: strip non-alphanumeric, lowercase.
 fn clean_word(s: &str) -> String {
-    s.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase()
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>()
+        .to_lowercase()
 }
 
 /// Align original words to aligner output using greedy concatenation.
@@ -79,16 +82,25 @@ fn match_alignment(
                         break;
                     }
                 }
-                if matched { break; }
+                if matched {
+                    break;
+                }
             }
         }
         if !matched {
-            eprintln!("[align] DROPPED word {oi}: '{}' (clean: '{}')", orig_word, orig_clean);
+            eprintln!(
+                "[align] DROPPED word {oi}: '{}' (clean: '{}')",
+                orig_word, orig_clean
+            );
         }
     }
 
-    eprintln!("[align] {} original words, {} aligned, {} dropped",
-        original_words.len(), aligned.len(), original_words.len() - aligned.len());
+    eprintln!(
+        "[align] {} original words, {} aligned, {} dropped",
+        original_words.len(),
+        aligned.len(),
+        original_words.len() - aligned.len()
+    );
 
     // Build the full result. For dropped words, interpolate time slots between
     // their surrounding aligned neighbors so each gets a visible column.
@@ -102,8 +114,13 @@ fn match_alignment(
         if ai < aligned.len() && aligned[ai].0 == oi {
             // This word is aligned — ensure minimum duration so findWordAt can match it
             let start = aligned[ai].1;
-            let end = if aligned[ai].2 <= start { start + 0.05 } else { aligned[ai].2 };
-            result.push(serde_json::json!({"word": original_words[oi], "start": start, "end": end}));
+            let end = if aligned[ai].2 <= start {
+                start + 0.05
+            } else {
+                aligned[ai].2
+            };
+            result
+                .push(serde_json::json!({"word": original_words[oi], "start": start, "end": end}));
             ai += 1;
             oi += 1;
         } else {
@@ -117,7 +134,11 @@ fn match_alignment(
             // Place dropped words in unique time slots BEFORE the next aligned word.
             // Each gets a 50ms window, counting backwards from next_start.
             let prev_end = if ai > 0 { aligned[ai - 1].2 } else { 0.0 };
-            let next_start = if ai < aligned.len() { aligned[ai].1 } else { prev_end + 0.5 };
+            let next_start = if ai < aligned.len() {
+                aligned[ai].1
+            } else {
+                prev_end + 0.5
+            };
             let slot = 0.05;
             // Place them just before next_start, working backwards
             let block_start = next_start - slot * run_len as f64;
@@ -137,7 +158,11 @@ fn match_alignment(
     }
 
     if result.len() != original_words.len() {
-        eprintln!("[align] BUG: result has {} entries but original has {} words!", result.len(), original_words.len());
+        eprintln!(
+            "[align] BUG: result has {} entries but original has {} words!",
+            result.len(),
+            original_words.len()
+        );
     }
 
     // Log dropped words with their interpolated times
@@ -146,7 +171,10 @@ fn match_alignment(
         let end = entry["end"].as_f64().unwrap_or(0.0);
         let is_interpolated = end - start < 0.04;
         if is_interpolated {
-            eprintln!("[align] interpolated [{i}] '{}' t={:.3}..{:.3}", word, start, end);
+            eprintln!(
+                "[align] interpolated [{i}] '{}' t={:.3}..{:.3}",
+                word, start, end
+            );
         }
     }
 
@@ -161,7 +189,7 @@ pub struct ReviewSession {
     pub backend: String,
     pub precomputed: HashMap<i64, PrecomputedData>,
     // Vocab review
-    pub vocab_queue: VecDeque<i64>,  // shuffled once, stable order
+    pub vocab_queue: VecDeque<i64>, // shuffled once, stable order
     pub vocab_precomputed: HashMap<i64, PrecomputedData>,
     /// The vocab ID currently being shown to the user (already popped from queue).
     pub vocab_current_id: Option<i64>,
@@ -172,8 +200,8 @@ pub struct ReviewSession {
 
 pub struct PrecomputedData {
     pub audio_b64: String,
-    pub alignment: Vec<serde_json::Value>,         // spoken text alignment (for waveform)
-    pub written_alignment: Vec<serde_json::Value>,  // written text alignment (for transcript grid)
+    pub alignment: Vec<serde_json::Value>, // spoken text alignment (for waveform)
+    pub written_alignment: Vec<serde_json::Value>, // written text alignment (for transcript grid)
     pub qwen_alignment: Vec<serde_json::Value>,
     pub parakeet_alignment: Vec<serde_json::Value>,
     pub wav_path: String,
@@ -226,15 +254,22 @@ pub fn compute_for_sentence(
     // If we used a carrier phrase, align the full text and crop to just the target word(s)
     if carrier {
         let full_16k = tts::resample_to_16k(&audio.samples, audio.sample_rate)?;
-        let carrier_items = state.aligner.align(&full_16k, &tts_text).unwrap_or_default();
+        let carrier_items = state
+            .aligner
+            .align(&full_16k, &tts_text)
+            .unwrap_or_default();
         // "The word is [target]." — skip first 3 words ("The", "word", "is")
         let skip = 3;
         if carrier_items.len() > skip {
             let start_time = carrier_items[skip].start_time;
-            let end_time = carrier_items.last().map(|i| i.end_time).unwrap_or(start_time + 1.0);
+            let end_time = carrier_items
+                .last()
+                .map(|i| i.end_time)
+                .unwrap_or(start_time + 1.0);
             // Add small padding
             let start_sample = ((start_time - 0.05).max(0.0) * audio.sample_rate as f64) as usize;
-            let end_sample = ((end_time + 0.1) * audio.sample_rate as f64).min(audio.samples.len() as f64) as usize;
+            let end_sample = ((end_time + 0.1) * audio.sample_rate as f64)
+                .min(audio.samples.len() as f64) as usize;
             if start_sample < end_sample && end_sample <= audio.samples.len() {
                 audio.samples = audio.samples[start_sample..end_sample].to_vec();
             }
@@ -253,14 +288,18 @@ pub fn compute_for_sentence(
     let spoken_text = &spoken_owned;
 
     // Run forced alignment on spoken text (for waveform playback sync)
-    let spoken_items = state.aligner.align(&samples_16k, spoken_text)
+    let spoken_items = state
+        .aligner
+        .align(&samples_16k, spoken_text)
         .map_err(|e| anyhow::anyhow!("Aligner (spoken): {e}"))?;
 
     // alignment is built below after written_alignment, filling in dropped words
 
     // Run forced alignment on written text (for transcript grid display row)
     let original_words: Vec<&str> = sentence.text.split_whitespace().collect();
-    let written_items = state.aligner.align(&samples_16k, &sentence.text)
+    let written_items = state
+        .aligner
+        .align(&samples_16k, &sentence.text)
         .unwrap_or_default();
 
     // Map aligner words back to original words, handling splits/drops/transforms
@@ -271,27 +310,46 @@ pub fn compute_for_sentence(
     let alignment = match_alignment(&spoken_words, &spoken_items);
 
     // Run ASR on the TTS audio (round-trip quality check)
-    let qwen_asr = match state.asr.transcribe_samples(&samples_16k, qwen3_asr::TranscribeOptions::default().with_language("english")) {
+    let qwen_asr = match state.asr.transcribe_samples(
+        &samples_16k,
+        qwen3_asr::TranscribeOptions::default().with_language("english"),
+    ) {
         Ok(r) => r.text,
-        Err(e) => { eprintln!("[review] Qwen ASR failed: {e}"); String::new() }
+        Err(e) => {
+            eprintln!("[review] Qwen ASR failed: {e}");
+            String::new()
+        }
     };
 
     let parakeet_asr = {
         let mut parakeet = state.parakeet.lock().unwrap();
         match parakeet.transcribe_samples(samples_16k.to_vec(), 16000, 1, None) {
             Ok(r) => r.text,
-            Err(e) => { eprintln!("[review] Parakeet ASR failed: {e}"); String::new() }
+            Err(e) => {
+                eprintln!("[review] Parakeet ASR failed: {e}");
+                String::new()
+            }
         }
     };
 
     // Run forced alignment on ASR outputs too (for time-based grouping)
     let align_to_json = |text: &str| -> Vec<serde_json::Value> {
-        if text.is_empty() { return vec![]; }
+        if text.is_empty() {
+            return vec![];
+        }
         match state.aligner.align(&samples_16k, text) {
-            Ok(items) => items.iter().map(|item| serde_json::json!({
-                "word": item.word, "start": item.start_time, "end": item.end_time,
-            })).collect(),
-            Err(e) => { eprintln!("[review] Aligner failed on ASR text: {e}"); vec![] }
+            Ok(items) => items
+                .iter()
+                .map(|item| {
+                    serde_json::json!({
+                        "word": item.word, "start": item.start_time, "end": item.end_time,
+                    })
+                })
+                .collect(),
+            Err(e) => {
+                eprintln!("[review] Aligner failed on ASR text: {e}");
+                vec![]
+            }
         }
     };
     let qwen_alignment = align_to_json(&qwen_asr);
@@ -306,11 +364,24 @@ pub fn compute_for_sentence(
     {
         let db = state.db.lock().unwrap();
         db.update_sentence_precomputed(
-            sentence.id, &wav_path, &alignment_json, backend, &sentence.spoken,
+            sentence.id,
+            &wav_path,
+            &alignment_json,
+            backend,
+            &sentence.spoken,
         )?;
     }
 
-    Ok(PrecomputedData { audio_b64, alignment, written_alignment, qwen_alignment, parakeet_alignment, wav_path, qwen_asr, parakeet_asr })
+    Ok(PrecomputedData {
+        audio_b64,
+        alignment,
+        written_alignment,
+        qwen_alignment,
+        parakeet_alignment,
+        wav_path,
+        qwen_asr,
+        parakeet_asr,
+    })
 }
 
 /// Build the full JSON response for a review screen.
@@ -321,7 +392,8 @@ fn build_review_response(
     backend: &str,
 ) -> serde_json::Value {
     let backends = state.tts.available_backends();
-    let unknown_words: Vec<String> = serde_json::from_str(&sentence.unknown_words).unwrap_or_default();
+    let unknown_words: Vec<String> =
+        serde_json::from_str(&sentence.unknown_words).unwrap_or_default();
 
     let (approved, rejected, total) = {
         let db = state.db.lock().unwrap();
@@ -368,7 +440,9 @@ fn ensure_current(state: &Arc<AppState>) -> Option<i64> {
         let db = state.db.lock().unwrap();
         match db.get_sentence(id) {
             Ok(Some(s)) if s.status == "pending" => return Some(id),
-            _ => { review.current_id = None; }
+            _ => {
+                review.current_id = None;
+            }
         }
     }
 
@@ -437,7 +511,9 @@ pub fn spawn_precompute_loop(state: Arc<AppState>, notify: Arc<Notify>, audio_di
                     db.get_sentence(id).ok().flatten()
                 };
                 let Some(sentence) = sentence else { continue };
-                if sentence.status != "pending" { continue; }
+                if sentence.status != "pending" {
+                    continue;
+                }
 
                 let state2 = state.clone();
                 let backend2 = backend.clone();
@@ -446,7 +522,8 @@ pub fn spawn_precompute_loop(state: Arc<AppState>, notify: Arc<Notify>, audio_di
                 // Run TTS + alignment on blocking thread
                 let result = tokio::task::spawn_blocking(move || {
                     compute_for_sentence(&state2, &sentence, &backend2, &audio_dir2)
-                }).await;
+                })
+                .await;
 
                 match result {
                     Ok(Ok(data)) => {
@@ -480,7 +557,9 @@ pub fn spawn_vocab_precompute_loop(state: Arc<AppState>, notify: Arc<Notify>, au
             ensure_vocab_queue(&state);
             let ids = {
                 let review = state.review.lock().unwrap();
-                review.vocab_queue.iter()
+                review
+                    .vocab_queue
+                    .iter()
                     .filter(|id| !review.vocab_precomputed.contains_key(id))
                     .take(3)
                     .copied()
@@ -493,7 +572,9 @@ pub fn spawn_vocab_precompute_loop(state: Arc<AppState>, notify: Arc<Notify>, au
                     db.get_vocab(id).ok().flatten()
                 };
                 let Some(vocab) = vocab else { continue };
-                if vocab.reviewed { continue; }
+                if vocab.reviewed {
+                    continue;
+                }
 
                 // Mark this ID as being computed so /current can wait instead of racing
                 {
@@ -508,7 +589,8 @@ pub fn spawn_vocab_precompute_loop(state: Arc<AppState>, notify: Arc<Notify>, au
 
                 let result = tokio::task::spawn_blocking(move || {
                     compute_for_sentence(&state2, &sentence, &backend2, &audio_dir2)
-                }).await;
+                })
+                .await;
 
                 {
                     let mut review = state.review.lock().unwrap();
@@ -529,14 +611,13 @@ pub fn spawn_vocab_precompute_loop(state: Arc<AppState>, notify: Arc<Notify>, au
 
 // ==================== API Endpoints ====================
 
-pub async fn api_review_current(
-    State(state): State<Arc<AppState>>,
-) -> Result<Response, AppError> {
+pub async fn api_review_current(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
     let Some(id) = ensure_current(&state) else {
         return Ok(Json(serde_json::json!({
             "sentence": null,
             "ready": true,
-        })).into_response());
+        }))
+        .into_response());
     };
 
     // Check if we have precomputed data
@@ -548,7 +629,9 @@ pub async fn api_review_current(
     if let Some(data) = precomputed {
         let sentence = {
             let db = state.db.lock().unwrap();
-            db.get_sentence(id).map_err(err)?.ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
+            db.get_sentence(id)
+                .map_err(err)?
+                .ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
         };
         let backend = state.review.lock().unwrap().backend.clone();
         let response = build_review_response(&state, &sentence, &data, &backend);
@@ -562,7 +645,9 @@ pub async fn api_review_current(
     // Not precomputed — compute synchronously (cold start)
     let sentence = {
         let db = state.db.lock().unwrap();
-        db.get_sentence(id).map_err(err)?.ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
+        db.get_sentence(id)
+            .map_err(err)?
+            .ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
     };
     let backend = state.review.lock().unwrap().backend.clone();
     let audio_dir = state.audio_dir.clone();
@@ -579,7 +664,9 @@ pub async fn api_review_current(
     // Re-read sentence (may have been updated by compute)
     let sentence = {
         let db = state.db.lock().unwrap();
-        db.get_sentence(id).map_err(err)?.ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
+        db.get_sentence(id)
+            .map_err(err)?
+            .ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
     };
 
     let response = build_review_response(&state, &sentence, &data, &backend);
@@ -590,9 +677,7 @@ pub async fn api_review_current(
     Ok(Json(response).into_response())
 }
 
-pub async fn api_review_approve(
-    State(state): State<Arc<AppState>>,
-) -> Result<Response, AppError> {
+pub async fn api_review_approve(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
     let id = {
         let review = state.review.lock().unwrap();
         review.current_id
@@ -618,9 +703,7 @@ pub async fn api_review_approve(
     Ok(Json(serde_json::json!({"ok": true})).into_response())
 }
 
-pub async fn api_review_reject(
-    State(state): State<Arc<AppState>>,
-) -> Result<Response, AppError> {
+pub async fn api_review_reject(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
     let id = {
         let review = state.review.lock().unwrap();
         review.current_id
@@ -668,15 +751,23 @@ pub async fn api_review_pronunciation(
         let db = state.db.lock().unwrap();
         match db.find_vocab_by_term(&body.word) {
             Ok(Some(vocab)) => {
-                eprintln!("[pronunciation] updating vocab '{}' (id={}) → '{}'", vocab.term, vocab.id, body.spoken);
-                db.update_vocab_override(vocab.id, Some(&body.spoken)).map_err(err)?;
+                eprintln!(
+                    "[pronunciation] updating vocab '{}' (id={}) → '{}'",
+                    vocab.term, vocab.id, body.spoken
+                );
+                db.update_vocab_override(vocab.id, Some(&body.spoken))
+                    .map_err(err)?;
             }
             Ok(None) => {
-                eprintln!("[pronunciation] vocab entry '{}' not found, inserting", body.word);
+                eprintln!(
+                    "[pronunciation] vocab entry '{}' not found, inserting",
+                    body.word
+                );
                 let _ = db.insert_candidate_vocab(&body.word, &body.spoken);
                 // Now update the override
                 if let Ok(Some(vocab)) = db.find_vocab_by_term(&body.word) {
-                    db.update_vocab_override(vocab.id, Some(&body.spoken)).map_err(err)?;
+                    db.update_vocab_override(vocab.id, Some(&body.spoken))
+                        .map_err(err)?;
                 }
             }
             Err(e) => eprintln!("[pronunciation] error finding vocab: {e}"),
@@ -696,7 +787,10 @@ pub async fn api_review_pronunciation(
         for sid in ids_to_update {
             if let Ok(Some(s)) = db.get_sentence(sid) {
                 let new_spoken = tts::build_spoken_form(&s.text, &overrides);
-                eprintln!("[pronunciation] sentence {sid}: '{}' → '{}'", s.spoken, new_spoken);
+                eprintln!(
+                    "[pronunciation] sentence {sid}: '{}' → '{}'",
+                    s.spoken, new_spoken
+                );
                 if new_spoken != s.spoken {
                     let _ = db.update_sentence_spoken(sid, &new_spoken);
                 }
@@ -713,7 +807,9 @@ pub async fn api_review_pronunciation(
     // Re-read updated sentence, re-compute TTS + alignment
     let sentence = {
         let db = state.db.lock().unwrap();
-        db.get_sentence(id).map_err(err)?.ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
+        db.get_sentence(id)
+            .map_err(err)?
+            .ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
     };
     let backend = state.review.lock().unwrap().backend.clone();
     let audio_dir = state.audio_dir.clone();
@@ -729,7 +825,9 @@ pub async fn api_review_pronunciation(
 
     let sentence = {
         let db = state.db.lock().unwrap();
-        db.get_sentence(id).map_err(err)?.ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
+        db.get_sentence(id)
+            .map_err(err)?
+            .ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
     };
 
     let response = build_review_response(&state, &sentence, &data, &backend);
@@ -768,7 +866,8 @@ pub async fn api_review_edit_text(
         // Update text, spoken, and unknown words
         let unknown = crate::tts::detect_unknown_words(&new_text);
         let unknown_json = serde_json::to_string(&unknown).unwrap_or_default();
-        db.update_sentence_text(id, &new_text, &spoken, &unknown_json).map_err(err)?;
+        db.update_sentence_text(id, &new_text, &spoken, &unknown_json)
+            .map_err(err)?;
     }
 
     // Invalidate precomputed data
@@ -780,7 +879,9 @@ pub async fn api_review_edit_text(
     // Re-compute TTS + alignment
     let sentence = {
         let db = state.db.lock().unwrap();
-        db.get_sentence(id).map_err(err)?.ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
+        db.get_sentence(id)
+            .map_err(err)?
+            .ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
     };
     let backend = state.review.lock().unwrap().backend.clone();
     let audio_dir = state.audio_dir.clone();
@@ -796,7 +897,9 @@ pub async fn api_review_edit_text(
 
     let sentence = {
         let db = state.db.lock().unwrap();
-        db.get_sentence(id).map_err(err)?.ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
+        db.get_sentence(id)
+            .map_err(err)?
+            .ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
     };
 
     let response = build_review_response(&state, &sentence, &data, &backend);
@@ -831,7 +934,9 @@ pub async fn api_review_backend(
     // Re-compute current sentence with new backend
     let sentence = {
         let db = state.db.lock().unwrap();
-        db.get_sentence(id).map_err(err)?.ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
+        db.get_sentence(id)
+            .map_err(err)?
+            .ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
     };
     let backend = body.backend.clone();
     let audio_dir = state.audio_dir.clone();
@@ -847,7 +952,9 @@ pub async fn api_review_backend(
 
     let sentence = {
         let db = state.db.lock().unwrap();
-        db.get_sentence(id).map_err(err)?.ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
+        db.get_sentence(id)
+            .map_err(err)?
+            .ok_or_else(|| err(anyhow::anyhow!("sentence gone")))?
     };
 
     let response = build_review_response(&state, &sentence, &data, &backend);
@@ -868,134 +975,171 @@ pub async fn api_review_asr(
     let audio_dir = state.audio_dir.clone();
     let state2 = state.clone();
 
-    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
-        let wav_bytes = body.to_vec();
+    let result =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+            let wav_bytes = body.to_vec();
 
-        // Decode human recording WAV
-        let cursor = std::io::Cursor::new(wav_bytes);
-        let mut reader = hound::WavReader::new(cursor)
-            .map_err(|e| anyhow::anyhow!("WAV decode: {e}"))?;
-        let spec = reader.spec();
+            // Decode human recording WAV
+            let cursor = std::io::Cursor::new(wav_bytes);
+            let mut reader =
+                hound::WavReader::new(cursor).map_err(|e| anyhow::anyhow!("WAV decode: {e}"))?;
+            let spec = reader.spec();
 
-        let samples_f32: Vec<f32> = match spec.sample_format {
-            hound::SampleFormat::Float => {
-                reader.samples::<f32>().filter_map(|s| s.ok()).collect()
-            }
-            hound::SampleFormat::Int => {
-                let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
-                reader.samples::<i32>().filter_map(|s| s.ok()).map(|s| s as f32 / max).collect()
-            }
-        };
-
-        let mut mono: Vec<f32> = if spec.channels > 1 {
-            samples_f32.chunks(spec.channels as usize)
-                .map(|ch| ch.iter().sum::<f32>() / ch.len() as f32)
-                .collect()
-        } else {
-            samples_f32
-        };
-
-        // Normalize audio
-        let peak = mono.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
-        if peak > 0.001 {
-            let gain = 0.95 / peak;
-            for s in &mut mono { *s *= gain; }
-        }
-
-        // Save normalized recording to disk for eval
-        if let Some(id) = current_id {
-            let human_wav_path = format!("{}/human_{}.wav", audio_dir, id);
-            let mut audio = crate::tts::TtsAudio { samples: mono.clone(), sample_rate: spec.sample_rate };
-            match audio.to_wav() {
-                Ok(bytes) => {
-                    if let Err(e) = std::fs::write(&human_wav_path, &bytes) {
-                        eprintln!("[human-asr] Failed to save recording: {e}");
-                    } else {
-                        let db = state2.db.lock().unwrap();
-                        let _ = db.update_sentence_human_wav(id, &human_wav_path);
-                        eprintln!("[human-asr] Saved normalized recording to {human_wav_path}");
-                    }
+            let samples_f32: Vec<f32> = match spec.sample_format {
+                hound::SampleFormat::Float => {
+                    reader.samples::<f32>().filter_map(|s| s.ok()).collect()
                 }
-                Err(e) => eprintln!("[human-asr] Failed to encode WAV: {e}"),
+                hound::SampleFormat::Int => {
+                    let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
+                    reader
+                        .samples::<i32>()
+                        .filter_map(|s| s.ok())
+                        .map(|s| s as f32 / max)
+                        .collect()
+                }
+            };
+
+            let mut mono: Vec<f32> = if spec.channels > 1 {
+                samples_f32
+                    .chunks(spec.channels as usize)
+                    .map(|ch| ch.iter().sum::<f32>() / ch.len() as f32)
+                    .collect()
+            } else {
+                samples_f32
+            };
+
+            // Normalize audio
+            let peak = mono.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+            if peak > 0.001 {
+                let gain = 0.95 / peak;
+                for s in &mut mono {
+                    *s *= gain;
+                }
             }
-        }
 
-        let samples_16k = crate::tts::resample_to_16k(&mono, spec.sample_rate)?;
+            // Save normalized recording to disk for eval
+            if let Some(id) = current_id {
+                let human_wav_path = format!("{}/human_{}.wav", audio_dir, id);
+                let mut audio = crate::tts::TtsAudio {
+                    samples: mono.clone(),
+                    sample_rate: spec.sample_rate,
+                };
+                match audio.to_wav() {
+                    Ok(bytes) => {
+                        if let Err(e) = std::fs::write(&human_wav_path, &bytes) {
+                            eprintln!("[human-asr] Failed to save recording: {e}");
+                        } else {
+                            let db = state2.db.lock().unwrap();
+                            let _ = db.update_sentence_human_wav(id, &human_wav_path);
+                            eprintln!("[human-asr] Saved normalized recording to {human_wav_path}");
+                        }
+                    }
+                    Err(e) => eprintln!("[human-asr] Failed to encode WAV: {e}"),
+                }
+            }
 
-        // Run both ASR models on human recording
-        let qwen = match state2.asr.transcribe_samples(&samples_16k, qwen3_asr::TranscribeOptions::default().with_language("english")) {
-            Ok(r) => r.text,
-            Err(e) => format!("(error: {e})"),
-        };
+            let samples_16k = crate::tts::resample_to_16k(&mono, spec.sample_rate)?;
 
-        let parakeet = {
-            let mut p = state2.parakeet.lock().unwrap();
-            match p.transcribe_samples(samples_16k.to_vec(), 16000, 1, None) {
+            // Run both ASR models on human recording
+            let qwen = match state2.asr.transcribe_samples(
+                &samples_16k,
+                qwen3_asr::TranscribeOptions::default().with_language("english"),
+            ) {
                 Ok(r) => r.text,
                 Err(e) => format!("(error: {e})"),
-            }
-        };
+            };
 
-        // Run forced aligner on the HUMAN recording for all alignments
-        let sentence = if let Some(id) = current_id {
-            let db = state2.db.lock().unwrap();
-            db.get_sentence(id).ok().flatten()
-        } else { None };
+            let parakeet = {
+                let mut p = state2.parakeet.lock().unwrap();
+                match p.transcribe_samples(samples_16k.to_vec(), 16000, 1, None) {
+                    Ok(r) => r.text,
+                    Err(e) => format!("(error: {e})"),
+                }
+            };
 
-        // Align spoken form against human audio
-        let spoken_text = sentence.as_ref().map(|s| s.spoken.replace('-', " ")).unwrap_or_default();
-        let written_text = sentence.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+            // Run forced aligner on the HUMAN recording for all alignments
+            let sentence = if let Some(id) = current_id {
+                let db = state2.db.lock().unwrap();
+                db.get_sentence(id).ok().flatten()
+            } else {
+                None
+            };
 
-        let spoken_items = if !spoken_text.is_empty() {
-            state2.aligner.align(&samples_16k, &spoken_text).unwrap_or_default()
-        } else { vec![] };
+            // Align spoken form against human audio
+            let spoken_text = sentence
+                .as_ref()
+                .map(|s| s.spoken.replace('-', " "))
+                .unwrap_or_default();
+            let written_text = sentence
+                .as_ref()
+                .map(|s| s.text.clone())
+                .unwrap_or_default();
 
-        let written_items = if !written_text.is_empty() {
-            state2.aligner.align(&samples_16k, &written_text).unwrap_or_default()
-        } else { vec![] };
+            let spoken_items = if !spoken_text.is_empty() {
+                state2
+                    .aligner
+                    .align(&samples_16k, &spoken_text)
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
 
-        let spoken_words: Vec<&str> = spoken_text.split_whitespace().collect();
-        let alignment = match_alignment(&spoken_words, &spoken_items);
+            let written_items = if !written_text.is_empty() {
+                state2
+                    .aligner
+                    .align(&samples_16k, &written_text)
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
 
-        let original_words: Vec<&str> = written_text.split_whitespace().collect();
-        let written_alignment = match_alignment(&original_words, &written_items);
+            let spoken_words: Vec<&str> = spoken_text.split_whitespace().collect();
+            let alignment = match_alignment(&spoken_words, &spoken_items);
 
-        // Align ASR text against human audio
-        let align_asr = |text: &str| -> Vec<serde_json::Value> {
-            if text.is_empty() { return vec![]; }
-            match state2.aligner.align(&samples_16k, text) {
+            let original_words: Vec<&str> = written_text.split_whitespace().collect();
+            let written_alignment = match_alignment(&original_words, &written_items);
+
+            // Align ASR text against human audio
+            let align_asr =
+                |text: &str| -> Vec<serde_json::Value> {
+                    if text.is_empty() {
+                        return vec![];
+                    }
+                    match state2.aligner.align(&samples_16k, text) {
                 Ok(items) => items.iter().map(|item| serde_json::json!({
                     "word": item.word, "start": item.start_time, "end": item.end_time,
                 })).collect(),
                 Err(e) => { eprintln!("[human-asr] Aligner failed: {e}"); vec![] }
             }
-        };
-        let qwen_alignment = align_asr(&qwen);
-        let parakeet_alignment = align_asr(&parakeet);
+                };
+            let qwen_alignment = align_asr(&qwen);
+            let parakeet_alignment = align_asr(&parakeet);
 
-        // Encode human audio as base64 for playback
-        use base64::Engine;
-        let human_wav_path = current_id.map(|id| format!("{}/human_{}.wav", audio_dir, id));
-        let audio_b64 = if let Some(ref path) = human_wav_path {
-            match std::fs::read(path) {
-                Ok(bytes) => Some(base64::engine::general_purpose::STANDARD.encode(&bytes)),
-                Err(_) => None,
-            }
-        } else { None };
+            // Encode human audio as base64 for playback
+            use base64::Engine;
+            let human_wav_path = current_id.map(|id| format!("{}/human_{}.wav", audio_dir, id));
+            let audio_b64 = if let Some(ref path) = human_wav_path {
+                match std::fs::read(path) {
+                    Ok(bytes) => Some(base64::engine::general_purpose::STANDARD.encode(&bytes)),
+                    Err(_) => None,
+                }
+            } else {
+                None
+            };
 
-        Ok(serde_json::json!({
-            "qwen": qwen,
-            "parakeet": parakeet,
-            "qwen_alignment": qwen_alignment,
-            "parakeet_alignment": parakeet_alignment,
-            "alignment": alignment,
-            "written_alignment": written_alignment,
-            "audio_b64": audio_b64,
-        }))
-    })
-    .await
-    .map_err(|e| err(e))?
-    .map_err(err)?;
+            Ok(serde_json::json!({
+                "qwen": qwen,
+                "parakeet": parakeet,
+                "qwen_alignment": qwen_alignment,
+                "parakeet_alignment": parakeet_alignment,
+                "alignment": alignment,
+                "written_alignment": written_alignment,
+                "audio_b64": audio_b64,
+            }))
+        })
+        .await
+        .map_err(|e| err(e))?
+        .map_err(err)?;
 
     Ok(Json(result).into_response())
 }
@@ -1011,7 +1155,12 @@ fn vocab_to_sentence(vocab: &crate::db::VocabRow) -> crate::db::SentenceRow {
         spoken: vocab.spoken().to_string(),
         vocab_terms: "[]".to_string(),
         unknown_words: serde_json::json!([vocab.term]).to_string(),
-        status: if vocab.reviewed { "approved" } else { "pending" }.to_string(),
+        status: if vocab.reviewed {
+            "approved"
+        } else {
+            "pending"
+        }
+        .to_string(),
         wav_path: None,
         alignment_json: None,
         tts_backend: None,
@@ -1045,7 +1194,9 @@ async fn serve_vocab_review(
 ) -> Result<Response, AppError> {
     let vocab = {
         let db = state.db.lock().unwrap();
-        db.get_vocab(vocab_id).map_err(err)?.ok_or_else(|| err(anyhow::anyhow!("vocab gone")))?
+        db.get_vocab(vocab_id)
+            .map_err(err)?
+            .ok_or_else(|| err(anyhow::anyhow!("vocab gone")))?
     };
 
     let data = if use_cache {
@@ -1053,7 +1204,13 @@ async fn serve_vocab_review(
         // this item, wait for it instead of starting a competing computation
         'resolve: {
             // First check: already cached?
-            if let Some(data) = state.review.lock().unwrap().vocab_precomputed.remove(&vocab_id) {
+            if let Some(data) = state
+                .review
+                .lock()
+                .unwrap()
+                .vocab_precomputed
+                .remove(&vocab_id)
+            {
                 break 'resolve data;
             }
 
@@ -1139,7 +1296,8 @@ async fn serve_vocab_review(
         },
         "ready": true,
         "mode": "vocab",
-    })).into_response())
+    }))
+    .into_response())
 }
 
 /// Ensure the vocab queue is populated with shuffled unreviewed IDs.
@@ -1154,7 +1312,10 @@ fn ensure_vocab_queue(state: &Arc<AppState>) {
         ids.shuffle(&mut rand::rng());
         let mut review = state.review.lock().unwrap();
         review.vocab_queue = ids.into();
-        eprintln!("[vocab-review] queue refilled with {} terms", review.vocab_queue.len());
+        eprintln!(
+            "[vocab-review] queue refilled with {} terms",
+            review.vocab_queue.len()
+        );
     }
 }
 
@@ -1180,7 +1341,11 @@ async fn eager_vocab_precompute(state: &Arc<AppState>) {
         let review = state.review.lock().unwrap();
         let db = state.db.lock().unwrap();
         // Find next queued ID that isn't precomputed yet
-        let id = review.vocab_queue.iter().find(|id| !review.vocab_precomputed.contains_key(id)).copied();
+        let id = review
+            .vocab_queue
+            .iter()
+            .find(|id| !review.vocab_precomputed.contains_key(id))
+            .copied();
         match id {
             Some(id) => match db.get_vocab(id) {
                 Ok(Some(v)) if !v.reviewed => (id, v),
@@ -1195,7 +1360,8 @@ async fn eager_vocab_precompute(state: &Arc<AppState>) {
     let state2 = state.clone();
     let result = tokio::task::spawn_blocking(move || {
         compute_for_sentence(&state2, &sentence, &backend, &audio_dir)
-    }).await;
+    })
+    .await;
     if let Ok(Ok(data)) = result {
         let mut review = state.review.lock().unwrap();
         review.vocab_precomputed.insert(id, data);
@@ -1207,7 +1373,9 @@ pub async fn api_vocab_review_approve(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Response, AppError> {
-    let id = body["id"].as_i64().ok_or_else(|| err(anyhow::anyhow!("missing id")))?;
+    let id = body["id"]
+        .as_i64()
+        .ok_or_else(|| err(anyhow::anyhow!("missing id")))?;
     {
         let db = state.db.lock().unwrap();
         db.mark_vocab_reviewed(id).map_err(err)?;
@@ -1225,7 +1393,9 @@ pub async fn api_vocab_review_reject(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Response, AppError> {
-    let id = body["id"].as_i64().ok_or_else(|| err(anyhow::anyhow!("missing id")))?;
+    let id = body["id"]
+        .as_i64()
+        .ok_or_else(|| err(anyhow::anyhow!("missing id")))?;
     {
         let db = state.db.lock().unwrap();
         db.reject_vocab(id).map_err(err)?;
@@ -1246,9 +1416,12 @@ pub async fn api_vocab_review_pronunciation(
     // Update the vocab override and get the ID
     let vocab_id = {
         let db = state.db.lock().unwrap();
-        let vocab = db.find_vocab_by_term(&body.word).map_err(err)?
+        let vocab = db
+            .find_vocab_by_term(&body.word)
+            .map_err(err)?
             .ok_or_else(|| err(anyhow::anyhow!("vocab term not found: {}", body.word)))?;
-        db.update_vocab_override(vocab.id, Some(&body.spoken)).map_err(err)?;
+        db.update_vocab_override(vocab.id, Some(&body.spoken))
+            .map_err(err)?;
         vocab.id
     };
     // Recompute for the SAME term (don't advance to next)
@@ -1280,11 +1453,16 @@ fn load_wav_16k(wav_path: &str) -> anyhow::Result<Vec<f32>> {
         hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
         hound::SampleFormat::Int => {
             let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
-            reader.samples::<i32>().filter_map(|s| s.ok()).map(|s| s as f32 / max).collect()
+            reader
+                .samples::<i32>()
+                .filter_map(|s| s.ok())
+                .map(|s| s as f32 / max)
+                .collect()
         }
     };
     let mono = if spec.channels > 1 {
-        samples_f32.chunks(spec.channels as usize)
+        samples_f32
+            .chunks(spec.channels as usize)
             .map(|ch| ch.iter().sum::<f32>() / ch.len() as f32)
             .collect()
     } else {

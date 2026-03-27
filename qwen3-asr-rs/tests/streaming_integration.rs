@@ -58,7 +58,10 @@ fn test_streaming_feed_partial_chunk_returns_none() {
     // Feed less than 2 seconds (32000 samples) — should return None
     let partial = vec![0.0f32; 16000]; // 1 second
     let result = engine.feed_audio(&mut state, &partial).unwrap();
-    assert!(result.is_none(), "partial chunk should not trigger inference");
+    assert!(
+        result.is_none(),
+        "partial chunk should not trigger inference"
+    );
 }
 
 #[test]
@@ -88,7 +91,10 @@ fn test_streaming_finish_flushes_buffer() {
     let result = engine.finish_streaming(&mut state).unwrap();
     // Result fields should be valid strings (not guaranteed non-empty for a tone)
     assert!(result.text.len() <= 10000, "text should be bounded");
-    assert!(result.raw_output.len() <= 10000, "raw_output should be bounded");
+    assert!(
+        result.raw_output.len() <= 10000,
+        "raw_output should be bounded"
+    );
 }
 
 #[test]
@@ -132,8 +138,7 @@ fn test_streaming_vs_batch_consistency() {
     let audio = sine_tone(440.0, 4.0, 16000);
 
     // Batch transcription
-    let batch_opts = qwen3_asr::TranscribeOptions::default()
-        .with_max_new_tokens(64);
+    let batch_opts = qwen3_asr::TranscribeOptions::default().with_max_new_tokens(64);
     let batch_result = engine.transcribe_samples(&audio, batch_opts).unwrap();
 
     // Streaming transcription
@@ -156,10 +161,22 @@ fn test_streaming_vs_batch_consistency() {
 
     // Both should produce bounded results without errors.
     // For a pure tone, content may be empty or noise, but both paths must succeed.
-    assert!(batch_result.text.len() <= 10000, "batch text should be bounded");
-    assert!(stream_result.text.len() <= 10000, "stream text should be bounded");
-    assert!(batch_result.raw_output.len() <= 10000, "batch raw_output should be bounded");
-    assert!(stream_result.raw_output.len() <= 10000, "stream raw_output should be bounded");
+    assert!(
+        batch_result.text.len() <= 10000,
+        "batch text should be bounded"
+    );
+    assert!(
+        stream_result.text.len() <= 10000,
+        "stream text should be bounded"
+    );
+    assert!(
+        batch_result.raw_output.len() <= 10000,
+        "batch raw_output should be bounded"
+    );
+    assert!(
+        stream_result.raw_output.len() <= 10000,
+        "stream raw_output should be bounded"
+    );
 }
 
 /// Test that `initial_text` is used as prefix during cold-start chunks.
@@ -182,8 +199,8 @@ fn test_streaming_initial_text_cross_session() {
         eprintln!("No test audio found, using tone");
         // Return early with tone test
         let samples = sine_tone(440.0, 6.0, 16000);
-        let opts = qwen3_asr::StreamingOptions::default()
-            .with_initial_text("Some prior context text.");
+        let opts =
+            qwen3_asr::StreamingOptions::default().with_initial_text("Some prior context text.");
         let mut state = engine.init_streaming(opts);
         let chunk_samples = 32000;
         for chunk_start in (0..samples.len()).step_by(chunk_samples) {
@@ -197,11 +214,14 @@ fn test_streaming_initial_text_cross_session() {
 
     let samples = load_wav_16k(wav_path);
     let chunk_samples = 32000;
-    eprintln!("Test audio: {:.1}s from {}", samples.len() as f32 / 16000.0, wav_path.display());
+    eprintln!(
+        "Test audio: {:.1}s from {}",
+        samples.len() as f32 / 16000.0,
+        wav_path.display()
+    );
 
     // Session 1: no initial_text (baseline)
-    let opts1 = qwen3_asr::StreamingOptions::default()
-        .with_chunk_size_sec(2.0);
+    let opts1 = qwen3_asr::StreamingOptions::default().with_chunk_size_sec(2.0);
     let mut state1 = engine.init_streaming(opts1);
     for chunk_start in (0..samples.len()).step_by(chunk_samples) {
         let chunk_end = (chunk_start + chunk_samples).min(samples.len());
@@ -225,8 +245,14 @@ fn test_streaming_initial_text_cross_session() {
     eprintln!("With initial_text:    {:?}", result2.text);
 
     // Both sessions must succeed and produce non-empty text for real speech.
-    assert!(!result1.text.is_empty(), "session 1 (no context) should produce text");
-    assert!(!result2.text.is_empty(), "session 2 (with context) should produce text");
+    assert!(
+        !result1.text.is_empty(),
+        "session 1 (no context) should produce text"
+    );
+    assert!(
+        !result2.text.is_empty(),
+        "session 2 (with context) should produce text"
+    );
 }
 
 /// Test with a real WAV file if available.
@@ -254,8 +280,7 @@ fn test_streaming_real_audio() {
     eprintln!("Batch result: {:?}", batch_result.text);
 
     // Streaming
-    let opts = qwen3_asr::StreamingOptions::default()
-        .with_chunk_size_sec(2.0);
+    let opts = qwen3_asr::StreamingOptions::default().with_chunk_size_sec(2.0);
     let mut state = engine.init_streaming(opts);
 
     let chunk_samples = 32000; // 2 seconds

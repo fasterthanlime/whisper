@@ -59,7 +59,11 @@ fn main() -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
 
     if args.start >= sentences.len() {
-        println!("Nothing to record (start={} >= total={})", args.start, sentences.len());
+        println!(
+            "Nothing to record (start={} >= total={})",
+            args.start,
+            sentences.len()
+        );
         return Ok(());
     }
 
@@ -76,7 +80,9 @@ fn main() -> Result<()> {
 
     // Set up audio — always recording
     let host = cpal::default_host();
-    let device = host.default_input_device().context("no input device found")?;
+    let device = host
+        .default_input_device()
+        .context("no input device found")?;
     let device_name = device.name().unwrap_or_else(|_| "unknown".to_string());
     let config = device.default_input_config()?;
     let sample_rate = config.sample_rate().0;
@@ -122,7 +128,11 @@ fn main() -> Result<()> {
         let (buf_len, peak) = {
             let buf = buffer.lock().unwrap();
             let len = buf.len();
-            let peak = buf.iter().rev().take(1600).fold(0.0f32, |m, &s| m.max(s.abs()));
+            let peak = buf
+                .iter()
+                .rev()
+                .take(1600)
+                .fold(0.0f32, |m, &s| m.max(s.abs()));
             (len, peak)
         };
         let buf_secs = buf_len as f32 / sample_rate as f32;
@@ -132,7 +142,7 @@ fn main() -> Result<()> {
             let area = frame.area();
 
             let chunks = Layout::vertical([
-                Constraint::Length(3),  // header
+                Constraint::Length(3), // header
                 Constraint::Min(8),    // sentence
                 Constraint::Length(3), // audio meter + status
                 Constraint::Length(3), // controls
@@ -190,14 +200,22 @@ fn main() -> Result<()> {
             // Audio meter + status
             let meter_width = (chunks[2].width.saturating_sub(4)) as usize;
             let level = (peak * meter_width as f32).min(meter_width as f32) as usize;
-            let meter_bar: String = "█".repeat(level) + &"░".repeat(meter_width.saturating_sub(level));
-            let meter_style = if peak > 0.05 { Color::Red } else { Color::DarkGray };
+            let meter_bar: String =
+                "█".repeat(level) + &"░".repeat(meter_width.saturating_sub(level));
+            let meter_style = if peak > 0.05 {
+                Color::Red
+            } else {
+                Color::DarkGray
+            };
 
             let status_line = if status_msg.is_empty() {
                 Line::from(vec![
                     Span::styled(" ● ", Style::default().fg(Color::Red)),
                     Span::styled(&meter_bar, Style::default().fg(meter_style)),
-                    Span::styled(format!(" {:.1}s", buf_secs), Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!(" {:.1}s", buf_secs),
+                        Style::default().fg(Color::DarkGray),
+                    ),
                 ])
             } else {
                 Line::from(Span::styled(
@@ -222,7 +240,10 @@ fn main() -> Result<()> {
             continue;
         }
 
-        if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+        if let Event::Key(KeyEvent {
+            code, modifiers, ..
+        }) = event::read()?
+        {
             match code {
                 KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => break,
                 KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => break,
@@ -289,7 +310,11 @@ fn main() -> Result<()> {
     drop(terminal);
     terminal::disable_raw_mode()?;
 
-    println!("\nDone! {} recordings in {}", recorded_count, profile_dir.display());
+    println!(
+        "\nDone! {} recordings in {}",
+        recorded_count,
+        profile_dir.display()
+    );
     Ok(())
 }
 

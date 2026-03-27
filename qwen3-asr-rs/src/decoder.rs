@@ -1,7 +1,7 @@
 use anyhow::Result;
 use candle_core::{Device, Tensor};
-use candle_nn::{Module, RmsNorm};
 use candle_nn::ops::softmax_last_dim;
+use candle_nn::{Module, RmsNorm};
 
 use crate::config::TextDecoderConfig;
 use crate::linear::LinearW;
@@ -128,7 +128,9 @@ pub(crate) struct KvCache {
 
 impl KvCache {
     pub(crate) fn new(num_layers: usize) -> Self {
-        Self { layers: vec![None; num_layers] }
+        Self {
+            layers: vec![None; num_layers],
+        }
     }
 
     pub(crate) fn get(&self, layer: usize) -> Option<&(Tensor, Tensor)> {
@@ -196,9 +198,24 @@ impl TextAttention {
         let nkvh = self.num_kv_heads;
         let hd = self.head_dim;
 
-        let q = self.q_proj.forward(x)?.reshape((bsz, seq_len, nqh, hd))?.transpose(1, 2)?.contiguous()?;
-        let k = self.k_proj.forward(x)?.reshape((bsz, seq_len, nkvh, hd))?.transpose(1, 2)?.contiguous()?;
-        let v = self.v_proj.forward(x)?.reshape((bsz, seq_len, nkvh, hd))?.transpose(1, 2)?.contiguous()?;
+        let q = self
+            .q_proj
+            .forward(x)?
+            .reshape((bsz, seq_len, nqh, hd))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let k = self
+            .k_proj
+            .forward(x)?
+            .reshape((bsz, seq_len, nkvh, hd))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let v = self
+            .v_proj
+            .forward(x)?
+            .reshape((bsz, seq_len, nkvh, hd))?
+            .transpose(1, 2)?
+            .contiguous()?;
 
         // QK normalization (applied per-head, on last dim)
         let q = self.q_norm.forward(&q)?;
@@ -233,7 +250,10 @@ impl TextAttention {
 
         let attn = softmax_last_dim(&attn)?;
         let out = attn.matmul(&v)?;
-        let out = out.transpose(1, 2)?.contiguous()?.reshape((bsz, seq_len, nqh * hd))?;
+        let out = out
+            .transpose(1, 2)?
+            .contiguous()?
+            .reshape((bsz, seq_len, nqh * hd))?;
         let out = self.o_proj.forward(&out)?;
 
         Ok((out, new_cache))
@@ -252,7 +272,7 @@ impl TextMlp {
     fn load(weights: &Weights, prefix: &str) -> Result<Self> {
         Ok(Self {
             gate_proj: weights.load_linear(&format!("{}.gate_proj", prefix))?,
-            up_proj:   weights.load_linear(&format!("{}.up_proj", prefix))?,
+            up_proj: weights.load_linear(&format!("{}.up_proj", prefix))?,
             down_proj: weights.load_linear(&format!("{}.down_proj", prefix))?,
         })
     }
@@ -283,10 +303,8 @@ impl TextDecoderLayer {
         rms_norm_eps: f64,
     ) -> Result<Self> {
         Ok(Self {
-            input_layernorm: weights.load_rms_norm(
-                &format!("{}.input_layernorm", prefix),
-                rms_norm_eps,
-            )?,
+            input_layernorm: weights
+                .load_rms_norm(&format!("{}.input_layernorm", prefix), rms_norm_eps)?,
             self_attn: TextAttention::load(
                 weights,
                 &format!("{}.self_attn", prefix),
@@ -327,7 +345,11 @@ impl TextDecoderLayer {
 
 // ─── Causal mask ─────────────────────────────────────────────────────────────
 
-pub(crate) fn create_causal_mask(seq_len: usize, past_len: usize, device: &Device) -> Result<Tensor> {
+pub(crate) fn create_causal_mask(
+    seq_len: usize,
+    past_len: usize,
+    device: &Device,
+) -> Result<Tensor> {
     let total_len = past_len + seq_len;
     let mut mask_data = vec![0.0f32; seq_len * total_len];
     for i in 0..seq_len {
@@ -355,8 +377,7 @@ impl TextDecoder {
         prefix: &str,
         config: &TextDecoderConfig,
     ) -> Result<Self> {
-        let embed_tokens =
-            weights.get_tensor(&format!("{}.embed_tokens.weight", prefix))?;
+        let embed_tokens = weights.get_tensor(&format!("{}.embed_tokens.weight", prefix))?;
 
         let mut layers = Vec::new();
         for i in 0..config.num_hidden_layers {
@@ -375,7 +396,12 @@ impl TextDecoder {
         // Tie lm_head weights to embed_tokens (weight tying).
         let lm_head = LinearW::new(embed_tokens.clone(), None);
 
-        Ok(Self { embed_tokens, layers, norm, lm_head })
+        Ok(Self {
+            embed_tokens,
+            layers,
+            norm,
+            lm_head,
+        })
     }
 
     /// Look up token embeddings. Returns the native dtype of the embedding table (BF16).
@@ -439,10 +465,14 @@ mod tests {
         let mask = create_causal_mask(3, 0, &device).unwrap();
         assert_eq!(mask.dims(), &[1, 1, 3, 3]);
         let data: Vec<f32> = mask
-            .squeeze(0).unwrap()
-            .squeeze(0).unwrap()
-            .flatten_all().unwrap()
-            .to_vec1().unwrap();
+            .squeeze(0)
+            .unwrap()
+            .squeeze(0)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1()
+            .unwrap();
         // Row 0: [0, -inf, -inf]
         assert_eq!(data[0], 0.0);
         assert_eq!(data[1], f32::NEG_INFINITY);
@@ -464,7 +494,10 @@ mod tests {
         let mask = create_causal_mask(1, 5, &device).unwrap();
         assert_eq!(mask.dims(), &[1, 1, 1, 6]);
         let data: Vec<f32> = mask.flatten_all().unwrap().to_vec1().unwrap();
-        assert!(data.iter().all(|&v| v == 0.0), "decode-step mask should be all zeros");
+        assert!(
+            data.iter().all(|&v| v == 0.0),
+            "decode-step mask should be all zeros"
+        );
     }
 
     #[test]
@@ -507,7 +540,12 @@ mod tests {
         let cos_data: Vec<f32> = cos.flatten_all().unwrap().to_vec1().unwrap();
         let sin_data: Vec<f32> = sin.flatten_all().unwrap().to_vec1().unwrap();
         for (i, (&c, &s)) in cos_data.iter().zip(sin_data.iter()).enumerate() {
-            assert!((c - 1.0).abs() < 1e-6, "cos[{}] should be 1.0, got {}", i, c);
+            assert!(
+                (c - 1.0).abs() < 1e-6,
+                "cos[{}] should be 1.0, got {}",
+                i,
+                c
+            );
             assert!(s.abs() < 1e-6, "sin[{}] should be 0.0, got {}", i, s);
         }
     }
@@ -518,11 +556,7 @@ mod tests {
         let device = Device::Cpu;
         let head_dim = 8;
         let mrope_section = [2usize, 2, 2];
-        let position_ids: [Vec<i64>; 3] = [
-            vec![0, 1, 2],
-            vec![0, 1, 2],
-            vec![0, 1, 2],
-        ];
+        let position_ids: [Vec<i64>; 3] = [vec![0, 1, 2], vec![0, 1, 2], vec![0, 1, 2]];
         let (cos, sin) = compute_mrope_cos_sin(
             &position_ids,
             head_dim,
@@ -536,7 +570,12 @@ mod tests {
         let sin_data: Vec<f32> = sin.flatten_all().unwrap().to_vec1().unwrap();
         for (i, (&c, &s)) in cos_data.iter().zip(sin_data.iter()).enumerate() {
             let r = c * c + s * s;
-            assert!((r - 1.0).abs() < 1e-5, "cos²+sin² at [{}] = {}, want 1", i, r);
+            assert!(
+                (r - 1.0).abs() < 1e-5,
+                "cos²+sin² at [{}] = {}, want 1",
+                i,
+                r
+            );
         }
     }
 

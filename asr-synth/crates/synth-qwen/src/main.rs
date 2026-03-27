@@ -7,7 +7,11 @@ use std::path::Path;
 #[derive(Parser)]
 struct Args {
     /// Path to model directory
-    #[arg(short, long, default_value = "~/Library/Caches/qwen3-asr/Alkd--qwen3-asr-gguf--qwen3_asr_1_7b_q8_0_gguf")]
+    #[arg(
+        short,
+        long,
+        default_value = "~/Library/Caches/qwen3-asr/Alkd--qwen3-asr-gguf--qwen3_asr_1_7b_q8_0_gguf"
+    )]
     model: String,
 
     /// Path to WAV file to transcribe (if omitted, reads paths from stdin)
@@ -43,15 +47,21 @@ fn main() -> Result<()> {
             }
             match engine.transcribe(path, TranscribeOptions::default()) {
                 Ok(result) => {
-                    serde_json::to_writer(&mut stdout, &serde_json::json!({
-                        "text": result.text,
-                        "language": result.language,
-                    }))?;
+                    serde_json::to_writer(
+                        &mut stdout,
+                        &serde_json::json!({
+                            "text": result.text,
+                            "language": result.language,
+                        }),
+                    )?;
                     stdout.write_all(b"\n")?;
                     stdout.flush()?;
                 }
                 Err(e) => {
-                    serde_json::to_writer(&mut stdout, &serde_json::json!({"error": e.to_string()}))?;
+                    serde_json::to_writer(
+                        &mut stdout,
+                        &serde_json::json!({"error": e.to_string()}),
+                    )?;
                     stdout.write_all(b"\n")?;
                     stdout.flush()?;
                 }

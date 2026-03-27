@@ -169,11 +169,12 @@ impl AsrInference {
         }
 
         // Acquire lock once for the entire step
-        let inner = self.inner.lock()
+        let inner = self
+            .inner
+            .lock()
             .map_err(|_| AsrError::Inference(anyhow::anyhow!("mutex poisoned")))?;
 
-        let result = run_streaming_step(&inner, state)
-            .map_err(AsrError::Inference)?;
+        let result = run_streaming_step(&inner, state).map_err(AsrError::Inference)?;
 
         Ok(Some(result))
     }
@@ -182,10 +183,7 @@ impl AsrInference {
     /// a final inference pass with higher token budget.
     ///
     /// Returns the final transcription result.
-    pub fn finish_streaming(
-        &self,
-        state: &mut StreamingState,
-    ) -> crate::Result<TranscribeResult> {
+    pub fn finish_streaming(&self, state: &mut StreamingState) -> crate::Result<TranscribeResult> {
         if !flush_remaining_buffer(state) {
             return Ok(TranscribeResult {
                 text: String::new(),
@@ -195,25 +193,29 @@ impl AsrInference {
         }
 
         // Acquire lock once for the entire final step
-        let inner = self.inner.lock()
+        let inner = self
+            .inner
+            .lock()
             .map_err(|_| AsrError::Inference(anyhow::anyhow!("mutex poisoned")))?;
 
         // Use incremental encoder for efficiency
-        let audio_embeds = encode_audio_incremental(&inner, state)
-            .map_err(AsrError::Inference)?;
+        let audio_embeds = encode_audio_incremental(&inner, state).map_err(AsrError::Inference)?;
 
         let prefix = build_prefix(&inner, state);
 
-        let generated_ids = inner.generate(
-            &audio_embeds,
-            state.options.language.as_deref(),
-            prefix.as_deref(),
-            state.options.max_new_tokens_final,
-        ).map_err(AsrError::Inference)?;
+        let generated_ids = inner
+            .generate(
+                &audio_embeds,
+                state.options.language.as_deref(),
+                prefix.as_deref(),
+                state.options.max_new_tokens_final,
+            )
+            .map_err(AsrError::Inference)?;
 
         let full_ids = combine_prefix_and_generated(state, &prefix, &generated_ids);
 
-        let result = inner.decode_result(&full_ids, state.options.language.as_deref())
+        let result = inner
+            .decode_result(&full_ids, state.options.language.as_deref())
             .map_err(AsrError::Inference)?;
 
         state.text = result.text.clone();
@@ -232,9 +234,14 @@ fn encode_audio_incremental(
     let (mel_data, n_mels, n_frames) = inner.mel_extractor.extract(&state.audio_accum)?;
     debug!("Mel: {}×{} frames (incremental)", n_mels, n_frames);
     let mel = Tensor::from_vec(mel_data, (n_mels, n_frames), &inner.device)?;
-    let audio_embeds = inner.audio_encoder.forward_incremental(&mel, &mut state.encoder_cache)?;
-    info!("Audio tokens (incremental): {} (cached: {})",
-        audio_embeds.dims()[0], state.encoder_cache.cached_tokens());
+    let audio_embeds = inner
+        .audio_encoder
+        .forward_incremental(&mel, &mut state.encoder_cache)?;
+    info!(
+        "Audio tokens (incremental): {} (cached: {})",
+        audio_embeds.dims()[0],
+        state.encoder_cache.cached_tokens()
+    );
     Ok(audio_embeds)
 }
 
@@ -285,7 +292,10 @@ pub(crate) fn compute_prefix_ids(state: &StreamingState) -> Option<&[u32]> {
     if state.raw_token_ids.is_empty() {
         return None;
     }
-    let keep = state.raw_token_ids.len().saturating_sub(state.options.unfixed_token_num);
+    let keep = state
+        .raw_token_ids
+        .len()
+        .saturating_sub(state.options.unfixed_token_num);
     if keep == 0 {
         return None;
     }
@@ -371,7 +381,10 @@ pub(crate) fn combine_prefix_and_generated(
         return generated_ids.to_vec();
     }
 
-    let keep = state.raw_token_ids.len().saturating_sub(state.options.unfixed_token_num);
+    let keep = state
+        .raw_token_ids
+        .len()
+        .saturating_sub(state.options.unfixed_token_num);
     if keep == 0 {
         return generated_ids.to_vec();
     }
@@ -712,15 +725,16 @@ mod tests {
 
     #[test]
     fn test_with_initial_text_sets_value() {
-        let opts = StreamingOptions::default()
-            .with_initial_text("previous transcript context");
-        assert_eq!(opts.initial_text.as_deref(), Some("previous transcript context"));
+        let opts = StreamingOptions::default().with_initial_text("previous transcript context");
+        assert_eq!(
+            opts.initial_text.as_deref(),
+            Some("previous transcript context")
+        );
     }
 
     #[test]
     fn test_with_initial_text_empty_string_becomes_none() {
-        let opts = StreamingOptions::default()
-            .with_initial_text("");
+        let opts = StreamingOptions::default().with_initial_text("");
         assert!(opts.initial_text.is_none());
     }
 
@@ -767,7 +781,7 @@ mod tests {
     #[test]
     fn test_vad_speech_returns_onset() {
         let mut samples = vec![0.001; 800]; // 50ms silence
-        samples.extend(vec![0.1; 800]);      // 50ms speech
+        samples.extend(vec![0.1; 800]); // 50ms speech
         assert_eq!(detect_speech_onset(&samples), Some(800)); // window index 5 * 160
     }
 

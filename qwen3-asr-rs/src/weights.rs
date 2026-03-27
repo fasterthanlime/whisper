@@ -82,10 +82,11 @@ impl Weights {
         match self {
             Self::Dense(map) => Ok(map.get(name).cloned()),
             Self::Quantized(g) => match g.tensors.get(name) {
-                Some(qt) => Ok(Some(
-                    qt.dequantize(&g.device)
-                        .map_err(|e| anyhow::anyhow!("dequantize '{name}': {e}"))?,
-                )),
+                Some(qt) => {
+                    Ok(Some(qt.dequantize(&g.device).map_err(|e| {
+                        anyhow::anyhow!("dequantize '{name}': {e}")
+                    })?))
+                }
                 None => Ok(None),
             },
         }
@@ -186,7 +187,9 @@ impl Weights {
                 }
             }
             if converted > 0 {
-                info!("Converted {converted} weight tensors from BF16/F16 to F32 for CPU inference");
+                info!(
+                    "Converted {converted} weight tensors from BF16/F16 to F32 for CPU inference"
+                );
             }
         }
         // Quantized weights don't need CPU dtype conversion — QMatMul handles it.

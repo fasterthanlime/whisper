@@ -66,10 +66,7 @@ impl Qwen2Model {
         let model = ModelWeights::from_gguf(content, &mut file, &device)
             .map_err(|e| anyhow::anyhow!("failed to load Qwen2 weights: {e}"))?;
 
-        eprintln!(
-            "[llm] Loading tokenizer from {}",
-            tokenizer_path.display()
-        );
+        eprintln!("[llm] Loading tokenizer from {}", tokenizer_path.display());
         let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("failed to load tokenizer: {e}"))?;
 

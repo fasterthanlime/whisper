@@ -19,16 +19,16 @@ pub(crate) const ENDOFTEXT_TOKEN_ID: i64 = 151643;
 pub(crate) const ASR_TEXT_SEP_TOKEN_ID: u32 = 151704;
 
 pub(crate) const MEL_SAMPLE_RATE: u32 = 16000;
-const N_FFT:           usize = 400; // Whisper-compatible FFT window (25ms @ 16kHz)
-const HOP_LENGTH:      usize = 160; // Whisper-compatible hop size  (10ms @ 16kHz)
+const N_FFT: usize = 400; // Whisper-compatible FFT window (25ms @ 16kHz)
+const HOP_LENGTH: usize = 160; // Whisper-compatible hop size  (10ms @ 16kHz)
 
 // Prompt structure token IDs (Qwen3 chat template)
-pub(crate) const TOK_IM_START:  i64 = 151644; // <|im_start|>
-pub(crate) const TOK_SYSTEM:    i64 = 8948;   // "system"
-pub(crate) const TOK_NEWLINE:   i64 = 198;    // "\n"
-pub(crate) const TOK_IM_END:    i64 = IM_END_TOKEN_ID; // 151645
-pub(crate) const TOK_USER:      i64 = 872;    // "user"
-pub(crate) const TOK_ASSISTANT: i64 = 77091;  // "assistant"
+pub(crate) const TOK_IM_START: i64 = 151644; // <|im_start|>
+pub(crate) const TOK_SYSTEM: i64 = 8948; // "system"
+pub(crate) const TOK_NEWLINE: i64 = 198; // "\n"
+pub(crate) const TOK_IM_END: i64 = IM_END_TOKEN_ID; // 151645
+pub(crate) const TOK_USER: i64 = 872; // "user"
+pub(crate) const TOK_ASSISTANT: i64 = 77091; // "assistant"
 
 /// Options controlling the transcription behaviour.
 ///
@@ -50,7 +50,10 @@ pub struct TranscribeOptions {
 
 impl Default for TranscribeOptions {
     fn default() -> Self {
-        Self { language: None, max_new_tokens: 512 }
+        Self {
+            language: None,
+            max_new_tokens: 512,
+        }
     }
 }
 
@@ -113,7 +116,13 @@ impl AsrInference {
             let w = load_safetensors_weights(model_dir, &device)
                 .context("load safetensors weights")
                 .map_err(AsrError::ModelLoad)?;
-            info!("Loaded {} weight tensors", match &w { Weights::Dense(m) => m.len(), _ => 0 });
+            info!(
+                "Loaded {} weight tensors",
+                match &w {
+                    Weights::Dense(m) => m.len(),
+                    _ => 0,
+                }
+            );
             w
         };
 
@@ -134,9 +143,10 @@ impl AsrInference {
             let tok_config = std::fs::read_to_string(model_dir.join("tokenizer_config.json"))
                 .context("read tokenizer_config.json (needed to build tokenizer.json)")
                 .map_err(AsrError::ModelLoad)?;
-            let tok_json = crate::tokenizer_build::build_qwen3_tokenizer_json(&vocab, &merges, &tok_config)
-                .context("build tokenizer.json")
-                .map_err(AsrError::ModelLoad)?;
+            let tok_json =
+                crate::tokenizer_build::build_qwen3_tokenizer_json(&vocab, &merges, &tok_config)
+                    .context("build tokenizer.json")
+                    .map_err(AsrError::ModelLoad)?;
             std::fs::write(&tokenizer_path, &tok_json)
                 .context("write tokenizer.json")
                 .map_err(AsrError::ModelLoad)?;
@@ -170,8 +180,13 @@ impl AsrInference {
     /// # Ok::<(), qwen3_asr::AsrError>(())
     /// ```
     #[cfg(feature = "hub")]
-    pub fn from_pretrained(model_id: &str, cache_dir: &Path, device: Device) -> crate::Result<Self> {
-        let model_dir = crate::hub::ensure_model_cached(model_id, cache_dir).map_err(AsrError::ModelLoad)?;
+    pub fn from_pretrained(
+        model_id: &str,
+        cache_dir: &Path,
+        device: Device,
+    ) -> crate::Result<Self> {
+        let model_dir =
+            crate::hub::ensure_model_cached(model_id, cache_dir).map_err(AsrError::ModelLoad)?;
         Self::load(&model_dir, device)
     }
 
@@ -215,12 +230,9 @@ impl AsrInference {
         .context("load audio encoder")?;
 
         info!("Loading text decoder...");
-        let text_decoder = TextDecoder::load(
-            weights,
-            "thinker.model",
-            &config.thinker_config.text_config,
-        )
-        .context("load text decoder")?;
+        let text_decoder =
+            TextDecoder::load(weights, "thinker.model", &config.thinker_config.text_config)
+                .context("load text decoder")?;
 
         let mel_extractor = MelExtractor::new(
             N_FFT,
@@ -229,8 +241,17 @@ impl AsrInference {
             MEL_SAMPLE_RATE,
         );
 
-        let inner = AsrInferenceInner { audio_encoder, text_decoder, mel_extractor, tokenizer, config, device };
-        Ok(AsrInference { inner: Mutex::new(inner) })
+        let inner = AsrInferenceInner {
+            audio_encoder,
+            text_decoder,
+            mel_extractor,
+            tokenizer,
+            config,
+            device,
+        };
+        Ok(AsrInference {
+            inner: Mutex::new(inner),
+        })
     }
 
     /// Transcribe from a WAV file path.
@@ -242,9 +263,13 @@ impl AsrInference {
         info!("Loading audio: {}", audio_path);
         let samples = load_audio_wav(audio_path, MEL_SAMPLE_RATE)?;
         info!("Audio: {} samples @ {}Hz", samples.len(), MEL_SAMPLE_RATE);
-        let inner = self.inner.lock()
+        let inner = self
+            .inner
+            .lock()
             .map_err(|_| AsrError::Inference(anyhow::anyhow!("mutex poisoned")))?;
-        inner.run_inference(&samples, &options).map_err(AsrError::Inference)
+        inner
+            .run_inference(&samples, &options)
+            .map_err(AsrError::Inference)
     }
 
     /// Transcribe directly from pre-loaded 16 kHz f32 samples.
@@ -253,9 +278,13 @@ impl AsrInference {
         samples: &[f32],
         options: TranscribeOptions,
     ) -> crate::Result<TranscribeResult> {
-        let inner = self.inner.lock()
+        let inner = self
+            .inner
+            .lock()
             .map_err(|_| AsrError::Inference(anyhow::anyhow!("mutex poisoned")))?;
-        inner.run_inference(samples, &options).map_err(AsrError::Inference)
+        inner
+            .run_inference(samples, &options)
+            .map_err(AsrError::Inference)
     }
 }
 
@@ -324,8 +353,7 @@ impl AsrInferenceInner {
         let after_emb = self.text_decoder.embed(&after_t)?;
         let audio_emb = audio_embeds.to_dtype(before_emb.dtype())?;
 
-        let hidden_states =
-            Tensor::cat(&[&before_emb, &audio_emb, &after_emb], 0)?.unsqueeze(0)?;
+        let hidden_states = Tensor::cat(&[&before_emb, &audio_emb, &after_emb], 0)?.unsqueeze(0)?;
 
         // Precompute MRoPE cos/sin table
         let text_cfg = &self.config.thinker_config.text_config;
@@ -348,13 +376,9 @@ impl AsrInferenceInner {
         let mask = create_causal_mask(seq_len, 0, &self.device)?;
         let mut kv_cache = KvCache::new(text_cfg.num_hidden_layers);
 
-        let logits = self.text_decoder.forward(
-            &hidden_states,
-            &cos,
-            &sin,
-            &mut kv_cache,
-            Some(&mask),
-        )?;
+        let logits =
+            self.text_decoder
+                .forward(&hidden_states, &cos, &sin, &mut kv_cache, Some(&mask))?;
 
         // Autoregressive generation
         let mut generated_ids: Vec<u32> = Vec::new();
@@ -394,8 +418,7 @@ impl AsrInferenceInner {
 
             generated_ids.push(next_token);
 
-            let next_id_t =
-                Tensor::from_vec(vec![next_token], (1,), &self.device)?;
+            let next_id_t = Tensor::from_vec(vec![next_token], (1,), &self.device)?;
             let next_emb = self.text_decoder.embed(&next_id_t)?.unsqueeze(0)?;
 
             let new_cos = cos_table.narrow(0, current_pos, 1)?;
@@ -431,8 +454,9 @@ impl AsrInferenceInner {
             .decode(generated_ids, true)
             .map_err(|e| anyhow::anyhow!("decode: {}", e))?;
 
-        let (lang, text) = if let Some(sep_pos) =
-            generated_ids.iter().position(|&id| id == ASR_TEXT_SEP_TOKEN_ID)
+        let (lang, text) = if let Some(sep_pos) = generated_ids
+            .iter()
+            .position(|&id| id == ASR_TEXT_SEP_TOKEN_ID)
         {
             let lang_ids: Vec<u32> = generated_ids[..sep_pos].to_vec();
             let text_ids: Vec<u32> = generated_ids[sep_pos + 1..].to_vec();
@@ -444,13 +468,20 @@ impl AsrInferenceInner {
                 .tokenizer
                 .decode(&text_ids, true)
                 .map_err(|e| anyhow::anyhow!("decode text: {}", e))?;
-            let lang =
-                lang_raw.strip_prefix("language ").unwrap_or(&lang_raw).trim().to_string();
+            let lang = lang_raw
+                .strip_prefix("language ")
+                .unwrap_or(&lang_raw)
+                .trim()
+                .to_string();
             (lang, text_raw.trim().to_string())
         } else {
             parse_asr_output(&raw_text, false)
         };
-        Ok(TranscribeResult { text, language: lang, raw_output: raw_text })
+        Ok(TranscribeResult {
+            text,
+            language: lang,
+            raw_output: raw_text,
+        })
     }
 
     /// Encode text into token IDs using the tokenizer.
@@ -580,7 +611,10 @@ fn find_gguf_file(model_dir: &Path) -> Option<std::path::PathBuf> {
 }
 
 /// Load safetensors weights from a directory (single file or sharded).
-pub(crate) fn load_safetensors_weights(model_dir: &Path, device: &Device) -> anyhow::Result<Weights> {
+pub(crate) fn load_safetensors_weights(
+    model_dir: &Path,
+    device: &Device,
+) -> anyhow::Result<Weights> {
     // Check for sharded model
     let index_path = model_dir.join("model.safetensors.index.json");
     if index_path.exists() {
@@ -590,8 +624,7 @@ pub(crate) fn load_safetensors_weights(model_dir: &Path, device: &Device) -> any
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("invalid index.json"))?;
 
-        let mut shard_files: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut shard_files: std::collections::HashSet<String> = std::collections::HashSet::new();
         for v in weight_map.values() {
             if let Some(s) = v.as_str() {
                 shard_files.insert(s.to_string());

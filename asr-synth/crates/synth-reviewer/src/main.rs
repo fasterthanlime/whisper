@@ -87,8 +87,8 @@ fn main() -> Result<()> {
             let area = frame.area();
 
             let chunks = Layout::vertical([
-                Constraint::Length(3),  // header
-                Constraint::Length(5),  // original
+                Constraint::Length(3), // header
+                Constraint::Length(5), // original
                 Constraint::Min(5),    // corrected / edit
                 Constraint::Length(3), // controls
             ])
@@ -166,7 +166,10 @@ fn main() -> Result<()> {
             continue;
         }
 
-        if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+        if let Event::Key(KeyEvent {
+            code, modifiers, ..
+        }) = event::read()?
+        {
             if editing {
                 match code {
                     KeyCode::Enter => {

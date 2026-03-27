@@ -27,15 +27,23 @@ fn main() {
     println!("Loading model from: {}", model_dir.display());
     let t0 = Instant::now();
     let device = qwen3_asr::best_device();
-    let engine = qwen3_asr::AsrInference::load(&model_dir, device)
-        .expect("failed to load model");
+    let engine = qwen3_asr::AsrInference::load(&model_dir, device).expect("failed to load model");
     println!("Model loaded in {:.2}s\n", t0.elapsed().as_secs_f64());
 
     // ── Load audio ───────────────────────────────────────────────────────
     let samples = qwen3_asr::load_audio_wav(wav_path, 16000).expect("failed to load wav");
     let duration_sec = samples.len() as f32 / 16000.0;
-    println!("Audio: {} ({:.1}s, {} samples)", wav_path, duration_sec, samples.len());
-    println!("Chunk size: {:.1}s ({} samples)\n", chunk_size_sec, (chunk_size_sec * 16000.0) as usize);
+    println!(
+        "Audio: {} ({:.1}s, {} samples)",
+        wav_path,
+        duration_sec,
+        samples.len()
+    );
+    println!(
+        "Chunk size: {:.1}s ({} samples)\n",
+        chunk_size_sec,
+        (chunk_size_sec * 16000.0) as usize
+    );
 
     // ── Batch transcription ──────────────────────────────────────────────
     println!("═══ BATCH TRANSCRIPTION ═══");
@@ -46,13 +54,15 @@ fn main() {
     let batch_elapsed = t0.elapsed();
     println!("Text: {}", batch_result.text);
     println!("Language: {}", batch_result.language);
-    println!("Time: {:.2}s (RTF: {:.3}x)\n", batch_elapsed.as_secs_f64(),
-             batch_elapsed.as_secs_f64() / duration_sec as f64);
+    println!(
+        "Time: {:.2}s (RTF: {:.3}x)\n",
+        batch_elapsed.as_secs_f64(),
+        batch_elapsed.as_secs_f64() / duration_sec as f64
+    );
 
     // ── Streaming transcription ──────────────────────────────────────────
     println!("═══ STREAMING TRANSCRIPTION ═══");
-    let stream_opts = qwen3_asr::StreamingOptions::default()
-        .with_chunk_size_sec(chunk_size_sec);
+    let stream_opts = qwen3_asr::StreamingOptions::default().with_chunk_size_sec(chunk_size_sec);
     let mut state = engine.init_streaming(stream_opts);
 
     let chunk_samples = (chunk_size_sec * 16000.0) as usize;
@@ -78,10 +88,7 @@ fn main() {
             }
             Ok(None) => {
                 let chunk_dur = chunk.len() as f64 / 16000.0;
-                println!(
-                    "  (buffered {:.2}s, not enough for a chunk)",
-                    chunk_dur
-                );
+                println!("  (buffered {:.2}s, not enough for a chunk)", chunk_dur);
             }
             Err(e) => {
                 eprintln!("  ERROR at step {}: {}", step + 1, e);
@@ -93,7 +100,9 @@ fn main() {
     // Final flush
     println!("\n  --- finish_streaming ---");
     let final_t0 = Instant::now();
-    let final_result = engine.finish_streaming(&mut state).expect("finish_streaming failed");
+    let final_result = engine
+        .finish_streaming(&mut state)
+        .expect("finish_streaming failed");
     let final_elapsed = final_t0.elapsed().as_secs_f64();
     let total_elapsed = t0.elapsed();
 
@@ -104,12 +113,19 @@ fn main() {
     // ── Summary ──────────────────────────────────────────────────────────
     println!("\n═══ SUMMARY ═══");
     println!("Audio duration: {:.1}s", duration_sec);
-    println!("Batch:   \"{}\"\n  time={:.2}s  RTF={:.3}x",
-             batch_result.text, batch_elapsed.as_secs_f64(),
-             batch_elapsed.as_secs_f64() / duration_sec as f64);
-    println!("Stream:  \"{}\"\n  time={:.2}s  RTF={:.3}x  steps={}",
-             final_result.text, total_elapsed.as_secs_f64(),
-             total_elapsed.as_secs_f64() / duration_sec as f64, step);
+    println!(
+        "Batch:   \"{}\"\n  time={:.2}s  RTF={:.3}x",
+        batch_result.text,
+        batch_elapsed.as_secs_f64(),
+        batch_elapsed.as_secs_f64() / duration_sec as f64
+    );
+    println!(
+        "Stream:  \"{}\"\n  time={:.2}s  RTF={:.3}x  steps={}",
+        final_result.text,
+        total_elapsed.as_secs_f64(),
+        total_elapsed.as_secs_f64() / duration_sec as f64,
+        step
+    );
 
     if !step_times.is_empty() {
         let avg = step_times.iter().sum::<f64>() / step_times.len() as f64;

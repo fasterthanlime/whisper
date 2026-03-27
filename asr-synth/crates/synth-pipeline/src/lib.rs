@@ -17,8 +17,7 @@ pub struct TrainingPair {
 
 pub fn resample_24k_to_16k(samples: &[f32]) -> Result<Vec<f32>> {
     use rubato::{
-        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType,
-        WindowFunction,
+        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
     };
 
     let params = SincInterpolationParameters {
@@ -28,8 +27,7 @@ pub fn resample_24k_to_16k(samples: &[f32]) -> Result<Vec<f32>> {
         oversampling_factor: 256,
         window: WindowFunction::BlackmanHarris2,
     };
-    let mut resampler =
-        SincFixedIn::<f32>::new(16000.0 / 24000.0, 2.0, params, samples.len(), 1)?;
+    let mut resampler = SincFixedIn::<f32>::new(16000.0 / 24000.0, 2.0, params, samples.len(), 1)?;
     let output = resampler.process(&[samples], None)?;
     Ok(output.into_iter().next().unwrap_or_default())
 }
@@ -37,10 +35,23 @@ pub fn resample_24k_to_16k(samples: &[f32]) -> Result<Vec<f32>> {
 /// Progress callback for pipeline execution
 pub enum PipelineEvent {
     Status(String),
-    SentenceStart { index: usize, total: usize, text: String },
-    SentenceDone { index: usize, parakeet: String, qwen: String },
-    SentenceError { index: usize, error: String },
-    Done { count: usize },
+    SentenceStart {
+        index: usize,
+        total: usize,
+        text: String,
+    },
+    SentenceDone {
+        index: usize,
+        parakeet: String,
+        qwen: String,
+    },
+    SentenceError {
+        index: usize,
+        error: String,
+    },
+    Done {
+        count: usize,
+    },
 }
 
 pub struct PipelineConfig {
@@ -73,24 +84,25 @@ pub fn run_pipeline(
     sentences: &[synth_textgen::templates::GeneratedSentence],
     mut on_event: impl FnMut(PipelineEvent),
 ) -> Result<Vec<TrainingPair>> {
-    on_event(PipelineEvent::Status("Loading pocket-tts (quantized)...".into()));
+    on_event(PipelineEvent::Status(
+        "Loading pocket-tts (quantized)...".into(),
+    ));
     let tts = pocket_tts::TTSModel::load_quantized("b6369a24")?;
     let voice_state = tts
         .get_voice_state(&config.voice)
         .context("loading voice reference WAV")?;
     let tts_sample_rate = tts.sample_rate as u32;
-    on_event(PipelineEvent::Status(format!("TTS ready ({tts_sample_rate} Hz)")));
+    on_event(PipelineEvent::Status(format!(
+        "TTS ready ({tts_sample_rate} Hz)"
+    )));
 
     on_event(PipelineEvent::Status("Loading Parakeet TDT...".into()));
-    let mut parakeet =
-        parakeet_rs::ParakeetTDT::from_pretrained(&config.parakeet_model, None)?;
+    let mut parakeet = parakeet_rs::ParakeetTDT::from_pretrained(&config.parakeet_model, None)?;
     on_event(PipelineEvent::Status("Parakeet ready".into()));
 
     on_event(PipelineEvent::Status("Loading Qwen3 ASR...".into()));
-    let qwen = qwen3_asr::AsrInference::load(
-        Path::new(&config.qwen_model),
-        qwen3_asr::best_device(),
-    )?;
+    let qwen =
+        qwen3_asr::AsrInference::load(Path::new(&config.qwen_model), qwen3_asr::best_device())?;
     on_event(PipelineEvent::Status("Qwen3 ready".into()));
 
     if let Some(ref audio_dir) = config.save_audio {
@@ -121,32 +133,29 @@ pub fn run_pipeline(
         let samples_16k = resample_24k_to_16k(&samples_24k)?;
 
         // Parakeet ASR
-        let parakeet_text =
-            match parakeet.transcribe_samples(samples_16k.clone(), 16000, 1, None) {
-                Ok(r) => r.text,
-                Err(e) => {
-                    on_event(PipelineEvent::SentenceError {
-                        index: i,
-                        error: format!("Parakeet: {e}"),
-                    });
-                    continue;
-                }
-            };
-
-        // Qwen3 ASR
-        let qwen_text = match qwen.transcribe_samples(
-            &samples_16k,
-            qwen3_asr::TranscribeOptions::default(),
-        ) {
+        let parakeet_text = match parakeet.transcribe_samples(samples_16k.clone(), 16000, 1, None) {
             Ok(r) => r.text,
             Err(e) => {
                 on_event(PipelineEvent::SentenceError {
                     index: i,
-                    error: format!("Qwen3: {e}"),
+                    error: format!("Parakeet: {e}"),
                 });
                 continue;
             }
         };
+
+        // Qwen3 ASR
+        let qwen_text =
+            match qwen.transcribe_samples(&samples_16k, qwen3_asr::TranscribeOptions::default()) {
+                Ok(r) => r.text,
+                Err(e) => {
+                    on_event(PipelineEvent::SentenceError {
+                        index: i,
+                        error: format!("Qwen3: {e}"),
+                    });
+                    continue;
+                }
+            };
 
         on_event(PipelineEvent::SentenceDone {
             index: i,
@@ -184,7 +193,11 @@ pub fn load_sentences(path: &str) -> Result<Vec<synth_textgen::templates::Genera
             spoken: v["spoken"].as_str().unwrap_or("").to_string(),
             vocab_terms: v["vocab_terms"]
                 .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default(),
         });
     }

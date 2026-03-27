@@ -3,7 +3,10 @@ use log::info;
 use std::path::Path;
 
 pub(crate) fn hf_url(model_id: &str, filename: &str) -> String {
-    format!("https://huggingface.co/{}/resolve/main/{}", model_id, filename)
+    format!(
+        "https://huggingface.co/{}/resolve/main/{}",
+        model_id, filename
+    )
 }
 
 /// Make a GET request; returns `None` on 404, error on other failures.
@@ -48,7 +51,9 @@ pub(crate) fn hf_stream_to_file(url: &str, path: &std::path::Path) -> anyhow::Re
     let mut buf = [0u8; 65536];
     loop {
         let n = resp.read(&mut buf)?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         file.write_all(&buf[..n])?;
         downloaded += n as u64;
     }
@@ -63,7 +68,10 @@ pub(crate) fn hf_stream_to_file(url: &str, path: &std::path::Path) -> anyhow::Re
 /// A `.complete` marker file signals that all files are present. If the
 /// directory exists but `.complete` is missing (interrupted download), the
 /// directory is removed and the download restarts.
-pub(crate) fn ensure_model_cached(model_id: &str, cache_dir: &Path) -> anyhow::Result<std::path::PathBuf> {
+pub(crate) fn ensure_model_cached(
+    model_id: &str,
+    cache_dir: &Path,
+) -> anyhow::Result<std::path::PathBuf> {
     let sanitized = model_id.replace('/', "--");
     let model_dir = cache_dir.join(&sanitized);
     let marker = model_dir.join(".complete");
@@ -80,12 +88,16 @@ pub(crate) fn ensure_model_cached(model_id: &str, cache_dir: &Path) -> anyhow::R
         std::fs::remove_dir_all(&model_dir)?;
     }
 
-    info!("Downloading '{}' from HuggingFace to {}…", model_id, model_dir.display());
+    info!(
+        "Downloading '{}' from HuggingFace to {}…",
+        model_id,
+        model_dir.display()
+    );
     std::fs::create_dir_all(&model_dir)?;
 
     // config.json
-    let config_bytes = hf_get_bytes(&hf_url(model_id, "config.json"))
-        .context("download config.json")?;
+    let config_bytes =
+        hf_get_bytes(&hf_url(model_id, "config.json")).context("download config.json")?;
     std::fs::write(model_dir.join("config.json"), &config_bytes)?;
 
     // Weights: check for sharded index first.
@@ -160,7 +172,10 @@ pub(crate) fn ensure_gguf_model_cached(
     }
 
     if model_dir.exists() {
-        info!("Removing incomplete GGUF download at {}", model_dir.display());
+        info!(
+            "Removing incomplete GGUF download at {}",
+            model_dir.display()
+        );
         std::fs::remove_dir_all(&model_dir)?;
     }
 

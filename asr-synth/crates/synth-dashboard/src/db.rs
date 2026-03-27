@@ -118,6 +118,7 @@ pub struct EvalItem {
     pub original: String,
     pub qwen: String,
     pub parakeet: String,
+    pub sentence: String,
     pub is_mistake: bool,
     pub hit_count: i64,
 }
@@ -127,7 +128,7 @@ pub struct SentenceRow {
     pub id: i64,
     pub text: String,
     pub spoken: String,
-    pub vocab_terms: String, // JSON array
+    pub vocab_terms: String,   // JSON array
     pub unknown_words: String, // JSON array
     pub status: String,
     pub wav_path: Option<String>,
@@ -200,7 +201,9 @@ impl Db {
             .context("setting pragmas")?;
         conn.execute_batch(SCHEMA).context("creating schema")?;
         // Migrations: add columns if missing (idempotent — errors ignored for already-existing columns)
-        let _ = conn.execute_batch("ALTER TABLE sentences ADD COLUMN unknown_words TEXT NOT NULL DEFAULT '[]';");
+        let _ = conn.execute_batch(
+            "ALTER TABLE sentences ADD COLUMN unknown_words TEXT NOT NULL DEFAULT '[]';",
+        );
         let _ = conn.execute_batch("ALTER TABLE sentences ADD COLUMN alignment_json TEXT;");
         let _ = conn.execute_batch("ALTER TABLE sentences ADD COLUMN tts_backend TEXT;");
         let _ = conn.execute_batch("ALTER TABLE sentences ADD COLUMN human_wav_path TEXT;");
@@ -213,10 +216,16 @@ impl Db {
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN trim_info TEXT;");
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN qwen_full TEXT;");
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN audio_ogg BLOB;");
-        let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN hit_count INTEGER NOT NULL DEFAULT 1;");
-        let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN is_mistake INTEGER NOT NULL DEFAULT 1;");
+        let _ = conn.execute_batch(
+            "ALTER TABLE corpus_pairs ADD COLUMN hit_count INTEGER NOT NULL DEFAULT 1;",
+        );
+        let _ = conn.execute_batch(
+            "ALTER TABLE corpus_pairs ADD COLUMN is_mistake INTEGER NOT NULL DEFAULT 1;",
+        );
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN updated_at TEXT;");
-        let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN rejected INTEGER NOT NULL DEFAULT 0;");
+        let _ = conn.execute_batch(
+            "ALTER TABLE corpus_pairs ADD COLUMN rejected INTEGER NOT NULL DEFAULT 0;",
+        );
         let _ = conn.execute_batch("ALTER TABLE corpus_pairs ADD COLUMN review_status TEXT;");
 
         // Migration: case-insensitive dedup of vocab terms.
@@ -235,23 +244,26 @@ impl Db {
                 parakeet_match INTEGER NOT NULL,
                 tts_backend TEXT,
                 created_at TEXT NOT NULL
-            )"
-        ).ok();
+            )",
+        )
+        .ok();
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS import_offsets (
                 source TEXT PRIMARY KEY,
                 byte_offset INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL
-            )"
-        ).ok();
+            )",
+        )
+        .ok();
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS authored_sentences (
                 id INTEGER PRIMARY KEY,
                 term TEXT NOT NULL,
                 sentence TEXT NOT NULL,
                 created_at TEXT NOT NULL
-            )"
-        ).ok();
+            )",
+        )
+        .ok();
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS authored_sentence_recordings (
                 id INTEGER PRIMARY KEY,
@@ -260,15 +272,17 @@ impl Db {
                 take_no INTEGER NOT NULL,
                 wav_path TEXT NOT NULL,
                 created_at TEXT NOT NULL
-            )"
-        ).ok();
+            )",
+        )
+        .ok();
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS rejected_suggestions (
                 term TEXT PRIMARY KEY COLLATE NOCASE,
                 rejected_at TEXT NOT NULL
-            )"
-        ).ok();
+            )",
+        )
+        .ok();
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS vocab_alt_spellings (
@@ -277,8 +291,20 @@ impl Db {
                 alt_spelling TEXT NOT NULL COLLATE NOCASE,
                 created_at TEXT NOT NULL,
                 UNIQUE(term, alt_spelling)
-            )"
-        ).ok();
+            )",
+        )
+        .ok();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS template_sentences (
+                id INTEGER PRIMARY KEY,
+                term TEXT NOT NULL COLLATE NOCASE,
+                sentence TEXT NOT NULL COLLATE NOCASE,
+                source TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(term, sentence)
+            )",
+        )
+        .ok();
 
         Ok(Db { conn })
     }
@@ -295,7 +321,8 @@ impl Db {
         let mut stmt = self.conn.prepare(
             "SELECT term FROM vocab WHERE reviewed = 1 AND spoken_override IS NOT NULL AND (curated IS NULL OR curated = 'kept')"
         )?;
-        let all_terms: Vec<String> = stmt.query_map([], |row| row.get(0))?
+        let all_terms: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -304,7 +331,8 @@ impl Db {
         matched_terms.push(primary_term);
         // Add any other terms found in the sentence
         for t in &all_terms {
-            if t.to_lowercase() != primary_term.to_lowercase() && lower.contains(&t.to_lowercase()) {
+            if t.to_lowercase() != primary_term.to_lowercase() && lower.contains(&t.to_lowercase())
+            {
                 matched_terms.push(t);
             }
         }
@@ -335,14 +363,20 @@ impl Db {
                 AND (v.curated IS NULL OR v.curated = 'kept')
                 AND v.term NOT LIKE '%-%'
              ORDER BY sentence_count ASC, RANDOM()
-             LIMIT 1"
+             LIMIT 1",
         )?;
         let mut rows = stmt.query_map([], |row| {
-            Ok((VocabRow {
-                id: row.get(0)?, term: row.get(1)?, spoken_auto: row.get(2)?,
-                spoken_override: row.get(3)?, reviewed: row.get::<_, i64>(4)? != 0,
-                description: row.get(5)?,
-            }, row.get::<_, i64>(6)?))
+            Ok((
+                VocabRow {
+                    id: row.get(0)?,
+                    term: row.get(1)?,
+                    spoken_auto: row.get(2)?,
+                    spoken_override: row.get(3)?,
+                    reviewed: row.get::<_, i64>(4)? != 0,
+                    description: row.get(5)?,
+                },
+                row.get::<_, i64>(6)?,
+            ))
         })?;
         match rows.next() {
             Some(Ok(r)) => Ok(Some(r)),
@@ -351,12 +385,16 @@ impl Db {
     }
 
     pub fn authored_sentence_count(&self) -> Result<i64> {
-        Ok(self.conn.query_row("SELECT COUNT(DISTINCT sentence) FROM authored_sentences", [], |r| r.get(0))?)
+        Ok(self.conn.query_row(
+            "SELECT COUNT(DISTINCT sentence) FROM authored_sentences",
+            [],
+            |r| r.get(0),
+        )?)
     }
 
     pub fn authored_sentence_term_counts(&self) -> Result<Vec<(String, i64)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT term, COUNT(*) FROM authored_sentences GROUP BY term ORDER BY COUNT(*) DESC"
+            "SELECT term, COUNT(*) FROM authored_sentences GROUP BY term ORDER BY COUNT(*) DESC",
         )?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -371,7 +409,7 @@ impl Db {
                  FROM authored_sentence_recordings
                  GROUP BY LOWER(sentence)
              ) r ON r.sentence_key = LOWER(a.sentence)
-             ORDER BY a.id DESC"
+             ORDER BY a.id DESC",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(serde_json::json!({
@@ -385,12 +423,15 @@ impl Db {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    pub fn authored_sentence_recordings_for_sentence(&self, sentence: &str) -> Result<Vec<AuthoredSentenceRecordingRow>> {
+    pub fn authored_sentence_recordings_for_sentence(
+        &self,
+        sentence: &str,
+    ) -> Result<Vec<AuthoredSentenceRecordingRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, term, sentence, take_no, wav_path, created_at
              FROM authored_sentence_recordings
              WHERE LOWER(sentence) = LOWER(?1)
-             ORDER BY take_no DESC, id DESC"
+             ORDER BY take_no DESC, id DESC",
         )?;
         let rows = stmt.query_map(params![sentence], |row| {
             Ok(AuthoredSentenceRecordingRow {
@@ -406,11 +447,13 @@ impl Db {
     }
 
     /// Get all authored sentence recordings for eval. One row per take.
-    pub fn authored_sentence_recordings_for_eval(&self) -> Result<Vec<AuthoredSentenceRecordingRow>> {
+    pub fn authored_sentence_recordings_for_eval(
+        &self,
+    ) -> Result<Vec<AuthoredSentenceRecordingRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, term, sentence, take_no, wav_path, created_at
              FROM authored_sentence_recordings
-             ORDER BY created_at ASC, id ASC"
+             ORDER BY created_at ASC, id ASC",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(AuthoredSentenceRecordingRow {
@@ -426,7 +469,11 @@ impl Db {
     }
 
     pub fn authored_sentence_recordings_count(&self) -> Result<i64> {
-        Ok(self.conn.query_row("SELECT COUNT(*) FROM authored_sentence_recordings", [], |r| r.get(0))?)
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM authored_sentence_recordings",
+            [],
+            |r| r.get(0),
+        )?)
     }
 
     pub fn authored_sentences_with_recordings_count(&self) -> Result<i64> {
@@ -437,12 +484,23 @@ impl Db {
         )?)
     }
 
-    pub fn add_authored_sentence_recording(&self, term: &str, sentence: &str, wav_path: &str) -> Result<i64> {
+    pub fn add_authored_sentence_recording(
+        &self,
+        term: &str,
+        sentence: &str,
+        wav_path: &str,
+    ) -> Result<i64> {
         let take_no = self.next_authored_sentence_recording_take_no(sentence)?;
         self.insert_authored_sentence_recording(term, sentence, take_no, wav_path)
     }
 
-    pub fn insert_authored_sentence_recording(&self, term: &str, sentence: &str, take_no: i64, wav_path: &str) -> Result<i64> {
+    pub fn insert_authored_sentence_recording(
+        &self,
+        term: &str,
+        sentence: &str,
+        take_no: i64,
+        wav_path: &str,
+    ) -> Result<i64> {
         let now = now_str();
         self.conn.execute(
             "INSERT INTO authored_sentence_recordings (term, sentence, take_no, wav_path, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -459,11 +517,14 @@ impl Db {
         )?)
     }
 
-    pub fn get_authored_sentence_recording(&self, id: i64) -> Result<Option<AuthoredSentenceRecordingRow>> {
+    pub fn get_authored_sentence_recording(
+        &self,
+        id: i64,
+    ) -> Result<Option<AuthoredSentenceRecordingRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, term, sentence, take_no, wav_path, created_at
              FROM authored_sentence_recordings
-             WHERE id = ?1"
+             WHERE id = ?1",
         )?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
@@ -491,7 +552,7 @@ impl Db {
     /// Get unique authored sentences for eval. Returns (sentence, primary_term).
     pub fn authored_sentences_for_eval(&self) -> Result<Vec<(String, String)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT sentence, term FROM authored_sentences GROUP BY sentence ORDER BY id"
+            "SELECT sentence, term FROM authored_sentences GROUP BY sentence ORDER BY id",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -508,7 +569,9 @@ impl Db {
     }
 
     pub fn get_authored_sentence(&self, id: i64) -> Result<Option<(String, String)>> {
-        let mut stmt = self.conn.prepare("SELECT term, sentence FROM authored_sentences WHERE id = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT term, sentence FROM authored_sentences WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
             Ok(Some((row.get(0)?, row.get(1)?)))
@@ -518,15 +581,50 @@ impl Db {
     }
 
     pub fn delete_authored_sentence(&self, id: i64) -> Result<()> {
-        self.conn.execute("DELETE FROM authored_sentences WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM authored_sentences WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     /// Get all authored sentences as plain text (for Markov chain building).
     pub fn all_authored_sentences(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare("SELECT DISTINCT sentence FROM authored_sentences")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT sentence FROM authored_sentences")?;
         let rows = stmt.query_map([], |row| row.get(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn authored_sentences_for_term(&self, term: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT sentence FROM authored_sentences WHERE LOWER(term) = LOWER(?1) ORDER BY id DESC",
+        )?;
+        let rows = stmt.query_map(params![term], |row| row.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn template_sentences_for_term(&self, term: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT sentence FROM template_sentences WHERE LOWER(term) = LOWER(?1) ORDER BY id DESC",
+        )?;
+        let rows = stmt.query_map(params![term], |row| row.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn template_sentence_term_counts(&self) -> Result<Vec<(String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT term, COUNT(*) FROM template_sentences GROUP BY term ORDER BY COUNT(*) DESC",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn insert_template_sentence(&self, term: &str, sentence: &str, source: &str) -> Result<bool> {
+        let changed = self.conn.execute(
+            "INSERT OR IGNORE INTO template_sentences (term, sentence, source, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![term, sentence, source, now_str()],
+        )?;
+        Ok(changed > 0)
     }
 
     // ==================== REJECTED SUGGESTIONS ====================
@@ -656,7 +754,8 @@ impl Db {
         param_values.push(Box::new(limit));
         param_values.push(Box::new(offset));
 
-        let refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(refs.as_slice(), |row| {
             Ok(VocabRow {
@@ -682,7 +781,9 @@ impl Db {
     }
 
     pub fn vocab_count(&self) -> Result<i64> {
-        Ok(self.conn.query_row("SELECT COUNT(*) FROM vocab", [], |r| r.get(0))?)
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM vocab", [], |r| r.get(0))?)
     }
 
     pub fn update_vocab_override(&self, id: i64, spoken_override: Option<&str>) -> Result<()> {
@@ -719,7 +820,10 @@ impl Db {
 
     // ==================== SENTENCES ====================
 
-    pub fn insert_sentences(&self, sentences: &[synth_textgen::templates::GeneratedSentence]) -> Result<usize> {
+    pub fn insert_sentences(
+        &self,
+        sentences: &[synth_textgen::templates::GeneratedSentence],
+    ) -> Result<usize> {
         let now = now_str();
         let mut count = 0;
         for s in sentences {
@@ -735,7 +839,13 @@ impl Db {
     }
 
     /// Insert a sentence, skipping duplicates.
-    pub fn insert_sentence_from_candidate(&self, text: &str, spoken: &str, vocab_terms: &str, unknown_words: &str) -> Result<bool> {
+    pub fn insert_sentence_from_candidate(
+        &self,
+        text: &str,
+        spoken: &str,
+        vocab_terms: &str,
+        unknown_words: &str,
+    ) -> Result<bool> {
         let now = now_str();
         let n = self.conn.execute(
             "INSERT OR IGNORE INTO sentences (text, spoken, vocab_terms, unknown_words, status, created_at) VALUES (?1, ?2, ?3, ?4, 'pending', ?5)",
@@ -753,7 +863,9 @@ impl Db {
         let cols = "id, text, spoken, vocab_terms, unknown_words, status, wav_path, alignment_json, tts_backend, parakeet_output, qwen_output, human_wav_path";
         let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match status {
             Some(s) => (
-                format!("SELECT {cols} FROM sentences WHERE status = ?1 ORDER BY id LIMIT ?2 OFFSET ?3"),
+                format!(
+                    "SELECT {cols} FROM sentences WHERE status = ?1 ORDER BY id LIMIT ?2 OFFSET ?3"
+                ),
                 vec![Box::new(s.to_string()), Box::new(limit), Box::new(offset)],
             ),
             None => (
@@ -761,7 +873,8 @@ impl Db {
                 vec![Box::new(limit), Box::new(offset)],
             ),
         };
-        let refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(refs.as_slice(), |row| {
             Ok(SentenceRow {
@@ -799,7 +912,13 @@ impl Db {
     }
 
     /// Update sentence text, spoken form, and unknown words (for correcting transcription errors).
-    pub fn update_sentence_text(&self, id: i64, text: &str, spoken: &str, unknown_words: &str) -> Result<()> {
+    pub fn update_sentence_text(
+        &self,
+        id: i64,
+        text: &str,
+        spoken: &str,
+        unknown_words: &str,
+    ) -> Result<()> {
         self.conn.execute(
             "UPDATE sentences SET text = ?1, spoken = ?2, unknown_words = ?3, status = 'pending' WHERE id = ?4",
             params![text, spoken, unknown_words, id],
@@ -826,13 +945,23 @@ impl Db {
     /// Get a single sentence by ID.
     pub fn get_sentence(&self, id: i64) -> Result<Option<SentenceRow>> {
         let cols = "id, text, spoken, vocab_terms, unknown_words, status, wav_path, alignment_json, tts_backend, parakeet_output, qwen_output, human_wav_path";
-        let mut stmt = self.conn.prepare(&format!("SELECT {cols} FROM sentences WHERE id = ?1"))?;
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT {cols} FROM sentences WHERE id = ?1"))?;
         let mut rows = stmt.query_map(params![id], |row| {
             Ok(SentenceRow {
-                id: row.get(0)?, text: row.get(1)?, spoken: row.get(2)?,
-                vocab_terms: row.get(3)?, unknown_words: row.get(4)?, status: row.get(5)?,
-                wav_path: row.get(6)?, alignment_json: row.get(7)?, tts_backend: row.get(8)?,
-                parakeet_output: row.get(9)?, qwen_output: row.get(10)?, human_wav_path: row.get(11)?,
+                id: row.get(0)?,
+                text: row.get(1)?,
+                spoken: row.get(2)?,
+                vocab_terms: row.get(3)?,
+                unknown_words: row.get(4)?,
+                status: row.get(5)?,
+                wav_path: row.get(6)?,
+                alignment_json: row.get(7)?,
+                tts_backend: row.get(8)?,
+                parakeet_output: row.get(9)?,
+                qwen_output: row.get(10)?,
+                human_wav_path: row.get(11)?,
             })
         })?;
         match rows.next() {
@@ -845,7 +974,7 @@ impl Db {
     pub fn pending_sentence_ids(&self, limit: i64) -> Result<Vec<i64>> {
         let mut stmt = self.conn.prepare(
             "SELECT id FROM sentences WHERE status = 'pending' \
-             ORDER BY (CASE WHEN unknown_words != '[]' THEN 0 ELSE 1 END), RANDOM() LIMIT ?1"
+             ORDER BY (CASE WHEN unknown_words != '[]' THEN 0 ELSE 1 END), RANDOM() LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], |row| row.get(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -861,11 +990,20 @@ impl Db {
     }
 
     pub fn delete_vocab_by_term(&self, term: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM vocab WHERE LOWER(term) = LOWER(?1)", params![term])?;
+        self.conn.execute(
+            "DELETE FROM vocab WHERE LOWER(term) = LOWER(?1)",
+            params![term],
+        )?;
         // Clean up authored sentences linked to this term
-        self.conn.execute("DELETE FROM authored_sentences WHERE LOWER(term) = LOWER(?1)", params![term])?;
+        self.conn.execute(
+            "DELETE FROM authored_sentences WHERE LOWER(term) = LOWER(?1)",
+            params![term],
+        )?;
         // Clean up rejected suggestions
-        self.conn.execute("DELETE FROM rejected_suggestions WHERE LOWER(term) = LOWER(?1)", params![term])?;
+        self.conn.execute(
+            "DELETE FROM rejected_suggestions WHERE LOWER(term) = LOWER(?1)",
+            params![term],
+        )?;
         Ok(())
     }
 
@@ -875,8 +1013,11 @@ impl Db {
         )?;
         let mut rows = stmt.query_map(params![term], |row| {
             Ok(VocabRow {
-                id: row.get(0)?, term: row.get(1)?, spoken_auto: row.get(2)?,
-                spoken_override: row.get(3)?, reviewed: row.get::<_, i64>(4)? != 0,
+                id: row.get(0)?,
+                term: row.get(1)?,
+                spoken_auto: row.get(2)?,
+                spoken_override: row.get(3)?,
+                reviewed: row.get::<_, i64>(4)? != 0,
                 description: row.get(5).ok().flatten(),
             })
         })?;
@@ -898,7 +1039,12 @@ impl Db {
 
     /// Update precomputed TTS + alignment data for a sentence.
     pub fn update_sentence_precomputed(
-        &self, id: i64, wav_path: &str, alignment_json: &str, backend: &str, spoken: &str,
+        &self,
+        id: i64,
+        wav_path: &str,
+        alignment_json: &str,
+        backend: &str,
+        spoken: &str,
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE sentences SET wav_path = ?1, alignment_json = ?2, tts_backend = ?3, spoken = ?4 WHERE id = ?5",
@@ -909,9 +1055,19 @@ impl Db {
 
     /// Count sentences by status.
     pub fn sentence_count_by_status(&self) -> Result<(i64, i64, i64)> {
-        let approved: i64 = self.conn.query_row("SELECT COUNT(*) FROM sentences WHERE status = 'approved'", [], |r| r.get(0))?;
-        let rejected: i64 = self.conn.query_row("SELECT COUNT(*) FROM sentences WHERE status = 'rejected'", [], |r| r.get(0))?;
-        let total: i64 = self.conn.query_row("SELECT COUNT(*) FROM sentences", [], |r| r.get(0))?;
+        let approved: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sentences WHERE status = 'approved'",
+            [],
+            |r| r.get(0),
+        )?;
+        let rejected: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sentences WHERE status = 'rejected'",
+            [],
+            |r| r.get(0),
+        )?;
+        let total: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM sentences", [], |r| r.get(0))?;
         Ok((approved, rejected, total))
     }
 
@@ -922,10 +1078,19 @@ impl Db {
     /// On conflict: increment hit_count, update alignment data to latest.
     /// Returns (id, is_new) — is_new=true if this was a first sighting.
     pub fn upsert_corpus_pair(
-        &self, term: &str, original: &str, qwen: &str, parakeet: &str,
-        sentence: &str, spoken: &str,
-        orig_align: Option<&str>, qwen_align: Option<&str>, parakeet_align: Option<&str>,
-        cons_time: Option<&str>, trim_info: Option<&str>, is_mistake: bool,
+        &self,
+        term: &str,
+        original: &str,
+        qwen: &str,
+        parakeet: &str,
+        sentence: &str,
+        spoken: &str,
+        orig_align: Option<&str>,
+        qwen_align: Option<&str>,
+        parakeet_align: Option<&str>,
+        cons_time: Option<&str>,
+        trim_info: Option<&str>,
+        is_mistake: bool,
         audio_ogg: Option<&[u8]>,
     ) -> Result<(i64, bool)> {
         let orig_lower = original.to_lowercase();
@@ -945,7 +1110,18 @@ impl Db {
                 "UPDATE corpus_pairs SET hit_count = hit_count + 1, sentence = ?2, spoken = ?3, \
                  orig_alignment = ?4, qwen_alignment = ?5, parakeet_alignment = ?6, \
                  cons_time = ?7, trim_info = ?8, audio_ogg = ?9, updated_at = ?10 WHERE id = ?1",
-                params![id, sentence, spoken, orig_align, qwen_align, parakeet_align, cons_time, trim_info, audio_ogg, now],
+                params![
+                    id,
+                    sentence,
+                    spoken,
+                    orig_align,
+                    qwen_align,
+                    parakeet_align,
+                    cons_time,
+                    trim_info,
+                    audio_ogg,
+                    now
+                ],
             )?;
             Ok((id, false))
         } else {
@@ -954,8 +1130,22 @@ impl Db {
                  orig_alignment, qwen_alignment, parakeet_alignment, cons_time, trim_info, \
                  hit_count, is_mistake, audio_ogg, created_at, updated_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13, ?14, ?14)",
-                params![term, original, qwen, parakeet, sentence, spoken, orig_align, qwen_align,
-                        parakeet_align, cons_time, trim_info, is_mistake as i32, audio_ogg, now],
+                params![
+                    term,
+                    original,
+                    qwen,
+                    parakeet,
+                    sentence,
+                    spoken,
+                    orig_align,
+                    qwen_align,
+                    parakeet_align,
+                    cons_time,
+                    trim_info,
+                    is_mistake as i32,
+                    audio_ogg,
+                    now
+                ],
             )?;
             Ok((self.conn.last_insert_rowid(), true))
         }
@@ -971,7 +1161,7 @@ impl Db {
              FROM corpus_pairs \
              WHERE is_mistake = 1 AND review_status IS NULL \
              ORDER BY hit_count DESC \
-             LIMIT 1"
+             LIMIT 1",
         )?;
         let row = stmt.query_row([], |row| {
             let orig_align: Option<String> = row.get(7)?;
@@ -1007,28 +1197,40 @@ impl Db {
     /// Progress for the confusions review: how many reviewed, how many total, how many remaining.
     pub fn confusions_review_progress(&self) -> Result<serde_json::Value> {
         let total: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 1", [], |r| r.get(0)
+            "SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 1",
+            [],
+            |r| r.get(0),
         )?;
         let reviewed: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 1 AND review_status IS NOT NULL", [], |r| r.get(0)
+            "SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 1 AND review_status IS NOT NULL",
+            [],
+            |r| r.get(0),
         )?;
         let remaining: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 1 AND review_status IS NULL", [], |r| r.get(0)
+            "SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 1 AND review_status IS NULL",
+            [],
+            |r| r.get(0),
         )?;
         Ok(serde_json::json!({"total": total, "reviewed": reviewed, "remaining": remaining}))
     }
 
     pub fn get_corpus_audio(&self, id: i64) -> Result<Option<Vec<u8>>> {
-        Ok(self.conn.query_row(
-            "SELECT audio_ogg FROM corpus_pairs WHERE id = ?1",
-            params![id],
-            |row| row.get(0),
-        ).ok().flatten())
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT audio_ogg FROM corpus_pairs WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten())
     }
 
     /// Count existing passes per term in corpus_pairs.
     pub fn corpus_passes_per_term(&self) -> Result<HashMap<String, usize>> {
-        let mut stmt = self.conn.prepare("SELECT term, COUNT(*) FROM corpus_pairs GROUP BY term")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT term, COUNT(*) FROM corpus_pairs GROUP BY term")?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
         })?;
@@ -1041,13 +1243,22 @@ impl Db {
     }
 
     pub fn corpus_pair_count(&self) -> Result<i64> {
-        Ok(self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs", [], |r| r.get(0))?)
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM corpus_pairs", [], |r| r.get(0))?)
     }
 
     /// Query corpus pairs with optional filtering.
     /// `review_filter`: None = all non-rejected, Some("unreviewed") = unreviewed mistakes only,
     /// Some("approved") = approved only, Some("rejected") = rejected only.
-    pub fn corpus_pairs_query(&self, filter_term: Option<&str>, mistakes_only: bool, review_filter: Option<&str>, limit: usize, offset: usize) -> Result<Vec<serde_json::Value>> {
+    pub fn corpus_pairs_query(
+        &self,
+        filter_term: Option<&str>,
+        mistakes_only: bool,
+        review_filter: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<serde_json::Value>> {
         let mut sql = String::from(
             "SELECT id, term, original, qwen, parakeet, sentence, spoken, orig_alignment, qwen_alignment, parakeet_alignment, cons_time, trim_info, hit_count, is_mistake, audio_ogg IS NOT NULL, review_status FROM corpus_pairs WHERE 1=1"
         );
@@ -1079,7 +1290,8 @@ impl Db {
         params_vec.push(Box::new(limit as i64));
         params_vec.push(Box::new(offset as i64));
 
-        let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params_refs.as_slice(), |row| {
             let orig_align: Option<String> = row.get(7)?;
@@ -1117,7 +1329,11 @@ impl Db {
         let mistakes: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 1 AND (review_status IS NULL OR review_status != 'rejected')", [], |r| r.get(0))?;
         let correct: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 0 AND (review_status IS NULL OR review_status != 'rejected')", [], |r| r.get(0))?;
         let total_hits: i64 = self.conn.query_row("SELECT COALESCE(SUM(hit_count), 0) FROM corpus_pairs WHERE review_status IS NULL OR review_status != 'rejected'", [], |r| r.get(0))?;
-        let unreviewed: i64 = self.conn.query_row("SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 1 AND review_status IS NULL", [], |r| r.get(0))?;
+        let unreviewed: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM corpus_pairs WHERE is_mistake = 1 AND review_status IS NULL",
+            [],
+            |r| r.get(0),
+        )?;
 
         // Per-term stats: mistake_count, correct_count, total_hits
         let mut stmt = self.conn.prepare(
@@ -1125,14 +1341,17 @@ impl Db {
              SUM(CASE WHEN is_mistake = 0 THEN 1 ELSE 0 END), \
              SUM(hit_count) FROM corpus_pairs WHERE review_status IS NULL OR review_status != 'rejected' GROUP BY term ORDER BY term COLLATE NOCASE"
         )?;
-        let term_stats: Vec<serde_json::Value> = stmt.query_map([], |row| {
-            Ok(serde_json::json!({
-                "term": row.get::<_, String>(0)?,
-                "mistakes": row.get::<_, i64>(1)?,
-                "correct": row.get::<_, i64>(2)?,
-                "hits": row.get::<_, i64>(3)?,
-            }))
-        })?.filter_map(|r| r.ok()).collect();
+        let term_stats: Vec<serde_json::Value> = stmt
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "term": row.get::<_, String>(0)?,
+                    "mistakes": row.get::<_, i64>(1)?,
+                    "correct": row.get::<_, i64>(2)?,
+                    "hits": row.get::<_, i64>(3)?,
+                }))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
 
         Ok(serde_json::json!({
             "unique_pairs": total,
@@ -1196,7 +1415,7 @@ impl Db {
     /// Get all alternate spellings for a term.
     pub fn get_alt_spellings_for_term(&self, term: &str) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
-            "SELECT alt_spelling FROM vocab_alt_spellings WHERE LOWER(term) = LOWER(?1)"
+            "SELECT alt_spelling FROM vocab_alt_spellings WHERE LOWER(term) = LOWER(?1)",
         )?;
         let rows = stmt.query_map(params![term], |row| row.get(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -1205,9 +1424,9 @@ impl Db {
     /// Get all alternate spellings as a map: term → set of acceptable spellings.
     /// The original term itself is included in each set.
     pub fn get_all_alt_spellings(&self) -> Result<HashMap<String, Vec<String>>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT term, alt_spelling FROM vocab_alt_spellings"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT term, alt_spelling FROM vocab_alt_spellings")?;
         let mut map: HashMap<String, Vec<String>> = HashMap::new();
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -1230,7 +1449,11 @@ impl Db {
 
     /// Check if a qwen output matches the original or any alt spelling for a term.
     pub fn is_acceptable_spelling(&self, term: &str, original: &str, qwen: &str) -> Result<bool> {
-        if original.to_lowercase() == qwen.to_lowercase() {
+        fn canonicalize(text: &str) -> String {
+            text.trim().to_lowercase().replace('-', "_")
+        }
+
+        if canonicalize(original) == canonicalize(qwen) {
             return Ok(true);
         }
         let count: i64 = self.conn.query_row(
@@ -1246,7 +1469,7 @@ impl Db {
     /// Each row is a unique (term, original, qwen) combination.
     pub fn corpus_eval_set(&self) -> Result<Vec<EvalItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT term, original, qwen, parakeet, is_mistake, hit_count FROM corpus_pairs ORDER BY term COLLATE NOCASE"
+            "SELECT term, original, qwen, parakeet, sentence, is_mistake, hit_count FROM corpus_pairs ORDER BY term COLLATE NOCASE"
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(EvalItem {
@@ -1254,8 +1477,9 @@ impl Db {
                 original: row.get(1)?,
                 qwen: row.get(2)?,
                 parakeet: row.get(3)?,
-                is_mistake: row.get::<_, i64>(4)? != 0,
-                hit_count: row.get(5)?,
+                sentence: row.get(4)?,
+                is_mistake: row.get::<_, i64>(5)? != 0,
+                hit_count: row.get(6)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -1263,11 +1487,16 @@ impl Db {
 
     /// Keep old method for backward compat
     pub fn corpus_unique_triplets(&self) -> Result<Vec<(String, String, String, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT term, original, qwen, parakeet FROM corpus_pairs"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT term, original, qwen, parakeet FROM corpus_pairs")?;
         let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -1304,7 +1533,8 @@ impl Db {
     pub fn sentences_with_human_recording_count(&self) -> Result<i64> {
         Ok(self.conn.query_row(
             "SELECT COUNT(*) FROM sentences WHERE human_wav_path IS NOT NULL",
-            [], |r| r.get(0),
+            [],
+            |r| r.get(0),
         )?)
     }
 
@@ -1318,7 +1548,15 @@ impl Db {
 
     // ==================== CONFUSIONS ====================
 
-    pub fn insert_confusion(&self, term: &str, qwen: &str, parakeet: &str, qwen_match: bool, parakeet_match: bool, backend: &str) -> Result<()> {
+    pub fn insert_confusion(
+        &self,
+        term: &str,
+        qwen: &str,
+        parakeet: &str,
+        qwen_match: bool,
+        parakeet_match: bool,
+        backend: &str,
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO vocab_confusions (term, qwen_heard, parakeet_heard, qwen_match, parakeet_match, tts_backend, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![term, qwen, parakeet, qwen_match as i64, parakeet_match as i64, backend, now_str()],
@@ -1340,10 +1578,15 @@ impl Db {
                     SUM(CASE WHEN parakeet_match = 0 THEN 1 ELSE 0 END) as parakeet_err
              FROM vocab_confusions
              GROUP BY term
-             ORDER BY (qwen_err + parakeet_err) DESC, term"
+             ORDER BY (qwen_err + parakeet_err) DESC, term",
         )?;
         let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+            ))
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -1385,8 +1628,11 @@ impl Db {
         )?;
         let mut rows = stmt.query_map(params![id], |row| {
             Ok(VocabRow {
-                id: row.get(0)?, term: row.get(1)?, spoken_auto: row.get(2)?,
-                spoken_override: row.get(3)?, reviewed: row.get::<_, i64>(4)? != 0,
+                id: row.get(0)?,
+                term: row.get(1)?,
+                spoken_auto: row.get(2)?,
+                spoken_override: row.get(3)?,
+                reviewed: row.get::<_, i64>(4)? != 0,
                 description: row.get(5).ok().flatten(),
             })
         })?;
@@ -1405,8 +1651,11 @@ impl Db {
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(VocabRow {
-                id: row.get(0)?, term: row.get(1)?, spoken_auto: row.get(2)?,
-                spoken_override: row.get(3)?, reviewed: row.get::<_, i64>(4)? != 0,
+                id: row.get(0)?,
+                term: row.get(1)?,
+                spoken_auto: row.get(2)?,
+                spoken_override: row.get(3)?,
+                reviewed: row.get::<_, i64>(4)? != 0,
                 description: row.get(5).ok().flatten(),
             })
         })?;
@@ -1457,12 +1706,23 @@ impl Db {
     }
 
     pub fn confusion_count(&self) -> Result<i64> {
-        Ok(self.conn.query_row("SELECT COUNT(DISTINCT term) FROM vocab_confusions", [], |r| r.get(0))?)
+        Ok(self.conn.query_row(
+            "SELECT COUNT(DISTINCT term) FROM vocab_confusions",
+            [],
+            |r| r.get(0),
+        )?)
     }
 
     // ==================== CANDIDATES ====================
 
-    pub fn insert_candidate(&self, text: &str, spoken: &str, vocab_terms: &str, source: &str, unknown_words: &str) -> Result<bool> {
+    pub fn insert_candidate(
+        &self,
+        text: &str,
+        spoken: &str,
+        vocab_terms: &str,
+        source: &str,
+        unknown_words: &str,
+    ) -> Result<bool> {
         let result = self.conn.execute(
             "INSERT OR IGNORE INTO candidate_sentences (text, spoken, vocab_terms, source, unknown_words, imported_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![text, spoken, vocab_terms, source, unknown_words, now_str()],
@@ -1471,12 +1731,18 @@ impl Db {
     }
 
     pub fn candidate_count(&self) -> Result<i64> {
-        Ok(self.conn.query_row("SELECT COUNT(*) FROM candidate_sentences", [], |r| r.get(0))?)
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM candidate_sentences", [], |r| r.get(0))?)
     }
 
     /// Pick N candidates that aren't already in the sentences table.
     /// If `prioritize_unknown` is true, prefer sentences with unknown words.
-    pub fn pick_candidates(&self, count: i64, prioritize_unknown: bool) -> Result<Vec<(String, String, String, String)>> {
+    pub fn pick_candidates(
+        &self,
+        count: i64,
+        prioritize_unknown: bool,
+    ) -> Result<Vec<(String, String, String, String)>> {
         let sql = if prioritize_unknown {
             // Sentences with unknown words first, then random
             "SELECT c.text, c.spoken, c.vocab_terms, c.unknown_words FROM candidate_sentences c
@@ -1490,7 +1756,12 @@ impl Db {
         };
         let mut stmt = self.conn.prepare(sql)?;
         let rows = stmt.query_map(params![count], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -1499,18 +1770,62 @@ impl Db {
 
     pub fn stats(&self) -> Result<CorpusStats> {
         Ok(CorpusStats {
-            vocab_total: self.conn.query_row("SELECT COUNT(*) FROM vocab", [], |r| r.get(0))?,
-            vocab_reviewed: self.conn.query_row("SELECT COUNT(*) FROM vocab WHERE reviewed = 1", [], |r| r.get(0))?,
-            vocab_with_override: self.conn.query_row("SELECT COUNT(*) FROM vocab WHERE spoken_override IS NOT NULL", [], |r| r.get(0))?,
-            vocab_unreviewed: self.conn.query_row("SELECT COUNT(*) FROM vocab WHERE curated = 'kept' AND reviewed = 0", [], |r| r.get(0))?,
-            candidates_total: self.conn.query_row("SELECT COUNT(*) FROM candidate_sentences", [], |r| r.get(0))?,
-            sentences_total: self.conn.query_row("SELECT COUNT(*) FROM sentences", [], |r| r.get(0))?,
-            sentences_pending: self.conn.query_row("SELECT COUNT(*) FROM sentences WHERE status = 'pending'", [], |r| r.get(0))?,
-            sentences_approved: self.conn.query_row("SELECT COUNT(*) FROM sentences WHERE status = 'approved'", [], |r| r.get(0))?,
-            sentences_rejected: self.conn.query_row("SELECT COUNT(*) FROM sentences WHERE status = 'rejected'", [], |r| r.get(0))?,
-            sentences_with_audio: self.conn.query_row("SELECT COUNT(*) FROM sentences WHERE wav_path IS NOT NULL", [], |r| r.get(0))?,
-            sentences_with_asr: self.conn.query_row("SELECT COUNT(*) FROM sentences WHERE parakeet_output IS NOT NULL", [], |r| r.get(0))?,
-            transcriptions_total: self.conn.query_row("SELECT COUNT(*) FROM transcriptions", [], |r| r.get(0))?,
+            vocab_total: self
+                .conn
+                .query_row("SELECT COUNT(*) FROM vocab", [], |r| r.get(0))?,
+            vocab_reviewed: self.conn.query_row(
+                "SELECT COUNT(*) FROM vocab WHERE reviewed = 1",
+                [],
+                |r| r.get(0),
+            )?,
+            vocab_with_override: self.conn.query_row(
+                "SELECT COUNT(*) FROM vocab WHERE spoken_override IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )?,
+            vocab_unreviewed: self.conn.query_row(
+                "SELECT COUNT(*) FROM vocab WHERE curated = 'kept' AND reviewed = 0",
+                [],
+                |r| r.get(0),
+            )?,
+            candidates_total: self.conn.query_row(
+                "SELECT COUNT(*) FROM candidate_sentences",
+                [],
+                |r| r.get(0),
+            )?,
+            sentences_total: self
+                .conn
+                .query_row("SELECT COUNT(*) FROM sentences", [], |r| r.get(0))?,
+            sentences_pending: self.conn.query_row(
+                "SELECT COUNT(*) FROM sentences WHERE status = 'pending'",
+                [],
+                |r| r.get(0),
+            )?,
+            sentences_approved: self.conn.query_row(
+                "SELECT COUNT(*) FROM sentences WHERE status = 'approved'",
+                [],
+                |r| r.get(0),
+            )?,
+            sentences_rejected: self.conn.query_row(
+                "SELECT COUNT(*) FROM sentences WHERE status = 'rejected'",
+                [],
+                |r| r.get(0),
+            )?,
+            sentences_with_audio: self.conn.query_row(
+                "SELECT COUNT(*) FROM sentences WHERE wav_path IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )?,
+            sentences_with_asr: self.conn.query_row(
+                "SELECT COUNT(*) FROM sentences WHERE parakeet_output IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )?,
+            transcriptions_total: self.conn.query_row(
+                "SELECT COUNT(*) FROM transcriptions",
+                [],
+                |r| r.get(0),
+            )?,
         })
     }
 
@@ -1522,7 +1837,9 @@ impl Db {
         let mut count = 0usize;
         for line in content.lines() {
             let line = line.trim();
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
             let entry: LogEntry = match serde_json::from_str(line) {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -1531,7 +1848,9 @@ impl Db {
                 "INSERT OR IGNORE INTO transcriptions (text, timestamp, app, imported_at) VALUES (?1, ?2, ?3, ?4)",
                 params![entry.text, entry.timestamp, entry.app, now],
             );
-            if let Ok(changed) = result { count += changed; }
+            if let Ok(changed) = result {
+                count += changed;
+            }
         }
         Ok(count)
     }
@@ -1589,9 +1908,14 @@ impl Db {
         )?;
         let mut rows = stmt.query_map(params![job_id], |row| {
             Ok(Job {
-                id: row.get(0)?, job_type: row.get(1)?, status: row.get(2)?,
-                config: row.get(3)?, log: row.get(4)?, result: row.get(5)?,
-                created_at: row.get(6)?, finished_at: row.get(7)?,
+                id: row.get(0)?,
+                job_type: row.get(1)?,
+                status: row.get(2)?,
+                config: row.get(3)?,
+                log: row.get(4)?,
+                result: row.get(5)?,
+                created_at: row.get(6)?,
+                finished_at: row.get(7)?,
             })
         })?;
         match rows.next() {
@@ -1606,9 +1930,14 @@ impl Db {
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(Job {
-                id: row.get(0)?, job_type: row.get(1)?, status: row.get(2)?,
-                config: row.get(3)?, log: row.get(4)?, result: row.get(5)?,
-                created_at: row.get(6)?, finished_at: row.get(7)?,
+                id: row.get(0)?,
+                job_type: row.get(1)?,
+                status: row.get(2)?,
+                config: row.get(3)?,
+                log: row.get(4)?,
+                result: row.get(5)?,
+                created_at: row.get(6)?,
+                finished_at: row.get(7)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -1620,10 +1949,13 @@ impl Db {
     /// rebuild the table with COLLATE NOCASE on the UNIQUE constraint.
     fn migrate_vocab_nocase(conn: &Connection) {
         // Check if the table already has COLLATE NOCASE by inspecting the schema
-        let schema: String = conn.query_row(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='vocab'",
-            [], |r| r.get(0),
-        ).unwrap_or_default();
+        let schema: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='vocab'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or_default();
 
         if schema.to_uppercase().contains("COLLATE NOCASE") {
             return; // Already migrated
@@ -1670,7 +2002,9 @@ impl Db {
         ");
         match result {
             Ok(()) => {
-                let count: i64 = conn.query_row("SELECT COUNT(*) FROM vocab", [], |r| r.get(0)).unwrap_or(0);
+                let count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM vocab", [], |r| r.get(0))
+                    .unwrap_or(0);
                 eprintln!("[db-migrate] Vocab table rebuilt with COLLATE NOCASE ({count} terms)");
             }
             Err(e) => eprintln!("[db-migrate] Vocab rebuild failed (non-fatal): {e}"),
@@ -1680,6 +2014,8 @@ impl Db {
 
 pub fn now_str() -> String {
     use std::time::SystemTime;
-    let dur = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap();
+    let dur = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap();
     format!("{}Z", dur.as_secs())
 }

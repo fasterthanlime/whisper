@@ -10,7 +10,6 @@
 ///   - Load time
 ///   - Per-file transcription time (mean / min / max over N runs)
 ///   - Wall-clock throughput (audio-seconds transcribed per second)
-
 use anyhow::Result;
 use qwen3_asr::{AsrInference, TranscribeOptions};
 use std::path::{Path, PathBuf};
@@ -49,12 +48,16 @@ fn parse_args() -> Cli {
             }
             "--model-id" => {
                 #[cfg(feature = "hub")]
-                { model_id = Some(args[i + 1].clone()); }
+                {
+                    model_id = Some(args[i + 1].clone());
+                }
                 i += 2;
             }
             "--cache-dir" => {
                 #[cfg(feature = "hub")]
-                { cache_dir = PathBuf::from(&args[i + 1]); }
+                {
+                    cache_dir = PathBuf::from(&args[i + 1]);
+                }
                 i += 2;
             }
             "--audio-dir" => {
@@ -133,7 +136,12 @@ fn peak_rss_mib() -> f64 {
             ru_maxrss: i64,
             _pad: [i64; 13],
         }
-        let mut u = Rusage { ru_utime: [0; 2], ru_stime: [0; 2], ru_maxrss: 0, _pad: [0; 13] };
+        let mut u = Rusage {
+            ru_utime: [0; 2],
+            ru_stime: [0; 2],
+            ru_maxrss: 0,
+            _pad: [0; 13],
+        };
         unsafe { getrusage(0, &mut u) };
         u.ru_maxrss as f64 / 1024.0 / 1024.0
     }
@@ -142,7 +150,11 @@ fn peak_rss_mib() -> f64 {
         if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
             for line in s.lines() {
                 if line.starts_with("VmRSS:") {
-                    if let Some(kb) = line.split_whitespace().nth(1).and_then(|v| v.parse::<f64>().ok()) {
+                    if let Some(kb) = line
+                        .split_whitespace()
+                        .nth(1)
+                        .and_then(|v| v.parse::<f64>().ok())
+                    {
                         return kb / 1024.0;
                     }
                 }
@@ -195,8 +207,11 @@ fn phys_footprint_mib() -> f64 {
         // count is in natural_t (i32-sized) units; [u64; 40] = 320 bytes = 80 i32 units
         let mut buf = [0u64; 40];
         let mut count: u32 = (buf.len() * 2) as u32;
-        let ret = unsafe { task_info(mach_task_self(), TASK_VM_INFO, buf.as_mut_ptr(), &mut count) };
-        if ret != 0 { return 0.0; }
+        let ret =
+            unsafe { task_info(mach_task_self(), TASK_VM_INFO, buf.as_mut_ptr(), &mut count) };
+        if ret != 0 {
+            return 0.0;
+        }
         // phys_footprint is at byte offset 144 = u64 index 18
         let footprint_bytes = buf[18];
         footprint_bytes as f64 / 1024.0 / 1024.0
@@ -240,12 +255,18 @@ fn main() -> Result<()> {
     let engine = if let Some(ref id) = cli.model_id {
         AsrInference::from_pretrained(id, &cli.cache_dir, device)?
     } else {
-        let dir = cli.model_dir.as_deref().unwrap_or_else(|| Path::new("models"));
+        let dir = cli
+            .model_dir
+            .as_deref()
+            .unwrap_or_else(|| Path::new("models"));
         AsrInference::load(dir, device)?
     };
     #[cfg(not(feature = "hub"))]
     let engine = {
-        let dir = cli.model_dir.as_deref().unwrap_or_else(|| Path::new("models"));
+        let dir = cli
+            .model_dir
+            .as_deref()
+            .unwrap_or_else(|| Path::new("models"));
         AsrInference::load(dir, device)?
     };
     let load_time = t_load.elapsed();
@@ -253,8 +274,14 @@ fn main() -> Result<()> {
     let footprint_after_load = phys_footprint_mib();
 
     println!("  Load time   : {:.1} ms", ms(load_time));
-    println!("  Peak RSS    : {:.0} MiB  (getrusage high-water mark — never decreases)", rss_after_load);
-    println!("  Phys footpt : {:.0} MiB  (task_info current physical memory including Metal GPU)", footprint_after_load);
+    println!(
+        "  Peak RSS    : {:.0} MiB  (getrusage high-water mark — never decreases)",
+        rss_after_load
+    );
+    println!(
+        "  Phys footpt : {:.0} MiB  (task_info current physical memory including Metal GPU)",
+        footprint_after_load
+    );
     println!();
 
     // ── Audio files to benchmark ──────────────────────────────────────────────
@@ -277,8 +304,10 @@ fn main() -> Result<()> {
     let mut total_audio_secs: f64 = 0.0;
     let mut total_infer_secs: f64 = 0.0;
 
-    println!("{:<20}  {:>8}  {:>8}  {:>8}  {:>8}  {}",
-        "File", "Mean ms", "Min ms", "Max ms", "RTF", "Text");
+    println!(
+        "{:<20}  {:>8}  {:>8}  {:>8}  {:>8}  {}",
+        "File", "Mean ms", "Min ms", "Max ms", "RTF", "Text"
+    );
     println!("{}", "─".repeat(100));
 
     for wav in &audio_files {
@@ -312,12 +341,17 @@ fn main() -> Result<()> {
             }
         };
 
-        let short_name = wav.file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or(wav_str);
+        let short_name = wav.file_name().and_then(|s| s.to_str()).unwrap_or(wav_str);
 
-        println!("{:<20}  {:>8.1}  {:>8.1}  {:>8.1}  {:>8.3}  {}",
-            short_name, ms(mean), ms(min), ms(max), rtf, text_display);
+        println!(
+            "{:<20}  {:>8.1}  {:>8.1}  {:>8.1}  {:>8.3}  {}",
+            short_name,
+            ms(mean),
+            ms(min),
+            ms(max),
+            rtf,
+            text_display
+        );
 
         total_audio_secs += audio_dur;
         total_infer_secs += mean.as_secs_f64();
@@ -329,13 +363,24 @@ fn main() -> Result<()> {
     } else {
         0.0
     };
-    println!("{:<20}  {:>8.1}  {:>8}  {:>8}  {:>8.3}",
-        "TOTAL/AVG", ms(Duration::from_secs_f64(total_infer_secs)),
-        "", "", overall_rtf);
+    println!(
+        "{:<20}  {:>8.1}  {:>8}  {:>8}  {:>8.3}",
+        "TOTAL/AVG",
+        ms(Duration::from_secs_f64(total_infer_secs)),
+        "",
+        "",
+        overall_rtf
+    );
     println!();
     println!("  RTF = inference_time / audio_duration  (lower is better)");
-    println!("  Peak RSS (getrusage high-water)       : {:.0} MiB", rss_after_load);
-    println!("  Phys footprint (task_info, post-load) : {:.0} MiB", footprint_after_load);
+    println!(
+        "  Peak RSS (getrusage high-water)       : {:.0} MiB",
+        rss_after_load
+    );
+    println!(
+        "  Phys footprint (task_info, post-load) : {:.0} MiB",
+        footprint_after_load
+    );
     println!();
 
     Ok(())

@@ -314,6 +314,43 @@
             border-color: var(--accent);
         }
 
+        .alt-spelling-row {
+            display: flex;
+            gap: 6px;
+            margin-top: 6px;
+            align-items: center;
+            max-width: 440px;
+        }
+
+        .alt-spelling-input {
+            flex: 1;
+            min-width: 0;
+            padding: 8px 12px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-family: 'Jost', sans-serif;
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+        }
+
+        .alt-spelling-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .alt-spelling-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.12);
+        }
+
+        .alt-spelling-add {
+            min-width: 64px;
+            justify-content: center;
+            font-weight: 600;
+        }
+
         .toolbar {
             display: flex;
             gap: 8px;
@@ -1849,6 +1886,9 @@
         // ==================== VOCAB ====================
         function VocabPage() {
             const [vocab, setVocab] = useState([]);
+            const [altSpellings, setAltSpellings] = useState({});
+            const [altInputs, setAltInputs] = useState({});
+            const [altBusyTerm, setAltBusyTerm] = useState(null);
             const [search, setSearch] = useState('');
             const [filter, setFilter] = useState('overrides'); // 'all' | 'overrides'
             const [sort, setSort] = useState('recent'); // 'alpha' | 'recent'
@@ -1874,7 +1914,13 @@
                 if (sort === 'recent') p.set('sort', 'recent');
                 p.set('limit', String(pageSize));
                 p.set('offset', String(page * pageSize));
-                api(`/api/vocab?${p}`).then(setVocab).finally(() => setLoading(false));
+                Promise.all([
+                    api(`/api/vocab?${p}`),
+                    api('/api/vocab/alt-spellings'),
+                ]).then(([list, alts]) => {
+                    setVocab(list);
+                    setAltSpellings(alts || {});
+                }).finally(() => setLoading(false));
             }, [search, filter, sort, page]);
             useEffect(() => {load();}, [load]);
             // Reset page when filter/search changes
@@ -1901,6 +1947,28 @@
                 await api('/api/vocab', {method: 'POST', body: JSON.stringify({term: newTerm.trim(), spoken_override: newOverride.trim() || undefined})});
                 setNewTerm(''); setNewOverride(''); setNewPreviewed(false); setNewTermExists(false); load();
                 setTimeout(() => newTermRef.current?.focus(), 50);
+            };
+            const altListFor = (term) => altSpellings[term.toLowerCase()] || [];
+            const addAltSpelling = async (term) => {
+                const value = (altInputs[term] || '').trim();
+                if (!value) return;
+                setAltBusyTerm(term);
+                try {
+                    await api('/api/vocab/alt-spellings', {method: 'POST', body: JSON.stringify({term, alt_spelling: value})});
+                    setAltInputs(prev => ({...prev, [term]: ''}));
+                    load();
+                } finally {
+                    setAltBusyTerm(null);
+                }
+            };
+            const deleteAltSpelling = async (term, altSpelling) => {
+                setAltBusyTerm(term);
+                try {
+                    await api('/api/vocab/alt-spellings/delete', {method: 'POST', body: JSON.stringify({term, alt_spelling: altSpelling})});
+                    load();
+                } finally {
+                    setAltBusyTerm(null);
+                }
             };
 
             const startCurate = async () => {
@@ -1979,7 +2047,45 @@
                                 <tbody>
                                     {vocab.map(row => (
                                         <tr key={row.id}>
-                                            <td style={{fontWeight: 600}}>{row.term}</td>
+                                            <td style={{fontWeight: 600}}>
+                                                <div>{row.term}</div>
+                                                <div style={{display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6, alignItems: 'center'}}>
+                                                    {altListFor(row.term).map(alt => (
+                                                        <span key={alt} style={{display: 'inline-flex', alignItems: 'center', gap: 6, padding: '2px 8px', borderRadius: 999, border: '1px solid var(--border)', fontSize: 12, fontWeight: 500, color: 'var(--text-muted)', background: 'var(--bg)'}}>
+                                                            <span>{alt}</span>
+                                                            <button
+                                                                onClick={() => deleteAltSpelling(row.term, alt)}
+                                                                disabled={altBusyTerm === row.term}
+                                                                style={{background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1}}
+                                                                title="Delete alt spelling"
+                                                            >
+                                                                &times;
+                                                            </button>
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                                <div className="alt-spelling-row">
+                                                    <input
+                                                        className="alt-spelling-input"
+                                                        placeholder="Add alt spelling..."
+                                                        value={altInputs[row.term] || ''}
+                                                        onChange={e => setAltInputs(prev => ({...prev, [row.term]: e.target.value}))}
+                                                        onKeyDown={e => {
+                                                            if (e.key === 'Enter') {
+                                                                e.preventDefault();
+                                                                addAltSpelling(row.term);
+                                                            }
+                                                        }}
+                                                    />
+                                                    <button
+                                                        className="btn btn-sm alt-spelling-add"
+                                                        onClick={() => addAltSpelling(row.term)}
+                                                        disabled={altBusyTerm === row.term || !(altInputs[row.term] || '').trim()}
+                                                    >
+                                                        Add
+                                                    </button>
+                                                </div>
+                                            </td>
                                             <td style={{color: 'var(--text-muted)'}}>{row.spoken_auto}</td>
                                             <td>
                                                 {editingId === row.id ? (
@@ -2630,6 +2736,69 @@
             const [rapidFireBusy, setRapidFireBusy] = useState(false);
             const recordingRecorderRef = useRef(null);
 
+            const spellIssueList = Array.isArray(spellIssues) ? spellIssues : (spellIssues?.issues || []);
+
+            const sentenceForSpellIssue = (issue) => {
+                if (!sentences) return '';
+                const row = sentences.find(s => s.id === issue.id);
+                return row?.sentence || '';
+            };
+
+            const applySpellSuggestion = (fullSentence, issue) => {
+                if (!fullSentence || !issue?.original || !issue?.suggestion) return fullSentence || '';
+                const escaped = issue.original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const re = new RegExp(`\\b${escaped}\\b`);
+                if (re.test(fullSentence)) return fullSentence.replace(re, issue.suggestion);
+                const idx = fullSentence.toLowerCase().indexOf(issue.original.toLowerCase());
+                if (idx < 0) return fullSentence;
+                return fullSentence.slice(0, idx) + issue.suggestion + fullSentence.slice(idx + issue.original.length);
+            };
+
+            const renderSpellPreview = (issue) => {
+                const fullSentence = sentenceForSpellIssue(issue);
+                if (!fullSentence) return null;
+                const updated = applySpellSuggestion(fullSentence, issue);
+                if (updated === fullSentence) {
+                    return <div style={{fontSize:12,color:'var(--text-muted)'}}>{fullSentence}</div>;
+                }
+                const originalIdx = fullSentence.toLowerCase().indexOf(issue.original.toLowerCase());
+                const updatedIdx = updated.toLowerCase().indexOf(issue.suggestion.toLowerCase());
+                return (
+                    <div style={{display:'grid',gap:4,marginTop:4}}>
+                        <div style={{fontSize:12,color:'var(--text-muted)',lineHeight:1.5}}>
+                            {originalIdx >= 0 ? (<>
+                                {fullSentence.slice(0, originalIdx)}
+                                <span style={{background:'rgba(248,81,73,0.18)',color:'var(--error)',textDecoration:'line-through',padding:'0 2px',borderRadius:3}}>{fullSentence.slice(originalIdx, originalIdx + issue.original.length)}</span>
+                                {fullSentence.slice(originalIdx + issue.original.length)}
+                            </>) : fullSentence}
+                        </div>
+                        <div style={{fontSize:12,color:'var(--text)',lineHeight:1.5}}>
+                            {updatedIdx >= 0 ? (<>
+                                {updated.slice(0, updatedIdx)}
+                                <span style={{background:'rgba(63,185,80,0.18)',color:'var(--success)',fontWeight:600,padding:'0 2px',borderRadius:3}}>{updated.slice(updatedIdx, updatedIdx + issue.suggestion.length)}</span>
+                                {updated.slice(updatedIdx + issue.suggestion.length)}
+                            </>) : updated}
+                        </div>
+                    </div>
+                );
+            };
+
+            const acceptSpellIssue = async (issue) => {
+                const fullSentence = sentenceForSpellIssue(issue);
+                const updated = applySpellSuggestion(fullSentence, issue).trim();
+                if (!fullSentence || !updated || updated === fullSentence) return;
+                await api(`/api/author/sentences/${issue.id}`, {
+                    method:'POST',
+                    body: JSON.stringify({sentence: updated}),
+                });
+                setSentences(prev => prev ? prev.map(s => s.id === issue.id ? {...s, sentence: updated} : s) : prev);
+                setSpellIssues(prev => {
+                    const arr = Array.isArray(prev) ? prev : (prev?.issues || []);
+                    const next = arr.filter((x, i) => !(x.id === issue.id && x.original === issue.original && x.suggestion === issue.suggestion && i === arr.indexOf(issue)));
+                    return Array.isArray(prev) ? next : {...prev, issues: next};
+                });
+            };
+
             const loadNext = () => {
                 api('/api/author/next').then(r => {
                     if (r.done) { setTerm(null); }
@@ -2842,7 +3011,11 @@
                     <div style={{display:'flex',gap:8,marginBottom:12}}>
                         <button className="btn btn-sm" disabled={spellLoading} onClick={async () => {
                             setSpellLoading(true); setSpellIssues(null);
-                            try { const r = await api('/api/author/spellcheck', {method:'POST'}); setSpellIssues(r.issues); }
+                            try {
+                                if (!sentences) await loadSentences();
+                                const r = await api('/api/author/spellcheck', {method:'POST'});
+                                setSpellIssues(r.issues);
+                            }
                             catch (e) { setError(e.message); }
                             setSpellLoading(false);
                         }}>{spellLoading ? 'Checking...' : 'Spellcheck'}</button>
@@ -2866,17 +3039,22 @@
                         <div className="card" style={{marginBottom:12}}>
                             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
                                 <h3 style={{margin:0}}>Spellcheck Results</h3>
+                                <span style={{fontSize:12,color:'var(--text-muted)'}}>{spellIssueList.length} issue{spellIssueList.length === 1 ? '' : 's'}</span>
                                 <button onClick={() => setSpellIssues(null)} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer'}}>&times;</button>
                             </div>
-                            {(Array.isArray(spellIssues) ? spellIssues : spellIssues?.issues || []).length === 0
+                            {spellIssueList.length === 0
                                 ? <div style={{color:'var(--success)',fontSize:13}}>No issues found!</div>
-                                : (Array.isArray(spellIssues) ? spellIssues : spellIssues?.issues || []).map((issue, i) => (
-                                    <div key={i} style={{padding:'4px 0',borderBottom:'1px solid rgba(255,255,255,0.04)',fontSize:12,display:'flex',gap:8,alignItems:'center'}}>
-                                        <span style={{color:'var(--text-muted)',minWidth:30}}>#{issue.id}</span>
-                                        <span style={{color:'var(--error)',textDecoration:'line-through'}}>{issue.original}</span>
-                                        <span style={{color:'var(--text-muted)'}}>&rarr;</span>
-                                        <span style={{color:'var(--success)',fontWeight:600}}>{issue.suggestion}</span>
-                                        <span style={{color:'var(--text-muted)',fontSize:11}}>{issue.reason}</span>
+                                : spellIssueList.map((issue, i) => (
+                                    <div key={`${issue.id}-${issue.original}-${issue.suggestion}-${i}`} style={{padding:'8px 0',borderBottom:'1px solid rgba(255,255,255,0.04)',fontSize:12}}>
+                                        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                                            <span style={{color:'var(--text-muted)',minWidth:30}}>#{issue.id}</span>
+                                            <span style={{color:'var(--error)',textDecoration:'line-through'}}>{issue.original}</span>
+                                            <span style={{color:'var(--text-muted)'}}>&rarr;</span>
+                                            <span style={{color:'var(--success)',fontWeight:600}}>{issue.suggestion}</span>
+                                            <span style={{color:'var(--text-muted)',fontSize:11,flex:1}}>{issue.reason}</span>
+                                            <button className="btn btn-sm btn-primary" onClick={() => acceptSpellIssue(issue)}>Accept</button>
+                                        </div>
+                                        {renderSpellPreview(issue)}
                                     </div>
                                 ))
                             }
@@ -3753,15 +3931,22 @@
             const [patience, setPatience] = useState(10);
             const [stepsPerEval, setStepsPerEval] = useState(500);
             const [totalExamples, setTotalExamples] = useState(12000);
-            const [errorRate, setErrorRate] = useState(50);
+            const [errorRate, setErrorRate] = useState(80);
             const [previewData, setPreviewData] = useState(null);
             const [previewLoading, setPreviewLoading] = useState(false);
+            const [templateCoverage, setTemplateCoverage] = useState(null);
+            const [templateDetail, setTemplateDetail] = useState(null);
+            const [templateDetailLoading, setTemplateDetailLoading] = useState(false);
             const [stopping, setStopping] = useState(false);
             const pollRef = useRef(null);
             const logRef = useRef(null);
 
-            const load = () => api('/api/pipeline/status').then(s => {
+            const load = () => Promise.all([
+                api('/api/pipeline/status'),
+                api('/api/pipeline/template-coverage').catch(() => null),
+            ]).then(([s, coverage]) => {
                 setStatus(s);
+                setTemplateCoverage(coverage);
                 if (s.running_job && !runningJob) setRunningJob(s.running_job);
             });
             useEffect(() => { load(); }, []);
@@ -3799,6 +3984,94 @@
             const paramRow = {display:'flex',gap:12,alignItems:'flex-start',marginBottom:12};
             const paramLabel = {fontSize:12,color:'var(--text-muted)',fontWeight:600,minWidth:90,paddingTop:6};
 
+            const trainMetrics = (() => {
+                const lines = (jobLog || '').split('\n');
+                const train = [];
+                const val = [];
+                let totalIters = null;
+                for (const line of lines) {
+                    const start = line.match(/Starting training: .*iters=(\d+)/);
+                    if (start) totalIters = parseInt(start[1], 10) || totalIters;
+                    const trainMatch = line.match(/^Iter\s+(\d+):\s+Train loss\s+([0-9.]+),\s+Learning Rate\s+([0-9.eE+-]+),\s+It\/sec\s+([0-9.]+),\s+Tokens\/sec\s+([0-9.]+),\s+Trained Tokens\s+([0-9,]+),\s+Peak mem\s+([0-9.]+)\s+GB/);
+                    if (trainMatch) {
+                        train.push({
+                            iter: parseInt(trainMatch[1], 10),
+                            loss: parseFloat(trainMatch[2]),
+                            lr: parseFloat(trainMatch[3]),
+                            itPerSec: parseFloat(trainMatch[4]),
+                            tokPerSec: parseFloat(trainMatch[5]),
+                            trainedTokens: parseInt(trainMatch[6].replace(/,/g, ''), 10),
+                            peakMemGb: parseFloat(trainMatch[7]),
+                        });
+                        continue;
+                    }
+                    const valMatch = line.match(/^Iter\s+(\d+):\s+Val loss\s+([0-9.]+),\s+Val took\s+([0-9.]+)s/);
+                    if (valMatch) {
+                        val.push({
+                            iter: parseInt(valMatch[1], 10),
+                            loss: parseFloat(valMatch[2]),
+                            tookSec: parseFloat(valMatch[3]),
+                        });
+                    }
+                }
+                const latestTrain = train[train.length - 1] || null;
+                const latestVal = val[val.length - 1] || null;
+                const bestVal = val.length ? val.reduce((best, p) => p.loss < best.loss ? p : best, val[0]) : null;
+                const currentIter = Math.max(latestTrain?.iter || 0, latestVal?.iter || 0);
+                return {train, val, latestTrain, latestVal, bestVal, totalIters, currentIter};
+            })();
+
+            const renderLossChart = () => {
+                const series = [...trainMetrics.train, ...trainMetrics.val];
+                if (!series.length) return null;
+                const width = 760;
+                const height = 220;
+                const pad = 24;
+                const maxIter = Math.max(trainMetrics.totalIters || 0, trainMetrics.currentIter || 1, 1);
+                const losses = series.map(p => p.loss).filter(Number.isFinite);
+                const minLoss = Math.min(...losses);
+                const maxLoss = Math.max(...losses);
+                const span = Math.max(maxLoss - minLoss, 0.02);
+                const x = iter => pad + (iter / maxIter) * (width - pad * 2);
+                const y = loss => height - pad - ((loss - minLoss) / span) * (height - pad * 2);
+                const pts = arr => arr.map(p => `${x(p.iter).toFixed(1)},${y(p.loss).toFixed(1)}`).join(' ');
+                const grid = [0, 0.25, 0.5, 0.75, 1].map(t => {
+                    const loss = minLoss + span * t;
+                    const yy = y(loss);
+                    return {loss, yy};
+                });
+                return (
+                    <div className="card" style={{marginBottom:16,padding:'12px 14px'}}>
+                        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8,flexWrap:'wrap'}}>
+                            <h3 style={{margin:0,flex:1}}>Live Training Curve</h3>
+                            <span style={{fontSize:12,color:'var(--text-muted)'}}>
+                                iter {trainMetrics.currentIter.toLocaleString()}{trainMetrics.totalIters ? ` / ${trainMetrics.totalIters.toLocaleString()}` : ''}
+                            </span>
+                        </div>
+                        <svg viewBox={`0 0 ${width} ${height}`} style={{width:'100%',height:'auto',display:'block',background:'rgba(255,255,255,0.02)',borderRadius:8,border:'1px solid var(--border)'}}>
+                            {grid.map((g, i) => (
+                                <g key={i}>
+                                    <line x1={pad} y1={g.yy} x2={width - pad} y2={g.yy} stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
+                                    <text x={8} y={g.yy + 4} fill="var(--text-muted)" fontSize="10">{g.loss.toFixed(3)}</text>
+                                </g>
+                            ))}
+                            <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+                            <line x1={pad} y1={pad} x2={pad} y2={height - pad} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+                            {trainMetrics.train.length > 1 && <polyline fill="none" stroke="rgba(88,166,255,0.95)" strokeWidth="2" points={pts(trainMetrics.train)} />}
+                            {trainMetrics.val.length > 0 && <polyline fill="none" stroke="rgba(126,231,135,0.95)" strokeWidth="2" points={pts(trainMetrics.val)} />}
+                            {trainMetrics.bestVal && (
+                                <circle cx={x(trainMetrics.bestVal.iter)} cy={y(trainMetrics.bestVal.loss)} r="3.5" fill="rgba(126,231,135,1)" />
+                            )}
+                        </svg>
+                        <div style={{display:'flex',gap:14,marginTop:8,flexWrap:'wrap',fontSize:12,color:'var(--text-muted)'}}>
+                            <span><span style={{display:'inline-block',width:10,height:10,background:'rgba(88,166,255,0.95)',borderRadius:2,marginRight:6,verticalAlign:'middle'}} />Train loss</span>
+                            <span><span style={{display:'inline-block',width:10,height:10,background:'rgba(126,231,135,0.95)',borderRadius:2,marginRight:6,verticalAlign:'middle'}} />Val loss</span>
+                            {trainMetrics.bestVal && <span>Best val at iter {trainMetrics.bestVal.iter.toLocaleString()}</span>}
+                        </div>
+                    </div>
+                );
+            };
+
             const rt = runningJob?.job_type;
             const prepareRunning = rt === 'prepare';
 
@@ -3831,8 +4104,8 @@
                             </div>
                             <div>
                                 <label style={{fontSize:12,color:'var(--text-muted)',display:'block',marginBottom:2}}>Error rate %</label>
-                                <input type="number" value={errorRate} onChange={e => setErrorRate(Math.min(100,Math.max(0,parseInt(e.target.value)||50)))} disabled={prepareRunning} min="0" max="100" style={{...inputStyle,width:60}} />
-                                <div style={{fontSize:10,color:'var(--text-muted)',marginTop:2}}>% with real ASR errors. Rest are identity.</div>
+                                <input type="number" value={errorRate} onChange={e => setErrorRate(Math.min(100,Math.max(0,parseInt(e.target.value)||80)))} disabled={prepareRunning} min="0" max="100" style={{...inputStyle,width:60}} />
+                                <div style={{fontSize:10,color:'var(--text-muted)',marginTop:2}}>% with real ASR errors. Default is 80 so the model is not overtrained to keep bad ASR unchanged.</div>
                             </div>
                             <div style={{flex:1,display:'flex',alignItems:'flex-end',justifyContent:'flex-end',paddingTop:16}}>
                                 {prepareRunning
@@ -3844,6 +4117,97 @@
                         {status.corpus_exists && !prepareRunning && (
                             <div style={{fontSize:12,color:'var(--text-muted)',padding:'6px 0',borderTop:'1px solid var(--border)',marginTop:4}}>
                                 {Math.round(totalExamples * errorRate / 100).toLocaleString()} error + {Math.round(totalExamples * (100 - errorRate) / 100).toLocaleString()} identity = {totalExamples.toLocaleString()} total. 90% train / 10% valid.
+                            </div>
+                        )}
+                        {templateCoverage && (
+                            <div style={{marginTop:12,borderTop:'1px solid var(--border)',paddingTop:12}}>
+                                <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8,flexWrap:'wrap'}}>
+                                    <b style={{fontSize:13}}>Template Coverage</b>
+                                    <span style={{fontSize:11,color:'var(--text-muted)'}}>
+                                        {templateCoverage.ready_terms?.toLocaleString() || 0} / {templateCoverage.total_terms?.toLocaleString() || 0} terms at target {templateCoverage.target}
+                                    </span>
+                                </div>
+                                <div style={{display:'grid',gap:6,maxHeight:220,overflow:'auto'}}>
+                                    {(templateCoverage.terms || []).slice(0, 24).map((row, i) => {
+                                        const ratio = Math.max(0, Math.min(1, row.coverage_ratio || 0));
+                                        return (
+                                            <div key={row.term} style={{display:'grid',gridTemplateColumns:'160px 1fr auto auto',gap:10,alignItems:'center',fontSize:12,padding:'4px 0',borderTop:i?'1px solid rgba(255,255,255,0.04)':'none'}}>
+                                                <div>
+                                                    <div style={{fontWeight:600}}>{row.term}</div>
+                                                    {row.description && <div style={{fontSize:10,color:'var(--text-muted)',marginTop:2}}>{row.description}</div>}
+                                                </div>
+                                                <div>
+                                                    <div style={{height:8,borderRadius:999,background:'rgba(255,255,255,0.08)',overflow:'hidden'}}>
+                                                        <div style={{width:`${(ratio*100).toFixed(1)}%`,height:'100%',background: ratio >= 1 ? 'var(--success)' : 'var(--accent)'}} />
+                                                    </div>
+                                                    <div style={{display:'flex',gap:10,marginTop:4,fontSize:10,color:'var(--text-muted)'}}>
+                                                        <span>{row.authored_count} authored</span>
+                                                        <span>{row.template_count} cached</span>
+                                                        <span>{row.total_count} total</span>
+                                                    </div>
+                                                </div>
+                                                <div style={{fontSize:11,color:'var(--text-muted)',whiteSpace:'nowrap'}}>
+                                                    {row.total_count}/{row.target}
+                                                </div>
+                                                <button
+                                                    className="btn btn-sm"
+                                                    style={{padding:'3px 8px',fontSize:11}}
+                                                    onClick={async () => {
+                                                        setTemplateDetailLoading(true);
+                                                        try {
+                                                            setTemplateDetail(await api(`/api/pipeline/template-coverage/${encodeURIComponent(row.term)}`));
+                                                        } catch (err) {
+                                                            setError(err.message);
+                                                        }
+                                                        setTemplateDetailLoading(false);
+                                                    }}
+                                                >
+                                                    View
+                                                </button>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                                {(templateCoverage.total_terms || 0) > 24 && (
+                                    <div style={{fontSize:11,color:'var(--text-muted)',marginTop:8}}>
+                                        Showing 24 least-covered terms first.
+                                    </div>
+                                )}
+                                {templateDetailLoading && (
+                                    <div style={{fontSize:11,color:'var(--text-muted)',marginTop:8}}>Loading sentences...</div>
+                                )}
+                                {templateDetail && (
+                                    <div style={{marginTop:12,paddingTop:12,borderTop:'1px solid var(--border)'}}>
+                                        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8}}>
+                                            <b style={{fontSize:13}}>Sentences for {templateDetail.term}</b>
+                                            <span style={{fontSize:11,color:'var(--text-muted)'}}>
+                                                {templateDetail.authored?.length || 0} authored, {templateDetail.cached?.length || 0} cached
+                                            </span>
+                                            <div style={{flex:1}} />
+                                            <button onClick={() => setTemplateDetail(null)} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:14}}>&times;</button>
+                                        </div>
+                                        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                                            <div>
+                                                <div style={{fontSize:11,fontWeight:600,color:'var(--accent)',marginBottom:4}}>Authored</div>
+                                                <div style={{maxHeight:220,overflow:'auto',fontSize:11}}>
+                                                    {(templateDetail.authored || []).map((s, i) => (
+                                                        <div key={i} style={{padding:'4px 8px',background:i%2?'transparent':'rgba(255,255,255,0.02)',lineHeight:1.5}}>{s}</div>
+                                                    ))}
+                                                    {(!templateDetail.authored || templateDetail.authored.length === 0) && <div style={{color:'var(--text-muted)'}}>No authored sentences.</div>}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div style={{fontSize:11,fontWeight:600,color:'var(--success)',marginBottom:4}}>Cached Templates</div>
+                                                <div style={{maxHeight:220,overflow:'auto',fontSize:11}}>
+                                                    {(templateDetail.cached || []).map((s, i) => (
+                                                        <div key={i} style={{padding:'4px 8px',background:i%2?'transparent':'rgba(255,255,255,0.02)',lineHeight:1.5}}>{s}</div>
+                                                    ))}
+                                                    {(!templateDetail.cached || templateDetail.cached.length === 0) && <div style={{color:'var(--text-muted)'}}>No cached templates yet.</div>}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
                         {jobLog && prepareRunning && <pre ref={logRef} className="stage-log" style={{marginTop:10,maxHeight:150}}>{jobLog}</pre>}
@@ -3887,6 +4251,18 @@
                             {status.last_train?.val_loss && <div className="stat-card"><div className="value">{Number(status.last_train.val_loss).toFixed(4)}</div><div className="label">Val Loss</div></div>}
                         </div>
                     )}
+
+                    {(trainMetrics.latestTrain || trainMetrics.latestVal) && (
+                        <div className="stats-grid" style={{marginBottom:16}}>
+                            {trainMetrics.latestTrain && <div className="stat-card"><div className="value" style={{color:'var(--accent)'}}>{trainMetrics.latestTrain.loss.toFixed(3)}</div><div className="label">Latest Train</div></div>}
+                            {trainMetrics.latestVal && <div className="stat-card"><div className="value" style={{color:'var(--success)'}}>{trainMetrics.latestVal.loss.toFixed(3)}</div><div className="label">Latest Val</div></div>}
+                            {trainMetrics.bestVal && <div className="stat-card"><div className="value" style={{color:'var(--success)'}}>{trainMetrics.bestVal.loss.toFixed(3)}</div><div className="label">Best Val</div></div>}
+                            {trainMetrics.latestTrain?.peakMemGb && <div className="stat-card"><div className="value">{trainMetrics.latestTrain.peakMemGb.toFixed(2)}GB</div><div className="label">Peak Mem</div></div>}
+                            {trainMetrics.latestTrain?.tokPerSec && <div className="stat-card"><div className="value">{Math.round(trainMetrics.latestTrain.tokPerSec)}</div><div className="label">Tok/sec</div></div>}
+                        </div>
+                    )}
+
+                    {renderLossChart()}
 
                     {trainExamples > 0 && (
                         <div className="card" style={{marginBottom:16,padding:'10px 14px',background:'rgba(255,255,255,0.03)'}}>
@@ -4345,9 +4721,9 @@
                 setCorrecting(true);
                 try {
                     const res = await api('/api/correct', {
-                        method: 'POST', body: JSON.stringify({parakeet, qwen}),
+                        method: 'POST', body: JSON.stringify({parakeet: '', qwen}),
                     });
-                    setResult({parakeet, qwen, corrected: res.corrected});
+                    setResult({parakeet, qwen, corrected: res.corrected, correctedFrom: 'qwen'});
                 } catch (e) { setResult({parakeet, qwen, corrected: `(error: ${e.message})`}); }
                 setCorrecting(false);
             };
@@ -4392,8 +4768,7 @@
 
             const manualCorrect = () => {
                 if (!input.trim()) return;
-                // Treat the input as both parakeet and qwen (simulating identical ASR output)
-                correct(input.trim(), input.trim());
+                correct('', input.trim());
             };
 
             return (
@@ -4410,7 +4785,7 @@
                         </div>
                     </div>
                     <div className="stage-desc">
-                        Speak or type text to see the correction model in action. Records your voice, runs both ASR models, then corrects the output.
+                        Speak or type text to see the correction model in action. Records your voice, runs both ASR models, then applies the correction model to the Qwen transcript.
                     </div>
                     <div className="stage-controls" style={{flexDirection: 'column', alignItems: 'stretch', gap: 12}}>
                         <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
@@ -4428,13 +4803,13 @@
                         {result && (
                             <div style={{padding: '12px 16px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: '1px solid rgba(88,166,255,0.1)', fontSize: 13, lineHeight: 1.8}}>
                                 {result.parakeet !== result.qwen ? (<>
-                                    <div><span style={{color: '#7ee787', opacity: 0.6, fontSize: 11, letterSpacing: '0.5px', textTransform: 'uppercase'}}>Parakeet</span> {result.parakeet}</div>
-                                    <div><span style={{color: '#58a6ff', opacity: 0.6, fontSize: 11, letterSpacing: '0.5px', textTransform: 'uppercase'}}>Qwen</span> {result.qwen}</div>
+                                    <div><span style={{color: '#7ee787', opacity: 0.6, fontSize: 11, letterSpacing: '0.5px', textTransform: 'uppercase'}}>Parakeet raw</span> {result.parakeet}</div>
+                                    <div><span style={{color: '#58a6ff', opacity: 0.6, fontSize: 11, letterSpacing: '0.5px', textTransform: 'uppercase'}}>Qwen raw</span> {result.qwen}</div>
                                 </>) : (
-                                    <div><span style={{opacity: 0.6, fontSize: 11, letterSpacing: '0.5px', textTransform: 'uppercase'}}>Input</span> {result.parakeet}</div>
+                                    <div><span style={{opacity: 0.6, fontSize: 11, letterSpacing: '0.5px', textTransform: 'uppercase'}}>Qwen input</span> {result.qwen}</div>
                                 )}
                                 <div style={{marginTop: 4, paddingTop: 4, borderTop: '1px solid rgba(88,166,255,0.1)'}}>
-                                    <span style={{color: 'var(--success)', fontSize: 11, letterSpacing: '0.5px', textTransform: 'uppercase'}}>Corrected</span>{' '}
+                                    <span style={{color: 'var(--success)', fontSize: 11, letterSpacing: '0.5px', textTransform: 'uppercase'}}>Corrected qwen</span>{' '}
                                     <span style={{fontWeight: 600}}>{result.corrected}</span>
                                 </div>
                             </div>

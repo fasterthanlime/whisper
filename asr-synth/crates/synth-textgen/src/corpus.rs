@@ -4,10 +4,18 @@ use std::path::Path;
 
 /// Returns true if a term is plausibly a dictatable word (not junk).
 pub fn is_valid_vocab_term(term: &str) -> bool {
-    if term.len() < 2 { return false; }
-    if term.contains('/') || term.contains('=') || term.contains('_') { return false; }
-    if term.chars().any(|c| !c.is_ascii()) { return false; }
-    if term.starts_with(|c: char| c.is_ascii_digit()) { return false; }
+    if term.len() < 2 {
+        return false;
+    }
+    if term.contains('/') || term.contains('=') || term.contains('_') {
+        return false;
+    }
+    if term.chars().any(|c| !c.is_ascii()) {
+        return false;
+    }
+    if term.starts_with(|c: char| c.is_ascii_digit()) {
+        return false;
+    }
     true
 }
 
@@ -93,8 +101,7 @@ fn extract_from_file(path: &Path, terms: &mut HashSet<String>) {
             // Prose text — look for CamelCase identifiers
             Event::Text(text) if !in_code_block => {
                 for word in text.split_whitespace() {
-                    let clean =
-                        word.trim_matches(|c: char| !c.is_alphanumeric());
+                    let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
                     if is_interesting_term(clean) {
                         terms.insert(clean.to_string());
                     }
@@ -159,7 +166,12 @@ fn is_interesting_term(s: &str) -> bool {
     }
 
     // Skip CLI flags (--foo, --foo-bar)
-    if s.starts_with("--") || s.starts_with('-') && s.chars().nth(1).is_some_and(|c| c.is_alphabetic()) && s.chars().all(|c| c.is_alphanumeric() || c == '-') && s.chars().filter(|c| c.is_uppercase()).count() == 0 {
+    if s.starts_with("--")
+        || s.starts_with('-')
+            && s.chars().nth(1).is_some_and(|c| c.is_alphabetic())
+            && s.chars().all(|c| c.is_alphanumeric() || c == '-')
+            && s.chars().filter(|c| c.is_uppercase()).count() == 0
+    {
         return false;
     }
 
@@ -191,7 +203,11 @@ fn is_interesting_term(s: &str) -> bool {
 pub fn to_spoken(term: &str) -> String {
     // Check overrides first — this is the primary mechanism
     if let Some(&spoken) = PRONUNCIATION_OVERRIDES.iter().find_map(|(k, v)| {
-        if k.eq_ignore_ascii_case(term) { Some(v) } else { None }
+        if k.eq_ignore_ascii_case(term) {
+            Some(v)
+        } else {
+            None
+        }
     }) {
         return spoken.to_string();
     }
@@ -247,32 +263,62 @@ fn number_to_words(num: &str) -> String {
 
 /// Manual pronunciation overrides for terms where the spelling genuinely
 /// doesn't match the pronunciation. Everything else gets added via the dashboard.
-pub const PRONUNCIATION_OVERRIDES: &[(&str, &str)] = &[
-    ("serde", "sir day"),
-    ("SQLite", "sequel light"),
-];
+pub const PRONUNCIATION_OVERRIDES: &[(&str, &str)] =
+    &[("serde", "sir day"), ("SQLite", "sequel light")];
 
 const STOP_WORDS: &[&str] = &[
-    "the", "and", "for", "with", "that", "this", "from", "are", "was", "were",
-    "been", "have", "has", "had", "not", "but", "can", "will", "all", "each",
-    "which", "their", "there", "when", "would", "make", "like", "just", "over",
-    "such", "take", "also", "into", "than", "them", "very", "some", "could",
-    "they", "other", "then", "its", "about", "use", "how", "any", "these",
-    "may", "should", "does", "more", "most", "only", "what", "where", "why",
-    "here", "still", "both", "between", "own", "under", "never", "being",
+    "the", "and", "for", "with", "that", "this", "from", "are", "was", "were", "been", "have",
+    "has", "had", "not", "but", "can", "will", "all", "each", "which", "their", "there", "when",
+    "would", "make", "like", "just", "over", "such", "take", "also", "into", "than", "them",
+    "very", "some", "could", "they", "other", "then", "its", "about", "use", "how", "any", "these",
+    "may", "should", "does", "more", "most", "only", "what", "where", "why", "here", "still",
+    "both", "between", "own", "under", "never", "being",
 ];
 
 /// Well-known technical terms that are commonly misrecognized by ASR
 const SEED_VOCAB: &[&str] = &[
     // Rust ecosystem
-    "serde", "tokio", "axum", "hyper", "candle", "rubato", "rustfft",
-    "wgpu", "naga", "ratatui", "clap", "anyhow", "thiserror",
-    "tracing", "rayon", "crossbeam", "mio", "reqwest", "ureq",
+    "serde",
+    "tokio",
+    "axum",
+    "hyper",
+    "candle",
+    "rubato",
+    "rustfft",
+    "wgpu",
+    "naga",
+    "ratatui",
+    "clap",
+    "anyhow",
+    "thiserror",
+    "tracing",
+    "rayon",
+    "crossbeam",
+    "mio",
+    "reqwest",
+    "ureq",
     // ML/AI terms
-    "GGUF", "GGML", "safetensors", "ONNX", "MLX", "LoRA", "QLoRA",
+    "GGUF",
+    "GGML",
+    "safetensors",
+    "ONNX",
+    "MLX",
+    "LoRA",
+    "QLoRA",
     // Tools & services
-    "HuggingFace", "GitHub", "Xcode", "Homebrew", "ffmpeg",
+    "HuggingFace",
+    "GitHub",
+    "Xcode",
+    "Homebrew",
+    "ffmpeg",
     // General tech
-    "WebSocket", "gRPC", "protobuf", "SQLite", "PostgreSQL",
-    "OAuth", "JWT", "SHA-256", "Blake3",
+    "WebSocket",
+    "gRPC",
+    "protobuf",
+    "SQLite",
+    "PostgreSQL",
+    "OAuth",
+    "JWT",
+    "SHA-256",
+    "Blake3",
 ];

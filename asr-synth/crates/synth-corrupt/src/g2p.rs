@@ -49,7 +49,9 @@ impl G2p {
             .to_string();
 
         // 1. Check pronunciation overrides first (highest priority)
-        if let Some(phonemes) = self.overrides.get(word)
+        if let Some(phonemes) = self
+            .overrides
+            .get(word)
             .or_else(|| self.overrides.get(&upper))
             .or_else(|| self.overrides.get(&word.to_lowercase()))
         {
@@ -205,7 +207,10 @@ fn crude_g2p(word: &str) -> Vec<String> {
             'U' => phonemes.push("AH".into()),
             'V' => phonemes.push("V".into()),
             'W' => phonemes.push("W".into()),
-            'X' => { phonemes.push("K".into()); phonemes.push("S".into()); }
+            'X' => {
+                phonemes.push("K".into());
+                phonemes.push("S".into());
+            }
             'Y' => phonemes.push("Y".into()),
             'Z' => phonemes.push("Z".into()),
             _ => {}

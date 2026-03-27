@@ -4657,6 +4657,8 @@ dependencies = [
  "futures",
  "hound",
  "mlx-rs",
+ "ogg",
+ "opus",
  "parakeet-rs",
  "pocket-tts",
  "qwen3-asr",

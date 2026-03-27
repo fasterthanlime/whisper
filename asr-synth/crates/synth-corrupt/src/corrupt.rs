@@ -18,7 +18,10 @@ impl PhonemeIndex {
         let mut all = Vec::with_capacity(dict.len());
 
         for (word, phonemes) in dict {
-            let key = (phonemes.len(), phonemes.first().cloned().unwrap_or_default());
+            let key = (
+                phonemes.len(),
+                phonemes.first().cloned().unwrap_or_default(),
+            );
             buckets
                 .entry(key)
                 .or_default()
@@ -156,9 +159,9 @@ pub fn phoneme_edit_distance(a: &[String], b: &[String]) -> usize {
     for i in 1..=m {
         for j in 1..=n {
             let sub_cost = (substitution_cost(&a[i - 1], &b[j - 1]) * 100.0) as u32;
-            dp[i * (n + 1) + j] = (dp[(i - 1) * (n + 1) + j] + 100)        // deletion
-                .min(dp[i * (n + 1) + (j - 1)] + 100)                        // insertion
-                .min(dp[(i - 1) * (n + 1) + (j - 1)] + sub_cost);            // substitution
+            dp[i * (n + 1) + j] = (dp[(i - 1) * (n + 1) + j] + 100) // deletion
+                .min(dp[i * (n + 1) + (j - 1)] + 100) // insertion
+                .min(dp[(i - 1) * (n + 1) + (j - 1)] + sub_cost); // substitution
         }
     }
     dp[m * (n + 1) + n] as usize

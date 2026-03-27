@@ -11,13 +11,13 @@ echo "=== Syncing to souffle ==="
 printf 'y\n' | bash ./sync-to-souffle.sh
 
 echo "=== Rebuilding on souffle ==="
-ssh "$REMOTE" "cd $REMOTE_ROOT && cargo build --release -p synth-dashboard"
+ssh "$REMOTE" "cd $REMOTE_ROOT && direnv exec .. cargo build --release -p synth-dashboard"
 
 echo "=== Restarting dashboard in tmux ==="
 ssh "$REMOTE" "pkill -f './target/release/synth-dashboard --voice voices/amos2_short.wav --host $TTS_HOST' 2>/dev/null || true"
 ssh "$REMOTE" "tmux kill-session -t $TMUX_SESSION 2>/dev/null || true"
-ssh "$REMOTE" "tmux new-session -d -s $TMUX_SESSION 'cd $REMOTE_ROOT && exec ./target/release/synth-dashboard --voice voices/amos2_short.wav --host $TTS_HOST'"
-ssh "$REMOTE" "sleep 2; lsof -nP -iTCP:$TTS_PORT -sTCP:LISTEN"
+ssh "$REMOTE" "tmux new-session -d -s $TMUX_SESSION 'cd $REMOTE_ROOT && exec direnv exec .. ./target/release/synth-dashboard --voice voices/amos2_short.wav --host $TTS_HOST'"
+ssh "$REMOTE" "for i in {1..20}; do if lsof -nP -iTCP:$TTS_PORT -sTCP:LISTEN >/dev/null 2>&1 && curl -fsS http://$TTS_HOST:$TTS_PORT/ >/dev/null 2>&1; then exit 0; fi; sleep 1; done; tmux capture-pane -pt $TMUX_SESSION | tail -40; exit 1"
 
 echo "=== Ensuring HTTPS proxy ==="
 ssh "$REMOTE" "/Applications/Tailscale.app/Contents/MacOS/Tailscale serve --bg --yes --https=443 http://$TTS_HOST:$TTS_PORT"

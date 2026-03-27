@@ -21,7 +21,10 @@ fn transcribe_wav(parakeet: &mut parakeet_rs::ParakeetTDT, path: &str) -> Result
         hound::SampleFormat::Float => reader.into_samples::<f32>().map(|s| s.unwrap()).collect(),
         hound::SampleFormat::Int => {
             let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
-            reader.into_samples::<i32>().map(|s| s.unwrap() as f32 / max).collect()
+            reader
+                .into_samples::<i32>()
+                .map(|s| s.unwrap() as f32 / max)
+                .collect()
         }
     };
 
@@ -58,7 +61,10 @@ fn main() -> Result<()> {
                     stdout.flush()?;
                 }
                 Err(e) => {
-                    serde_json::to_writer(&mut stdout, &serde_json::json!({"error": e.to_string()}))?;
+                    serde_json::to_writer(
+                        &mut stdout,
+                        &serde_json::json!({"error": e.to_string()}),
+                    )?;
                     stdout.write_all(b"\n")?;
                     stdout.flush()?;
                 }

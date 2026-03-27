@@ -13,7 +13,10 @@ struct Args {
     parakeet_model: String,
 
     /// Qwen3 ASR model directory
-    #[arg(long, default_value = "~/Library/Caches/qwen3-asr/Alkd--qwen3-asr-gguf--qwen3_asr_1_7b_q8_0_gguf")]
+    #[arg(
+        long,
+        default_value = "~/Library/Caches/qwen3-asr/Alkd--qwen3-asr-gguf--qwen3_asr_1_7b_q8_0_gguf"
+    )]
     qwen_model: String,
 
     /// Pre-generated sentences JSONL (if provided, skips textgen)

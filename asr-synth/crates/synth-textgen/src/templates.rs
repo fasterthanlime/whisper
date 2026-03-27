@@ -29,7 +29,8 @@ impl Default for TextSources {
             history_files: vec![
                 shellexpand::tilde("~/.claude/history.jsonl").to_string(),
                 shellexpand::tilde("~/.codex/history.jsonl").to_string(),
-                shellexpand::tilde("~/Library/Application Support/hark/transcription_log.jsonl").to_string(),
+                shellexpand::tilde("~/Library/Application Support/hark/transcription_log.jsonl")
+                    .to_string(),
             ],
         }
     }
@@ -47,10 +48,8 @@ pub fn generate(
     let sources = sources.unwrap_or(&default_sources);
 
     // Build a lookup: lowercase term → VocabEntry
-    let term_lookup: HashMap<String, &VocabEntry> = vocab
-        .iter()
-        .map(|v| (v.term.to_lowercase(), v))
-        .collect();
+    let term_lookup: HashMap<String, &VocabEntry> =
+        vocab.iter().map(|v| (v.term.to_lowercase(), v)).collect();
 
     // Collect all candidate sentences from real sources
     let mut candidates: Vec<(String, Vec<String>)> = Vec::new(); // (sentence, matched_terms)
@@ -147,11 +146,18 @@ fn extract_blog_sentences(
 ) {
     let mut md_files = Vec::new();
     walk_md(Path::new(blog_dir), &mut md_files);
-    eprintln!("[textgen] scanning {} markdown files in {blog_dir}", md_files.len());
+    eprintln!(
+        "[textgen] scanning {} markdown files in {blog_dir}",
+        md_files.len()
+    );
 
     for (fi, path) in md_files.iter().enumerate() {
         if fi > 0 && fi % 100 == 0 {
-            eprintln!("[textgen] {fi}/{} files, {} candidates so far", md_files.len(), out.len());
+            eprintln!(
+                "[textgen] {fi}/{} files, {} candidates so far",
+                md_files.len(),
+                out.len()
+            );
         }
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
@@ -224,8 +230,14 @@ fn extract_history_sentences(
     let tail = if content.len() as u64 > TAIL_BYTES {
         let skip = content.len() - TAIL_BYTES as usize;
         // Find the first newline after the skip point to avoid partial lines
-        let start = content[skip..].find('\n').map(|i| skip + i + 1).unwrap_or(skip);
-        eprintln!("[textgen] large file ({} bytes), scanning tail from byte {start}", content.len());
+        let start = content[skip..]
+            .find('\n')
+            .map(|i| skip + i + 1)
+            .unwrap_or(skip);
+        eprintln!(
+            "[textgen] large file ({} bytes), scanning tail from byte {start}",
+            content.len()
+        );
         &content[start..]
     } else {
         &content
@@ -236,7 +248,10 @@ fn extract_history_sentences(
 
     for (li, line) in tail.lines().enumerate() {
         if li > 0 && li % 10000 == 0 {
-            eprintln!("[textgen] {li}/{line_count} lines, {} candidates so far", out.len());
+            eprintln!(
+                "[textgen] {li}/{line_count} lines, {} candidates so far",
+                out.len()
+            );
         }
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
@@ -278,7 +293,11 @@ pub fn extract_sentences(
         .into_iter()
         .map(|(text, terms)| {
             let spoken = build_spoken_form(&text, &terms, &vocab, Some(overrides));
-            GeneratedSentence { text, spoken, vocab_terms: terms }
+            GeneratedSentence {
+                text,
+                spoken,
+                vocab_terms: terms,
+            }
         })
         .collect()
 }
@@ -287,14 +306,14 @@ pub fn extract_sentences(
 /// and add matching ones to the output.
 /// Normalize fancy/smart punctuation to plain ASCII equivalents.
 fn normalize_punctuation(s: &str) -> String {
-    s.replace('\u{2018}', "'")  // left single quote
-     .replace('\u{2019}', "'")  // right single quote
-     .replace('\u{201C}', "\"") // left double quote
-     .replace('\u{201D}', "\"") // right double quote
-     .replace('\u{2013}', "-")  // en dash
-     .replace('\u{2014}', " - ") // em dash
-     .replace('\u{2026}', "...") // ellipsis
-     .replace('\u{00A0}', " ")  // non-breaking space
+    s.replace('\u{2018}', "'") // left single quote
+        .replace('\u{2019}', "'") // right single quote
+        .replace('\u{201C}', "\"") // left double quote
+        .replace('\u{201D}', "\"") // right double quote
+        .replace('\u{2013}', "-") // en dash
+        .replace('\u{2014}', " - ") // em dash
+        .replace('\u{2026}', "...") // ellipsis
+        .replace('\u{00A0}', " ") // non-breaking space
 }
 
 fn flush_paragraph(
@@ -322,14 +341,17 @@ fn flush_paragraph(
         {
             let lower = sentence.to_lowercase();
             const BANNED_WORDS: &[&str] = &[
-                "fuck", "shit", "jesus", "christ", "damn",
-                "idk", "omg", "lol", "lmao", "rofl", "wtf", "stfu", "smh",
-                "tbh", "imo", "imho", "afaik", "fwiw",
+                "fuck", "shit", "jesus", "christ", "damn", "idk", "omg", "lol", "lmao", "rofl",
+                "wtf", "stfu", "smh", "tbh", "imo", "imho", "afaik", "fwiw",
             ];
             let has_banned = BANNED_WORDS.iter().any(|w| {
-                lower.split(|c: char| !c.is_alphanumeric()).any(|tok| tok == *w)
+                lower
+                    .split(|c: char| !c.is_alphanumeric())
+                    .any(|tok| tok == *w)
             });
-            if has_banned { continue; }
+            if has_banned {
+                continue;
+            }
         }
 
         // Find vocab terms in this sentence
@@ -338,8 +360,7 @@ fn flush_paragraph(
         for (term_lower, entry) in term_lookup {
             // Word-boundary-ish match: check the term appears and isn't part of a larger word
             if let Some(pos) = lower.find(term_lower.as_str()) {
-                let before_ok = pos == 0
-                    || !sentence.as_bytes()[pos - 1].is_ascii_alphanumeric();
+                let before_ok = pos == 0 || !sentence.as_bytes()[pos - 1].is_ascii_alphanumeric();
                 let after_pos = pos + term_lower.len();
                 let after_ok = after_pos >= sentence.len()
                     || !sentence.as_bytes()[after_pos].is_ascii_alphanumeric();

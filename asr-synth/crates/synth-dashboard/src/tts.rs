@@ -1,28 +1,40 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use ogg::{PacketReader, PacketWriteEndInfo, PacketWriter};
+use opus::{Application, Bitrate, Channels, Decoder as OpusDecoder, Encoder as OpusEncoder};
 use std::sync::Mutex;
+
+const OPUS_SAMPLE_RATE: u32 = 48_000;
+const OPUS_FRAME_SAMPLES: usize = 960; // 20ms @ 48kHz
+const OPUS_MAX_PACKET_BYTES: usize = 4_000;
+const OPUS_BITRATE_BPS: i32 = 96_000;
 
 /// Encode f32 mono samples as Ogg Opus. Returns the Ogg container bytes.
 pub async fn encode_ogg_opus(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>> {
-    use crime::{AudioFormat, AudioStream, OggContainer, OpusApplication, OpusBitrate};
-    use futures::StreamExt;
+    let mono_48k = if sample_rate == OPUS_SAMPLE_RATE {
+        samples.to_vec()
+    } else {
+        resample(samples, sample_rate, OPUS_SAMPLE_RATE)?
+    };
+    encode_ogg_opus_with_libopus(&mono_48k)
+}
 
-    let stream = futures::stream::iter(samples.iter().copied());
-    let audio = AudioStream::new(sample_rate, stream);
-    let format = AudioFormat::Ogg(OggContainer::Opus(
-        OpusApplication::Voip,
-        OpusBitrate::Bits(24000),
-    ));
-    let encoded = audio.commit(sample_rate, 1.0, format).await;
-    let bytes: Vec<u8> = encoded.collect().await;
-    Ok(bytes)
+/// Decode an Ogg Opus payload into mono f32 samples.
+pub fn decode_ogg_opus_mono(bytes: &[u8]) -> Result<(Vec<f32>, u32)> {
+    decode_ogg_opus_with_libopus(bytes)
 }
 
 /// Resample f32 mono samples to 16kHz. Returns samples unchanged if already 16kHz.
 pub fn resample_to_16k(samples: &[f32], from_rate: u32) -> Result<Vec<f32>> {
-    if from_rate == 16000 {
+    resample(samples, from_rate, 16_000)
+}
+
+fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32>> {
+    if from_rate == to_rate {
         return Ok(samples.to_vec());
     }
-    use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
+    use rubato::{
+        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    };
     let params = SincInterpolationParameters {
         sinc_len: 256,
         f_cutoff: 0.95,
@@ -30,11 +42,153 @@ pub fn resample_to_16k(samples: &[f32], from_rate: u32) -> Result<Vec<f32>> {
         oversampling_factor: 256,
         window: WindowFunction::BlackmanHarris2,
     };
-    let mut resampler = SincFixedIn::<f32>::new(
-        16000.0 / from_rate as f64, 2.0, params, samples.len(), 1,
-    )?;
+    let mut resampler =
+        SincFixedIn::<f32>::new(to_rate as f64 / from_rate as f64, 2.0, params, samples.len(), 1)?;
     let output = resampler.process(&[samples], None)?;
     Ok(output.into_iter().next().unwrap_or_default())
+}
+
+fn encode_ogg_opus_with_libopus(samples: &[f32]) -> Result<Vec<u8>> {
+    let mut encoder = OpusEncoder::new(OPUS_SAMPLE_RATE, Channels::Mono, Application::Audio)
+        .map_err(|e| anyhow!("Opus encoder init: {e}"))?;
+    encoder
+        .set_bitrate(Bitrate::Bits(OPUS_BITRATE_BPS))
+        .map_err(|e| anyhow!("Opus set bitrate: {e}"))?;
+    encoder
+        .set_vbr(true)
+        .map_err(|e| anyhow!("Opus set vbr: {e}"))?;
+    encoder
+        .set_vbr_constraint(false)
+        .map_err(|e| anyhow!("Opus set unconstrained vbr: {e}"))?;
+    encoder
+        .set_complexity(10)
+        .map_err(|e| anyhow!("Opus set complexity: {e}"))?;
+
+    let mut output = Vec::new();
+    let mut writer = PacketWriter::new(&mut output);
+    let serial = rand::random::<u32>().max(1);
+    let pre_skip = encoder
+        .get_lookahead()
+        .map_err(|e| anyhow!("Opus get lookahead: {e}"))? as u16;
+
+    writer.write_packet(
+        build_opus_head(pre_skip, OPUS_SAMPLE_RATE, 1),
+        serial,
+        PacketWriteEndInfo::EndPage,
+        0,
+    )?;
+    writer.write_packet(
+        build_opus_tags(),
+        serial,
+        PacketWriteEndInfo::EndPage,
+        0,
+    )?;
+
+    let total_samples = samples.len();
+    let mut emitted_samples = 0usize;
+    let mut packet = vec![0u8; OPUS_MAX_PACKET_BYTES];
+    while emitted_samples < total_samples {
+        let end = (emitted_samples + OPUS_FRAME_SAMPLES).min(total_samples);
+        let mut frame = [0.0f32; OPUS_FRAME_SAMPLES];
+        let frame_len = end - emitted_samples;
+        frame[..frame_len].copy_from_slice(&samples[emitted_samples..end]);
+        let encoded_len = encoder
+            .encode_float(&frame, &mut packet)
+            .map_err(|e| anyhow!("Opus encode: {e}"))?;
+        emitted_samples = end;
+        let granule_position = (pre_skip as u64) + (emitted_samples as u64);
+        let end_info = if emitted_samples >= total_samples {
+            PacketWriteEndInfo::EndStream
+        } else {
+            PacketWriteEndInfo::NormalPacket
+        };
+        writer.write_packet(
+            packet[..encoded_len].to_vec(),
+            serial,
+            end_info,
+            granule_position,
+        )?;
+    }
+
+    Ok(output)
+}
+
+fn decode_ogg_opus_with_libopus(bytes: &[u8]) -> Result<(Vec<f32>, u32)> {
+    use std::io::Cursor;
+
+    let mut reader = PacketReader::new(Cursor::new(bytes.to_vec()));
+    let head = reader
+        .read_packet()
+        .map_err(|e| anyhow!("Ogg read OpusHead: {e}"))?
+        .ok_or_else(|| anyhow!("Missing OpusHead packet"))?;
+    let (channels, pre_skip) = parse_opus_head(&head.data)?;
+    if channels != 1 {
+        return Err(anyhow!("Only mono Opus recordings are supported, got {channels} channels"));
+    }
+
+    let tags = reader
+        .read_packet()
+        .map_err(|e| anyhow!("Ogg read OpusTags: {e}"))?
+        .ok_or_else(|| anyhow!("Missing OpusTags packet"))?;
+    if !tags.data.starts_with(b"OpusTags") {
+        return Err(anyhow!("Invalid OpusTags packet"));
+    }
+
+    let mut decoder = OpusDecoder::new(OPUS_SAMPLE_RATE, Channels::Mono)
+        .map_err(|e| anyhow!("Opus decoder init: {e}"))?;
+    let mut decoded = Vec::new();
+    let mut decoded_packet = vec![0.0f32; OPUS_FRAME_SAMPLES * 6];
+    let mut final_granule = None;
+
+    while let Some(packet) = reader.read_packet().map_err(|e| anyhow!("Ogg read packet: {e}"))? {
+        let len = decoder
+            .decode_float(&packet.data, &mut decoded_packet, false)
+            .map_err(|e| anyhow!("Opus decode: {e}"))?;
+        decoded.extend_from_slice(&decoded_packet[..len]);
+        final_granule = Some(packet.absgp_page());
+    }
+
+    let target_len = final_granule
+        .map(|g| g.saturating_sub(pre_skip as u64) as usize)
+        .unwrap_or_else(|| decoded.len().saturating_sub(pre_skip as usize));
+    let skip = pre_skip as usize;
+    if skip >= decoded.len() {
+        return Ok((Vec::new(), OPUS_SAMPLE_RATE));
+    }
+    let available = decoded.len() - skip;
+    let keep = target_len.min(available);
+    Ok((decoded[skip..skip + keep].to_vec(), OPUS_SAMPLE_RATE))
+}
+
+fn build_opus_head(pre_skip: u16, input_sample_rate: u32, channels: u8) -> Vec<u8> {
+    let mut out = Vec::with_capacity(19);
+    out.extend_from_slice(b"OpusHead");
+    out.push(1);
+    out.push(channels);
+    out.extend_from_slice(&pre_skip.to_le_bytes());
+    out.extend_from_slice(&input_sample_rate.to_le_bytes());
+    out.extend_from_slice(&0i16.to_le_bytes()); // output gain
+    out.push(0); // channel mapping family 0: mono/stereo
+    out
+}
+
+fn build_opus_tags() -> Vec<u8> {
+    let vendor = b"hark synth-dashboard";
+    let mut out = Vec::with_capacity(16 + vendor.len());
+    out.extend_from_slice(b"OpusTags");
+    out.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+    out.extend_from_slice(vendor);
+    out.extend_from_slice(&0u32.to_le_bytes()); // user comment list length
+    out
+}
+
+fn parse_opus_head(packet: &[u8]) -> Result<(u8, u16)> {
+    if packet.len() < 19 || &packet[..8] != b"OpusHead" {
+        return Err(anyhow!("Invalid OpusHead packet"));
+    }
+    let channels = packet[9];
+    let pre_skip = u16::from_le_bytes([packet[10], packet[11]]);
+    Ok((channels, pre_skip))
 }
 
 /// Replace one word in a spoken form string (case-insensitive match, preserving surrounding punctuation).
@@ -176,13 +330,20 @@ struct PocketTtsBackend {
 }
 
 impl LocalTtsBackend for PocketTtsBackend {
-    fn name(&self) -> &'static str { "pocket" }
+    fn name(&self) -> &'static str {
+        "pocket"
+    }
 
     fn generate(&self, text: &str) -> Result<TtsAudio> {
-        let audio = self.model.generate(text, &self.voice_state)
+        let audio = self
+            .model
+            .generate(text, &self.voice_state)
             .map_err(|e| anyhow::anyhow!("pocket-tts: {e}"))?;
         let samples: Vec<f32> = audio.flatten_all()?.to_vec1()?;
-        Ok(TtsAudio { samples, sample_rate: self.sample_rate })
+        Ok(TtsAudio {
+            samples,
+            sample_rate: self.sample_rate,
+        })
     }
 }
 
@@ -200,18 +361,27 @@ struct PocketTtsWorker {
 }
 
 impl LocalTtsBackend for PocketTtsPool {
-    fn name(&self) -> &'static str { "pocket-hq" }
+    fn name(&self) -> &'static str {
+        "pocket-hq"
+    }
 
     fn generate(&self, text: &str) -> Result<TtsAudio> {
         // Try to find a free worker, otherwise block on the first one.
-        let worker = self.workers.iter()
+        let worker = self
+            .workers
+            .iter()
             .find_map(|w| w.try_lock().ok())
             .unwrap_or_else(|| self.workers[0].lock().unwrap());
 
-        let audio = worker.model.generate(text, &worker.voice_state)
+        let audio = worker
+            .model
+            .generate(text, &worker.voice_state)
             .map_err(|e| anyhow::anyhow!("pocket-tts-hq: {e}"))?;
         let samples: Vec<f32> = audio.flatten_all()?.to_vec1()?;
-        Ok(TtsAudio { samples, sample_rate: self.sample_rate })
+        Ok(TtsAudio {
+            samples,
+            sample_rate: self.sample_rate,
+        })
     }
 }
 
@@ -223,7 +393,9 @@ struct KokoroBackend {
 unsafe impl Sync for KokoroBackend {}
 
 impl LocalTtsBackend for KokoroBackend {
-    fn name(&self) -> &'static str { "kokoro" }
+    fn name(&self) -> &'static str {
+        "kokoro"
+    }
 
     fn generate(&self, text: &str) -> Result<TtsAudio> {
         // Use espeak-ng directly for the full sentence — the voice-g2p pipeline
@@ -237,7 +409,9 @@ impl LocalTtsBackend for KokoroBackend {
         let mut phoneme_parts = Vec::new();
         for word in text.split_whitespace() {
             let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'');
-            if clean.is_empty() { continue; }
+            if clean.is_empty() {
+                continue;
+            }
             match fallback.convert_word(clean) {
                 Some((ph, _)) => phoneme_parts.push(ph),
                 None => {
@@ -254,11 +428,15 @@ impl LocalTtsBackend for KokoroBackend {
         let phonemes = phoneme_parts.join(" ");
         eprintln!("kokoro espeak: {text:?} → {phonemes:?}");
 
-        let audio = voice_tts::generate(&mut self.model.lock().unwrap(), &phonemes, &self.voice, 1.0)
-            .map_err(|e| anyhow::anyhow!("kokoro: {e}"))?;
+        let audio =
+            voice_tts::generate(&mut self.model.lock().unwrap(), &phonemes, &self.voice, 1.0)
+                .map_err(|e| anyhow::anyhow!("kokoro: {e}"))?;
         audio.eval().map_err(|e| anyhow::anyhow!("mlx eval: {e}"))?;
         let samples: Vec<f32> = audio.as_slice().to_vec();
-        Ok(TtsAudio { samples, sample_rate: 24000 })
+        Ok(TtsAudio {
+            samples,
+            sample_rate: 24000,
+        })
     }
 }
 
@@ -267,7 +445,10 @@ impl LocalTtsBackend for KokoroBackend {
 /// Async TTS backend — makes HTTP calls, no mutable state needed
 trait RemoteTtsBackend: Send + Sync + 'static {
     fn name(&self) -> &'static str;
-    fn generate(&self, text: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<TtsAudio>> + Send + '_>>;
+    fn generate(
+        &self,
+        text: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<TtsAudio>> + Send + '_>>;
 }
 
 struct OpenAiTtsBackend {
@@ -276,12 +457,18 @@ struct OpenAiTtsBackend {
 }
 
 impl RemoteTtsBackend for OpenAiTtsBackend {
-    fn name(&self) -> &'static str { "openai" }
+    fn name(&self) -> &'static str {
+        "openai"
+    }
 
-    fn generate(&self, text: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<TtsAudio>> + Send + '_>> {
+    fn generate(
+        &self,
+        text: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<TtsAudio>> + Send + '_>> {
         let text = text.to_string();
         Box::pin(async move {
-            let resp = self.client
+            let resp = self
+                .client
                 .post("https://api.openai.com/v1/audio/speech")
                 .bearer_auth(&self.api_key)
                 .json(&serde_json::json!({
@@ -308,7 +495,10 @@ impl RemoteTtsBackend for OpenAiTtsBackend {
                     sample as f32 / 32768.0
                 })
                 .collect();
-            Ok(TtsAudio { samples, sample_rate: 24000 })
+            Ok(TtsAudio {
+                samples,
+                sample_rate: 24000,
+            })
         })
     }
 }
@@ -320,13 +510,22 @@ struct ElevenLabsTtsBackend {
 }
 
 impl RemoteTtsBackend for ElevenLabsTtsBackend {
-    fn name(&self) -> &'static str { "elevenlabs" }
+    fn name(&self) -> &'static str {
+        "elevenlabs"
+    }
 
-    fn generate(&self, text: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<TtsAudio>> + Send + '_>> {
+    fn generate(
+        &self,
+        text: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<TtsAudio>> + Send + '_>> {
         let text = text.to_string();
         Box::pin(async move {
-            let url = format!("https://api.elevenlabs.io/v1/text-to-speech/{}", self.voice_id);
-            let resp = self.client
+            let url = format!(
+                "https://api.elevenlabs.io/v1/text-to-speech/{}",
+                self.voice_id
+            );
+            let resp = self
+                .client
                 .post(&url)
                 .header("xi-api-key", &self.api_key)
                 .header("Accept", "audio/wav")
@@ -367,26 +566,35 @@ pub fn init_cmudict() {
         let mut errors = Vec::new();
         for p in &candidates {
             match std::fs::read(p) {
-            Err(e) => { errors.push(format!("{p}: {e}")); continue; }
-            Ok(bytes) => { let content = String::from_utf8_lossy(&bytes);
-                let mut dict = HashSet::new();
-                for line in content.lines() {
-                    if line.starts_with(";;;") || line.is_empty() { continue; }
-                    if let Some(word) = line.split_whitespace().next() {
-                        let word = word.split('(').next().unwrap_or(word);
-                        dict.insert(word.to_lowercase());
-                    }
+                Err(e) => {
+                    errors.push(format!("{p}: {e}"));
+                    continue;
                 }
-                eprintln!("CMUdict loaded: {} words from {p}", dict.len());
-                return dict;
-            }}
+                Ok(bytes) => {
+                    let content = String::from_utf8_lossy(&bytes);
+                    let mut dict = HashSet::new();
+                    for line in content.lines() {
+                        if line.starts_with(";;;") || line.is_empty() {
+                            continue;
+                        }
+                        if let Some(word) = line.split_whitespace().next() {
+                            let word = word.split('(').next().unwrap_or(word);
+                            dict.insert(word.to_lowercase());
+                        }
+                    }
+                    eprintln!("CMUdict loaded: {} words from {p}", dict.len());
+                    return dict;
+                }
+            }
         }
         panic!("CMUdict not found:\n{}", errors.join("\n"));
     });
 }
 
 fn cmudict() -> &'static HashSet<String> {
-    CMUDICT.get().expect("CMUdict not initialized — call tts::init_cmudict() at startup")
+    CMUDICT
+        .get()
+        .expect("CMUdict not initialized — call tts::init_cmudict() at startup")
 }
 
 /// Check which words in a sentence are NOT in CMUdict.
@@ -404,11 +612,12 @@ pub fn extract_words(text: &str) -> Vec<String> {
 fn is_semver(s: &str) -> bool {
     let s = s.strip_prefix('v').unwrap_or(s);
     let parts: Vec<&str> = s.split('.').collect();
-    parts.len() >= 2 && parts.iter().all(|p| {
-        // Each part is digits, or digits followed by -prerelease
-        let base = p.split('-').next().unwrap_or(p);
-        !base.is_empty() && base.chars().all(|c| c.is_ascii_digit())
-    })
+    parts.len() >= 2
+        && parts.iter().all(|p| {
+            // Each part is digits, or digits followed by -prerelease
+            let base = p.split('-').next().unwrap_or(p);
+            !base.is_empty() && base.chars().all(|c| c.is_ascii_digit())
+        })
 }
 
 pub fn detect_unknown_words(text: &str) -> Vec<String> {
@@ -416,22 +625,45 @@ pub fn detect_unknown_words(text: &str) -> Vec<String> {
     let mut unknown = Vec::new();
 
     for word in extract_words(text) {
-        if !synth_textgen::corpus::is_valid_vocab_term(&word) { continue; }
+        if !synth_textgen::corpus::is_valid_vocab_term(&word) {
+            continue;
+        }
         let lower = word.to_lowercase();
 
-        if dict.contains(&lower) { continue; }
-        if let Some(stem) = lower.strip_suffix("'s") { if dict.contains(stem) { continue; } }
-        if let Some(stem) = lower.strip_suffix('s') { if dict.contains(stem) { continue; } }
+        if dict.contains(&lower) {
+            continue;
+        }
+        if let Some(stem) = lower.strip_suffix("'s") {
+            if dict.contains(stem) {
+                continue;
+            }
+        }
+        if let Some(stem) = lower.strip_suffix('s') {
+            if dict.contains(stem) {
+                continue;
+            }
+        }
         // Check if it's a compound of two known words (e.g., "roadmap" = "road" + "map")
-        let is_compound = lower.char_indices()
+        let is_compound = lower
+            .char_indices()
             .skip(2)
             .take_while(|(i, _)| *i + 2 < lower.len())
             .any(|(i, _)| dict.contains(&lower[..i]) && dict.contains(&lower[i..]));
-        if is_compound { continue; }
-        if word.chars().all(|c| c.is_ascii_digit()) { continue; }
-        if lower.starts_with("0x") { continue; } // hex constants like 0xDEAD
-        if lower.chars().all(|c| c.is_ascii_hexdigit()) { continue; } // hex-only (short git commits etc.)
-        if is_semver(&lower) { continue; } // semver like 1.2.3, v0.1.0
+        if is_compound {
+            continue;
+        }
+        if word.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        if lower.starts_with("0x") {
+            continue;
+        } // hex constants like 0xDEAD
+        if lower.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue;
+        } // hex-only (short git commits etc.)
+        if is_semver(&lower) {
+            continue;
+        } // semver like 1.2.3, v0.1.0
 
         unknown.push(word);
     }
@@ -448,15 +680,20 @@ fn decode_wav(wav_bytes: &[u8]) -> Result<TtsAudio> {
     let mut reader = hound::WavReader::new(cursor)?;
     let spec = reader.spec();
     let samples: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => {
-            reader.samples::<f32>().filter_map(|s| s.ok()).collect()
-        }
+        hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
         hound::SampleFormat::Int => {
             let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
-            reader.samples::<i32>().filter_map(|s| s.ok()).map(|s| s as f32 / max).collect()
+            reader
+                .samples::<i32>()
+                .filter_map(|s| s.ok())
+                .map(|s| s as f32 / max)
+                .collect()
         }
     };
-    Ok(TtsAudio { samples, sample_rate: spec.sample_rate })
+    Ok(TtsAudio {
+        samples,
+        sample_rate: spec.sample_rate,
+    })
 }
 
 // ==================== Manager ====================
@@ -470,9 +707,7 @@ pub struct TtsManager {
 
 impl TtsManager {
     pub fn available_backends(&self) -> Vec<&str> {
-        let mut names: Vec<&str> = self.local.iter()
-            .map(|b| b.name())
-            .collect();
+        let mut names: Vec<&str> = self.local.iter().map(|b| b.name()).collect();
         names.extend(self.remote.iter().map(|b| b.name()));
         names
     }
@@ -507,7 +742,10 @@ pub fn init(voice_path: &str, _kokoro_voice: &str, tts_workers: usize) -> TtsMan
     // Pocket-tts HQ pool — N isolated Metal workers
     match PocketTtsPool::load(voice_path, tts_workers) {
         Ok(pool) => {
-            eprintln!("pocket-tts-hq ready ({tts_workers} workers, {} Hz)", pool.sample_rate);
+            eprintln!(
+                "pocket-tts-hq ready ({tts_workers} workers, {} Hz)",
+                pool.sample_rate
+            );
             local.push(std::sync::Arc::new(pool));
         }
         Err(e) => eprintln!("pocket-tts-hq not available: {e}"),
@@ -550,7 +788,11 @@ impl PocketTtsBackend {
             .map_err(|e| anyhow::anyhow!("loading voice '{voice_path}': {e}"))?;
         let sample_rate = model.sample_rate as u32;
         eprintln!("pocket-tts ready ({sample_rate} Hz)");
-        Ok(Self { model, voice_state, sample_rate })
+        Ok(Self {
+            model,
+            voice_state,
+            sample_rate,
+        })
     }
 }
 
@@ -577,11 +819,17 @@ impl PocketTtsPool {
                 .get_voice_state(voice_path)
                 .map_err(|e| anyhow::anyhow!("worker {i} voice '{voice_path}': {e}"))?;
             sample_rate = model.sample_rate as u32;
-            eprintln!("  worker {i} ready ({sample_rate} Hz, Metal device {:?})", device);
+            eprintln!(
+                "  worker {i} ready ({sample_rate} Hz, Metal device {:?})",
+                device
+            );
             workers.push(Mutex::new(PocketTtsWorker { model, voice_state }));
         }
 
-        Ok(Self { workers, sample_rate })
+        Ok(Self {
+            workers,
+            sample_rate,
+        })
     }
 }
 
@@ -593,6 +841,34 @@ impl KokoroBackend {
         let voice = voice_tts::load_voice(voice_name, None)
             .map_err(|e| anyhow::anyhow!("kokoro voice '{voice_name}': {e}"))?;
         eprintln!("Kokoro ready (24000 Hz, voice: {voice_name})");
-        Ok(Self { model: Mutex::new(model), voice })
+        Ok(Self {
+            model: Mutex::new(model),
+            voice,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_ogg_opus_mono, encode_ogg_opus};
+    use std::f32::consts::TAU;
+
+    #[tokio::test]
+    async fn ogg_opus_round_trip_produces_audio() {
+        let sample_rate = 16_000;
+        let samples: Vec<f32> = (0..sample_rate)
+            .map(|n| (TAU * 440.0 * n as f32 / sample_rate as f32).sin() * 0.2)
+            .collect();
+
+        let encoded = encode_ogg_opus(&samples, sample_rate).await.unwrap();
+        assert!(
+            encoded.len() > 1000,
+            "encoded file should not be header-only"
+        );
+
+        let (decoded, decoded_rate) = decode_ogg_opus_mono(&encoded).unwrap();
+        assert_eq!(decoded_rate, 48_000);
+        assert!(decoded.len() > 40_000);
+        assert!(decoded.iter().map(|s| s.abs()).fold(0.0f32, f32::max) > 0.05);
     }
 }

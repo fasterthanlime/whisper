@@ -46,7 +46,8 @@ fn main() -> Result<()> {
         eprintln!("\n{}", "=".repeat(60));
         eprintln!("Testing: {}", wav_file);
 
-        let path_str = audio_path.to_str()
+        let path_str = audio_path
+            .to_str()
             .ok_or_else(|| anyhow::anyhow!("non-UTF8 path: {}", audio_path.display()))?;
         match engine.transcribe(path_str, TranscribeOptions::default()) {
             Ok(result) => {
@@ -88,7 +89,8 @@ fn main() -> Result<()> {
         eprintln!("\n{}", "=".repeat(60));
         eprintln!("Transcribing: {}", wav_file);
 
-        let path_str = audio_path.to_str()
+        let path_str = audio_path
+            .to_str()
             .ok_or_else(|| anyhow::anyhow!("non-UTF8 path: {}", audio_path.display()))?;
         match engine.transcribe(path_str, TranscribeOptions::default()) {
             Ok(result) => {

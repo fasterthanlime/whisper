@@ -5,8 +5,8 @@
 //! License: MIT / Apache-2.0
 
 use candle_core::{
-    quantized::{gguf_file, QMatMul, QTensor},
     DType, Device, IndexOp, Module, Result, Tensor,
+    quantized::{QMatMul, QTensor, gguf_file},
 };
 use candle_nn::Embedding;
 use std::collections::HashMap;
@@ -226,8 +226,7 @@ impl ModelWeights {
             _ => QMatMul::from_qtensor(ct.tensor(reader, "token_embd.weight", device)?)?,
         };
 
-        let (cos, sin) =
-            precompute_freqs_cis(head_dim, rope_freq_base, context_length, device)?;
+        let (cos, sin) = precompute_freqs_cis(head_dim, rope_freq_base, context_length, device)?;
 
         let mut layers = Vec::with_capacity(block_count);
 

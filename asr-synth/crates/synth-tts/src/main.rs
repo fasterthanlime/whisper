@@ -4,7 +4,11 @@ use clap::Parser;
 #[derive(Parser)]
 struct Args {
     /// Text to synthesize
-    #[arg(short, long, default_value = "The serde crate handles serialization and deserialization in Rust.")]
+    #[arg(
+        short,
+        long,
+        default_value = "The serde crate handles serialization and deserialization in Rust."
+    )]
     text: String,
 
     /// Path to a voice reference WAV file
@@ -45,6 +49,12 @@ fn main() -> Result<()> {
     writer.finalize()?;
 
     let duration = samples.len() as f32 / sample_rate as f32;
-    println!("Wrote {} ({:.1}s, {} Hz, {} samples)", args.output, duration, sample_rate, samples.len());
+    println!(
+        "Wrote {} ({:.1}s, {} Hz, {} samples)",
+        args.output,
+        duration,
+        sample_rate,
+        samples.len()
+    );
     Ok(())
 }

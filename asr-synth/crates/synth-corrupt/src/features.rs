@@ -13,8 +13,14 @@ pub fn substitution_cost(a: &str, b: &str) -> f32 {
     if a == b {
         return 0.0;
     }
-    let ai = match phoneme_index(a) { Some(i) => i, None => return 1.0 };
-    let bi = match phoneme_index(b) { Some(i) => i, None => return 1.0 };
+    let ai = match phoneme_index(a) {
+        Some(i) => i,
+        None => return 1.0,
+    };
+    let bi = match phoneme_index(b) {
+        Some(i) => i,
+        None => return 1.0,
+    };
     let (lo, hi) = if ai <= bi { (ai, bi) } else { (bi, ai) };
     COST_MATRIX[lo][hi]
 }
@@ -22,14 +28,46 @@ pub fn substitution_cost(a: &str, b: &str) -> f32 {
 fn phoneme_index(p: &str) -> Option<usize> {
     Some(match p {
         // Consonants 0-23
-        "P" => 0, "B" => 1, "T" => 2, "D" => 3, "K" => 4, "G" => 5,
-        "F" => 6, "V" => 7, "TH" => 8, "DH" => 9, "S" => 10, "Z" => 11,
-        "SH" => 12, "ZH" => 13, "HH" => 14, "CH" => 15, "JH" => 16,
-        "M" => 17, "N" => 18, "NG" => 19, "L" => 20, "R" => 21, "W" => 22, "Y" => 23,
+        "P" => 0,
+        "B" => 1,
+        "T" => 2,
+        "D" => 3,
+        "K" => 4,
+        "G" => 5,
+        "F" => 6,
+        "V" => 7,
+        "TH" => 8,
+        "DH" => 9,
+        "S" => 10,
+        "Z" => 11,
+        "SH" => 12,
+        "ZH" => 13,
+        "HH" => 14,
+        "CH" => 15,
+        "JH" => 16,
+        "M" => 17,
+        "N" => 18,
+        "NG" => 19,
+        "L" => 20,
+        "R" => 21,
+        "W" => 22,
+        "Y" => 23,
         // Vowels 24-38
-        "IY" => 24, "IH" => 25, "EH" => 26, "EY" => 27, "AE" => 28,
-        "AA" => 29, "AO" => 30, "OW" => 31, "OY" => 32,
-        "UH" => 33, "UW" => 34, "AH" => 35, "ER" => 36, "AW" => 37, "AY" => 38,
+        "IY" => 24,
+        "IH" => 25,
+        "EH" => 26,
+        "EY" => 27,
+        "AE" => 28,
+        "AA" => 29,
+        "AO" => 30,
+        "OW" => 31,
+        "OY" => 32,
+        "UH" => 33,
+        "UW" => 34,
+        "AH" => 35,
+        "ER" => 36,
+        "AW" => 37,
+        "AY" => 38,
         _ => return None,
     })
 }

@@ -12,11 +12,12 @@ use std::path::Path;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let wav_path = args.get(1).map(String::as_str).unwrap_or("tests/fixtures/audio/sample1.wav");
-    let model_id = std::env::var("MODEL_ID")
-        .unwrap_or_else(|_| "Qwen/Qwen3-ASR-0.6B".to_string());
-    let cache_dir = std::env::var("CACHE_DIR")
-        .unwrap_or_else(|_| "models".to_string());
+    let wav_path = args
+        .get(1)
+        .map(String::as_str)
+        .unwrap_or("tests/fixtures/audio/sample1.wav");
+    let model_id = std::env::var("MODEL_ID").unwrap_or_else(|_| "Qwen/Qwen3-ASR-0.6B".to_string());
+    let cache_dir = std::env::var("CACHE_DIR").unwrap_or_else(|_| "models".to_string());
 
     let device = qwen3_asr::best_device();
     eprintln!("Device    : {device:?}");

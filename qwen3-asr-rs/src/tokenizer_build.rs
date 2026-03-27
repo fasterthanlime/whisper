@@ -1,7 +1,11 @@
 /// Build the Qwen3 tokenizer JSON from vocab.json, merges.txt, and tokenizer_config.json.
 /// The added_tokens list is derived from tokenizer_config.json's added_tokens_decoder field,
 /// so no special tokens need to be hardcoded here.
-pub(crate) fn build_qwen3_tokenizer_json(vocab: &str, merges: &str, tok_config: &str) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn build_qwen3_tokenizer_json(
+    vocab: &str,
+    merges: &str,
+    tok_config: &str,
+) -> anyhow::Result<Vec<u8>> {
     let vocab_val: serde_json::Value = serde_json::from_str(vocab)?;
     let merges_vec: Vec<&str> = merges
         .lines()

@@ -55,7 +55,7 @@ impl Default for TrainConfig {
         Self {
             data: "training/data".into(),
             adapters: "training/adapters".into(),
-            model: "Qwen/Qwen2.5-0.5B".into(),
+            model: "Qwen/Qwen3.5-0.8B".into(),
             iters: 2000,
             batch_size: 4,
             num_layers: 8,
@@ -85,12 +85,18 @@ pub fn prepare(config: &PrepareConfig, mut on_status: impl FnMut(&str)) -> Resul
         let original = v["original"].as_str().unwrap_or("").to_string();
         let parakeet = v["parakeet"].as_str().unwrap_or("").to_string();
         let qwen = v["qwen"].as_str().unwrap_or("").to_string();
-        if original.is_empty() { continue; }
+        if original.is_empty() {
+            continue;
+        }
         originals.push(original.clone());
         corpus_pairs.push((original, parakeet, qwen));
     }
 
-    on_status(&format!("Loaded {} corpus pairs, {} unique originals", corpus_pairs.len(), originals.len()));
+    on_status(&format!(
+        "Loaded {} corpus pairs, {} unique originals",
+        corpus_pairs.len(),
+        originals.len()
+    ));
 
     if corpus_pairs.is_empty() {
         anyhow::bail!("No corpus pairs found in {}", config.input);
@@ -100,8 +106,10 @@ pub fn prepare(config: &PrepareConfig, mut on_status: impl FnMut(&str)) -> Resul
     let n_error = (config.total_examples as f64 * config.error_rate).round() as usize;
     let n_identity = config.total_examples - n_error;
 
-    on_status(&format!("Generating {} error + {} identity = {} total examples",
-        n_error, n_identity, config.total_examples));
+    on_status(&format!(
+        "Generating {} error + {} identity = {} total examples",
+        n_error, n_identity, config.total_examples
+    ));
 
     let mut examples = Vec::with_capacity(config.total_examples);
     let mut correction_count = 0usize;
@@ -186,23 +194,33 @@ pub fn train(config: &TrainConfig) -> Result<std::process::ExitStatus> {
 /// is passed to `on_line` for progress tracking.
 pub fn train_streaming(
     config: &TrainConfig,
+    should_cancel: impl Fn() -> bool,
     mut on_line: impl FnMut(&str),
 ) -> Result<std::process::ExitStatus> {
-    use std::io::BufRead;
     use std::process::{Command, Stdio};
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::Duration;
 
     let mut child = Command::new("uvx")
         .args([
-            "--from", "mlx-lm",
+            "--from",
+            "mlx-lm",
             "mlx_lm.lora",
-            "--model", &config.model,
-            "--data", &config.data,
+            "--model",
+            &config.model,
+            "--data",
+            &config.data,
             "--train",
-            "--iters", &config.iters.to_string(),
-            "--batch-size", &config.batch_size.to_string(),
-            "--num-layers", &config.num_layers.to_string(),
-            "--adapter-path", &config.adapters,
-            "--steps-per-eval", &config.steps_per_eval.to_string(),
+            "--iters",
+            &config.iters.to_string(),
+            "--batch-size",
+            &config.batch_size.to_string(),
+            "--num-layers",
+            &config.num_layers.to_string(),
+            "--adapter-path",
+            &config.adapters,
+            "--steps-per-eval",
+            &config.steps_per_eval.to_string(),
             "--mask-prompt",
         ])
         .stdout(Stdio::piped())
@@ -213,7 +231,6 @@ pub fn train_streaming(
     // Merge both streams and parse line-by-line, monitoring val loss for early stopping.
     let mut best_val_loss = f64::INFINITY;
     let mut patience_remaining = config.early_stop_patience;
-    let mut should_kill = false;
 
     // Read both stdout and stderr on separate threads, funnel into one channel
     let (line_tx, line_rx) = std::sync::mpsc::channel::<String>();
@@ -230,16 +247,22 @@ pub fn train_streaming(
                 match byte[0] {
                     b'\n' => {
                         let line = String::from_utf8_lossy(&buf).trim().to_string();
-                        if !line.is_empty() { let _ = tx.send(line); }
+                        if !line.is_empty() {
+                            let _ = tx.send(line);
+                        }
                         buf.clear();
                     }
-                    b'\r' => { buf.clear(); }
+                    b'\r' => {
+                        buf.clear();
+                    }
                     _ => buf.push(byte[0]),
                 }
             }
             if !buf.is_empty() {
                 let line = String::from_utf8_lossy(&buf).trim().to_string();
-                if !line.is_empty() { let _ = tx.send(line); }
+                if !line.is_empty() {
+                    let _ = tx.send(line);
+                }
             }
         });
     }
@@ -253,41 +276,58 @@ pub fn train_streaming(
             for line in reader.lines() {
                 let Ok(line) = line else { break };
                 let line = line.trim().to_string();
-                if !line.is_empty() { let _ = tx.send(line); }
+                if !line.is_empty() {
+                    let _ = tx.send(line);
+                }
             }
         });
     }
 
     drop(line_tx); // Close sender so receiver knows when both threads are done
 
-    for line in line_rx {
-        on_line(&line);
+    loop {
+        match line_rx.recv_timeout(Duration::from_millis(250)) {
+            Ok(line) => {
+                on_line(&line);
 
-        // Check for val loss for early stopping
-        if config.early_stop_patience > 0 {
-            let lower = line.to_lowercase();
-            if lower.contains("val") && lower.contains("loss") {
-                if let Some(loss) = lower.split_whitespace()
-                    .filter_map(|w| w.trim_matches(',').parse::<f64>().ok())
-                    .next()
-                {
-                    if loss < best_val_loss {
-                        best_val_loss = loss;
-                        patience_remaining = config.early_stop_patience;
-                    } else {
-                        patience_remaining = patience_remaining.saturating_sub(1);
-                        if patience_remaining == 0 {
-                            on_line(&format!(
-                                "Early stopping: val loss {loss:.4} did not improve from {best_val_loss:.4} for {} evals",
-                                config.early_stop_patience
-                            ));
-                            let _ = child.kill();
-                            should_kill = true;
-                            break;
+                // Check for val loss for early stopping
+                if config.early_stop_patience > 0 {
+                    let lower = line.to_lowercase();
+                    if lower.contains("val") && lower.contains("loss") {
+                        if let Some(loss) = lower
+                            .split_whitespace()
+                            .filter_map(|w| w.trim_matches(',').parse::<f64>().ok())
+                            .next()
+                        {
+                            if loss < best_val_loss {
+                                best_val_loss = loss;
+                                patience_remaining = config.early_stop_patience;
+                            } else {
+                                patience_remaining = patience_remaining.saturating_sub(1);
+                                if patience_remaining == 0 {
+                                    on_line(&format!(
+                                        "Early stopping: val loss {loss:.4} did not improve from {best_val_loss:.4} for {} evals",
+                                        config.early_stop_patience
+                                    ));
+                                    let _ = child.kill();
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
             }
+            Err(RecvTimeoutError::Timeout) => {
+                if should_cancel() {
+                    on_line("Stop requested. Terminating training process...");
+                    let _ = child.kill();
+                    break;
+                }
+                if let Some(_status) = child.try_wait()? {
+                    break;
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
         }
     }
 
@@ -307,9 +347,9 @@ pub struct InferenceConfig {
 impl Default for InferenceConfig {
     fn default() -> Self {
         Self {
-            model: "Qwen/Qwen2.5-0.5B".into(),
+            model: "Qwen/Qwen3.5-0.8B".into(),
             adapters: "training/adapters".into(),
-            max_tokens: 256,
+            max_tokens: 64,
             port: 8899,
         }
     }
@@ -320,9 +360,22 @@ impl Default for InferenceConfig {
 /// In single mode: only Qwen lane (pass parakeet as empty or None).
 pub fn build_correction_prompt(parakeet: &str, qwen: &str) -> String {
     if parakeet.is_empty() {
-        format!("<qwen> {}\n<fixd>", qwen)
+        format!(
+            "<task> Rewrite the ASR sentence into corrected technical text.\n\
+<rules> Keep the same sentence. Fix recognition mistakes only. Do not add or remove meaning. Output one corrected sentence only.\n\
+<qwen> {}\n\
+<fixd>",
+            qwen
+        )
     } else {
-        format!("<keet> {}\n<qwen> {}\n<fixd>", parakeet, qwen)
+        format!(
+            "<task> Rewrite the ASR sentence into corrected technical text.\n\
+<rules> Prefer the Qwen lane and use Parakeet only as supporting evidence. Keep the same sentence. Fix recognition mistakes only. Do not add or remove meaning. Output one corrected sentence only.\n\
+<keet> {}\n\
+<qwen> {}\n\
+<fixd>",
+            parakeet, qwen
+        )
     }
 }
 
@@ -331,6 +384,8 @@ pub struct InferenceServer {
     child: std::process::Child,
     pub port: u16,
     pub max_tokens: usize,
+    pub model: String,
+    pub adapters: String,
 }
 
 impl InferenceServer {
@@ -338,16 +393,25 @@ impl InferenceServer {
     pub fn start(config: &InferenceConfig) -> Result<Self> {
         use std::process::{Command, Stdio};
 
-        eprintln!("[inference] Starting mlx_lm.server on port {}...", config.port);
+        eprintln!(
+            "[inference] Starting mlx_lm.server on port {}...",
+            config.port
+        );
         let child = Command::new("uvx")
             .args([
-                "--from", "mlx-lm",
+                "--from",
+                "mlx-lm",
                 "mlx_lm.server",
-                "--model", &config.model,
-                "--adapter-path", &config.adapters,
-                "--port", &config.port.to_string(),
-                "--max-tokens", &config.max_tokens.to_string(),
-                "--temp", "0",
+                "--model",
+                &config.model,
+                "--adapter-path",
+                &config.adapters,
+                "--port",
+                &config.port.to_string(),
+                "--max-tokens",
+                &config.max_tokens.to_string(),
+                "--temp",
+                "0",
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -361,13 +425,21 @@ impl InferenceServer {
                 anyhow::bail!("mlx_lm.server failed to start within 120s");
             }
             if let Ok(resp) = ureq::get(&url).call() {
-                if resp.status() == 200 { break; }
+                if resp.status() == 200 {
+                    break;
+                }
             }
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
         eprintln!("[inference] Server ready on port {}", config.port);
 
-        Ok(Self { child, port: config.port, max_tokens: config.max_tokens })
+        Ok(Self {
+            child,
+            port: config.port,
+            max_tokens: config.max_tokens,
+            model: config.model.clone(),
+            adapters: config.adapters.clone(),
+        })
     }
 
     /// Run inference on a single prompt. Returns the corrected text.
@@ -378,6 +450,7 @@ impl InferenceServer {
             "prompt": prompt,
             "max_tokens": self.max_tokens,
             "temperature": 0.0,
+            "stop": ["<|endoftext|>", "<|end_of_text|>", "<fixd>", "<qwen>", "<keet>"],
         });
 
         let agent = ureq::Agent::config_builder()
@@ -385,19 +458,32 @@ impl InferenceServer {
             .build()
             .new_agent();
 
-        let mut resp = agent.post(&url)
+        let mut resp = agent
+            .post(&url)
             .header("Content-Type", "application/json")
             .send_json(&body)
             .map_err(|e| anyhow::anyhow!("inference request failed: {e}"))?;
 
-        let json: serde_json::Value = resp.body_mut().read_json()
+        let json: serde_json::Value = resp
+            .body_mut()
+            .read_json()
             .map_err(|e| anyhow::anyhow!("inference response parse failed: {e}"))?;
 
-        let text = json["choices"][0]["text"]
+        let mut text = json["choices"][0]["text"]
             .as_str()
             .unwrap_or("")
             .replace("<|endoftext|>", "")
             .replace("<|end_of_text|>", "");
+
+        if let Some(stripped) = text.strip_prefix(prompt) {
+            text = stripped.to_string();
+        }
+
+        for marker in ["<fixd>", "<qwen>", "<keet>"] {
+            if let Some(idx) = text.find(marker) {
+                text.truncate(idx);
+            }
+        }
 
         Ok(text.trim().to_string())
     }
@@ -409,6 +495,13 @@ impl InferenceServer {
         eprintln!("[inference] Killing mlx_lm.server");
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+
+    pub fn matches(&self, config: &InferenceConfig) -> bool {
+        self.port == config.port
+            && self.max_tokens == config.max_tokens
+            && self.model == config.model
+            && self.adapters == config.adapters
     }
 }
 
@@ -462,11 +555,8 @@ impl SentenceGenerator {
             "[sentgen] Loading {} (in-process candle inference)...",
             config.gguf_file
         );
-        let model = llm::Qwen2Model::load(
-            &config.gguf_repo,
-            &config.gguf_file,
-            &config.tokenizer_repo,
-        )?;
+        let model =
+            llm::Qwen2Model::load(&config.gguf_repo, &config.gguf_file, &config.tokenizer_repo)?;
         eprintln!("[sentgen] Ready.");
 
         Ok(Self {
