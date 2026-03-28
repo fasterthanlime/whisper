@@ -22,12 +22,15 @@ final class AudioRecorder: @unchecked Sendable {
     private var capturedSamples: [Float] = []
     private var isCapturing = false
     private var isWarm = false
-    /// True while waiting to stop at the next tap callback boundary.
+    /// True while waiting to stop after a short post-keyup VAD tail window.
     private var stopCapturePending = false
     private var stopCaptureSignal: DispatchSemaphore?
-    private var stopCaptureDrainSamplesRemaining = 0
-    private let stopCaptureDrainSeconds: TimeInterval = 0.25
-    private let stopCaptureBoundaryTimeoutSeconds: TimeInterval = 0.35
+    private var stopCaptureSilenceSamples = 0
+    private var stopCaptureSamplesUntilTimeout = 0
+    private let stopCaptureMaxWaitSeconds: TimeInterval = 0.5
+    private let stopCaptureRequiredSilenceSeconds: TimeInterval = 0.12
+    private let stopCaptureSilenceRmsThreshold: Float = 0.008
+    private let stopCaptureBoundaryTimeoutSeconds: TimeInterval = 0.65
 
     private var onLevel: (@Sendable (Float) -> Void)?
     private var onSpectrum: (@Sendable ([Float]) -> Void)?
@@ -118,7 +121,8 @@ final class AudioRecorder: @unchecked Sendable {
         isCapturing = false
         stopCapturePending = false
         stopCaptureSignal = nil
-        stopCaptureDrainSamplesRemaining = 0
+        stopCaptureSilenceSamples = 0
+        stopCaptureSamplesUntilTimeout = 0
         lock.unlock()
 
         engine?.inputNode.removeTap(onBus: 0)
@@ -157,7 +161,8 @@ final class AudioRecorder: @unchecked Sendable {
 
         stopCapturePending = false
         stopCaptureSignal = nil
-        stopCaptureDrainSamplesRemaining = 0
+        stopCaptureSilenceSamples = 0
+        stopCaptureSamplesUntilTimeout = 0
         isCapturing = true
     }
 
@@ -187,20 +192,22 @@ final class AudioRecorder: @unchecked Sendable {
             let signal = DispatchSemaphore(value: 0)
             stopCapturePending = true
             stopCaptureSignal = signal
-            stopCaptureDrainSamplesRemaining = max(
+            stopCaptureSilenceSamples = 0
+            stopCaptureSamplesUntilTimeout = max(
                 1,
-                Int((nativeSampleRate * stopCaptureDrainSeconds).rounded())
+                Int((nativeSampleRate * stopCaptureMaxWaitSeconds).rounded())
             )
             waitSignal = signal
         } else {
             stopCapturePending = false
             stopCaptureSignal = nil
-            stopCaptureDrainSamplesRemaining = 0
+            stopCaptureSilenceSamples = 0
+            stopCaptureSamplesUntilTimeout = 0
         }
         lock.unlock()
 
-        // Wait for a short post-stop drain window so input-node queued audio is
-        // captured before finalization.
+        // Wait for VAD tail-stop (silence or timeout) so we avoid cutting
+        // speech endings when key-up happens near the final words.
         if let waitSignal {
             _ = waitSignal.wait(timeout: .now() + stopCaptureBoundaryTimeoutSeconds)
         }
@@ -209,7 +216,8 @@ final class AudioRecorder: @unchecked Sendable {
         isCapturing = false
         stopCapturePending = false
         stopCaptureSignal = nil
-        stopCaptureDrainSamplesRemaining = 0
+        stopCaptureSilenceSamples = 0
+        stopCaptureSamplesUntilTimeout = 0
         let captured = capturedSamples
         let capturedRate = nativeSampleRate
         capturedSamples.removeAll()
@@ -252,16 +260,12 @@ final class AudioRecorder: @unchecked Sendable {
 
         let bufferPointer = UnsafeBufferPointer(start: channelData[0], count: count)
 
-        // Compute RMS level
-        if let onLevel = self.onLevel {
-            var sumOfSquares: Float = 0
-            for sample in bufferPointer {
-                sumOfSquares += sample * sample
+            // Compute RMS level
+            let rms = computeRMS(bufferPointer)
+            if let onLevel = self.onLevel {
+                let normalized = min(rms * 5.0, 1.0)
+                onLevel(normalized)
             }
-            let rms = sqrtf(sumOfSquares / Float(count))
-            let normalized = min(rms * 5.0, 1.0)
-            onLevel(normalized)
-        }
 
         // Compute FFT spectrum
         if let onSpectrum = self.onSpectrum, let setup = fftSetup, count >= fftSize {
@@ -289,12 +293,27 @@ final class AudioRecorder: @unchecked Sendable {
             }
 
             if stopCapturePending {
-                stopCaptureDrainSamplesRemaining = max(0, stopCaptureDrainSamplesRemaining - count)
-                if stopCaptureDrainSamplesRemaining == 0 {
+                if rms < stopCaptureSilenceRmsThreshold {
+                    stopCaptureSilenceSamples += count
+                } else {
+                    stopCaptureSilenceSamples = 0
+                }
+                stopCaptureSamplesUntilTimeout = max(0, stopCaptureSamplesUntilTimeout - count)
+
+                let requiredSilenceSamples = max(
+                    1,
+                    Int((nativeSampleRate * stopCaptureRequiredSilenceSeconds).rounded())
+                )
+                let reachedSilence = stopCaptureSilenceSamples >= requiredSilenceSamples
+                let reachedTimeout = stopCaptureSamplesUntilTimeout == 0
+
+                if reachedSilence || reachedTimeout {
                     stopCapturePending = false
                     isCapturing = false
                     stopSignalToFire = stopCaptureSignal
                     stopCaptureSignal = nil
+                    stopCaptureSilenceSamples = 0
+                    stopCaptureSamplesUntilTimeout = 0
                 }
             }
         } else if isWarm && preBufferCapacity > 0 {
@@ -376,6 +395,15 @@ final class AudioRecorder: @unchecked Sendable {
         }
 
         return smoothedBands
+    }
+
+    private func computeRMS(_ samples: UnsafeBufferPointer<Float>) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        var sumOfSquares: Float = 0
+        for sample in samples {
+            sumOfSquares += sample * sample
+        }
+        return sqrtf(sumOfSquares / Float(samples.count))
     }
 
     private func resample(_ samples: [Float], from srcRate: Double, to dstRate: Double) -> [Float] {
