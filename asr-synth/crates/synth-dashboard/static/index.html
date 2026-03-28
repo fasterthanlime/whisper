@@ -4507,6 +4507,78 @@
                 return {train, val, resources, latestTrain, latestVal, latestResource, bestVal, totalIters, currentIter, peakProcessTreeRssMb, peakGpuUtilPercent};
             })();
 
+            const pressureMetrics = (() => {
+                const r = trainMetrics.latestResource;
+                if (!r) return null;
+                const totalMb = r.system_total_memory_mb || 0;
+                const freeGb = (r.system_free_memory_mb || 0) / 1024;
+                const rssGb = (r.process_tree_rss_mb || 0) / 1024;
+                const gpuInUseGb = (r.gpu_in_use_system_memory_mb || 0) / 1024;
+                const gpuAllocGb = (r.gpu_alloc_system_memory_mb || 0) / 1024;
+                const util = Number.isFinite(r.gpu_device_util_percent) ? r.gpu_device_util_percent : null;
+                const clamp01 = v => Math.max(0, Math.min(1, v || 0));
+                const freeRatio = totalMb > 0 ? clamp01((r.system_free_memory_mb || 0) / totalMb) : 0;
+                const rssRatio = totalMb > 0 ? clamp01((r.process_tree_rss_mb || 0) / totalMb) : 0;
+                const gpuInUseRatio = totalMb > 0 ? clamp01((r.gpu_in_use_system_memory_mb || 0) / totalMb) : 0;
+                const gpuAllocRatio = totalMb > 0 ? clamp01((r.gpu_alloc_system_memory_mb || 0) / totalMb) : 0;
+                const gpuUtilRatio = util == null ? null : clamp01(util / 100);
+                const pressureState = freeGb < 1.5 || gpuInUseGb > 10 || (util || 0) > 97
+                    ? {label: 'Danger', color: 'var(--danger)'}
+                    : freeGb < 3 || gpuInUseGb > 8 || (util || 0) > 90
+                        ? {label: 'Tight', color: 'var(--warning)'}
+                        : {label: 'OK', color: 'var(--success)'};
+                return {
+                    freeGb, rssGb, gpuInUseGb, gpuAllocGb, util,
+                    freeRatio, rssRatio, gpuInUseRatio, gpuAllocRatio, gpuUtilRatio,
+                    pressureState,
+                };
+            })();
+
+            const formatGb = value => `${value.toFixed(value >= 10 ? 1 : 2)}GB`;
+
+            const renderDonut = ({label, ratio, value, subtitle, color, invert=false}) => {
+                const size = 112;
+                const stroke = 9;
+                const radius = (size - stroke) / 2;
+                const circumference = 2 * Math.PI * radius;
+                const progress = Math.max(0, Math.min(1, ratio));
+                const visual = invert ? 1 - progress : progress;
+                const dashOffset = circumference * (1 - visual);
+                return (
+                    <div key={label} className="stat-card" style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'14px 10px',gap:8}}>
+                        <div style={{position:'relative',width:size,height:size}}>
+                            <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{display:'block'}}>
+                                <circle
+                                    cx={size / 2}
+                                    cy={size / 2}
+                                    r={radius}
+                                    fill="none"
+                                    stroke="rgba(255,255,255,0.08)"
+                                    strokeWidth={stroke}
+                                />
+                                <circle
+                                    cx={size / 2}
+                                    cy={size / 2}
+                                    r={radius}
+                                    fill="none"
+                                    stroke={color}
+                                    strokeWidth={stroke}
+                                    strokeLinecap="round"
+                                    strokeDasharray={circumference}
+                                    strokeDashoffset={dashOffset}
+                                    transform={`rotate(-90 ${size / 2} ${size / 2})`}
+                                />
+                            </svg>
+                            <div style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',pointerEvents:'none'}}>
+                                <div style={{fontSize:22,fontWeight:700,color}}>{value}</div>
+                                <div style={{fontSize:10,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.04em'}}>{subtitle}</div>
+                            </div>
+                        </div>
+                        <div style={{fontSize:12,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.04em'}}>{label}</div>
+                    </div>
+                );
+            };
+
             const renderLossChart = () => {
                 const series = [...trainMetrics.train, ...trainMetrics.val];
                 if (!series.length) return null;
@@ -4760,19 +4832,67 @@
                         </div>
                     )}
 
+                    {pressureMetrics && (
+                        <div className="card" style={{marginBottom:16,padding:'12px 14px'}}>
+                            <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12,flexWrap:'wrap'}}>
+                                <h3 style={{margin:0,flex:1}}>Pressure</h3>
+                                <span style={{fontSize:12,color:pressureMetrics.pressureState.color,fontWeight:700}}>
+                                    {pressureMetrics.pressureState.label}
+                                </span>
+                            </div>
+                            <div className="stats-grid" style={{marginBottom:12}}>
+                                {renderDonut({
+                                    label: 'System Free',
+                                    ratio: pressureMetrics.freeRatio,
+                                    value: formatGb(pressureMetrics.freeGb),
+                                    subtitle: `${Math.round(pressureMetrics.freeRatio * 100)}% free`,
+                                    color: pressureMetrics.freeGb < 1.5 ? 'var(--danger)' : pressureMetrics.freeGb < 3 ? 'var(--warning)' : 'var(--success)',
+                                })}
+                                {renderDonut({
+                                    label: 'MLX RSS',
+                                    ratio: pressureMetrics.rssRatio,
+                                    value: formatGb(pressureMetrics.rssGb),
+                                    subtitle: `${Math.round(pressureMetrics.rssRatio * 100)}% of RAM`,
+                                    color: pressureMetrics.rssRatio > 0.2 ? 'var(--warning)' : 'var(--accent)',
+                                })}
+                                {renderDonut({
+                                    label: 'GPU In Use',
+                                    ratio: pressureMetrics.gpuInUseRatio,
+                                    value: formatGb(pressureMetrics.gpuInUseGb),
+                                    subtitle: `${Math.round(pressureMetrics.gpuInUseRatio * 100)}% of RAM`,
+                                    color: pressureMetrics.gpuInUseGb > 10 ? 'var(--danger)' : pressureMetrics.gpuInUseGb > 8 ? 'var(--warning)' : 'var(--accent)',
+                                })}
+                                {pressureMetrics.gpuUtilRatio != null && renderDonut({
+                                    label: 'GPU Util',
+                                    ratio: pressureMetrics.gpuUtilRatio,
+                                    value: `${Math.round(pressureMetrics.util)}%`,
+                                    subtitle: 'current',
+                                    color: pressureMetrics.util > 97 ? 'var(--danger)' : pressureMetrics.util > 90 ? 'var(--warning)' : 'var(--success)',
+                                })}
+                                {pressureMetrics.gpuAllocGb > 0 && renderDonut({
+                                    label: 'GPU Alloc',
+                                    ratio: pressureMetrics.gpuAllocRatio,
+                                    value: formatGb(pressureMetrics.gpuAllocGb),
+                                    subtitle: `${Math.round(pressureMetrics.gpuAllocRatio * 100)}% of RAM`,
+                                    color: 'rgba(126,231,135,0.95)',
+                                })}
+                            </div>
+                            <div style={{display:'flex',gap:14,flexWrap:'wrap',fontSize:12,color:'var(--text-muted)'}}>
+                                <span>System free is the best cliff-warning signal.</span>
+                                <span>GPU in use is actual GPU-managed memory.</span>
+                                <span>GPU alloc is reserved footprint, not necessarily active use.</span>
+                            </div>
+                        </div>
+                    )}
+
                     {trainMetrics.latestResource && (
                         <div className="stats-grid" style={{marginBottom:16}}>
-                            <div className="stat-card"><div className="value">{(trainMetrics.latestResource.process_tree_rss_mb / 1024).toFixed(2)}GB</div><div className="label">MLX RSS</div></div>
                             {trainMetrics.peakProcessTreeRssMb > 0 && <div className="stat-card"><div className="value">{(trainMetrics.peakProcessTreeRssMb / 1024).toFixed(2)}GB</div><div className="label">Peak MLX RSS</div></div>}
                             <div className="stat-card"><div className="value">{(trainMetrics.latestResource.system_used_memory_mb / 1024).toFixed(1)}GB</div><div className="label">System Used</div></div>
-                            <div className="stat-card"><div className="value">{(trainMetrics.latestResource.system_available_memory_mb / 1024).toFixed(1)}GB</div><div className="label">System Avail</div></div>
-                            <div className="stat-card"><div className="value">{(trainMetrics.latestResource.system_free_memory_mb / 1024).toFixed(1)}GB</div><div className="label">System Free</div></div>
                             <div className="stat-card"><div className="value">{(trainMetrics.latestResource.system_total_memory_mb / 1024).toFixed(1)}GB</div><div className="label">System Total</div></div>
-                            {Number.isFinite(trainMetrics.latestResource.gpu_device_util_percent) && <div className="stat-card"><div className="value">{Math.round(trainMetrics.latestResource.gpu_device_util_percent)}%</div><div className="label">GPU Util</div></div>}
                             {trainMetrics.peakGpuUtilPercent > 0 && <div className="stat-card"><div className="value">{Math.round(trainMetrics.peakGpuUtilPercent)}%</div><div className="label">Peak GPU</div></div>}
-                            {Number.isFinite(trainMetrics.latestResource.gpu_in_use_system_memory_mb) && <div className="stat-card"><div className="value">{(trainMetrics.latestResource.gpu_in_use_system_memory_mb / 1024).toFixed(2)}GB</div><div className="label">GPU In Use</div></div>}
-                            {Number.isFinite(trainMetrics.latestResource.gpu_alloc_system_memory_mb) && <div className="stat-card"><div className="value">{(trainMetrics.latestResource.gpu_alloc_system_memory_mb / 1024).toFixed(2)}GB</div><div className="label">GPU Alloc</div></div>}
-                            {Number.isFinite(trainMetrics.latestResource.gpu_driver_system_memory_mb) && <div className="stat-card"><div className="value">{(trainMetrics.latestResource.gpu_driver_system_memory_mb / 1024).toFixed(2)}GB</div><div className="label">GPU Driver</div></div>}
+                            {Number.isFinite(trainMetrics.latestResource.launcher_rss_mb) && <div className="stat-card"><div className="value">{(trainMetrics.latestResource.launcher_rss_mb / 1024).toFixed(2)}GB</div><div className="label">Launcher RSS</div></div>}
+                            {Number.isFinite(trainMetrics.latestResource.gpu_driver_system_memory_mb) && trainMetrics.latestResource.gpu_driver_system_memory_mb > 0.01 && <div className="stat-card"><div className="value">{(trainMetrics.latestResource.gpu_driver_system_memory_mb / 1024).toFixed(2)}GB</div><div className="label">GPU Driver</div></div>}
                         </div>
                     )}
 

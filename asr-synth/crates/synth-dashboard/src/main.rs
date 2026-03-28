@@ -14,7 +14,10 @@ use db::Db;
 use parakeet_rs::Transcriber;
 use serde::Deserialize;
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
 pub type AppError = (StatusCode, String);
 
@@ -22,10 +25,10 @@ pub struct AppState {
     db: Mutex<Db>,
     log_path: std::path::PathBuf,
     docs_root: String,
-    tts: tts::TtsManager,
-    asr: qwen3_asr::AsrInference,
-    parakeet: std::sync::Mutex<parakeet_rs::ParakeetTDT>,
-    aligner: qwen3_asr::ForcedAligner,
+    tts: LazyTtsManager,
+    asr: LazyAsr,
+    parakeet: LazyParakeet,
+    aligner: LazyAligner,
     review: Mutex<review::ReviewSession>,
     precompute_notify: std::sync::Arc<tokio::sync::Notify>,
     vocab_precompute_notify: std::sync::Arc<tokio::sync::Notify>,
@@ -34,8 +37,225 @@ pub struct AppState {
     audio_dir: String,
     qwen_model_key: String,
     job_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    training_exclusive: AtomicBool,
     /// Shared inference server for live correction (started on first use)
     inference_server: std::sync::Mutex<Option<synth_train::InferenceServer>>,
+}
+
+struct LazyTtsManager {
+    inner: Mutex<Option<Arc<tts::TtsManager>>>,
+    backend_names: Vec<&'static str>,
+    voice_path: String,
+    kokoro_voice: String,
+    tts_workers: usize,
+}
+
+impl LazyTtsManager {
+    fn loaded(
+        initial: tts::TtsManager,
+        voice_path: String,
+        kokoro_voice: String,
+        tts_workers: usize,
+    ) -> Self {
+        let backend_names = initial.available_backends();
+        Self {
+            inner: Mutex::new(Some(Arc::new(initial))),
+            backend_names,
+            voice_path,
+            kokoro_voice,
+            tts_workers,
+        }
+    }
+
+    fn get_or_load(&self) -> anyhow::Result<Arc<tts::TtsManager>> {
+        if let Some(current) = self.inner.lock().unwrap().as_ref().cloned() {
+            return Ok(current);
+        }
+
+        eprintln!("Reloading TTS backends...");
+        let manager = Arc::new(tts::init(
+            &self.voice_path,
+            &self.kokoro_voice,
+            self.tts_workers,
+        ));
+        *self.inner.lock().unwrap() = Some(manager.clone());
+        Ok(manager)
+    }
+
+    fn unload(&self) {
+        if self.inner.lock().unwrap().take().is_some() {
+            eprintln!("Unloaded TTS backends");
+        }
+    }
+
+    fn available_backends(&self) -> Vec<&'static str> {
+        self.backend_names.clone()
+    }
+
+    async fn generate(&self, backend_name: &str, text: &str) -> anyhow::Result<tts::TtsAudio> {
+        let manager = self.get_or_load()?;
+        manager.generate(backend_name, text).await
+    }
+}
+
+struct LazyAsr {
+    inner: Mutex<Option<Arc<qwen3_asr::AsrInference>>>,
+    model_dir: String,
+}
+
+impl LazyAsr {
+    fn loaded(initial: qwen3_asr::AsrInference, model_dir: String) -> Self {
+        Self {
+            inner: Mutex::new(Some(Arc::new(initial))),
+            model_dir,
+        }
+    }
+
+    fn get_or_load(&self) -> qwen3_asr::Result<Arc<qwen3_asr::AsrInference>> {
+        if let Some(current) = self.inner.lock().unwrap().as_ref().cloned() {
+            return Ok(current);
+        }
+
+        eprintln!("Reloading Qwen3 ASR from {}...", self.model_dir);
+        let model = Arc::new(qwen3_asr::AsrInference::load(
+            std::path::Path::new(&self.model_dir),
+            qwen3_asr::best_device(),
+        )?);
+        *self.inner.lock().unwrap() = Some(model.clone());
+        Ok(model)
+    }
+
+    fn unload(&self) {
+        if self.inner.lock().unwrap().take().is_some() {
+            eprintln!("Unloaded Qwen3 ASR");
+        }
+    }
+
+    fn transcribe_samples(
+        &self,
+        samples: &[f32],
+        options: qwen3_asr::TranscribeOptions,
+    ) -> qwen3_asr::Result<qwen3_asr::TranscribeResult> {
+        let model = self.get_or_load()?;
+        model.transcribe_samples(samples, options)
+    }
+}
+
+struct LazyParakeet {
+    inner: Mutex<Option<Arc<Mutex<parakeet_rs::ParakeetTDT>>>>,
+    model_path: String,
+}
+
+impl LazyParakeet {
+    fn loaded(initial: parakeet_rs::ParakeetTDT, model_path: String) -> Self {
+        Self {
+            inner: Mutex::new(Some(Arc::new(Mutex::new(initial)))),
+            model_path,
+        }
+    }
+
+    fn get_or_load(&self) -> anyhow::Result<Arc<Mutex<parakeet_rs::ParakeetTDT>>> {
+        if let Some(current) = self.inner.lock().unwrap().as_ref().cloned() {
+            return Ok(current);
+        }
+
+        eprintln!("Reloading Parakeet TDT...");
+        let model = Arc::new(Mutex::new(parakeet_rs::ParakeetTDT::from_pretrained(
+            &self.model_path,
+            None,
+        )?));
+        *self.inner.lock().unwrap() = Some(model.clone());
+        Ok(model)
+    }
+
+    fn unload(&self) {
+        if self.inner.lock().unwrap().take().is_some() {
+            eprintln!("Unloaded Parakeet TDT");
+        }
+    }
+
+    fn transcribe_samples(
+        &self,
+        audio: Vec<f32>,
+        sample_rate: u32,
+        channels: u16,
+        mode: Option<parakeet_rs::TimestampMode>,
+    ) -> parakeet_rs::Result<parakeet_rs::TranscriptionResult> {
+        let model = self
+            .get_or_load()
+            .map_err(|e| parakeet_rs::Error::Model(format!("failed to load Parakeet: {e}")))?;
+        let result = model
+            .lock()
+            .unwrap()
+            .transcribe_samples(audio, sample_rate, channels, mode);
+        result
+    }
+}
+
+struct LazyAligner {
+    inner: Mutex<Option<Arc<qwen3_asr::ForcedAligner>>>,
+    model_id: String,
+    hf_cache: String,
+}
+
+impl LazyAligner {
+    fn loaded(initial: qwen3_asr::ForcedAligner, model_id: String, hf_cache: String) -> Self {
+        Self {
+            inner: Mutex::new(Some(Arc::new(initial))),
+            model_id,
+            hf_cache,
+        }
+    }
+
+    fn get_or_load(&self) -> qwen3_asr::Result<Arc<qwen3_asr::ForcedAligner>> {
+        if let Some(current) = self.inner.lock().unwrap().as_ref().cloned() {
+            return Ok(current);
+        }
+
+        eprintln!("Reloading ForcedAligner ({})...", self.model_id);
+        let aligner = Arc::new(qwen3_asr::ForcedAligner::from_pretrained(
+            &self.model_id,
+            std::path::Path::new(&self.hf_cache),
+            qwen3_asr::best_device(),
+        )?);
+        *self.inner.lock().unwrap() = Some(aligner.clone());
+        Ok(aligner)
+    }
+
+    fn unload(&self) {
+        if self.inner.lock().unwrap().take().is_some() {
+            eprintln!("Unloaded ForcedAligner");
+        }
+    }
+
+    fn align(
+        &self,
+        samples: &[f32],
+        text: &str,
+    ) -> qwen3_asr::Result<Vec<qwen3_asr::ForcedAlignItem>> {
+        let aligner = self.get_or_load()?;
+        aligner.align(samples, text)
+    }
+}
+
+impl AppState {
+    fn unload_heavy_models(&self) {
+        self.tts.unload();
+        self.asr.unload();
+        self.parakeet.unload();
+        self.aligner.unload();
+        if let Some(mut server) = self.inference_server.lock().unwrap().take() {
+            server.kill();
+        }
+    }
+
+    fn training_exclusive(&self) -> bool {
+        self.training_exclusive.load(Ordering::Relaxed)
+    }
+
+    fn set_training_exclusive(&self, value: bool) {
+        self.training_exclusive.store(value, Ordering::Relaxed);
+    }
 }
 
 #[derive(Deserialize)]
@@ -832,12 +1052,11 @@ async fn api_asr_dual(
             .transcribe_samples(&samples_16k, qwen3_asr::TranscribeOptions::default())
             .map(|r| r.text)
             .unwrap_or_default();
-        let parakeet = {
-            let mut p = state2.parakeet.lock().unwrap();
-            p.transcribe_samples(samples_16k.to_vec(), 16000, 1, None)
-                .map(|r| r.text)
-                .unwrap_or_default()
-        };
+        let parakeet = state2
+            .parakeet
+            .transcribe_samples(samples_16k.to_vec(), 16000, 1, None)
+            .map(|r| r.text)
+            .unwrap_or_default();
         Ok((qwen, parakeet))
     })
     .await
@@ -1112,10 +1331,15 @@ async fn main() -> anyhow::Result<()> {
         db: Mutex::new(db),
         log_path,
         docs_root,
-        tts: tts_manager,
-        asr,
-        parakeet: std::sync::Mutex::new(parakeet),
-        aligner,
+        tts: LazyTtsManager::loaded(
+            tts_manager,
+            cli.voice.clone(),
+            cli.kokoro_voice.clone(),
+            cli.tts_workers,
+        ),
+        asr: LazyAsr::loaded(asr, qwen_model_dir.clone()),
+        parakeet: LazyParakeet::loaded(parakeet, cli.parakeet_model.clone()),
+        aligner: LazyAligner::loaded(aligner, cli.aligner_model.clone(), hf_cache.clone()),
         review: Mutex::new(review::ReviewSession::new()),
         precompute_notify: precompute_notify.clone(),
         vocab_precompute_notify: vocab_precompute_notify.clone(),
@@ -1124,6 +1348,7 @@ async fn main() -> anyhow::Result<()> {
         audio_dir: audio_dir.clone(),
         qwen_model_key: qwen_model_dir.clone(),
         job_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        training_exclusive: AtomicBool::new(false),
         inference_server: std::sync::Mutex::new(None),
     });
 

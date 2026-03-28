@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
 use std::sync::Arc;
 
 use axum::{
@@ -12,7 +11,6 @@ use serde::Deserialize;
 
 use crate::tts;
 use crate::{err, AppError, AppState};
-use parakeet_rs::Transcriber;
 
 use std::sync::atomic::Ordering;
 
@@ -788,8 +786,9 @@ async fn scan_vocab_terms_incremental(
                 .unwrap_or_default()
         });
         let parakeet_task = tokio::task::spawn_blocking(move || -> String {
-            let mut p = state_p.parakeet.lock().unwrap();
-            p.transcribe_samples(seg_p, 16000, 1, None)
+            state_p
+                .parakeet
+                .transcribe_samples(seg_p, 16000, 1, None)
                 .map(|r| r.text)
                 .unwrap_or_default()
         });
@@ -865,7 +864,14 @@ pub fn spawn_background_maintenance_loop(state: Arc<AppState>, notify: Arc<tokio
         loop {
             notify.notified().await;
 
+            if state.training_exclusive() {
+                continue;
+            }
+
             loop {
+                if state.training_exclusive() {
+                    break;
+                }
                 let mut made_progress = false;
 
                 match background_confusion_scan_once(&state).await {
@@ -939,7 +945,14 @@ pub fn spawn_authored_asr_precompute_loop(state: Arc<AppState>, notify: Arc<toki
         loop {
             notify.notified().await;
 
+            if state.training_exclusive() {
+                continue;
+            }
+
             loop {
+                if state.training_exclusive() {
+                    break;
+                }
                 let pending = {
                     let db = state.db.lock().unwrap();
                     db.authored_recordings_needing_qwen_clean(&state.qwen_model_key, 4)
@@ -1097,8 +1110,9 @@ async fn run_corpus_pass(
         let state_p = state.clone();
         let samples_p = full_16k.to_vec();
         let parakeet_task = tokio::task::spawn_blocking(move || -> String {
-            let mut p = state_p.parakeet.lock().unwrap();
-            p.transcribe_samples(samples_p, 16000, 1, None)
+            state_p
+                .parakeet
+                .transcribe_samples(samples_p, 16000, 1, None)
                 .map(|r| r.text)
                 .unwrap_or_default()
         });
@@ -3076,13 +3090,6 @@ pub async fn api_start_train_job(
 ) -> Result<Response, AppError> {
     check_no_running_jobs(&state)?;
 
-    {
-        let mut guard = state.inference_server.lock().unwrap();
-        if let Some(mut server) = guard.take() {
-            server.kill();
-        }
-    }
-
     let config = synth_train::TrainConfig {
         model: body.model.unwrap_or_else(|| "Qwen/Qwen3.5-0.8B".into()),
         iters: body.iters.unwrap_or(2000),
@@ -3106,6 +3113,9 @@ pub async fn api_start_train_job(
         let db = state.db.lock().unwrap();
         db.create_job("train", Some(&config_json)).map_err(err)?
     };
+
+    state.set_training_exclusive(true);
+    state.unload_heavy_models();
 
     let state2 = state.clone();
     tokio::task::spawn_blocking(move || {
@@ -3211,6 +3221,10 @@ pub async fn api_start_train_job(
                 let _ = db.finish_job(job_id, "failed", None);
             }
         }
+
+        state2.set_training_exclusive(false);
+        state2.background_work_notify.notify_one();
+        state2.authored_asr_notify.notify_one();
     });
 
     Ok(Json(serde_json::json!({"job_id": job_id})).into_response())
@@ -3665,8 +3679,9 @@ async fn run_vocab_scan(
             });
 
             let parakeet_task = tokio::task::spawn_blocking(move || -> String {
-                let mut p = state_p.parakeet.lock().unwrap();
-                p.transcribe_samples(seg_p, 16000, 1, None)
+                state_p
+                    .parakeet
+                    .transcribe_samples(seg_p, 16000, 1, None)
                     .map(|r| r.text)
                     .unwrap_or_default()
             });

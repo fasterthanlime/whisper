@@ -9,10 +9,9 @@ use axum::{
 use serde::Deserialize;
 use tokio::sync::Notify;
 
-use crate::db::{Db, SentenceRow};
+use crate::db::SentenceRow;
 use crate::tts;
 use crate::{err, AppError, AppState};
-use parakeet_rs::Transcriber;
 
 /// Clean a word for comparison: strip non-alphanumeric, lowercase.
 fn clean_word(s: &str) -> String {
@@ -321,14 +320,14 @@ pub fn compute_for_sentence(
         }
     };
 
-    let parakeet_asr = {
-        let mut parakeet = state.parakeet.lock().unwrap();
-        match parakeet.transcribe_samples(samples_16k.to_vec(), 16000, 1, None) {
-            Ok(r) => r.text,
-            Err(e) => {
-                eprintln!("[review] Parakeet ASR failed: {e}");
-                String::new()
-            }
+    let parakeet_asr = match state
+        .parakeet
+        .transcribe_samples(samples_16k.to_vec(), 16000, 1, None)
+    {
+        Ok(r) => r.text,
+        Err(e) => {
+            eprintln!("[review] Parakeet ASR failed: {e}");
+            String::new()
         }
     };
 
@@ -492,6 +491,10 @@ pub fn spawn_precompute_loop(state: Arc<AppState>, notify: Arc<Notify>, audio_di
         loop {
             notify.notified().await;
 
+            if state.training_exclusive() {
+                continue;
+            }
+
             // Grab the next few IDs that need precomputation
             let (ids_to_compute, backend) = {
                 let review = state.review.lock().unwrap();
@@ -506,6 +509,9 @@ pub fn spawn_precompute_loop(state: Arc<AppState>, notify: Arc<Notify>, audio_di
             };
 
             for id in ids_to_compute {
+                if state.training_exclusive() {
+                    break;
+                }
                 let sentence = {
                     let db = state.db.lock().unwrap();
                     db.get_sentence(id).ok().flatten()
@@ -548,6 +554,10 @@ pub fn spawn_vocab_precompute_loop(state: Arc<AppState>, notify: Arc<Notify>, au
         loop {
             notify.notified().await;
 
+            if state.training_exclusive() {
+                continue;
+            }
+
             let backend = {
                 let review = state.review.lock().unwrap();
                 review.backend.clone()
@@ -567,6 +577,9 @@ pub fn spawn_vocab_precompute_loop(state: Arc<AppState>, notify: Arc<Notify>, au
             };
 
             for id in ids {
+                if state.training_exclusive() {
+                    break;
+                }
                 let vocab = {
                     let db = state.db.lock().unwrap();
                     db.get_vocab(id).ok().flatten()
@@ -1049,13 +1062,14 @@ pub async fn api_review_asr(
                 Err(e) => format!("(error: {e})"),
             };
 
-            let parakeet = {
-                let mut p = state2.parakeet.lock().unwrap();
-                match p.transcribe_samples(samples_16k.to_vec(), 16000, 1, None) {
+            let parakeet =
+                match state2
+                    .parakeet
+                    .transcribe_samples(samples_16k.to_vec(), 16000, 1, None)
+                {
                     Ok(r) => r.text,
                     Err(e) => format!("(error: {e})"),
-                }
-            };
+                };
 
             // Run forced aligner on the HUMAN recording for all alignments
             let sentence = if let Some(id) = current_id {

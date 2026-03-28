@@ -711,8 +711,8 @@ pub struct TtsManager {
 }
 
 impl TtsManager {
-    pub fn available_backends(&self) -> Vec<&str> {
-        let mut names: Vec<&str> = self.local.iter().map(|b| b.name()).collect();
+    pub fn available_backends(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = self.local.iter().map(|b| b.name()).collect();
         names.extend(self.remote.iter().map(|b| b.name()));
         names
     }
