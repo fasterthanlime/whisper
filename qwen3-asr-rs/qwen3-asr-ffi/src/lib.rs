@@ -15,6 +15,7 @@ pub struct AsrSession {
     engine: Arc<AsrInference>,
     state: StreamingState,
     transcript: String,
+    pending_prefix: String,
     session_samples: usize,
     session_limit: usize,
     chunk_size_sec: f32,
@@ -61,6 +62,104 @@ fn tail_chars(s: &str, n: usize) -> &str {
         .map(|(i, _)| i)
         .unwrap_or(0);
     &s[byte_start..]
+}
+
+fn append_segment(dst: &mut String, segment: &str) {
+    let s = segment.trim();
+    if s.is_empty() {
+        return;
+    }
+    if !dst.is_empty() {
+        dst.push(' ');
+    }
+    dst.push_str(s);
+}
+
+fn join_segments(a: &str, b: &str) -> String {
+    let mut out = String::new();
+    append_segment(&mut out, a);
+    append_segment(&mut out, b);
+    out
+}
+
+fn is_sentence_terminal(ch: char) -> bool {
+    matches!(ch, '.' | '!' | '?' | '。' | '！' | '？')
+}
+
+fn is_sentence_closer(ch: char) -> bool {
+    matches!(
+        ch,
+        '"' | '\'' | ')' | ']' | '}' | '”' | '’' | '»' | '）' | '】' | '』'
+    )
+}
+
+/// Return byte indices right after complete sentence boundaries.
+fn sentence_boundaries(text: &str) -> Vec<usize> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let len = text.len();
+    let mut out = Vec::new();
+
+    for (i, (_, ch)) in chars.iter().enumerate() {
+        if !is_sentence_terminal(*ch) {
+            continue;
+        }
+
+        let mut j = i + 1;
+        while j < chars.len() && is_sentence_closer(chars[j].1) {
+            j += 1;
+        }
+
+        let is_boundary = if j >= chars.len() {
+            true
+        } else {
+            chars[j].1.is_whitespace()
+        };
+        if !is_boundary {
+            continue;
+        }
+
+        while j < chars.len() && chars[j].1.is_whitespace() {
+            j += 1;
+        }
+        let end = if j < chars.len() { chars[j].0 } else { len };
+        out.push(end);
+    }
+
+    out
+}
+
+/// Conservative commit policy:
+/// when we have at least two complete sentences, commit only the first one.
+fn split_for_commit(text: &str) -> Option<(&str, &str)> {
+    let boundaries = sentence_boundaries(text);
+    if boundaries.len() < 2 {
+        return None;
+    }
+    let cut = boundaries[0];
+    let committed = text[..cut].trim();
+    if committed.is_empty() {
+        return None;
+    }
+    let remainder = text[cut..].trim_start();
+    Some((committed, remainder))
+}
+
+fn build_context_text(s: &AsrSession) -> String {
+    let combined = join_segments(&s.transcript, &s.pending_prefix);
+    tail_chars(&combined, 200).to_string()
+}
+
+fn restart_subsession(s: &mut AsrSession) {
+    let context = build_context_text(s);
+    let mut opts = StreamingOptions::default().with_chunk_size_sec(s.chunk_size_sec);
+    if !context.is_empty() {
+        opts = opts.with_initial_text(context);
+    }
+    if let Some(lang) = &s.language {
+        opts = opts.with_language(lang);
+    }
+    s.state = s.engine.init_streaming(opts);
+    s.session_samples = 0;
 }
 
 // ── Engine API ──────────────────────────────────────────────────────────
@@ -300,6 +399,7 @@ pub extern "C" fn asr_session_create(
         engine: arc,
         state,
         transcript: String::new(),
+        pending_prefix: String::new(),
         session_samples: 0,
         session_limit,
         chunk_size_sec: opts.chunk_size_sec,
@@ -327,7 +427,31 @@ pub extern "C" fn asr_session_feed(
 
         match s.engine.feed_audio(&mut s.state, audio) {
             Ok(Some(result)) => {
-                let full_text = format!("{}{}", s.transcript, result.text);
+                let current_text = join_segments(&s.pending_prefix, &result.text);
+
+                // Commit the oldest sentence once we have >=2 complete sentences
+                // buffered, then restart from that text boundary.
+                //
+                // We first flush/finalize the current sub-session to avoid losing
+                // any buffered samples that haven't crossed a chunk boundary yet.
+                if split_for_commit(&current_text).is_some() {
+                    let flushed = s
+                        .engine
+                        .finish_streaming(&mut s.state)
+                        .map_err(|e| format!("{e:#}"))?;
+                    let full_tail = join_segments(&s.pending_prefix, &flushed.text);
+                    if let Some((committed, remainder)) = split_for_commit(&full_tail) {
+                        append_segment(&mut s.transcript, committed);
+                        s.pending_prefix = remainder.to_string();
+                    } else {
+                        s.pending_prefix = full_tail;
+                    }
+                    restart_subsession(s);
+                    let full_text = join_segments(&s.transcript, &s.pending_prefix);
+                    return Ok(Some(full_text));
+                }
+
+                let full_text = join_segments(&s.transcript, &current_text);
 
                 // Session rotation: if we've accumulated enough audio, finalize
                 // and start a new sub-session.
@@ -362,6 +486,24 @@ pub extern "C" fn asr_session_feed(
     }
 }
 
+/// Return the length (in UTF-16 code units) of the committed transcript prefix.
+///
+/// This excludes the current uncommitted/pending tail and is intended for UI
+/// styling (e.g. committed vs pending fade levels).
+#[no_mangle]
+pub extern "C" fn asr_session_committed_utf16_len(session: *const AsrSession) -> usize {
+    if session.is_null() {
+        return 0;
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let s = unsafe { &*session };
+        s.transcript.encode_utf16().count()
+    }));
+
+    result.unwrap_or(0)
+}
+
 /// Finalize the session and return the complete transcript.
 ///
 /// Returns a newly-allocated C string (caller must free with `asr_string_free`).
@@ -377,9 +519,9 @@ pub extern "C" fn asr_session_finish(
             .engine
             .finish_streaming(&mut s.state)
             .map_err(|e| format!("{e:#}"))?;
-        if !final_result.text.is_empty() {
-            s.transcript.push_str(&final_result.text);
-        }
+        let full_tail = join_segments(&s.pending_prefix, &final_result.text);
+        append_segment(&mut s.transcript, &full_tail);
+        s.pending_prefix.clear();
         Ok::<_, String>(s.transcript.clone())
     }));
 
@@ -421,20 +563,43 @@ pub extern "C" fn asr_string_free(s: *mut c_char) {
 fn rotate_session(s: &mut AsrSession) {
     // Finalize current sub-session.
     if let Ok(result) = s.engine.finish_streaming(&mut s.state) {
-        if !result.text.is_empty() {
-            s.transcript.push_str(&result.text);
-            s.transcript.push(' ');
-        }
+        let full_tail = join_segments(&s.pending_prefix, &result.text);
+        append_segment(&mut s.transcript, &full_tail);
+        s.pending_prefix.clear();
+    }
+    restart_subsession(s);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_for_commit_needs_two_complete_sentences() {
+        assert!(split_for_commit("hello world.").is_none());
+        assert!(split_for_commit("hello world. next bit").is_none());
     }
 
-    // Start a new sub-session with context from the tail of the transcript.
-    let context = tail_chars(&s.transcript, 200);
-    let mut opts = StreamingOptions::default()
-        .with_chunk_size_sec(s.chunk_size_sec)
-        .with_initial_text(context);
-    if let Some(lang) = &s.language {
-        opts = opts.with_language(lang);
+    #[test]
+    fn split_for_commit_commits_oldest_sentence_only() {
+        let (commit, rest) =
+            split_for_commit("First sentence. Second sentence. Third").expect("should split");
+        assert_eq!(commit, "First sentence.");
+        assert_eq!(rest, "Second sentence. Third");
     }
-    s.state = s.engine.init_streaming(opts);
-    s.session_samples = 0;
+
+    #[test]
+    fn split_for_commit_handles_unicode_punctuation() {
+        let (commit, rest) =
+            split_for_commit("Bonjour ! Encore une phrase ? Suite").expect("should split");
+        assert_eq!(commit, "Bonjour !");
+        assert_eq!(rest, "Encore une phrase ? Suite");
+    }
+
+    #[test]
+    fn join_segments_trims_and_separates() {
+        assert_eq!(join_segments("", "hello"), "hello");
+        assert_eq!(join_segments("hello", "world"), "hello world");
+        assert_eq!(join_segments(" hello  ", "  world "), "hello world");
+    }
 }

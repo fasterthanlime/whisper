@@ -1378,6 +1378,7 @@ async fn main() -> anyhow::Result<()> {
     #[derive(Deserialize)]
     struct AuthorSubmitBody {
         term: String,
+        terms: Option<Vec<String>>,
         sentence: String,
         kind: Option<String>,
         surface_form: Option<String>,
@@ -1411,12 +1412,40 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .into_response());
             }
-            if sentence.to_lowercase().contains(&body.term.to_lowercase()) {
-                return Ok(Json(
-                    serde_json::json!({"error": format!("Counterexample sentence must not contain canonical term '{}'", body.term)}),
-                )
-                .into_response());
+            let mut target_terms = body
+                .terms
+                .unwrap_or_default()
+                .into_iter()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect::<Vec<_>>();
+            if target_terms.is_empty() && !body.term.trim().is_empty() {
+                target_terms.push(body.term.trim().to_string());
             }
+            target_terms.sort_by_key(|t| t.to_ascii_lowercase());
+            target_terms.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+            for term in &target_terms {
+                if sentence.to_lowercase().contains(&term.to_lowercase()) {
+                    return Ok(Json(
+                        serde_json::json!({"error": format!("Counterexample sentence must not contain canonical term '{}'", term)}),
+                    )
+                    .into_response());
+                }
+            }
+            let db = state.db.lock().unwrap();
+            let mut ids = Vec::new();
+            for term in &target_terms {
+                let id = db
+                    .insert_authored_sentence_with_kind(
+                        term,
+                        &sentence,
+                        kind,
+                        surface_form.as_deref(),
+                    )
+                    .map_err(err)?;
+                ids.push(id);
+            }
+            return Ok(Json(serde_json::json!({"id": ids.first().copied(), "ids": ids})).into_response());
         } else if !sentence.to_lowercase().contains(&body.term.to_lowercase()) {
             return Ok(Json(
                 serde_json::json!({"error": format!("Sentence must contain '{}'", body.term)}),
@@ -1433,6 +1462,203 @@ async fn main() -> anyhow::Result<()> {
             )
             .map_err(err)?;
         Ok(Json(serde_json::json!({"id": id})).into_response())
+    }
+
+    async fn api_author_counterexample_surface_next(
+        State(state): State<Arc<AppState>>,
+    ) -> Result<Response, AppError> {
+        let db = state.db.lock().unwrap();
+        let item = db.next_counterexample_surface_candidate().map_err(err)?;
+        Ok(Json(serde_json::json!({ "item": item })).into_response())
+    }
+
+    #[derive(Deserialize)]
+    struct CounterexampleSurfaceDecisionBody {
+        surface_form: String,
+        decision: String,
+    }
+
+    async fn api_author_counterexample_surface_decision(
+        State(state): State<Arc<AppState>>,
+        Json(body): Json<CounterexampleSurfaceDecisionBody>,
+    ) -> Result<Response, AppError> {
+        let db = state.db.lock().unwrap();
+        db.set_counterexample_surface_decision(&body.surface_form, &body.decision)
+            .map_err(err)?;
+        Ok(Json(serde_json::json!({"ok": true})).into_response())
+    }
+
+    #[derive(Deserialize)]
+    struct CounterexampleSurfaceSentencesQuery {
+        term: String,
+        surface_form: String,
+        limit: Option<i64>,
+    }
+
+    async fn api_author_counterexample_surface_sentences(
+        State(state): State<Arc<AppState>>,
+        Query(query): Query<CounterexampleSurfaceSentencesQuery>,
+    ) -> Result<Response, AppError> {
+        let db = state.db.lock().unwrap();
+        let suggestions = db
+            .sentence_suggestions_for_counterexample_surface(
+                &query.term,
+                &query.surface_form,
+                query.limit.unwrap_or(12),
+            )
+            .map_err(err)?;
+        let existing = db
+            .authored_counterexamples_for_term_surface(&query.term, &query.surface_form)
+            .map_err(err)?;
+        Ok(Json(serde_json::json!({
+            "sentences": suggestions,
+            "existing": existing,
+        }))
+        .into_response())
+    }
+
+    #[derive(Deserialize)]
+    struct CounterexampleSurfaceTranscribeQuery {
+        term: Option<String>,
+        surface_form: String,
+    }
+
+    async fn api_author_counterexample_surface_transcribe(
+        State(state): State<Arc<AppState>>,
+        Query(query): Query<CounterexampleSurfaceTranscribeQuery>,
+        body: axum::body::Bytes,
+    ) -> Result<Response, AppError> {
+        let (_term, surface_form, mono, sample_rate) =
+            tokio::task::spawn_blocking(move || -> Result<_, AppError> {
+                let cursor = std::io::Cursor::new(body.to_vec());
+                let mut reader = hound::WavReader::new(cursor).map_err(err)?;
+                let spec = reader.spec();
+
+                let samples_f32: Vec<f32> = match spec.sample_format {
+                    hound::SampleFormat::Float => {
+                        reader.samples::<f32>().filter_map(|s| s.ok()).collect()
+                    }
+                    hound::SampleFormat::Int => {
+                        let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
+                        reader
+                            .samples::<i32>()
+                            .filter_map(|s| s.ok())
+                            .map(|s| s as f32 / max)
+                            .collect()
+                    }
+                };
+
+                let mut mono: Vec<f32> = if spec.channels > 1 {
+                    samples_f32
+                        .chunks(spec.channels as usize)
+                        .map(|ch| ch.iter().sum::<f32>() / ch.len() as f32)
+                        .collect()
+                } else {
+                    samples_f32
+                };
+
+                let peak = mono.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+                if peak > 0.001 {
+                    let gain = 0.95 / peak;
+                    for s in &mut mono {
+                        *s *= gain;
+                    }
+                }
+
+                Ok((query.term, query.surface_form, mono, spec.sample_rate))
+            })
+            .await
+            .map_err(|e| err(e))??;
+
+        let qwen_clean = {
+            let state2 = state.clone();
+            tokio::task::spawn_blocking(move || -> Result<String, AppError> {
+                let clean_16k = tts::resample_to_16k(&mono, sample_rate).map_err(err)?;
+                let qwen = state2
+                    .asr
+                    .transcribe_samples(
+                        &clean_16k,
+                        qwen3_asr::TranscribeOptions::default().with_language("english"),
+                    )
+                    .map_err(err)?
+                    .text;
+                Ok(qwen)
+            })
+            .await
+            .map_err(|e| err(e))??
+        };
+
+        let contains_surface = qwen_clean
+            .to_lowercase()
+            .contains(&surface_form.to_lowercase());
+
+        Ok(Json(serde_json::json!({
+            "qwen_clean": qwen_clean,
+            "contains_surface": contains_surface,
+        }))
+        .into_response())
+    }
+
+    #[derive(Deserialize)]
+    struct CounterexampleSurfaceCreateBody {
+        term: String,
+        surface_form: String,
+        sentences: Vec<String>,
+    }
+
+    async fn api_author_counterexample_surface_create(
+        State(state): State<Arc<AppState>>,
+        Json(body): Json<CounterexampleSurfaceCreateBody>,
+    ) -> Result<Response, AppError> {
+        let term = body.term.trim();
+        let surface = body.surface_form.trim();
+        if term.is_empty() || surface.is_empty() {
+            return Ok(Json(serde_json::json!({
+                "error": "term and surface_form are required"
+            }))
+            .into_response());
+        }
+
+        let mut created_ids = Vec::new();
+        {
+            let db = state.db.lock().unwrap();
+            for raw_sentence in body.sentences {
+                let sentence = raw_sentence.trim();
+                if sentence.is_empty() {
+                    continue;
+                }
+                if !sentence.to_lowercase().contains(&surface.to_lowercase()) {
+                    continue;
+                }
+                if sentence.to_lowercase().contains(&term.to_lowercase()) {
+                    continue;
+                }
+                let id = db
+                    .insert_authored_sentence_with_kind(term, sentence, "counterexample", Some(surface))
+                    .map_err(err)?;
+                created_ids.push(id);
+            }
+        }
+
+        let created = if created_ids.is_empty() {
+            Vec::new()
+        } else {
+            let db = state.db.lock().unwrap();
+            let rows = db.list_authored_sentences().map_err(err)?;
+            rows.into_iter()
+                .filter(|row| {
+                    row.get("id")
+                        .and_then(|v| v.as_i64())
+                        .map(|id| created_ids.contains(&id))
+                        .unwrap_or(false)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        Ok(Json(serde_json::json!({
+            "created": created,
+        }))
+        .into_response())
     }
 
     async fn api_author_sentences(
@@ -1496,15 +1722,15 @@ async fn main() -> anyhow::Result<()> {
         Path(id): Path<i64>,
         body: axum::body::Bytes,
     ) -> Result<Response, AppError> {
-        let (term, sentence) = {
+        let (term, sentence, kind, surface_form) = {
             let db = state.db.lock().unwrap();
             db.get_authored_sentence(id)
                 .map_err(err)?
-                .map(|(term, sentence, _kind, _surface_form)| (term, sentence))
+                .map(|(term, sentence, kind, surface_form)| (term, sentence, kind, surface_form))
                 .ok_or_else(|| err("sentence not found"))?
         };
 
-        let (term, sentence, mono, sample_rate) =
+        let (term, sentence, kind, surface_form, mono, sample_rate) =
             tokio::task::spawn_blocking(move || -> Result<_, AppError> {
                 let cursor = std::io::Cursor::new(body.to_vec());
                 let mut reader = hound::WavReader::new(cursor).map_err(err)?;
@@ -1541,10 +1767,46 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
 
-                Ok((term, sentence, mono, spec.sample_rate))
+                Ok((term, sentence, kind, surface_form, mono, spec.sample_rate))
             })
             .await
             .map_err(|e| err(e))??;
+
+        let mut validated_qwen_clean = None;
+        if kind.eq_ignore_ascii_case("counterexample") {
+            if let Some(surface) = surface_form.as_deref().filter(|s| !s.trim().is_empty()) {
+                let state2 = state.clone();
+                let mono2 = mono.clone();
+                let surface2 = surface.to_string();
+                let sample_rate2 = sample_rate;
+                let qwen = tokio::task::spawn_blocking(move || -> Result<String, AppError> {
+                    let clean_16k = tts::resample_to_16k(&mono2, sample_rate2).map_err(err)?;
+                    let qwen = state2
+                        .asr
+                        .transcribe_samples(
+                            &clean_16k,
+                            qwen3_asr::TranscribeOptions::default().with_language("english"),
+                        )
+                        .map_err(err)?
+                        .text;
+                    Ok(qwen)
+                })
+                .await
+                .map_err(|e| err(e))??;
+
+                if !qwen.to_lowercase().contains(&surface2.to_lowercase()) {
+                    return Ok((
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "ASR heard '{}' but expected '{}' to appear in the take.",
+                            qwen, surface2
+                        ),
+                    )
+                        .into_response());
+                }
+                validated_qwen_clean = Some(qwen);
+            }
+        }
 
         let ogg_bytes = tts::encode_ogg_opus(&mono, sample_rate)
             .await
@@ -1562,9 +1824,19 @@ async fn main() -> anyhow::Result<()> {
             let recording_id = db
                 .insert_authored_sentence_recording(&term, &sentence, take_no, &ogg_path)
                 .map_err(err)?;
+            if let Some(qwen_clean) = validated_qwen_clean.as_deref() {
+                db.update_authored_recording_qwen_clean(
+                    recording_id,
+                    qwen_clean,
+                    &state.qwen_model_key,
+                )
+                .map_err(err)?;
+            }
             (recording_id, take_no)
         };
-        state.authored_asr_notify.notify_one();
+        if validated_qwen_clean.is_none() {
+            state.authored_asr_notify.notify_one();
+        }
 
         let recordings = {
             let db = state.db.lock().unwrap();
@@ -1578,6 +1850,7 @@ async fn main() -> anyhow::Result<()> {
             "take_no": take_no,
             "sentence": sentence,
             "term": term,
+            "qwen_clean": validated_qwen_clean,
             "recordings": recordings.into_iter().map(|r| {
                 let audio_b64 = std::fs::read(&r.wav_path)
                     .ok()
@@ -2053,6 +2326,26 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/author/next", get(api_author_next))
         .route("/api/author/submit", post(api_author_submit))
         .route("/api/author/stats", get(api_author_stats))
+        .route(
+            "/api/author/counterexample-surfaces/next",
+            get(api_author_counterexample_surface_next),
+        )
+        .route(
+            "/api/author/counterexample-surfaces/decision",
+            post(api_author_counterexample_surface_decision),
+        )
+        .route(
+            "/api/author/counterexample-surfaces/sentences",
+            get(api_author_counterexample_surface_sentences),
+        )
+        .route(
+            "/api/author/counterexample-surfaces/transcribe",
+            post(api_author_counterexample_surface_transcribe),
+        )
+        .route(
+            "/api/author/counterexample-surfaces/create",
+            post(api_author_counterexample_surface_create),
+        )
         .route("/api/author/sentences", get(api_author_sentences))
         .route(
             "/api/author/sentences/{id}/recordings",

@@ -13,9 +13,9 @@ struct RecordingOverlayView: View {
 
     @State private var isAppearing = false
     @State private var displayedText = ""
-    @State private var stablePrefix = ""
     @State private var freshStart = 0 // character index where fresh/rewritten text begins
     @State private var freshOpacity: Double = 1.0
+    @State private var freshColorBlend: Double = 1.0
     @State private var textAnimationTask: Task<Void, Never>?
     @State private var textContentHeight: CGFloat = 0
 
@@ -33,6 +33,11 @@ struct RecordingOverlayView: View {
     }
 
     private let maxTextHeight: CGFloat = 120 // ~6 lines at 17pt
+    private let committedRGB = (r: 1.00, g: 1.00, b: 1.00)
+    private let pendingRGB = (r: 0.74, g: 0.87, b: 1.00)
+    private let freshRGB = (r: 1.00, g: 0.78, b: 0.52)
+    private let pendingOpacity: Double = 0.92
+    private let freshStartOpacity: Double = 0.55
 
     private var isScrolling: Bool { textContentHeight > maxTextHeight }
 
@@ -182,20 +187,32 @@ struct RecordingOverlayView: View {
         return "Listening..."
     }
 
-    /// Build an `AttributedString` where the stable prefix is fully opaque
-    /// and the fresh/rewritten portion fades in.
+    /// Build an `AttributedString` with 3 visual tiers:
+    /// committed (opaque), pending stable (medium), and fresh (animated fade).
     private var styledDisplayText: AttributedString {
         let full = displayedTextValue
         var result = AttributedString(full)
         let font = NSFont(name: "Jost-Medium", size: 15) ?? .systemFont(ofSize: 15, weight: .medium)
+        let committedCount = committedCharacterCount(in: full)
+        let pendingStart = min(max(committedCount, 0), full.count)
+        let freshStartClamped = min(max(freshStart, pendingStart), full.count)
+        let committedColor = Color(red: committedRGB.r, green: committedRGB.g, blue: committedRGB.b)
+        let pendingColor = Color(red: pendingRGB.r, green: pendingRGB.g, blue: pendingRGB.b)
+        let freshColor = blendedFreshColor()
 
         result.font = font
-        result.foregroundColor = .white
+        result.foregroundColor = pendingColor.opacity(pendingOpacity)
 
-        // Apply fade to the fresh portion (after the stable prefix)
-        if freshStart > 0, freshStart < full.count {
-            let startIdx = result.index(result.startIndex, offsetByCharacters: freshStart)
-            result[startIdx..<result.endIndex].foregroundColor = .white.opacity(freshOpacity)
+        // Committed prefix is fully opaque.
+        if committedCount > 0 {
+            let committedEnd = result.index(result.startIndex, offsetByCharacters: committedCount)
+            result[result.startIndex..<committedEnd].foregroundColor = committedColor
+        }
+
+        // Fresh tail fades from stronger fade to pending opacity.
+        if freshStartClamped < full.count {
+            let startIdx = result.index(result.startIndex, offsetByCharacters: freshStartClamped)
+            result[startIdx..<result.endIndex].foregroundColor = freshColor.opacity(freshOpacity)
         }
 
         return result
@@ -210,7 +227,8 @@ struct RecordingOverlayView: View {
         if appState.phase == .transcribing {
             displayedText = newText
             freshStart = 0
-            freshOpacity = 1.0
+            freshOpacity = pendingOpacity
+            freshColorBlend = 1.0
             return
         }
 
@@ -221,16 +239,17 @@ struct RecordingOverlayView: View {
         if commonPrefixLength == newText.count {
             displayedText = newText
             freshStart = 0
-            freshOpacity = 1.0
+            freshOpacity = pendingOpacity
+            freshColorBlend = 1.0
             return
         }
 
-        let hasRewrite = commonPrefixLength < currentText.count
         let newPart = String(newText.dropFirst(commonPrefixLength))
 
         // Set the full new text, mark where fresh content starts.
         freshStart = commonPrefixLength
-        freshOpacity = hasRewrite ? 0.35 : 0.35
+        freshOpacity = freshStartOpacity
+        freshColorBlend = 0.0
         displayedText = String(newText.prefix(commonPrefixLength))
 
         // Typewrite the new characters, then fade in the fresh portion.
@@ -250,9 +269,25 @@ struct RecordingOverlayView: View {
             // Fade in the fresh portion
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.2)) {
-                freshOpacity = 1.0
+                freshOpacity = pendingOpacity
+                freshColorBlend = 1.0
             }
         }
+    }
+
+    private func committedCharacterCount(in text: String) -> Int {
+        guard !text.isEmpty else { return 0 }
+        let clampedUTF16 = min(max(0, appState.partialTranscriptCommittedUTF16), (text as NSString).length)
+        let ns = text as NSString
+        return ns.substring(to: clampedUTF16).count
+    }
+
+    private func blendedFreshColor() -> Color {
+        let t = min(max(freshColorBlend, 0), 1)
+        let r = freshRGB.r + (pendingRGB.r - freshRGB.r) * t
+        let g = freshRGB.g + (pendingRGB.g - freshRGB.g) * t
+        let b = freshRGB.b + (pendingRGB.b - freshRGB.b) * t
+        return Color(red: r, green: g, blue: b)
     }
 }
 

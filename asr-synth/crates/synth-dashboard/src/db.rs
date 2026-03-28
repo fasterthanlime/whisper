@@ -320,6 +320,18 @@ impl Db {
         )
         .ok();
         conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS counterexample_surface_reviews (
+                id INTEGER PRIMARY KEY,
+                term TEXT NOT NULL COLLATE NOCASE,
+                surface_form TEXT NOT NULL COLLATE NOCASE,
+                decision TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(term, surface_form)
+            )",
+        )
+        .ok();
+        conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS template_sentences (
                 id INTEGER PRIMARY KEY,
                 term TEXT NOT NULL COLLATE NOCASE,
@@ -792,6 +804,39 @@ impl Db {
              ORDER BY id DESC",
         )?;
         let rows = stmt.query_map(params![term], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn authored_counterexamples_for_term_surface(
+        &self,
+        term: &str,
+        surface_form: &str,
+    ) -> Result<Vec<serde_json::Value>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.id, a.term, a.sentence, a.created_at, COALESCE(a.kind, 'term') as kind, a.surface_form,
+                    COALESCE(r.cnt, 0) as recording_count
+             FROM authored_sentences a
+             LEFT JOIN (
+                 SELECT LOWER(sentence) as sentence_key, COUNT(*) as cnt
+                 FROM authored_sentence_recordings
+                 GROUP BY LOWER(sentence)
+             ) r ON r.sentence_key = LOWER(a.sentence)
+             WHERE LOWER(a.term) = LOWER(?1)
+               AND COALESCE(a.kind, 'term') = 'counterexample'
+               AND LOWER(COALESCE(a.surface_form, '')) = LOWER(?2)
+             ORDER BY a.id DESC",
+        )?;
+        let rows = stmt.query_map(params![term, surface_form], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, i64>(0)?,
+                "term": row.get::<_, String>(1)?,
+                "sentence": row.get::<_, String>(2)?,
+                "created_at": row.get::<_, String>(3)?,
+                "kind": row.get::<_, String>(4)?,
+                "surface_form": row.get::<_, Option<String>>(5)?,
+                "recording_count": row.get::<_, i64>(6)?,
+            }))
+        })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -1662,6 +1707,141 @@ impl Db {
             params![term, alt_spelling],
         )?;
         Ok(n)
+    }
+
+    pub fn next_counterexample_surface_candidate(&self) -> Result<Option<serde_json::Value>> {
+        let sql = r#"
+            WITH raw AS (
+                SELECT term,
+                       TRIM(TRIM(qwen_heard), '.,!?;:()[]{}"''`“”‘’') AS surface_form
+                FROM vocab_confusions
+                WHERE qwen_match = 0
+                UNION ALL
+                SELECT term,
+                       TRIM(TRIM(parakeet_heard), '.,!?;:()[]{}"''`“”‘’') AS surface_form
+                FROM vocab_confusions
+                WHERE parakeet_match = 0
+            ),
+            grouped AS (
+                SELECT LOWER(surface_form) AS surface_key,
+                       MIN(surface_form) AS surface_form,
+                       COUNT(*) AS hit_count,
+                       COUNT(DISTINCT LOWER(term)) AS distinct_terms,
+                       GROUP_CONCAT(DISTINCT term) AS terms_csv
+                FROM raw
+                WHERE surface_form IS NOT NULL
+                  AND surface_form != ''
+                  AND LOWER(surface_form) != LOWER(term)
+                GROUP BY LOWER(surface_form)
+            )
+            SELECT g.surface_form, g.hit_count, g.distinct_terms, g.terms_csv
+            FROM grouped g
+            WHERE g.distinct_terms <= 3
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM counterexample_surface_reviews r
+                  WHERE LOWER(r.surface_form) = LOWER(g.surface_form)
+              )
+            ORDER BY g.hit_count DESC, LENGTH(g.surface_form) ASC, g.surface_form COLLATE NOCASE
+            LIMIT 1
+        "#;
+        let mut stmt = self.conn.prepare(sql)?;
+        let row = stmt
+            .query_row([], |row| {
+                let terms_csv = row.get::<_, String>(3)?;
+                let terms = terms_csv
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>();
+                Ok(serde_json::json!({
+                    "surface_form": row.get::<_, String>(0)?,
+                    "hit_count": row.get::<_, i64>(1)?,
+                    "distinct_terms": row.get::<_, i64>(2)?,
+                    "terms": terms,
+                }))
+            })
+            .optional()?;
+        Ok(row)
+    }
+
+    pub fn set_counterexample_surface_decision(
+        &self,
+        surface_form: &str,
+        decision: &str,
+    ) -> Result<()> {
+        let decision = if decision.eq_ignore_ascii_case("keep") {
+            "keep"
+        } else if decision.eq_ignore_ascii_case("skip") {
+            "skip"
+        } else {
+            "garbage"
+        };
+        let now = now_str();
+        self.conn.execute(
+            "INSERT INTO counterexample_surface_reviews (term, surface_form, decision, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?4)
+             ON CONFLICT(term, surface_form) DO UPDATE
+             SET decision = excluded.decision,
+                 updated_at = excluded.updated_at",
+            params!["*", surface_form, decision, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn sentence_suggestions_for_counterexample_surface(
+        &self,
+        term: &str,
+        surface_form: &str,
+        limit: i64,
+    ) -> Result<Vec<serde_json::Value>> {
+        let limit = limit.max(1);
+        let sql = r#"
+            WITH all_sentences AS (
+                SELECT text AS sentence, 'approved' AS source
+                FROM sentences
+                WHERE status = 'approved'
+                UNION
+                SELECT text AS sentence, source
+                FROM candidate_sentences
+                UNION
+                SELECT text AS sentence, COALESCE(app, 'transcription') AS source
+                FROM transcriptions
+                UNION
+                SELECT sentence, 'authored'
+                FROM authored_sentences
+            )
+            SELECT DISTINCT sentence, source
+            FROM all_sentences
+            WHERE LOWER(sentence) LIKE '%' || LOWER(?1) || '%'
+              AND LOWER(sentence) NOT LIKE '%' || LOWER(?2) || '%'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM authored_sentences a
+                  WHERE LOWER(a.term) = LOWER(?2)
+                    AND COALESCE(a.kind, 'term') = 'counterexample'
+                    AND LOWER(COALESCE(a.surface_form, '')) = LOWER(?1)
+                    AND LOWER(a.sentence) = LOWER(all_sentences.sentence)
+              )
+            ORDER BY
+                CASE source
+                    WHEN 'authored' THEN 0
+                    WHEN 'approved' THEN 1
+                    ELSE 2
+                END,
+                LENGTH(sentence) ASC,
+                sentence COLLATE NOCASE
+            LIMIT ?3
+        "#;
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![surface_form, term, limit], |row| {
+            Ok(serde_json::json!({
+                "sentence": row.get::<_, String>(0)?,
+                "source": row.get::<_, String>(1)?,
+            }))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     /// Check if a qwen output matches the original or any alt spelling for a term.

@@ -82,6 +82,12 @@ char *asr_session_feed(AsrSession *session,
                        char **out_err);
 
 /*
+ * Return committed transcript prefix length in UTF-16 code units.
+ * This excludes the current pending/uncommitted tail.
+ */
+size_t asr_session_committed_utf16_len(const AsrSession *session);
+
+/*
  * Finalize the session and return the complete transcript.
  * Caller must free the returned string with asr_string_free.
  */

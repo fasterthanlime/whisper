@@ -110,15 +110,14 @@ fn sample_weighted_index(weights: &[u32], rng: &mut impl Rng) -> usize {
 
 fn correction_example_repeat_count(item: &crate::db::EvalItem, eval_bonus: usize) -> usize {
     let hit_bonus = item.hit_count.clamp(1, 5) as usize;
-    let repeat = 1 + (hit_bonus.saturating_sub(1) / 2) + eval_bonus.min(3);
-    repeat.clamp(1, 4)
+    let repeat = 1 + (hit_bonus.saturating_sub(1) / 3) + usize::from(eval_bonus > 0);
+    repeat.clamp(1, 2)
 }
 
 fn counterexample_example_repeat_count(weight: u32) -> usize {
     match weight {
         0..=3 => 1,
-        4..=8 => 2,
-        _ => 3,
+        _ => 2,
     }
 }
 
@@ -170,6 +169,8 @@ const TEMPLATE_TARGET_PER_TERM: usize = 200;
 const TEMPLATE_BATCH_TERMS: usize = 4;
 const TEMPLATE_BATCH_SIZE: usize = 25;
 const TEMPLATE_MAX_ROUNDS: usize = 8;
+const MIN_CORRECTION_EXAMPLES_PER_TERM: usize = 8;
+const MAX_CORRECTION_EXAMPLES_PER_TERM: usize = 32;
 const COUNTEREXAMPLE_SHARE_OF_NOCHANGE: f64 = 0.5;
 const BG_TEMPLATE_TARGET_PER_TERM_DEFAULT: usize = 200;
 const BG_CONFUSION_TARGET_PER_TERM_DEFAULT: usize = 8;
@@ -2788,6 +2789,7 @@ pub async fn api_start_prepare_job(
             let mut quality_skips = 0usize;
             let mut missing_template_skips = 0usize;
             let mut weighted_repeat_pushes = 0usize;
+            let mut per_term_cap_skips = 0usize;
             let mut seen_prompts = HashMap::<String, String>::new();
             let identity_terms: Vec<String> = mistake_pairs
                 .iter()
@@ -2795,6 +2797,15 @@ pub async fn api_start_prepare_job(
                 .collect::<HashSet<_>>()
                 .into_iter()
                 .collect();
+            let distinct_term_count = identity_terms.len().max(1);
+            let average_error_budget = n_error.div_ceil(distinct_term_count);
+            let per_term_error_cap = average_error_budget
+                .saturating_mul(2)
+                .clamp(
+                    MIN_CORRECTION_EXAMPLES_PER_TERM,
+                    MAX_CORRECTION_EXAMPLES_PER_TERM,
+                );
+            let mut correction_examples_per_term = HashMap::<String, usize>::new();
             let counterexample_weight_map: HashMap<(String, String), u32> =
                 mistake_pairs.iter().fold(HashMap::new(), |mut acc, item| {
                     let key = (
@@ -2912,6 +2923,15 @@ pub async fn api_start_prepare_job(
             while correction_count < n_error && error_attempts < max_error_attempts {
                 error_attempts += 1;
                 let item = &mistake_pairs[sample_weighted_index(&pair_weights, &mut rng)];
+                let term_key = item.term.to_ascii_lowercase();
+                let current_for_term = correction_examples_per_term
+                    .get(&term_key)
+                    .copied()
+                    .unwrap_or(0);
+                if current_for_term >= per_term_error_cap {
+                    per_term_cap_skips += 1;
+                    continue;
+                }
                 let Some(sentence) = sample_template_sentence(&item.term, &mut rng) else {
                     missing_template_skips += 1;
                     continue;
@@ -2938,6 +2958,10 @@ pub async fn api_start_prepare_job(
                     if correction_count + added >= n_error {
                         break;
                     }
+                    if current_for_term + added >= per_term_error_cap {
+                        per_term_cap_skips += 1;
+                        break;
+                    }
                     if push_example(PreparedExample {
                         prompt: prompt.clone(),
                         completion: format!(" {}<|endoftext|>", full_original),
@@ -2948,6 +2972,7 @@ pub async fn api_start_prepare_job(
                 }
                 if added > 0 {
                     correction_count += added;
+                    *correction_examples_per_term.entry(term_key).or_insert(0) += added;
                 }
             }
 
@@ -3040,6 +3065,8 @@ pub async fn api_start_prepare_job(
                 "quality_skips": quality_skips,
                 "missing_template_skips": missing_template_skips,
                 "weighted_repeat_pushes": weighted_repeat_pushes,
+                "per_term_cap_skips": per_term_cap_skips,
+                "per_term_error_cap": per_term_error_cap,
                 "requested_total": total_examples,
                 "total": n,
                 "train_count": train.len(),
@@ -3051,8 +3078,8 @@ pub async fn api_start_prepare_job(
             job_id,
             &format!(
                 "Done: {} error + {} no-change ({} plain identity, {} counterexample) = {} total ({} train / {} valid, {} terms with cached templates, {} authored counterexamples)\n\
-                 Skipped: {} duplicate, {} conflicting prompt, {} quality filter, {} missing template\n\
-                 Weighted repeats kept: {}",
+                 Skipped: {} duplicate, {} conflicting prompt, {} quality filter, {} missing template, {} per-term cap\n\
+                 Weighted repeats kept: {} | Per-term correction cap: {}",
                 correction_count,
                 identity_count + counterexample_count,
                 identity_count,
@@ -3066,9 +3093,11 @@ pub async fn api_start_prepare_job(
                 conflict_skips,
                 quality_skips,
                 missing_template_skips,
+                per_term_cap_skips,
                 weighted_repeat_pushes,
+                per_term_error_cap,
             ),
-        );
+            );
             let _ = db.finish_job(job_id, "completed", Some(&stats.to_string()));
         });
 
@@ -3091,7 +3120,9 @@ pub async fn api_start_train_job(
     check_no_running_jobs(&state)?;
 
     let config = synth_train::TrainConfig {
-        model: body.model.unwrap_or_else(|| "Qwen/Qwen3.5-0.8B".into()),
+        model: body
+            .model
+            .unwrap_or_else(|| "mlx-community/Qwen3.5-2B-4bit".into()),
         iters: body.iters.unwrap_or(2000),
         batch_size: body.batch_size.unwrap_or(4),
         num_layers: body.num_layers.unwrap_or(8),
@@ -3746,10 +3777,14 @@ pub async fn api_start_eval_job(
     check_no_running_jobs(&state)?;
 
     let config = synth_train::InferenceConfig {
-        model: body.model.unwrap_or_else(|| "Qwen/Qwen3.5-0.8B".into()),
+        model: body
+            .model
+            .unwrap_or_else(|| synth_train::InferenceConfig::default().model),
         adapters: body.adapters.unwrap_or_else(|| "training/adapters".into()),
         ..Default::default()
     };
+    let resolved_model = synth_train::resolved_correction_base_model(&config)
+        .unwrap_or_else(|_| config.model.clone());
     let source = body.source.unwrap_or_else(|| "human".to_string());
     let repeats = body.repeats.unwrap_or(1).clamp(1, 32);
     let noise_level = body.noise_level.unwrap_or(0.0).clamp(0.0, 0.5);
@@ -3760,7 +3795,8 @@ pub async fn api_start_eval_job(
             "eval",
             Some(
                 &serde_json::json!({
-                    "model": config.model,
+                    "model": resolved_model,
+                    "requested_model": config.model,
                     "adapters": config.adapters,
                     "source": source,
                     "repeats": repeats,
@@ -3840,7 +3876,7 @@ pub async fn api_start_eval_job(
                     job_id,
                     &format!(
                         "Starting inference server ({} + {})...",
-                        config.model, config.adapters
+                        resolved_model, config.adapters
                     ),
                 );
                 drop(db);
@@ -3922,10 +3958,18 @@ pub async fn api_start_eval_job(
                         splice_fragment(&template_sentence, &item.term, &item.original);
                     let full_asr = splice_fragment(&template_sentence, &item.term, &item.qwen);
                     let prompt = synth_train::build_correction_prompt("", &full_asr);
+                    let infer_started = std::time::Instant::now();
                     let result = {
                         let mut guard = state2.inference_server.lock().unwrap();
-                        guard.as_mut().unwrap().infer(&prompt)
+                        guard.as_mut().unwrap().infer_with_stats(&prompt)
                     };
+                    let infer_total_ms = infer_started.elapsed().as_millis() as u64;
+                    let infer_stats = result.as_ref().ok().map(|output| output.stats.clone());
+                    let raw_output = result
+                        .as_ref()
+                        .ok()
+                        .map(|output| output.raw_text.clone())
+                        .unwrap_or_default();
                     evaluated += 1;
 
                     let expected_norm = normalize_eval_fragment(&item.original);
@@ -3945,11 +3989,12 @@ pub async fn api_start_eval_job(
                         extract_synthetic_fragment(&template_sentence, &item.term, &full_asr);
 
                     let (category, _corrected_text, corrected_fragment) = match result {
-                        Ok(ref corrected) if corrected.trim().is_empty() => {
+                        Ok(ref output) if output.text.trim().is_empty() => {
                             blank += 1;
                             ("blank", String::new(), String::new())
                         }
-                        Ok(corrected) => {
+                        Ok(output) => {
+                            let corrected = output.text;
                             let corrected_fragment = extract_synthetic_fragment(
                                 &template_sentence,
                                 &item.term,
@@ -4011,7 +4056,18 @@ pub async fn api_start_eval_job(
                         "cat": category,
                         "qwen": asr_fragment,
                         "output": corrected_fragment.trim(),
+                        "raw_output": raw_output,
                         "expected": expected_fragment,
+                        "timing": {
+                            "infer_total_ms": infer_total_ms,
+                            "encode_ms": infer_stats.as_ref().map(|stats| stats.encode_ms),
+                            "prefill_ms": infer_stats.as_ref().map(|stats| stats.prefill_ms),
+                            "decode_ms": infer_stats.as_ref().map(|stats| stats.decode_ms),
+                            "generate_ms": infer_stats.as_ref().map(|stats| stats.generate_ms),
+                            "total_ms": infer_stats.as_ref().map(|stats| stats.total_ms).unwrap_or(infer_total_ms),
+                            "prompt_tokens": infer_stats.as_ref().map(|stats| stats.prompt_tokens),
+                            "output_tokens": infer_stats.as_ref().map(|stats| stats.output_tokens),
+                        }
                     }));
 
                     let db = state2.db.lock().unwrap();
@@ -4179,10 +4235,12 @@ pub async fn api_start_eval_job(
                 }
 
                 let samples = apply_eval_noise(&clean_16k, noise_level);
-                let asr_qwen = if use_cached_clean_qwen
+                let attempt_started = std::time::Instant::now();
+                let asr_started = std::time::Instant::now();
+                let (asr_qwen, asr_source) = if use_cached_clean_qwen
                     && rec.qwen_clean_model.as_deref() == Some(&state2.qwen_model_key)
                 {
-                    rec.qwen_clean.clone().unwrap_or_default()
+                    (rec.qwen_clean.clone().unwrap_or_default(), "cache")
                 } else {
                     let state_q = state2.clone();
                     let asr_samples = samples.clone();
@@ -4208,19 +4266,30 @@ pub async fn api_start_eval_job(
                         );
                     }
 
-                    qwen
+                    (qwen, "live")
                 };
+                let asr_ms = asr_started.elapsed().as_millis() as u64;
 
                 let prompt = synth_train::build_correction_prompt("", &asr_qwen);
+                let infer_started = std::time::Instant::now();
                 let result = {
                     let mut guard = state2.inference_server.lock().unwrap();
-                    guard.as_mut().unwrap().infer(&prompt)
+                    guard.as_mut().unwrap().infer_with_stats(&prompt)
                 };
+                let infer_total_ms = infer_started.elapsed().as_millis() as u64;
+                let infer_stats = result.as_ref().ok().map(|output| output.stats.clone());
+                let raw_output = result
+                    .as_ref()
+                    .ok()
+                    .map(|output| output.raw_text.clone())
+                    .unwrap_or_default();
                 evaluated += 1;
 
+                let focus_ms;
                 let (category, corrected_text, expected_text, asr_focus_text, focus) = match result
                 {
-                    Ok(ref c) if c.trim().is_empty() => {
+                    Ok(ref output) if output.text.trim().is_empty() => {
+                        let focus_started = std::time::Instant::now();
                         let focus = match extract_eval_focus(
                             &state2,
                             &samples,
@@ -4249,12 +4318,17 @@ pub async fn api_start_eval_job(
                                 continue;
                             }
                         };
-                        if eval_fragment_matches(
+                        focus_ms = focus_started.elapsed().as_millis() as u64;
+                        let asr_was_correct = eval_fragment_matches(
                             &alt_spellings,
                             &rec.term,
                             &focus.expected,
                             &focus.asr,
-                        ) {
+                        );
+                        if !focus.alignment_failed {
+                            scorable += 1;
+                        }
+                        if !focus.alignment_failed && asr_was_correct {
                             asr_correct += 1;
                         }
                         blank += 1;
@@ -4266,7 +4340,9 @@ pub async fn api_start_eval_job(
                             focus,
                         )
                     }
-                    Ok(corrected) => {
+                    Ok(output) => {
+                        let corrected = output.text;
+                        let focus_started = std::time::Instant::now();
                         let focus = match extract_eval_focus(
                             &state2,
                             &samples,
@@ -4295,6 +4371,7 @@ pub async fn api_start_eval_job(
                                 continue;
                             }
                         };
+                        focus_ms = focus_started.elapsed().as_millis() as u64;
                         let asr_was_correct = eval_fragment_matches(
                             &alt_spellings,
                             &rec.term,
@@ -4364,6 +4441,7 @@ pub async fn api_start_eval_job(
                         }
                     }
                     Err(e) => {
+                        let focus_started = std::time::Instant::now();
                         let focus = match extract_eval_focus(
                             &state2,
                             &samples,
@@ -4392,12 +4470,17 @@ pub async fn api_start_eval_job(
                                 continue;
                             }
                         };
-                        if eval_fragment_matches(
+                        focus_ms = focus_started.elapsed().as_millis() as u64;
+                        let asr_was_correct = eval_fragment_matches(
                             &alt_spellings,
                             &rec.term,
                             &focus.expected,
                             &focus.asr,
-                        ) {
+                        );
+                        if !focus.alignment_failed {
+                            scorable += 1;
+                        }
+                        if !focus.alignment_failed && asr_was_correct {
                             asr_correct += 1;
                         }
                         let msg = e.to_string();
@@ -4444,12 +4527,26 @@ pub async fn api_start_eval_job(
                     "cat": category,
                     "qwen": asr_focus_text,
                     "output": corrected_text.trim(),
+                    "raw_output": raw_output,
                     "expected": expected_text,
                     "extracted_expected": focus.extracted_expected,
                     "alignment_failed": focus.alignment_failed,
                     "cons_time": [focus.cons_range.0, focus.cons_range.1],
                     "trim_info": focus.trim_info,
                     "trace": focus.trace,
+                    "timing": {
+                        "asr_source": asr_source,
+                        "asr_ms": asr_ms,
+                        "infer_total_ms": infer_total_ms,
+                        "encode_ms": infer_stats.as_ref().map(|stats| stats.encode_ms),
+                        "prefill_ms": infer_stats.as_ref().map(|stats| stats.prefill_ms),
+                        "decode_ms": infer_stats.as_ref().map(|stats| stats.decode_ms),
+                        "generate_ms": infer_stats.as_ref().map(|stats| stats.generate_ms),
+                        "prompt_tokens": infer_stats.as_ref().map(|stats| stats.prompt_tokens),
+                        "output_tokens": infer_stats.as_ref().map(|stats| stats.output_tokens),
+                        "focus_ms": focus_ms,
+                        "total_ms": attempt_started.elapsed().as_millis() as u64,
+                    },
                     "alignments": {
                         "expected": focus.expected_alignment,
                         "asr": focus.asr_alignment,
@@ -4547,6 +4644,7 @@ pub async fn api_start_eval_job(
 pub struct CorrectionBody {
     pub parakeet: String,
     pub qwen: String,
+    pub use_adapters: Option<bool>,
 }
 
 /// Run a single correction inference via a temporary server.
@@ -4557,7 +4655,10 @@ pub async fn api_correct(
 ) -> Result<Response, AppError> {
     let state2 = state.clone();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-        let config = synth_train::InferenceConfig::default();
+        let config = synth_train::InferenceConfig {
+            attach_adapters: body.use_adapters.unwrap_or(true),
+            ..Default::default()
+        };
         let mut server_guard = state2.inference_server.lock().unwrap();
         // Start server on first use, reuse for subsequent calls
         if server_guard
@@ -4574,13 +4675,21 @@ pub async fn api_correct(
         }
         let server = server_guard.as_mut().unwrap();
         let prompt = synth_train::build_correction_prompt(&body.parakeet, &body.qwen);
-        server.infer(&prompt)
+        let output = server.infer_with_stats(&prompt)?;
+        Ok(serde_json::json!({
+            "corrected": output.text,
+            "raw_output": output.raw_text,
+            "timing": output.stats,
+            "use_adapters": config.attach_adapters,
+        })
+        .to_string())
     })
     .await
     .map_err(|e| err(e))?
     .map_err(err)?;
 
-    Ok(Json(serde_json::json!({"corrected": result})).into_response())
+    let parsed: serde_json::Value = serde_json::from_str(&result).map_err(err)?;
+    Ok(Json(parsed).into_response())
 }
 
 // ==================== Scan Results ====================

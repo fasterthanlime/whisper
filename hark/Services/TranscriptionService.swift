@@ -1,6 +1,9 @@
 import Foundation
 import os
 
+@_silgen_name("asr_session_committed_utf16_len")
+private func asr_session_committed_utf16_len_ffi(_ session: OpaquePointer) -> UInt
+
 /// Wraps the Rust qwen3-asr-ffi library for streaming transcription.
 ///
 /// Thread-safe: the engine uses an internal mutex. However, a single session
@@ -169,8 +172,8 @@ final class TranscriptionService: @unchecked Sendable {
     }
 
     /// Feed 16kHz mono f32 audio into a streaming session.
-    /// Returns the current transcript if a chunk boundary was crossed, nil otherwise.
-    func feed(session: StreamingSession, samples: [Float]) -> String? {
+    /// Returns transcript + committed prefix metadata when a chunk boundary is crossed.
+    func feed(session: StreamingSession, samples: [Float]) -> StreamingTranscriptUpdate? {
         var err: UnsafeMutablePointer<CChar>?
         let result = samples.withUnsafeBufferPointer { buf in
             asr_session_feed(session.ptr, buf.baseAddress, buf.count, &err)
@@ -186,7 +189,14 @@ final class TranscriptionService: @unchecked Sendable {
         guard let result else { return nil }
         let text = String(cString: result)
         asr_string_free(result)
-        return text
+
+        let committedUTF16 = Int(asr_session_committed_utf16_len_ffi(session.ptr))
+        let clampedCommittedUTF16 = min(max(0, committedUTF16), (text as NSString).length)
+
+        return StreamingTranscriptUpdate(
+            text: text,
+            committedUTF16Count: clampedCommittedUTF16
+        )
     }
 
     /// Finalize a streaming session and return the complete transcript.
@@ -244,4 +254,9 @@ enum TranscriptionError: LocalizedError {
 enum ModelLoadUpdate: Sendable {
     case downloading(progress: Double)
     case initializing
+}
+
+struct StreamingTranscriptUpdate: Sendable {
+    let text: String
+    let committedUTF16Count: Int
 }

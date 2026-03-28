@@ -24,6 +24,113 @@ private struct StreamingResult {
     let processedSampleCount: Int
 }
 
+/// Intercepts Esc/Return while recording so those keys do not leak to the app behind Hark.
+private final class RecordingControlInterceptor: @unchecked Sendable {
+    nonisolated(unsafe) var onIntercept: ((UInt16) -> Void)?
+    nonisolated(unsafe) var shouldIntercept: ((UInt16) -> Bool)?
+
+    nonisolated(unsafe) private var eventTap: CFMachPort?
+    nonisolated(unsafe) private var runLoopSource: CFRunLoopSource?
+    nonisolated(unsafe) private var swallowedKeyUps: Set<UInt16> = []
+
+    nonisolated func start() {
+        guard eventTap == nil else { return }
+
+        let mask: CGEventMask =
+            (1 << CGEventType.keyDown.rawValue) |
+            (1 << CGEventType.keyUp.rawValue)
+
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: recordingControlCallback,
+            userInfo: refcon
+        ) else {
+            return
+        }
+
+        eventTap = tap
+        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        if let source = runLoopSource {
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        }
+        CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    nonisolated func stop() {
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+        }
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        }
+        eventTap = nil
+        runLoopSource = nil
+        swallowedKeyUps.removeAll()
+    }
+
+    deinit {
+        stop()
+    }
+
+    fileprivate func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            swallowedKeyUps.removeAll()
+            if let tap = eventTap {
+                CGEvent.tapEnable(tap: tap, enable: true)
+            }
+            return Unmanaged.passUnretained(event)
+        }
+
+        guard type == .keyDown || type == .keyUp else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        let isEscapeOrReturn = keyCode == UInt16(kVK_Escape) || keyCode == UInt16(kVK_Return)
+        guard isEscapeOrReturn else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        switch type {
+        case .keyDown:
+            let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+            if isRepeat {
+                return swallowedKeyUps.contains(keyCode) ? nil : Unmanaged.passUnretained(event)
+            }
+
+            guard shouldIntercept?(keyCode) == true else {
+                return Unmanaged.passUnretained(event)
+            }
+
+            swallowedKeyUps.insert(keyCode)
+            onIntercept?(keyCode)
+            return nil
+
+        case .keyUp:
+            guard swallowedKeyUps.contains(keyCode) else {
+                return Unmanaged.passUnretained(event)
+            }
+            swallowedKeyUps.remove(keyCode)
+            return nil
+
+        default:
+            return Unmanaged.passUnretained(event)
+        }
+    }
+}
+
+nonisolated(unsafe) private let recordingControlCallback: CGEventTapCallBack = { _, type, event, refcon in
+    guard let refcon else {
+        return Unmanaged.passUnretained(event)
+    }
+    let interceptor = Unmanaged<RecordingControlInterceptor>.fromOpaque(refcon).takeUnretainedValue()
+    return interceptor.handle(type: type, event: event)
+}
+
 @main
 struct HarkApp: App {
     private static let sharedTranscriptionService = TranscriptionService()
@@ -47,8 +154,8 @@ struct HarkApp: App {
     @State private var keyDownTime: Date?
     /// Skip the next keyUp after locking (so releasing the hotkey after ⌘-lock doesn't submit).
     @State private var skipNextKeyUp = false
-    @State private var escapeMonitor: Any?
-    @State private var notificationObserver: NSObjectProtocol?
+    @State private var recordingControlInterceptor = RecordingControlInterceptor()
+    @State private var recordingControlObservers: [NSObjectProtocol] = []
 
     private static let maxRecordingDurationSeconds = AudioRecorder.defaultMaximumDuration
     private static let toggleModeThresholdSeconds: TimeInterval = 0.3
@@ -76,6 +183,12 @@ struct HarkApp: App {
                 runOnStartupEnabled: appState.runOnStartupEnabled,
                 onRunOnStartupToggle: {
                     toggleRunOnStartup()
+                },
+                onSelectInputDevice: { uid in
+                    selectInputDevice(uid: uid)
+                },
+                onSetActiveInputDeviceKeepWarm: { keepWarm in
+                    setActiveInputDeviceKeepWarm(keepWarm)
                 },
                 onRequestMicrophonePermission: {
                     Task { @MainActor in
@@ -130,6 +243,11 @@ struct HarkApp: App {
         if let saved = UserDefaults.standard.dictionary(forKey: "appVocabPrompts") as? [String: String] {
             appState.appVocabPrompts = saved
         }
+        if let saved = UserDefaults.standard.dictionary(
+            forKey: AppState.inputDeviceWarmPreferencesDefaultsKey
+        ) as? [String: Bool] {
+            appState.inputDeviceKeepWarmByUID = saved
+        }
         syncRunOnStartupState()
         configureHotkeyFromDefaults()
 
@@ -141,55 +259,43 @@ struct HarkApp: App {
 
         setupHotkey()
         startInputDeviceMonitoring()
-        warmUpAudio()
     }
 
     @MainActor
     private func startInputDeviceMonitoring() {
-        inputDeviceMonitor.start { [weak appState, weak audioRecorder] deviceName in
+        inputDeviceMonitor.start { [weak appState] snapshot in
             Task { @MainActor in
-                guard let appState, let audioRecorder else { return }
+                guard let appState else { return }
 
-                let previousDevice = appState.activeInputDeviceName
-                appState.activeInputDeviceName = deviceName
+                let previousDeviceUID = appState.activeInputDeviceUID
+                let wasRecording = appState.phase == .recording
+                appState.applyInputDeviceSnapshot(snapshot)
 
-                if previousDevice != nil, previousDevice != deviceName, audioRecorder.isWarmedUp {
-                    let wasRecording = appState.phase == .recording
-                    Self.logger.info("Input device changed (wasRecording=\(wasRecording)), reinitializing audio")
+                if let active = snapshot.activeDevice {
+                    let keepWarm = appState.keepWarmPreference(for: active.uid)
+                    Self.logger.info(
+                        "Active input device: \(active.name, privacy: .public) (keepWarm=\(keepWarm, privacy: .public))"
+                    )
+                }
 
-                    audioRecorder.coolDown()
-                    try? await Task.sleep(for: .milliseconds(100))
-
-                    do {
-                        try audioRecorder.warmUp(
-                            onLevel: { level in
-                                Task { @MainActor in
-                                    appState.audioLevel = level
-                                }
-                            },
-                            onSpectrum: { bands in
-                                Task { @MainActor in
-                                    appState.spectrumBands = bands
-                                }
-                            }
-                        )
-
-                        // If we were recording, restart capture on the new device.
-                        if wasRecording {
-                            audioRecorder.startCapture()
-                            Self.logger.info("Restarted capture on new device")
-                        }
-                    } catch {
-                        Self.logger.error("Failed to reinitialize audio after device change: \(error.localizedDescription, privacy: .public)")
-                    }
+                if previousDeviceUID != nil, previousDeviceUID != snapshot.activeDevice?.uid {
+                    Self.logger.info(
+                        "Input device changed (wasRecording=\(wasRecording, privacy: .public)); refreshing audio engine"
+                    )
+                    await reconfigureAudioForCurrentDevice(wasRecording: wasRecording)
+                } else {
+                    applyActiveInputWarmPolicy()
                 }
             }
         }
     }
 
     @MainActor
-    private func warmUpAudio() {
+    private func warmUpAudio(force: Bool = false) {
         guard appState.hasMicrophonePermission else { return }
+        guard force || appState.activeInputDeviceKeepWarm else { return }
+        guard !audioRecorder.isWarmedUp else { return }
+
         do {
             try audioRecorder.warmUp(
                 onLevel: { [appState] level in
@@ -205,6 +311,69 @@ struct HarkApp: App {
             )
         } catch {
             Self.logger.error("Failed to warm up audio: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    @MainActor
+    private func selectInputDevice(uid: String) {
+        guard !isAudioBusy else { return }
+        let selected = inputDeviceMonitor.setDefaultInputDevice(uid: uid)
+        if !selected {
+            _ = appState.transition(to: .error("Could not switch to the selected input device."))
+            resetAfterDelay(seconds: 2)
+        }
+    }
+
+    @MainActor
+    private func setActiveInputDeviceKeepWarm(_ keepWarm: Bool) {
+        appState.setKeepWarmForActiveInputDevice(keepWarm)
+        Task { @MainActor in
+            applyActiveInputWarmPolicy()
+        }
+    }
+
+    @MainActor
+    private func reconfigureAudioForCurrentDevice(wasRecording: Bool) async {
+        let shouldKeepWarm = appState.activeInputDeviceKeepWarm
+        let shouldRunEngine = shouldKeepWarm || wasRecording
+
+        audioRecorder.coolDown()
+        appState.audioLevel = 0
+        appState.spectrumBands = Array(repeating: 0, count: AudioRecorder.spectrumBandCount)
+
+        guard shouldRunEngine, appState.hasMicrophonePermission else { return }
+        try? await Task.sleep(for: .milliseconds(100))
+        warmUpAudio(force: true)
+        if wasRecording, audioRecorder.isWarmedUp {
+            audioRecorder.startCapture()
+            Self.logger.info("Restarted capture on newly selected input device")
+        }
+    }
+
+    @MainActor
+    private func applyActiveInputWarmPolicy() {
+        guard appState.hasMicrophonePermission else { return }
+        let shouldKeepWarm = appState.activeInputDeviceKeepWarm
+
+        if shouldKeepWarm {
+            warmUpAudio()
+            return
+        }
+
+        if !isAudioBusy, audioRecorder.isWarmedUp {
+            audioRecorder.coolDown()
+            appState.audioLevel = 0
+            appState.spectrumBands = Array(repeating: 0, count: AudioRecorder.spectrumBandCount)
+        }
+    }
+
+    @MainActor
+    private var isAudioBusy: Bool {
+        switch appState.phase {
+        case .recording, .transcribing, .pasting:
+            return true
+        default:
+            return false
         }
     }
 
@@ -321,6 +490,7 @@ struct HarkApp: App {
 
         _ = appState.transition(to: .recording)
         appState.partialTranscript = ""
+        appState.partialTranscriptCommittedUTF16 = 0
         keyDownTime = Date()
         appState.isLockedMode = false
         hotkeyMonitor.allowExtraModifiers = true
@@ -397,13 +567,20 @@ struct HarkApp: App {
                 let newChunk = Array(allSamples[processedCount...])
                 processedCount = allSamples.count
 
-                let text: String? = transcriptionService.feed(session: session, samples: newChunk)
+                let update: StreamingTranscriptUpdate? = transcriptionService.feed(session: session, samples: newChunk)
 
-                if let text {
-                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let update {
+                    let trimmed = update.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !trimmed.isEmpty {
                         lastText = trimmed
-                        await MainActor.run { appState.partialTranscript = trimmed }
+                        let committedUTF16 = min(
+                            max(0, update.committedUTF16Count),
+                            (trimmed as NSString).length
+                        )
+                        await MainActor.run {
+                            appState.partialTranscript = trimmed
+                            appState.partialTranscriptCommittedUTF16 = committedUTF16
+                        }
 
                         // Check "over and out" first (higher priority).
                         if trimmed.range(of: #"(?i)[.!?,]\s+over\s+and\s+out\.?\s*$"#, options: .regularExpression) != nil {
@@ -432,6 +609,7 @@ struct HarkApp: App {
 
             print("[hark] signal: \(result.signal) text='\(result.text)'")
             appState.partialTranscript = ""
+            appState.partialTranscriptCommittedUTF16 = 0
 
             if !result.text.isEmpty {
                 // Paste + Enter for the current sentence.
@@ -455,6 +633,7 @@ struct HarkApp: App {
                 _ = appState.transition(to: .idle)
                 _ = appState.transition(to: .recording)
                 appState.partialTranscript = ""
+                appState.partialTranscriptCommittedUTF16 = 0
                 streamingSession = transcriptionService.createSession(
                     language: appState.currentLanguage
                 )
@@ -575,15 +754,19 @@ struct HarkApp: App {
         let stask = streamingTask
         streamingTask = nil
 
-        // Grab all remaining audio before stopping capture.
-        let allSamples = audioRecorder.peekCapture()
-
+        // Stop capture and use the definitive captured buffer at stop time.
+        // Using `peekCapture()` here can miss tail audio arriving between peek and stop.
+        let allSamples: [Float]
         if audioRecorder.isWarmedUp {
-            _ = audioRecorder.stopCapture()
+            allSamples = audioRecorder.stopCapture()
         } else {
-            _ = audioRecorder.stop()
+            allSamples = audioRecorder.stop()
         }
         appState.audioLevel = 0
+        if !appState.activeInputDeviceKeepWarm, audioRecorder.isWarmedUp {
+            audioRecorder.coolDown()
+            appState.spectrumBands = Array(repeating: 0, count: AudioRecorder.spectrumBandCount)
+        }
 
         // Feed any remaining samples and finalize the session to get the complete transcript.
         var text = appState.partialTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -632,6 +815,7 @@ struct HarkApp: App {
 
             // Show the final transcript in the overlay (no animation).
             appState.partialTranscript = text
+            appState.partialTranscriptCommittedUTF16 = (text as NSString).length
             appState.isFinishing = false
         }
         streamingSession = nil
@@ -689,29 +873,31 @@ struct HarkApp: App {
 
         let currentAppState = appState
         let currentHotkeyMonitor = hotkeyMonitor
-        escapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [self] event in
-            guard currentAppState.phase == .recording else { return }
 
-            let isEscape = event.keyCode == UInt16(kVK_Escape)
-            let isReturn = event.keyCode == UInt16(kVK_Return)
+        recordingControlInterceptor.shouldIntercept = { keyCode in
+            guard currentAppState.phase == .recording else { return false }
+            guard keyCode == UInt16(kVK_Escape) || keyCode == UInt16(kVK_Return) else { return false }
 
-            guard isEscape || isReturn else { return }
-
-            if appState.isLockedMode {
-                // Check if the hotkey's keys are still pressed (not exact isHeld,
-                // because the ESC/Return key itself gets added to pressedKeyCodes
-                // before this monitor fires, breaking the exact match).
-                guard currentHotkeyMonitor.binding.keyCodeSet.isSubset(of: currentHotkeyMonitor.pressedKeyCodes) else { return }
+            if currentAppState.isLockedMode {
+                // In locked mode, require that the configured hotkey keys are still held.
+                guard currentHotkeyMonitor.binding.keyCodeSet.isSubset(of: currentHotkeyMonitor.pressedKeyCodes) else {
+                    return false
+                }
             }
 
-            if isEscape {
+            return true
+        }
+
+        recordingControlInterceptor.onIntercept = { keyCode in
+            if keyCode == UInt16(kVK_Escape) {
                 NotificationCenter.default.post(name: .cancelRecording, object: nil)
-            } else if isReturn {
+            } else if keyCode == UInt16(kVK_Return) {
                 NotificationCenter.default.post(name: .submitRecording, object: nil)
             }
         }
+        recordingControlInterceptor.start()
 
-        notificationObserver = NotificationCenter.default.addObserver(
+        let cancelObserver = NotificationCenter.default.addObserver(
             forName: .cancelRecording,
             object: nil,
             queue: .main
@@ -720,8 +906,9 @@ struct HarkApp: App {
                 await self.stopRecordingAndTranscribe(skipPaste: true, forceSubmit: false)
             }
         }
+        recordingControlObservers.append(cancelObserver)
 
-        NotificationCenter.default.addObserver(
+        let submitObserver = NotificationCenter.default.addObserver(
             forName: .submitRecording,
             object: nil,
             queue: .main
@@ -730,18 +917,19 @@ struct HarkApp: App {
                 await self.stopRecordingAndTranscribe(skipPaste: false, forceSubmit: true)
             }
         }
+        recordingControlObservers.append(submitObserver)
     }
 
     @MainActor
     private func removeEscapeMonitor() {
-        if let monitor = escapeMonitor {
-            NSEvent.removeMonitor(monitor)
-            escapeMonitor = nil
-        }
-        if let observer = notificationObserver {
+        recordingControlInterceptor.stop()
+        recordingControlInterceptor.shouldIntercept = nil
+        recordingControlInterceptor.onIntercept = nil
+
+        for observer in recordingControlObservers {
             NotificationCenter.default.removeObserver(observer)
-            notificationObserver = nil
         }
+        recordingControlObservers.removeAll()
     }
 
     // MARK: - Model Management
@@ -886,7 +1074,10 @@ struct HarkApp: App {
         let granted = await AudioRecorder.requestPermission()
         refreshPermissionState()
 
-        guard !granted else { return }
+        if granted {
+            applyActiveInputWarmPolicy()
+            return
+        }
         openPrivacySettings(anchor: "Privacy_Microphone")
     }
 

@@ -43,6 +43,8 @@ private extension AppPhase {
 @Observable
 @MainActor
 final class AppState {
+    static let inputDeviceWarmPreferencesDefaultsKey = "inputDeviceKeepWarmByUID"
+
     var phase: AppPhase = .idle
     var selectedModelID: String = STTModelDefinition.default.id
     var hotkeyBinding: HotkeyBinding = .defaultBinding
@@ -56,6 +58,58 @@ final class AppState {
     var runOnStartupError: String?
     /// Name of the currently active input device.
     var activeInputDeviceName: String?
+    /// UID of the currently active/default input device.
+    var activeInputDeviceUID: String?
+    /// All visible input devices from CoreAudio (default device first).
+    var availableInputDevices: [InputAudioDevice] = []
+    /// Per-device "keep warm" preference keyed by device UID.
+    var inputDeviceKeepWarmByUID: [String: Bool] = [:] {
+        didSet {
+            UserDefaults.standard.set(
+                inputDeviceKeepWarmByUID,
+                forKey: Self.inputDeviceWarmPreferencesDefaultsKey
+            )
+        }
+    }
+
+    var activeInputDevice: InputAudioDevice? {
+        if let activeInputDeviceUID,
+           let match = availableInputDevices.first(where: { $0.uid == activeInputDeviceUID }) {
+            return match
+        }
+        return availableInputDevices.first(where: \.isDefault)
+    }
+
+    var activeInputDeviceKeepWarm: Bool {
+        guard let activeInputDevice else { return true }
+        if let persisted = inputDeviceKeepWarmByUID[activeInputDevice.uid] {
+            return persisted
+        }
+        // Default policy: built-in laptop microphones stay cold; external mics stay warm.
+        return !activeInputDevice.isBuiltIn
+    }
+
+    func applyInputDeviceSnapshot(_ snapshot: InputDeviceSnapshot) {
+        availableInputDevices = snapshot.devices
+        activeInputDeviceUID = snapshot.activeDevice?.uid
+        activeInputDeviceName = snapshot.activeDevice?.name
+    }
+
+    func setKeepWarmForActiveInputDevice(_ keepWarm: Bool) {
+        guard let activeUID = activeInputDevice?.uid else { return }
+        inputDeviceKeepWarmByUID[activeUID] = keepWarm
+    }
+
+    func keepWarmPreference(for deviceUID: String) -> Bool {
+        if let persisted = inputDeviceKeepWarmByUID[deviceUID] {
+            return persisted
+        }
+        if let device = availableInputDevices.first(where: { $0.uid == deviceUID }) {
+            return !device.isBuiltIn
+        }
+        return true
+    }
+
     // MARK: - Per-app language
 
     /// Language forced per bundle ID. Missing key = auto-detect.
@@ -144,6 +198,8 @@ final class AppState {
 
     /// Partial transcript during streaming transcription.
     var partialTranscript: String = ""
+    /// UTF-16 length of the committed prefix inside `partialTranscript`.
+    var partialTranscriptCommittedUTF16: Int = 0
 
     /// Whether recording is in toggle/locked mode (hands-free).
     var isLockedMode = false

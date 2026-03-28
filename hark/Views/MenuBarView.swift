@@ -11,6 +11,8 @@ struct MenuBarView: View {
     var onHotkeyEditorPresentedChange: (Bool) -> Void
     var runOnStartupEnabled: Bool
     var onRunOnStartupToggle: () -> Void
+    var onSelectInputDevice: (String) -> Void
+    var onSetActiveInputDeviceKeepWarm: (Bool) -> Void
     var onRequestMicrophonePermission: () -> Void
     var onRequestAccessibilityPermission: () -> Void
     var onRecheckPermissions: () -> Void
@@ -22,6 +24,7 @@ struct MenuBarView: View {
     @State private var hoveredDownloadModelID: String?
     @State private var isHoveringRunOnStartup = false
     @State private var isHoveringPauseMedia = false
+    @State private var isHoveringKeepWarmForInput = false
     @State private var pauseMediaEnabled = MediaController.isEnabled
     @State private var isHoveringQuit = false
     @State private var isHoveringSettings = false
@@ -366,28 +369,68 @@ struct MenuBarView: View {
 
             permissionRow("Mic", status: appState.microphonePermission)
             permissionRow("Accessibility", status: appState.accessibilityPermission)
-
-            if let inputDevice = appState.activeInputDeviceName {
-                HStack(spacing: 8) {
-                    Image(systemName: "mic.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.blue)
-                    Text("Input")
-                        .font(.system(.caption))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text(inputDevice)
-                        .font(.system(.caption2, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .padding(.horizontal, 6)
-            }
+            inputDeviceSection
 
             if !appState.hasRequiredPermissions {
                 permissionActionsSection
             }
+        }
+    }
+
+    @ViewBuilder
+    private var inputDeviceSection: some View {
+        let activeDeviceName = appState.activeInputDeviceName ?? "No Input"
+        let activeDeviceUID = appState.activeInputDeviceUID
+
+        infoRow(label: "Input") {
+            Menu {
+                if appState.availableInputDevices.isEmpty {
+                    Text("No Input Devices")
+                } else {
+                    ForEach(appState.availableInputDevices) { device in
+                        Button {
+                            onSelectInputDevice(device.uid)
+                        } label: {
+                            if device.uid == activeDeviceUID {
+                                Label(device.name, systemImage: "checkmark")
+                            } else {
+                                Text(device.name)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.blue)
+                    Text(activeDeviceName)
+                        .font(.system(.caption2, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(.caption2, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.primary.opacity(0.05))
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize(horizontal: false, vertical: true)
+            .disabled(isAudioDeviceInteractionDisabled || appState.availableInputDevices.isEmpty)
+        }
+
+        toggleRow(
+            label: "Keep Warm for This Mic",
+            isOn: appState.activeInputDeviceKeepWarm,
+            isHovering: $isHoveringKeepWarmForInput,
+            isDisabled: isAudioDeviceInteractionDisabled || appState.activeInputDevice == nil
+        ) {
+            onSetActiveInputDeviceKeepWarm(!appState.activeInputDeviceKeepWarm)
         }
     }
 
@@ -446,7 +489,13 @@ struct MenuBarView: View {
     }
 
     @ViewBuilder
-    private func toggleRow(label: String, isOn: Bool, isHovering: Binding<Bool>, action: @escaping () -> Void) -> some View {
+    private func toggleRow(
+        label: String,
+        isOn: Bool,
+        isHovering: Binding<Bool>,
+        isDisabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
         Button {
             action()
         } label: {
@@ -470,8 +519,10 @@ struct MenuBarView: View {
             .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.55 : 1)
         .onHover { h in
-            isHovering.wrappedValue = h
+            isHovering.wrappedValue = isDisabled ? false : h
         }
     }
 
@@ -552,6 +603,10 @@ struct MenuBarView: View {
         default:
             return false
         }
+    }
+
+    private var isAudioDeviceInteractionDisabled: Bool {
+        isModelInteractionDisabled
     }
 
     /// Label shown on the hotkey capture button, with live feedback of currently pressed keys.

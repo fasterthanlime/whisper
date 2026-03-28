@@ -2945,9 +2945,20 @@
             const [rapidFireSentence, setRapidFireSentence] = useState(null);
             const [rapidFireError, setRapidFireError] = useState(null);
             const [rapidFireBusy, setRapidFireBusy] = useState(false);
+            const [rapidFirePool, setRapidFirePool] = useState(null);
+            const [rapidFireTitle, setRapidFireTitle] = useState('Rapid fire');
+            const [rapidFireHint, setRapidFireHint] = useState('Zero-take sentences are prioritized first, then selection becomes random across the whole set.');
+            const [counterexampleReview, setCounterexampleReview] = useState(null);
+            const [counterexampleReviewBusy, setCounterexampleReviewBusy] = useState(false);
+            const [counterexampleReviewError, setCounterexampleReviewError] = useState(null);
+            const [counterexampleSpeakBusy, setCounterexampleSpeakBusy] = useState(false);
+            const [counterexampleSpeakRecording, setCounterexampleSpeakRecording] = useState(false);
+            const [counterexampleSpeakError, setCounterexampleSpeakError] = useState(null);
+            const [counterexampleDraft, setCounterexampleDraft] = useState(null);
             const recordingRecorderRef = useRef(null);
             const rapidFireRecorderRef = useRef(null);
             const rapidFireAutostartRef = useRef(false);
+            const counterexampleRecorderRef = useRef(null);
 
             const spellIssueList = Array.isArray(spellIssues) ? spellIssues : (spellIssues?.issues || []);
 
@@ -3074,6 +3085,21 @@
                 return rows;
             };
 
+            const loadCounterexampleReview = async () => {
+                try {
+                    const res = await api('/api/author/counterexample-surfaces/next');
+                    setCounterexampleReview(res.item || null);
+                    setCounterexampleReviewError(null);
+                    setCounterexampleSpeakError(null);
+                    setCounterexampleDraft(null);
+                    return res.item || null;
+                } catch (e) {
+                    setCounterexampleReview(null);
+                    setCounterexampleReviewError(e.message);
+                    return null;
+                }
+            };
+
             const pickRapidFireSentence = (rows, currentId = null) => {
                 if (!rows || rows.length === 0) return null;
                 const zeroTake = rows.filter(s => (s.recording_count || 0) === 0 && s.id !== currentId);
@@ -3120,6 +3146,21 @@
                 setRapidFireSentence(null);
                 setRapidFireError(null);
                 setRapidFireBusy(false);
+                setRapidFirePool(null);
+                setRapidFireTitle('Rapid fire');
+                setRapidFireHint('Zero-take sentences are prioritized first, then selection becomes random across the whole set.');
+            };
+
+            const stopCounterexampleRecording = async (options = {}) => {
+                const recorder = counterexampleRecorderRef.current;
+                if (!recorder) {
+                    setCounterexampleSpeakRecording(false);
+                    return;
+                }
+                counterexampleRecorderRef.current = null;
+                const result = await recorder.stop(options);
+                setCounterexampleSpeakRecording(false);
+                return result;
             };
 
             const stopSentenceRecording = async (options = {}) => {
@@ -3216,7 +3257,11 @@
                     setRapidFireError(null);
                     const rows = await loadSentences();
                     const refreshed = rows.find(s => s.id === rapidFireSentence.id) || rapidFireSentence;
-                    setRapidFireSentence(pickRapidFireSentence(rows, refreshed.id));
+                    const nextPool = rapidFirePool && rapidFirePool.length > 0
+                        ? rows.filter(s => rapidFirePool.some(p => p.id === s.id))
+                        : rows;
+                    setRapidFirePool(nextPool);
+                    setRapidFireSentence(pickRapidFireSentence(nextPool, refreshed.id));
                     loadStats();
                 } catch (e) {
                     rapidFireAutostartRef.current = false;
@@ -3226,15 +3271,18 @@
                 }
             };
 
-            const openRapidFire = async () => {
+            const openRapidFireForRows = async (rows, options = {}) => {
                 closeRecordings();
                 rapidFireAutostartRef.current = false;
                 setRapidFireOpen(true);
                 setRapidFireError(null);
                 setRapidFireBusy(true);
+                setRapidFireTitle(options.title || 'Rapid fire');
+                setRapidFireHint(options.hint || 'Zero-take sentences are prioritized first, then selection becomes random across the whole set.');
                 try {
-                    const rows = sentences || await loadSentences();
-                    setRapidFireSentence(pickRapidFireSentence(rows));
+                    const allRows = rows && rows.length > 0 ? rows : (sentences || await loadSentences());
+                    setRapidFirePool(allRows);
+                    setRapidFireSentence(pickRapidFireSentence(allRows));
                     if (!rapidFireRecorderRef.current) {
                         rapidFireRecorderRef.current = await createWarmMonoRecorder();
                     }
@@ -3242,6 +3290,107 @@
                     setRapidFireError(e.message);
                 } finally {
                     setRapidFireBusy(false);
+                }
+            };
+
+            const openRapidFire = async () => {
+                await openRapidFireForRows(null);
+            };
+
+            const decideCounterexampleReview = async (decision) => {
+                if (!counterexampleReview || counterexampleReviewBusy) return;
+                setCounterexampleReviewBusy(true);
+                setCounterexampleReviewError(null);
+                setCounterexampleSpeakError(null);
+                setCounterexampleDraft(null);
+                try {
+                    await api('/api/author/counterexample-surfaces/decision', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            surface_form: counterexampleReview.surface_form,
+                            decision,
+                        }),
+                    });
+                    if (decision !== 'keep') {
+                        await loadCounterexampleReview();
+                    }
+                } catch (e) {
+                    setCounterexampleReviewError(e.message);
+                } finally {
+                    setCounterexampleReviewBusy(false);
+                }
+            };
+
+            const startCounterexampleRecording = async () => {
+                if (!counterexampleReview || counterexampleSpeakBusy || counterexampleSpeakRecording) return;
+                setCounterexampleSpeakError(null);
+                setCounterexampleDraft(null);
+                try {
+                    const recorder = await startMonoWavRecording(async ({wavBytes}) => {
+                        try {
+                            setCounterexampleSpeakBusy(true);
+                            const params = new URLSearchParams({
+                                surface_form: counterexampleReview.surface_form,
+                            });
+                            const res = await fetch(`/api/author/counterexample-surfaces/transcribe?${params.toString()}`, {
+                                method: 'POST',
+                                headers: {'Content-Type': 'audio/wav'},
+                                body: wavBytes,
+                            });
+                            const data = await res.json();
+                            if (!res.ok) {
+                                throw new Error(data?.error || 'failed to transcribe take');
+                            }
+                            setCounterexampleDraft({
+                                wavBytes,
+                                sentence: data.qwen_clean || '',
+                                containsSurface: !!data.contains_surface,
+                            });
+                        } catch (e) {
+                            setCounterexampleSpeakError(e.message);
+                        } finally {
+                            setCounterexampleSpeakBusy(false);
+                            setCounterexampleSpeakRecording(false);
+                        }
+                    });
+                    counterexampleRecorderRef.current = recorder;
+                    setCounterexampleSpeakRecording(true);
+                } catch (e) {
+                    setCounterexampleSpeakError('Microphone access denied');
+                }
+            };
+
+            const confirmCounterexampleDraft = async () => {
+                if (!counterexampleReview || !counterexampleDraft || counterexampleSpeakBusy) return;
+                if (!counterexampleDraft.containsSurface) {
+                    setCounterexampleSpeakError(`ASR did not keep "${counterexampleReview.surface_form}" in the sentence.`);
+                    return;
+                }
+                setCounterexampleSpeakBusy(true);
+                setCounterexampleSpeakError(null);
+                try {
+                    const submit = await api('/api/author/submit', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            term: (counterexampleReview.terms && counterexampleReview.terms[0]) || '',
+                            terms: counterexampleReview.terms || [],
+                            sentence: counterexampleDraft.sentence,
+                            kind: 'counterexample',
+                            surface_form: counterexampleReview.surface_form,
+                        }),
+                    });
+                    if (submit.error) throw new Error(submit.error);
+                    for (const id of (submit.ids || [submit.id]).filter(Boolean)) {
+                        await uploadSentenceTake({id}, counterexampleDraft.wavBytes);
+                    }
+                    await loadSentences();
+                    await loadStats();
+                    setCounterexampleDraft(null);
+                    await loadCounterexampleReview();
+                } catch (e) {
+                    setCounterexampleSpeakError(e.message);
+                } finally {
+                    setCounterexampleSpeakBusy(false);
                 }
             };
 
@@ -3291,6 +3440,7 @@
                     const nextStats = await loadStats();
                     await loadAuthorTerms(nextStats);
                     await loadNext();
+                    await loadCounterexampleReview();
                 })();
             }, []);
 
@@ -3573,6 +3723,83 @@
                         );
                     })()}
 
+                    <div className="card" style={{marginBottom:12}}>
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:12,marginBottom:10,flexWrap:'wrap'}}>
+                            <div>
+                                <div style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>Counterexample drill</div>
+                                <div style={{fontSize:13,color:'var(--text-muted)'}}>Review one ambiguous surface at a time. If it is a legitimate word, speak a sentence using it, inspect the ASR transcript, then confirm to save it as a counterexample.</div>
+                            </div>
+                            <button className="btn btn-sm" onClick={loadCounterexampleReview} disabled={counterexampleReviewBusy || counterexampleSpeakBusy}>Refresh</button>
+                        </div>
+                        {counterexampleReviewError && <div className="pipeline-error" style={{marginBottom:12}}>{counterexampleReviewError}</div>}
+                        {counterexampleSpeakError && <div className="pipeline-error" style={{marginBottom:12}}>{counterexampleSpeakError}</div>}
+                        {!counterexampleReview ? (
+                            <div style={{fontSize:13,color:'var(--text-muted)'}}>No unreviewed ambiguous surfaces right now.</div>
+                        ) : (
+                            <div style={{display:'grid',gap:12}}>
+                                <div style={{display:'grid',gap:6,justifyItems:'center',textAlign:'center'}}>
+                                    <div style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1}}>Should this surface ever stay unchanged?</div>
+                                    <div style={{fontSize:30,fontFamily:'monospace',color:'var(--warning)',fontWeight:700}}>{counterexampleReview.surface_form}</div>
+                                    <div style={{fontSize:13,color:'var(--text-muted)'}}>
+                                        {counterexampleReview.hit_count} hits across {counterexampleReview.distinct_terms || (counterexampleReview.terms || []).length || 1} term{((counterexampleReview.distinct_terms || (counterexampleReview.terms || []).length || 1) === 1) ? '' : 's'}
+                                    </div>
+                                </div>
+                                <div style={{display:'flex',gap:8,justifyContent:'center',flexWrap:'wrap'}}>
+                                    <button className="btn btn-primary btn-sm" onClick={() => decideCounterexampleReview('keep')} disabled={counterexampleReviewBusy || counterexampleSpeakBusy}>Keep sometimes</button>
+                                    <button className="btn btn-sm" onClick={() => decideCounterexampleReview('garbage')} disabled={counterexampleReviewBusy || counterexampleSpeakBusy}>Just garbage</button>
+                                    <button className="btn btn-sm" onClick={() => decideCounterexampleReview('skip')} disabled={counterexampleReviewBusy || counterexampleSpeakBusy}>Skip</button>
+                                    <button className="btn btn-sm" onClick={async () => {
+                                        setAuthorMode('counterexample');
+                                        setCounterSurface(counterexampleReview.surface_form || '');
+                                        setTermPicker((counterexampleReview.terms && counterexampleReview.terms[0]) || '');
+                                        setTermLocked(true);
+                                        setError(null);
+                                        if ((counterexampleReview.terms && counterexampleReview.terms[0])) {
+                                            await focusTermByName(counterexampleReview.terms[0], stats);
+                                        }
+                                        setCounterSurface(counterexampleReview.surface_form || '');
+                                        setTimeout(() => inputRef.current?.focus(), 50);
+                                    }} disabled={counterexampleReviewBusy || counterexampleSpeakBusy}>Manual</button>
+                                </div>
+
+                                <div style={{display:'grid',gap:12,paddingTop:12,borderTop:'1px solid var(--border)'}}>
+                                    <div style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1}}>Speak a real sentence using the surface form</div>
+                                    <div style={{fontSize:13,color:'var(--text-muted)',lineHeight:1.5}}>
+                                        Say any sentence where <span style={{fontFamily:'monospace',color:'var(--warning)'}}>{counterexampleReview.surface_form}</span> is actually correct and should stay unchanged.
+                                    </div>
+                                    <div style={{display:'flex',gap:10,alignItems:'center',justifyContent:'center',flexWrap:'wrap'}}>
+                                        <button className={`record-btn ${counterexampleSpeakRecording ? 'active' : ''}`} onClick={counterexampleSpeakRecording ? () => stopCounterexampleRecording() : startCounterexampleRecording} disabled={counterexampleSpeakBusy || counterexampleReviewBusy}
+                                            title={counterexampleSpeakRecording ? 'Stop recording' : 'Record a counterexample take'}>
+                                            {counterexampleSpeakBusy ? '…' : counterexampleSpeakRecording ? '\u25A0' : '\u25CF'}
+                                        </button>
+                                        <span style={{fontSize:13,color:'var(--text-muted)'}}>
+                                            {counterexampleSpeakRecording
+                                                ? 'Recording... press again to stop and transcribe'
+                                                : counterexampleSpeakBusy
+                                                    ? 'Transcribing or saving...'
+                                                    : 'Record, inspect the transcript, then confirm if ASR heard it correctly'}
+                                        </span>
+                                    </div>
+                                    {counterexampleDraft && (
+                                        <div style={{display:'grid',gap:8,padding:'10px 12px',border:'1px solid var(--border)',borderRadius:8,background:'rgba(255,255,255,0.02)'}}>
+                                            <div style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1}}>ASR heard</div>
+                                            <div style={{fontSize:15,lineHeight:1.5}}>{counterexampleDraft.sentence || <span style={{color:'var(--text-muted)'}}>(empty)</span>}</div>
+                                            <div style={{fontSize:12,color:counterexampleDraft.containsSurface ? 'var(--success)' : 'var(--warning)'}}>
+                                                {counterexampleDraft.containsSurface
+                                                    ? `Looks good: "${counterexampleReview.surface_form}" is present.`
+                                                    : `Missing "${counterexampleReview.surface_form}". Retry unless the transcript is clearly still acceptable.`}
+                                            </div>
+                                            <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                                                <button className="btn btn-primary btn-sm" onClick={confirmCounterexampleDraft} disabled={!counterexampleDraft.containsSurface || counterexampleSpeakBusy}>Confirm & save</button>
+                                                <button className="btn btn-sm" onClick={() => { setCounterexampleDraft(null); setCounterexampleSpeakError(null); }} disabled={counterexampleSpeakBusy}>Discard</button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
                     {error && <div className="pipeline-error" style={{marginBottom:12}}>{error}</div>}
 
                     {!term ? (
@@ -3767,11 +3994,11 @@
                             <div className="vocab-editor" style={{maxWidth: 1100, width: '96vw', minHeight: '88vh', display: 'flex', flexDirection: 'column', justifyContent: 'space-between'}}>
                                 <div>
                                     <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
-                                        <div className="term" style={{flex:1,textAlign:'left'}}>Rapid fire</div>
+                                        <div className="term" style={{flex:1,textAlign:'left'}}>{rapidFireTitle}</div>
                                         <button onClick={closeRapidFire} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:18}}>&times;</button>
                                     </div>
                                     <div style={{color:'var(--text-muted)',fontSize:13,marginBottom:18,lineHeight:1.5}}>
-                                        It keeps picking a new sentence at random, but zero-take sentences are always preferred first.
+                                        {rapidFireHint}
                                     </div>
                                     <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:10}}>
                                         <div style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1}}>Current sentence</div>
@@ -3810,7 +4037,7 @@
                                     </div>
                                 </div>
                                 <div style={{marginTop:24,borderTop:'1px solid var(--border)',paddingTop:12,fontSize:11,color:'var(--text-muted)',textAlign:'center'}}>
-                                    Zero-take sentences are prioritized first, then selection becomes random across the whole set.
+                                    Zero-take sentences are prioritized first, then selection becomes random across the active queue.
                                 </div>
                             </div>
                         </div>
@@ -4350,6 +4577,13 @@
             );
         }
 
+        const TRAIN_PRESETS = [
+            { id: 'q35-2b-q4', label: '2B Q4', model: 'mlx-community/Qwen3.5-2B-4bit', iters: 2000, batch: 4, layers: 8 },
+            { id: 'q35-2b-q4-smoke', label: '2B Q4 Smoke', model: 'mlx-community/Qwen3.5-2B-4bit', iters: 600, batch: 4, layers: 4 },
+            { id: 'q35-08b-q4', label: '0.8B Q4', model: 'mlx-community/Qwen3.5-0.8B-4bit', iters: 2000, batch: 4, layers: 8 },
+            { id: 'q35-2b-bf16', label: '2B BF16', model: 'Qwen/Qwen3.5-2B', iters: 2000, batch: 4, layers: 8 },
+        ];
+
         // ==================== TRAIN PAGE ====================
         function TrainPage() {
             const [status, setStatus] = useState(null);
@@ -4357,7 +4591,7 @@
             const [runningJob, setRunningJob] = useState(null);
             const [jobLog, setJobLog] = useState('');
             const [error, setError] = useState(null);
-            const [model, setModel] = useState('Qwen/Qwen3.5-0.8B');
+            const [model, setModel] = useState('mlx-community/Qwen3.5-2B-4bit');
             const [iters, setIters] = useState(2000);
             const [batch, setBatch] = useState(4);
             const [layers, setLayers] = useState(8);
@@ -5037,6 +5271,13 @@
                 return value;
             }
 
+            function formatMs(ms) {
+                if (ms == null || Number.isNaN(Number(ms))) return '—';
+                const value = Number(ms);
+                if (value >= 1000) return `${(value / 1000).toFixed(2)}s`;
+                return `${Math.round(value)}ms`;
+            }
+
             const ensurePreviewBuffer = async () => {
                 if (previewBuffer) return previewBuffer;
                 setPreviewLoading(true);
@@ -5305,7 +5546,7 @@
                                                     </button>
                                                 )
                                             )}
-                                            {(e.cat === 'wrong' || e.cat === 'broken') && (e.alignments || e.trace) && (
+                                            {(e.alignments || e.trace || e.timing) && (
                                                 <button className="btn" style={{padding:'2px 8px',minHeight:'auto',fontSize:11}} onClick={() => setExpandedEntry(expandedEntry === i ? null : i)}>
                                                     {expandedEntry === i ? 'Hide details' : 'Details'}
                                                 </button>
@@ -5323,7 +5564,7 @@
                                             {e.alignment_failed && (
                                                 <div><span style={{color:'var(--text-muted)',fontSize:10,display:'inline-block',width:55}}>trace:</span> <span style={{color:'var(--warning)'}}>alignment failed or expected fragment mismatch</span></div>
                                             )}
-                                            {expandedEntry === i && e.alignments && (() => {
+                                            {expandedEntry === i && (() => {
                                                 const tt = e.cons_time;
                                                 const ti = e.trim_info;
                                                 const tl = ti?.trimmed_left || 0;
@@ -5369,6 +5610,39 @@
                                                     </div>;
                                                 };
                                                 return <div style={{marginTop:8,paddingTop:8,borderTop:'1px solid rgba(255,255,255,0.06)'}}>
+                                                    {e.raw_output && e.raw_output !== e.output && (
+                                                        <div style={{marginBottom:10,padding:'10px 12px',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:6}}>
+                                                            <div style={{fontSize:11,fontWeight:600,color:'var(--text-muted)',marginBottom:6}}>Raw model output</div>
+                                                            <pre style={{
+                                                                margin:0,
+                                                                whiteSpace:'pre-wrap',
+                                                                wordBreak:'break-word',
+                                                                fontSize:11,
+                                                                lineHeight:1.45,
+                                                                color:'var(--text)',
+                                                                overflow:'auto',
+                                                                maxHeight:160,
+                                                            }}>{e.raw_output}</pre>
+                                                        </div>
+                                                    )}
+                                                    {e.timing && (
+                                                        <div style={{marginBottom:10,padding:'10px 12px',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:6}}>
+                                                            <div style={{fontSize:11,fontWeight:600,color:'var(--text-muted)',marginBottom:8}}>Timing</div>
+                                                            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))',gap:8,fontSize:11}}>
+                                                                <div><span style={{color:'var(--text-muted)'}}>total:</span> <span>{formatMs(e.timing.total_ms ?? e.timing.infer_total_ms)}</span></div>
+                                                                {'asr_ms' in e.timing && <div><span style={{color:'var(--text-muted)'}}>ASR:</span> <span>{formatMs(e.timing.asr_ms)}</span>{e.timing.asr_source ? <span style={{color:'var(--text-muted)'}}> ({e.timing.asr_source})</span> : null}</div>}
+                                                                <div><span style={{color:'var(--text-muted)'}}>infer:</span> <span>{formatMs(e.timing.infer_total_ms ?? e.timing.total_ms)}</span></div>
+                                                                {'encode_ms' in e.timing && <div><span style={{color:'var(--text-muted)'}}>encode:</span> <span>{formatMs(e.timing.encode_ms)}</span></div>}
+                                                                {'prefill_ms' in e.timing && <div><span style={{color:'var(--text-muted)'}}>prefill:</span> <span>{formatMs(e.timing.prefill_ms)}</span></div>}
+                                                                {'decode_ms' in e.timing && <div><span style={{color:'var(--text-muted)'}}>decode:</span> <span>{formatMs(e.timing.decode_ms)}</span></div>}
+                                                                {'generate_ms' in e.timing && <div><span style={{color:'var(--text-muted)'}}>generate:</span> <span>{formatMs(e.timing.generate_ms)}</span></div>}
+                                                                {'focus_ms' in e.timing && <div><span style={{color:'var(--text-muted)'}}>focus:</span> <span>{formatMs(e.timing.focus_ms)}</span></div>}
+                                                                {'prompt_tokens' in e.timing && <div><span style={{color:'var(--text-muted)'}}>prompt toks:</span> <span>{e.timing.prompt_tokens ?? '—'}</span></div>}
+                                                                {'output_tokens' in e.timing && <div><span style={{color:'var(--text-muted)'}}>output toks:</span> <span>{e.timing.output_tokens ?? '—'}</span></div>}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                    {e.alignments && <>
                                                     <div style={{display:'flex',gap:8,marginBottom:6}}>
                                                         <button className="btn" style={{padding:'2px 8px',minHeight:'auto',fontSize:11}} onClick={async () => {
                                                             const buf = await fetchRecordingBuffer(e.recording_id);
@@ -5401,6 +5675,7 @@
                                                             }}>{JSON.stringify(e.trace, null, 2)}</pre>
                                                         </div>
                                                     )}
+                                                    </>}
                                                 </div>;
                                             })()}
                                         </div>
@@ -5609,11 +5884,13 @@
             const pollRef = useRef(null);
 
             const [corpusBackend, setCorpusBackend] = useState('pocket-hq');
-            const [trainIters, setTrainIters] = useState(1000);
-            const [trainBatch, setTrainBatch] = useState(1);
-            const [trainLayers, setTrainLayers] = useState(4);
-            const [trainModel, setTrainModel] = useState('Qwen/Qwen3.5-0.8B');
-            const [identityCount, setIdentityCount] = useState(95000);
+            const defaultTrainPreset = TRAIN_PRESETS[0];
+            const [trainIters, setTrainIters] = useState(defaultTrainPreset.iters);
+            const [trainBatch, setTrainBatch] = useState(defaultTrainPreset.batch);
+            const [trainLayers, setTrainLayers] = useState(defaultTrainPreset.layers);
+            const [trainModel, setTrainModel] = useState(defaultTrainPreset.model);
+            const [prepareTotalExamples, setPrepareTotalExamples] = useState(12000);
+            const [prepareErrorRate, setPrepareErrorRate] = useState(25);
             // Vocab scan config
             const [scanBatch, setScanBatch] = useState(20);
             const [scanLimit, setScanLimit] = useState(250);
@@ -5655,6 +5932,193 @@
 
             const logRef = useRef(null);
             useEffect(() => {if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;}, [jobLog]);
+
+            const trainMetrics = (() => {
+                const lines = (jobLog || '').split('\n');
+                const train = [];
+                const val = [];
+                const resources = [];
+                let totalIters = null;
+                for (const line of lines) {
+                    const start = line.match(/Starting training: .*iters=(\d+)/);
+                    if (start) totalIters = parseInt(start[1], 10) || totalIters;
+                    if (line.startsWith('RESOURCE ')) {
+                        try { resources.push(JSON.parse(line.slice('RESOURCE '.length))); } catch (_) {}
+                        continue;
+                    }
+                    const trainMatch = line.match(/^Iter\s+(\d+):\s+Train loss\s+([0-9.]+),\s+Learning Rate\s+([0-9.eE+-]+),\s+It\/sec\s+([0-9.]+),\s+Tokens\/sec\s+([0-9.]+),\s+Trained Tokens\s+([0-9,]+),\s+Peak mem\s+([0-9.]+)\s+GB/);
+                    if (trainMatch) {
+                        train.push({
+                            iter: parseInt(trainMatch[1], 10),
+                            loss: parseFloat(trainMatch[2]),
+                            itPerSec: parseFloat(trainMatch[4]),
+                            tokPerSec: parseFloat(trainMatch[5]),
+                            peakMemGb: parseFloat(trainMatch[7]),
+                        });
+                        continue;
+                    }
+                    const valMatch = line.match(/^Iter\s+(\d+):\s+Val loss\s+([0-9.]+),\s+Val took\s+([0-9.]+)s/);
+                    if (valMatch) {
+                        val.push({
+                            iter: parseInt(valMatch[1], 10),
+                            loss: parseFloat(valMatch[2]),
+                            tookSec: parseFloat(valMatch[3]),
+                        });
+                    }
+                }
+                const latestTrain = train[train.length - 1] || null;
+                const latestVal = val[val.length - 1] || null;
+                const latestResource = resources[resources.length - 1] || null;
+                const bestVal = val.length ? val.reduce((best, p) => p.loss < best.loss ? p : best, val[0]) : null;
+                const currentIter = Math.max(latestTrain?.iter || 0, latestVal?.iter || 0);
+                const peakProcessTreeRssMb = resources.reduce((best, sample) => Math.max(best, sample.process_tree_rss_mb || 0), 0);
+                const peakGpuUtilPercent = resources.reduce((best, sample) => Math.max(best, sample.gpu_device_util_percent || 0), 0);
+                return {train, val, resources, latestTrain, latestVal, latestResource, bestVal, totalIters, currentIter, peakProcessTreeRssMb, peakGpuUtilPercent};
+            })();
+
+            const pressureMetrics = (() => {
+                const r = trainMetrics.latestResource;
+                if (!r) return null;
+                const totalMb = r.system_total_memory_mb || 0;
+                const freeGb = (r.system_free_memory_mb || 0) / 1024;
+                const rssGb = (r.process_tree_rss_mb || 0) / 1024;
+                const gpuInUseGb = (r.gpu_in_use_system_memory_mb || 0) / 1024;
+                const gpuAllocGb = (r.gpu_alloc_system_memory_mb || 0) / 1024;
+                const util = Number.isFinite(r.gpu_device_util_percent) ? r.gpu_device_util_percent : null;
+                const clamp01 = v => Math.max(0, Math.min(1, v || 0));
+                const freeRatio = totalMb > 0 ? clamp01((r.system_free_memory_mb || 0) / totalMb) : 0;
+                const rssRatio = totalMb > 0 ? clamp01((r.process_tree_rss_mb || 0) / totalMb) : 0;
+                const gpuInUseRatio = totalMb > 0 ? clamp01((r.gpu_in_use_system_memory_mb || 0) / totalMb) : 0;
+                const gpuAllocRatio = totalMb > 0 ? clamp01((r.gpu_alloc_system_memory_mb || 0) / totalMb) : 0;
+                const gpuUtilRatio = util == null ? null : clamp01(util / 100);
+                const pressureState = freeGb < 1.5 || gpuInUseGb > 10 || (util || 0) > 97
+                    ? {label: 'Danger', color: 'var(--danger)'}
+                    : freeGb < 3 || gpuInUseGb > 8 || (util || 0) > 90
+                        ? {label: 'Tight', color: 'var(--warning)'}
+                        : {label: 'OK', color: 'var(--success)'};
+                return {
+                    freeGb, rssGb, gpuInUseGb, gpuAllocGb, util,
+                    freeRatio, rssRatio, gpuInUseRatio, gpuAllocRatio, gpuUtilRatio,
+                    pressureState,
+                };
+            })();
+
+            const formatGb = value => `${value.toFixed(value >= 10 ? 1 : 2)}GB`;
+            const formatEta = seconds => {
+                if (!Number.isFinite(seconds) || seconds <= 0) return null;
+                const total = Math.round(seconds);
+                const h = Math.floor(total / 3600);
+                const m = Math.floor((total % 3600) / 60);
+                const s = total % 60;
+                if (h > 0) return `${h}h ${m}m`;
+                if (m > 0) return `${m}m ${s}s`;
+                return `${s}s`;
+            };
+
+            const renderDonut = ({label, ratio, value, subtitle, color, invert=false}) => {
+                const size = 88;
+                const stroke = 7;
+                const radius = (size - stroke) / 2;
+                const circumference = 2 * Math.PI * radius;
+                const progress = Math.max(0, Math.min(1, ratio));
+                const visual = invert ? 1 - progress : progress;
+                const dashOffset = circumference * (1 - visual);
+                return (
+                    <div key={label} className="stat-card" style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'12px 10px',gap:8}}>
+                        <div style={{position:'relative',width:size,height:size}}>
+                            <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{display:'block'}}>
+                                <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={stroke} />
+                                <circle
+                                    cx={size / 2}
+                                    cy={size / 2}
+                                    r={radius}
+                                    fill="none"
+                                    stroke={color}
+                                    strokeWidth={stroke}
+                                    strokeLinecap="round"
+                                    strokeDasharray={circumference}
+                                    strokeDashoffset={dashOffset}
+                                    transform={`rotate(-90 ${size / 2} ${size / 2})`}
+                                />
+                            </svg>
+                            <div style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',pointerEvents:'none'}}>
+                                <div style={{fontSize:18,fontWeight:700,color}}>{value}</div>
+                                <div style={{fontSize:10,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.04em'}}>{subtitle}</div>
+                            </div>
+                        </div>
+                        <div style={{fontSize:12,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.04em'}}>{label}</div>
+                    </div>
+                );
+            };
+
+            const renderLossChart = () => {
+                const series = [...trainMetrics.train, ...trainMetrics.val];
+                if (!series.length) return null;
+                const width = 760;
+                const height = 220;
+                const pad = 24;
+                const maxIter = Math.max(trainMetrics.totalIters || 0, trainMetrics.currentIter || 1, 1);
+                const losses = series.map(p => p.loss).filter(Number.isFinite);
+                const maxLoss = Math.max(...losses);
+                const positiveLosses = losses.filter(loss => loss > 0);
+                const lossFloor = positiveLosses.length
+                    ? Math.min(1e-2, Math.max(Math.min(...positiveLosses) / 2, 1e-4))
+                    : 1e-4;
+                const logMin = Math.log10(lossFloor);
+                const logMax = Math.log10(Math.max(maxLoss, lossFloor * 10));
+                const logSpan = Math.max(logMax - logMin, 1);
+                const etaSeconds = trainMetrics.totalIters && trainMetrics.latestTrain?.itPerSec
+                    ? Math.max(0, (trainMetrics.totalIters - trainMetrics.currentIter) / trainMetrics.latestTrain.itPerSec)
+                    : null;
+                const eta = formatEta(etaSeconds);
+                const formatLossTick = loss => (loss < 0.01 ? loss.toFixed(4) : loss.toFixed(3));
+                const x = iter => pad + (iter / maxIter) * (width - pad * 2);
+                const y = loss => {
+                    const clamped = Math.max(loss, lossFloor);
+                    return height - pad - ((Math.log10(clamped) - logMin) / logSpan) * (height - pad * 2);
+                };
+                const pts = arr => arr.map(p => `${x(p.iter).toFixed(1)},${y(p.loss).toFixed(1)}`).join(' ');
+                const grid = [0, 0.25, 0.5, 0.75, 1].map(t => {
+                    const loss = 10 ** (logMin + logSpan * t);
+                    const yy = y(loss);
+                    return {loss, yy};
+                });
+                return (
+                    <div className="card" style={{marginTop:16,padding:'12px 14px'}}>
+                        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8,flexWrap:'wrap'}}>
+                            <h3 style={{margin:0,flex:1}}>Live Training Curve</h3>
+                            <span style={{fontSize:12,color:'var(--text-muted)'}}>
+                                iter {trainMetrics.currentIter.toLocaleString()}{trainMetrics.totalIters ? ` / ${trainMetrics.totalIters.toLocaleString()}` : ''}
+                            </span>
+                            {eta && (
+                                <span style={{fontSize:12,color:'var(--text-muted)'}}>
+                                    ETA {eta}
+                                </span>
+                            )}
+                        </div>
+                        <svg viewBox={`0 0 ${width} ${height}`} style={{width:'100%',height:'auto',display:'block',background:'rgba(255,255,255,0.02)',borderRadius:8,border:'1px solid var(--border)'}}>
+                            {grid.map((g, i) => (
+                                <g key={i}>
+                                    <line x1={pad} y1={g.yy} x2={width - pad} y2={g.yy} stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
+                                    <text x={8} y={g.yy + 4} fill="var(--text-muted)" fontSize="10">{formatLossTick(g.loss)}</text>
+                                </g>
+                            ))}
+                            <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+                            <line x1={pad} y1={pad} x2={pad} y2={height - pad} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+                            {trainMetrics.train.length > 1 && <polyline fill="none" stroke="rgba(88,166,255,0.95)" strokeWidth="2" points={pts(trainMetrics.train)} />}
+                            {trainMetrics.val.length > 0 && <polyline fill="none" stroke="rgba(126,231,135,0.95)" strokeWidth="2" points={pts(trainMetrics.val)} />}
+                            {trainMetrics.bestVal && <circle cx={x(trainMetrics.bestVal.iter)} cy={y(trainMetrics.bestVal.loss)} r="3.5" fill="rgba(126,231,135,1)" />}
+                        </svg>
+                    </div>
+                );
+            };
+
+            const applyTrainPreset = preset => {
+                setTrainModel(preset.model);
+                setTrainIters(preset.iters);
+                setTrainBatch(preset.batch);
+                setTrainLayers(preset.layers);
+            };
 
             if (!status) return <div className="pipeline-wrap"><p style={{textAlign: 'center', color: 'var(--text-muted)'}}>Initializing pipeline...</p></div>;
 
@@ -5795,14 +6259,16 @@
                                 <span className={badgeClass(s2)}>{badgeText(s2, `${status.train_count?.toLocaleString()} examples`)}</span>
                             </div>
                             <div className="stage-desc">
-                                Generate identity examples from conversation history, merge with corpus triples, split into train / valid / test partitions.
+                                Build a fixed-size train / valid set from correction examples plus no-change examples. Total examples stays fixed; error rate controls how much of the budget goes to corrections.
                             </div>
                             <div className="stage-controls">
-                                <label>Identity</label>
-                                <input type="number" value={identityCount} onChange={e => setIdentityCount(parseInt(e.target.value) || 95000)} style={{width: 80}} />
+                                <label>Total</label>
+                                <input type="number" value={prepareTotalExamples} onChange={e => setPrepareTotalExamples(parseInt(e.target.value) || 12000)} style={{width: 80}} />
+                                <label>Error %</label>
+                                <input type="number" min="0" max="100" step="1" value={prepareErrorRate} onChange={e => setPrepareErrorRate(parseInt(e.target.value) || 25)} style={{width: 60}} />
                                 <div style={{flex: 1}} />
                                 <button className="stage-launch-btn" disabled={isRunning || !status.corpus_exists}
-                                    onClick={() => startJob('prepare', {identity_count: identityCount})}>
+                                    onClick={() => startJob('prepare', {total_examples: prepareTotalExamples, error_rate: Math.max(0, Math.min(100, prepareErrorRate)) / 100})}>
                                     {rt === 'prepare' ? 'Running\u2026' : 'Prepare'}
                                 </button>
                             </div>
@@ -5822,17 +6288,37 @@
                                 <span className={badgeClass(s3)}>{badgeText(s3, 'Adapters ready')}</span>
                             </div>
                             <div className="stage-desc">
-                                Fine-tune with Low-Rank Adaptation on Apple Silicon via MLX-LM. Prompt format: &lt;parakeet&gt; ... &lt;qwen&gt; ... &lt;correct&gt;
+                                Fine-tune with Low-Rank Adaptation on Apple Silicon via MLX-LM. Prompt format: &lt;task&gt; ... &lt;rules&gt; ... &lt;qwen&gt; ... &lt;fixd&gt;
                             </div>
                             <div className="stage-controls">
+                                <label>Preset</label>
+                                <div style={{display:'flex',gap:6,flexWrap:'wrap',marginRight:10}}>
+                                    {TRAIN_PRESETS.map(preset => (
+                                        <button
+                                            key={preset.id}
+                                            type="button"
+                                            className="stage-launch-btn"
+                                            style={{
+                                                padding:'6px 10px',
+                                                background: trainModel === preset.model && trainIters === preset.iters && trainBatch === preset.batch && trainLayers === preset.layers
+                                                    ? 'rgba(88,166,255,0.14)'
+                                                    : 'rgba(255,255,255,0.02)',
+                                            }}
+                                            onClick={() => applyTrainPreset(preset)}
+                                            disabled={isRunning}
+                                        >
+                                            {preset.label}
+                                        </button>
+                                    ))}
+                                </div>
                                 <label>Model</label>
-                                <input value={trainModel} onChange={e => setTrainModel(e.target.value)} style={{width: 170}} />
+                                <input value={trainModel} onChange={e => setTrainModel(e.target.value)} style={{width: 220}} />
                                 <label>Iters</label>
-                                <input type="number" value={trainIters} onChange={e => setTrainIters(parseInt(e.target.value) || 1000)} style={{width: 60}} />
+                                <input type="number" value={trainIters} onChange={e => setTrainIters(parseInt(e.target.value) || defaultTrainPreset.iters)} style={{width: 60}} />
                                 <label>Batch</label>
-                                <input type="number" value={trainBatch} onChange={e => setTrainBatch(parseInt(e.target.value) || 1)} style={{width: 40}} />
+                                <input type="number" value={trainBatch} onChange={e => setTrainBatch(parseInt(e.target.value) || defaultTrainPreset.batch)} style={{width: 40}} />
                                 <label>Layers</label>
-                                <input type="number" value={trainLayers} onChange={e => setTrainLayers(parseInt(e.target.value) || 4)} style={{width: 40}} />
+                                <input type="number" value={trainLayers} onChange={e => setTrainLayers(parseInt(e.target.value) || defaultTrainPreset.layers)} style={{width: 40}} />
                                 <div style={{flex: 1}} />
                                 <button className="stage-launch-btn" disabled={isRunning || !status.training_data_exists}
                                     onClick={() => startJob('train', {model: trainModel, iters: trainIters, batch_size: trainBatch, num_layers: trainLayers})}>
@@ -5891,6 +6377,78 @@
                         {/* Live Correction Demo */}
                         {status.adapters_exist && <LiveCorrection />}
                     </div>
+
+                    {(trainMetrics.latestTrain || trainMetrics.latestVal || pressureMetrics || status.adapters_exist) && (
+                        <div style={{marginTop:16}}>
+                            {status.adapters_exist && (
+                                <div className="stats-grid" style={{marginBottom:16}}>
+                                    <div className="stat-card"><div className="value" style={{color:'var(--success)'}}>Ready</div><div className="label">Adapters</div></div>
+                                    {status.last_train?.adapter_mb && <div className="stat-card"><div className="value">{status.last_train.adapter_mb}MB</div><div className="label">Size</div></div>}
+                                    {status.last_train?.val_loss && <div className="stat-card"><div className="value">{Number(status.last_train.val_loss).toFixed(4)}</div><div className="label">Val Loss</div></div>}
+                                </div>
+                            )}
+
+                            {pressureMetrics && (
+                                <div className="card" style={{marginBottom:16,padding:'12px 14px'}}>
+                                    <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12,flexWrap:'wrap'}}>
+                                        <h3 style={{margin:0,flex:1}}>Pressure</h3>
+                                        <span style={{fontSize:12,color:pressureMetrics.pressureState.color,fontWeight:700}}>
+                                            {pressureMetrics.pressureState.label}
+                                        </span>
+                                    </div>
+                                    <div className="stats-grid" style={{marginBottom:12}}>
+                                        {renderDonut({
+                                            label: 'System Free',
+                                            ratio: pressureMetrics.freeRatio,
+                                            value: formatGb(pressureMetrics.freeGb),
+                                            subtitle: `${Math.round(pressureMetrics.freeRatio * 100)}% free`,
+                                            color: pressureMetrics.freeGb < 1.5 ? 'var(--danger)' : pressureMetrics.freeGb < 3 ? 'var(--warning)' : 'var(--success)',
+                                        })}
+                                        {renderDonut({
+                                            label: 'MLX RSS',
+                                            ratio: pressureMetrics.rssRatio,
+                                            value: formatGb(pressureMetrics.rssGb),
+                                            subtitle: `${Math.round(pressureMetrics.rssRatio * 100)}% of RAM`,
+                                            color: pressureMetrics.rssRatio > 0.2 ? 'var(--warning)' : 'var(--accent)',
+                                        })}
+                                        {renderDonut({
+                                            label: 'GPU In Use',
+                                            ratio: pressureMetrics.gpuInUseRatio,
+                                            value: formatGb(pressureMetrics.gpuInUseGb),
+                                            subtitle: `${Math.round(pressureMetrics.gpuInUseRatio * 100)}% of RAM`,
+                                            color: pressureMetrics.gpuInUseGb > 10 ? 'var(--danger)' : pressureMetrics.gpuInUseGb > 8 ? 'var(--warning)' : 'var(--accent)',
+                                        })}
+                                        {pressureMetrics.gpuUtilRatio != null && renderDonut({
+                                            label: 'GPU Util',
+                                            ratio: pressureMetrics.gpuUtilRatio,
+                                            value: `${Math.round(pressureMetrics.util)}%`,
+                                            subtitle: 'current',
+                                            color: pressureMetrics.util > 97 ? 'var(--danger)' : pressureMetrics.util > 90 ? 'var(--warning)' : 'var(--success)',
+                                        })}
+                                        {pressureMetrics.gpuAllocGb > 0 && renderDonut({
+                                            label: 'GPU Alloc',
+                                            ratio: pressureMetrics.gpuAllocRatio,
+                                            value: formatGb(pressureMetrics.gpuAllocGb),
+                                            subtitle: `${Math.round(pressureMetrics.gpuAllocRatio * 100)}% of RAM`,
+                                            color: 'rgba(126,231,135,0.95)',
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+
+                            {(trainMetrics.latestTrain || trainMetrics.latestVal) && (
+                                <div className="stats-grid" style={{marginBottom:16}}>
+                                    {trainMetrics.latestTrain && <div className="stat-card"><div className="value" style={{color:'var(--accent)'}}>{trainMetrics.latestTrain.loss.toFixed(3)}</div><div className="label">Latest Train</div></div>}
+                                    {trainMetrics.latestVal && <div className="stat-card"><div className="value" style={{color:'var(--success)'}}>{trainMetrics.latestVal.loss.toFixed(3)}</div><div className="label">Latest Val</div></div>}
+                                    {trainMetrics.bestVal && <div className="stat-card"><div className="value" style={{color:'var(--success)'}}>{trainMetrics.bestVal.loss.toFixed(3)}</div><div className="label">Best Val</div></div>}
+                                    {trainMetrics.latestTrain?.peakMemGb && <div className="stat-card"><div className="value">{trainMetrics.latestTrain.peakMemGb.toFixed(2)}GB</div><div className="label">Peak Mem</div></div>}
+                                    {trainMetrics.latestTrain?.tokPerSec && <div className="stat-card"><div className="value">{Math.round(trainMetrics.latestTrain.tokPerSec)}</div><div className="label">Tok/sec</div></div>}
+                                </div>
+                            )}
+
+                            {renderLossChart()}
+                        </div>
+                    )}
                 </div>
             );
         }
@@ -6350,7 +6908,9 @@
             else if (hash.startsWith('#/author')) page = <AuthorPage />;
             else if (hash === '#/confusions/review') page = <ConfusionsReview />;
             else if (hash.startsWith('#/confusions')) page = <CorpusPage />;
-            else if (hash.startsWith('#/train')) page = <TrainPage />;
+            else if (hash.startsWith('#/pipeline/scan')) page = <ScanResultsPage />;
+            else if (hash.startsWith('#/train')) page = <PipelinePage />;
+            else if (hash.startsWith('#/pipeline')) page = <PipelinePage />;
             else if (hash.startsWith('#/eval')) page = <EvalPage />;
             else if (hash.startsWith('#/settings')) page = <SettingsPage />;
             else if (hash.startsWith('#/tests')) page = <AlgorithmTestsPage />;

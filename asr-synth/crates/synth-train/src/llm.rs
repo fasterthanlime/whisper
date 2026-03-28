@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use candle_core::{Device, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use peft_rs::LoraLayer;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Instant;
 
@@ -83,9 +83,43 @@ pub(crate) struct LocalModel<M> {
     model: M,
     tokenizer: tokenizers::Tokenizer,
     device: Device,
+    stop_tokens: BTreeSet<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct GenerateStats {
+    pub text: String,
+    pub prompt_tokens: usize,
+    pub output_tokens: usize,
+    pub prefill_ms: u64,
+    pub decode_ms: u64,
 }
 
 impl<M: AdapterModel> LocalModel<M> {
+    fn discover_stop_tokens(tokenizer: &tokenizers::Tokenizer) -> BTreeSet<u32> {
+        const STOP_TEXTS: &[&str] = &[
+            "<|eot_id|>",
+            "<|im_end|>",
+            "<|end|>",
+            "<end_of_turn>",
+            "<|endoftext|>",
+            "<|end_of_text|>",
+            "<EOT>",
+            "_<EOT>",
+            "[EOT]",
+            "<｜end▁of▁sentence｜>",
+            "<end_of_utterance>",
+        ];
+
+        let mut stop_tokens = BTreeSet::new();
+        for text in STOP_TEXTS {
+            if let Some(id) = tokenizer.token_to_id(text) {
+                stop_tokens.insert(id);
+            }
+        }
+        stop_tokens
+    }
+
     fn sample_next_token(logits_processor: &mut LogitsProcessor, logits: Tensor) -> Result<u32> {
         let logits = logits.squeeze(0)?;
         logits_processor
@@ -94,14 +128,79 @@ impl<M: AdapterModel> LocalModel<M> {
     }
 
     fn from_loaded_parts(model: M, tokenizer: tokenizers::Tokenizer, device: Device) -> Self {
+        let stop_tokens = Self::discover_stop_tokens(&tokenizer);
+        eprintln!("[llm] stop tokens: {stop_tokens:?}");
         Self {
             model,
             tokenizer,
             device,
+            stop_tokens,
         }
     }
 
+    fn is_stop_token(&self, token: u32) -> bool {
+        self.stop_tokens.contains(&token)
+    }
+
+    fn normalize_piece(piece: &str) -> String {
+        piece.trim_matches(|ch: char| {
+            ch.is_ascii_whitespace()
+                || matches!(
+                    ch,
+                    '\u{2581}' | '<' | '>' | '|' | '_' | '\n' | '\r' | '\t'
+                )
+        })
+        .to_ascii_lowercase()
+    }
+
+    fn has_repeated_suffix<T: Eq>(items: &[T], unit: usize, reps: usize) -> bool {
+        if unit == 0 || reps < 2 || items.len() < unit * reps {
+            return false;
+        }
+        let start = items.len() - unit * reps;
+        let base = &items[start..start + unit];
+        (1..reps).all(|rep| {
+            let chunk_start = start + rep * unit;
+            &items[chunk_start..chunk_start + unit] == base
+        })
+    }
+
+    fn should_abort_repetition(&self, generated_tokens: &[u32]) -> bool {
+        if Self::has_repeated_suffix(generated_tokens, 1, 6)
+            || Self::has_repeated_suffix(generated_tokens, 2, 4)
+            || Self::has_repeated_suffix(generated_tokens, 3, 3)
+        {
+            return true;
+        }
+
+        let pieces: Vec<_> = generated_tokens
+            .iter()
+            .filter_map(|&token| self.tokenizer.id_to_token(token))
+            .map(|piece| Self::normalize_piece(&piece))
+            .filter(|piece| !piece.is_empty())
+            .collect();
+
+        if Self::has_repeated_suffix(&pieces, 1, 4)
+            || Self::has_repeated_suffix(&pieces, 2, 3)
+            || Self::has_repeated_suffix(&pieces, 3, 3)
+        {
+            return true;
+        }
+
+        let Ok(text) = self.tokenizer.decode(generated_tokens, true) else {
+            return false;
+        };
+        let lower = text.trim().to_ascii_lowercase();
+        lower.contains("<task>")
+            || lower.contains("<rules>")
+            || lower.contains("<qwen>")
+            || lower.contains("<fixd>")
+    }
+
     fn should_stop_early(&self, generated_tokens: &[u32]) -> bool {
+        if self.should_abort_repetition(generated_tokens) {
+            return true;
+        }
         if generated_tokens.len() < 6 {
             return false;
         }
@@ -150,16 +249,13 @@ impl<M: AdapterModel> LocalModel<M> {
         Ok(encoding.get_ids().to_vec())
     }
 
-    pub fn generate(
+    pub fn generate_with_stats(
         &mut self,
         prompt_tokens: &[u32],
         max_tokens: usize,
         temperature: f64,
         seed: u64,
-    ) -> Result<String> {
-        const IM_END_TOKEN: u32 = 151645;
-        const ENDOFTEXT_TOKEN: u32 = 151643;
-
+    ) -> Result<GenerateStats> {
         let started = Instant::now();
         self.model.clear_kv_cache();
 
@@ -188,14 +284,20 @@ impl<M: AdapterModel> LocalModel<M> {
         let mut next_token = Self::sample_next_token(&mut logits_processor, logits)?;
 
         let mut generated_tokens = Vec::new();
-        if next_token == IM_END_TOKEN || next_token == ENDOFTEXT_TOKEN {
+        if self.is_stop_token(next_token) {
             eprintln!(
                 "[llm] generate done: prompt_tokens={} output_tokens=0 prefill_ms={} decode_ms=0 total_ms={}",
                 prompt_tokens.len(),
                 prefill_elapsed.as_millis(),
                 started.elapsed().as_millis(),
             );
-            return Ok(String::new());
+            return Ok(GenerateStats {
+                text: String::new(),
+                prompt_tokens: prompt_tokens.len(),
+                output_tokens: 0,
+                prefill_ms: prefill_elapsed.as_millis() as u64,
+                decode_ms: 0,
+            });
         }
         generated_tokens.push(next_token);
         if self.should_stop_early(&generated_tokens) {
@@ -203,10 +305,17 @@ impl<M: AdapterModel> LocalModel<M> {
                 "[llm] early stop after {} token(s) of output",
                 generated_tokens.len()
             );
-            return self
+            let text = self
                 .tokenizer
                 .decode(&generated_tokens, true)
-                .map_err(|e| anyhow::anyhow!("tokenizer decode failed: {e}"));
+                .map_err(|e| anyhow::anyhow!("tokenizer decode failed: {e}"))?;
+            return Ok(GenerateStats {
+                text,
+                prompt_tokens: prompt_tokens.len(),
+                output_tokens: generated_tokens.len(),
+                prefill_ms: prefill_elapsed.as_millis() as u64,
+                decode_ms: 0,
+            });
         }
 
         let decode_started = Instant::now();
@@ -218,7 +327,7 @@ impl<M: AdapterModel> LocalModel<M> {
                 .map_err(|e| anyhow::anyhow!("forward (decode step {i}) failed: {e}"))?;
             next_token = Self::sample_next_token(&mut logits_processor, logits)?;
 
-            if next_token == IM_END_TOKEN || next_token == ENDOFTEXT_TOKEN {
+            if self.is_stop_token(next_token) {
                 break;
             }
             generated_tokens.push(next_token);
@@ -241,9 +350,29 @@ impl<M: AdapterModel> LocalModel<M> {
             started.elapsed().as_millis(),
         );
 
-        self.tokenizer
+        let text = self
+            .tokenizer
             .decode(&generated_tokens, true)
-            .map_err(|e| anyhow::anyhow!("tokenizer decode failed: {e}"))
+            .map_err(|e| anyhow::anyhow!("tokenizer decode failed: {e}"))?;
+        Ok(GenerateStats {
+            text,
+            prompt_tokens: prompt_tokens.len(),
+            output_tokens: generated_tokens.len(),
+            prefill_ms: prefill_elapsed.as_millis() as u64,
+            decode_ms: decode_elapsed.as_millis() as u64,
+        })
+    }
+
+    pub fn generate(
+        &mut self,
+        prompt_tokens: &[u32],
+        max_tokens: usize,
+        temperature: f64,
+        seed: u64,
+    ) -> Result<String> {
+        Ok(self
+            .generate_with_stats(prompt_tokens, max_tokens, temperature, seed)?
+            .text)
     }
 }
 
@@ -333,16 +462,20 @@ impl CorrectionModel {
         }
     }
 
-    pub fn generate(
+    pub fn generate_with_stats(
         &mut self,
         prompt_tokens: &[u32],
         max_tokens: usize,
         temperature: f64,
         seed: u64,
-    ) -> Result<String> {
+    ) -> Result<GenerateStats> {
         match self {
-            Self::Qwen2(model) => model.generate(prompt_tokens, max_tokens, temperature, seed),
-            Self::Qwen3_5(model) => model.generate(prompt_tokens, max_tokens, temperature, seed),
+            Self::Qwen2(model) => {
+                model.generate_with_stats(prompt_tokens, max_tokens, temperature, seed)
+            }
+            Self::Qwen3_5(model) => {
+                model.generate_with_stats(prompt_tokens, max_tokens, temperature, seed)
+            }
         }
     }
 }

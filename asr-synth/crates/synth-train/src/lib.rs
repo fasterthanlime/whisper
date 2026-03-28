@@ -62,7 +62,7 @@ impl Default for TrainConfig {
         Self {
             data: "training/data".into(),
             adapters: "training/adapters".into(),
-            model: "Qwen/Qwen3.5-0.8B".into(),
+            model: "mlx-community/Qwen3.5-2B-4bit".into(),
             iters: 2000,
             batch_size: 4,
             num_layers: 8,
@@ -523,6 +523,7 @@ pub fn train_streaming(
 pub struct InferenceConfig {
     pub model: String,
     pub adapters: String,
+    pub attach_adapters: bool,
     pub max_tokens: usize,
     pub port: u16,
 }
@@ -530,8 +531,9 @@ pub struct InferenceConfig {
 impl Default for InferenceConfig {
     fn default() -> Self {
         Self {
-            model: "Qwen/Qwen2.5-0.5B".into(),
+            model: "mlx-community/Qwen3.5-2B-4bit".into(),
             adapters: "training/adapters".into(),
+            attach_adapters: true,
             max_tokens: 64,
             port: 8899,
         }
@@ -541,25 +543,14 @@ impl Default for InferenceConfig {
 /// Build the prompt for the correction model from ASR outputs.
 /// In dual mode: both Parakeet and Qwen lanes.
 /// In single mode: only Qwen lane (pass parakeet as empty or None).
-pub fn build_correction_prompt(parakeet: &str, qwen: &str) -> String {
-    if parakeet.is_empty() {
-        format!(
-            "<task> Rewrite the ASR sentence into corrected technical text.\n\
+pub fn build_correction_prompt(_parakeet: &str, qwen: &str) -> String {
+    format!(
+        "<task> Rewrite the ASR sentence into corrected technical text.\n\
 <rules> Keep the same sentence. Fix recognition mistakes only. Do not add or remove meaning. Output one corrected sentence only.\n\
 <qwen> {}\n\
 <fixd>",
-            qwen
-        )
-    } else {
-        format!(
-            "<task> Rewrite the ASR sentence into corrected technical text.\n\
-<rules> Prefer the Qwen lane and use Parakeet only as supporting evidence. Keep the same sentence. Fix recognition mistakes only. Do not add or remove meaning. Output one corrected sentence only.\n\
-<keet> {}\n\
-<qwen> {}\n\
-<fixd>",
-            parakeet, qwen
-        )
-    }
+        qwen.trim()
+    )
 }
 
 fn normalized_words(text: &str) -> Vec<String> {
@@ -718,6 +709,11 @@ fn load_adapter_base_model(adapters_dir: &str) -> Option<String> {
 fn resolve_correction_model(config: &InferenceConfig) -> Result<CorrectionModelSpec> {
     let base_model =
         load_adapter_base_model(&config.adapters).unwrap_or_else(|| config.model.clone());
+    let base_model = match base_model.as_str() {
+        "mlx-community/Qwen3.5-0.8B-4bit" => "Qwen/Qwen3.5-0.8B".to_string(),
+        "mlx-community/Qwen3.5-2B-4bit" => "Qwen/Qwen3.5-2B".to_string(),
+        other => other.to_string(),
+    };
     match base_model.as_str() {
         "Qwen/Qwen2.5-0.5B" => Ok(CorrectionModelSpec {
             base_model,
@@ -751,6 +747,10 @@ fn resolve_correction_model(config: &InferenceConfig) -> Result<CorrectionModelS
     }
 }
 
+pub fn resolved_correction_base_model(config: &InferenceConfig) -> Result<String> {
+    Ok(resolve_correction_model(config)?.base_model)
+}
+
 /// An in-process correction model that keeps the GGUF weights loaded in Rust.
 pub struct InferenceServer {
     model_runtime: llm::CorrectionModel,
@@ -758,6 +758,25 @@ pub struct InferenceServer {
     pub max_tokens: usize,
     pub model: String,
     pub adapters: String,
+    pub attach_adapters: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InferenceStats {
+    pub prompt_tokens: usize,
+    pub output_tokens: usize,
+    pub encode_ms: u64,
+    pub prefill_ms: u64,
+    pub decode_ms: u64,
+    pub generate_ms: u64,
+    pub total_ms: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InferenceOutput {
+    pub text: String,
+    pub raw_text: String,
+    pub stats: InferenceStats,
 }
 
 impl InferenceServer {
@@ -770,20 +789,30 @@ impl InferenceServer {
         );
         let model_runtime = match spec.family {
             CorrectionModelFamily::Qwen2 => {
-                llm::CorrectionModel::Qwen2(llm::Qwen2Model::load_with_mlx_adapters(
-                    &spec.gguf_repo,
-                    &spec.gguf_file,
-                    &spec.tokenizer_repo,
-                    &config.adapters,
-                )?)
+                let model = if config.attach_adapters {
+                    llm::Qwen2Model::load_with_mlx_adapters(
+                        &spec.gguf_repo,
+                        &spec.gguf_file,
+                        &spec.tokenizer_repo,
+                        &config.adapters,
+                    )?
+                } else {
+                    llm::Qwen2Model::load(&spec.gguf_repo, &spec.gguf_file, &spec.tokenizer_repo)?
+                };
+                llm::CorrectionModel::Qwen2(model)
             }
             CorrectionModelFamily::Qwen3_5 => {
-                llm::CorrectionModel::Qwen3_5(llm::Qwen3_5Model::load_with_mlx_adapters(
-                    &spec.gguf_repo,
-                    &spec.gguf_file,
-                    &spec.tokenizer_repo,
-                    &config.adapters,
-                )?)
+                let model = if config.attach_adapters {
+                    llm::Qwen3_5Model::load_with_mlx_adapters(
+                        &spec.gguf_repo,
+                        &spec.gguf_file,
+                        &spec.tokenizer_repo,
+                        &config.adapters,
+                    )?
+                } else {
+                    llm::Qwen3_5Model::load(&spec.gguf_repo, &spec.gguf_file, &spec.tokenizer_repo)?
+                };
+                llm::CorrectionModel::Qwen3_5(model)
             }
         };
         eprintln!("[inference] Correction model ready");
@@ -794,20 +823,26 @@ impl InferenceServer {
             max_tokens: config.max_tokens,
             model: spec.base_model,
             adapters: config.adapters.clone(),
+            attach_adapters: config.attach_adapters,
         })
     }
 
     /// Run inference on a single prompt. Returns the corrected text.
     pub fn infer(&mut self, prompt: &str) -> Result<String> {
+        Ok(self.infer_with_stats(prompt)?.text)
+    }
+
+    pub fn infer_with_stats(&mut self, prompt: &str) -> Result<InferenceOutput> {
         let started = Instant::now();
         let encode_started = Instant::now();
         let prompt_tokens = self.model_runtime.encode_text(prompt)?;
         let encode_elapsed = encode_started.elapsed();
         let generate_started = Instant::now();
-        let mut text = self
+        let generation = self
             .model_runtime
-            .generate(&prompt_tokens, self.max_tokens, 0.0, 0)?;
+            .generate_with_stats(&prompt_tokens, self.max_tokens, 0.0, 0)?;
         let generate_elapsed = generate_started.elapsed();
+        let mut text = generation.text;
 
         for marker in [
             "<|endoftext|>",
@@ -821,15 +856,31 @@ impl InferenceServer {
             }
         }
 
-        let sanitized = sanitize_correction_output(prompt, text.trim());
+        let raw_text = text.trim().to_string();
+        let sanitized = sanitize_correction_output(prompt, &raw_text);
+        let stats = InferenceStats {
+            prompt_tokens: generation.prompt_tokens,
+            output_tokens: generation.output_tokens,
+            encode_ms: encode_elapsed.as_millis() as u64,
+            prefill_ms: generation.prefill_ms,
+            decode_ms: generation.decode_ms,
+            generate_ms: generate_elapsed.as_millis() as u64,
+            total_ms: started.elapsed().as_millis() as u64,
+        };
         eprintln!(
-            "[inference] infer done: prompt_tokens={} encode_ms={} generate_ms={} total_ms={}",
-            prompt_tokens.len(),
-            encode_elapsed.as_millis(),
-            generate_elapsed.as_millis(),
-            started.elapsed().as_millis(),
+            "[inference] infer done: prompt_tokens={} encode_ms={} prefill_ms={} decode_ms={} generate_ms={} total_ms={}",
+            stats.prompt_tokens,
+            stats.encode_ms,
+            stats.prefill_ms,
+            stats.decode_ms,
+            stats.generate_ms,
+            stats.total_ms,
         );
-        Ok(sanitized)
+        Ok(InferenceOutput {
+            text: sanitized,
+            raw_text,
+            stats,
+        })
     }
 }
 
@@ -846,6 +897,7 @@ impl InferenceServer {
             && self.max_tokens == config.max_tokens
             && self.model == resolved_model
             && self.adapters == config.adapters
+            && self.attach_adapters == config.attach_adapters
     }
 }
 
@@ -1006,6 +1058,7 @@ mod tests {
         let config = InferenceConfig {
             model: "Qwen/Qwen3.5-2B".into(),
             adapters: "/definitely/missing".into(),
+            attach_adapters: true,
             max_tokens: 64,
             port: 8899,
         };
