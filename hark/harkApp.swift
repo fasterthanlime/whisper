@@ -22,7 +22,6 @@ private struct StreamingResult {
     let text: String
     let signal: StreamingSignal
     let processedSampleCount: Int
-    let lastCommitSampleCount: Int
 }
 
 /// Intercepts Esc/Return while recording so those keys do not leak to the app behind Hark.
@@ -163,7 +162,6 @@ struct HarkApp: App {
     private static let minimumSpeechDurationSeconds = 0.2
     private static let transcriptionSampleRate = 16_000.0
     private static let finalizationSilencePaddingSeconds = 0.35
-    private static let tailRecoveryLookbackSeconds = 8.0
 
     var body: some Scene {
         MenuBarExtra {
@@ -555,8 +553,6 @@ struct HarkApp: App {
 
         streamingTask = Task.detached { () -> StreamingResult in
             var processedCount = 0
-            var lastCommitSampleCount = 0
-            var lastCommittedUTF16 = 0
             var lastText = ""
             var signal: StreamingSignal = .none
 
@@ -585,10 +581,6 @@ struct HarkApp: App {
                             max(0, update.committedUTF16Count),
                             (trimmed as NSString).length
                         )
-                        if committedUTF16 > lastCommittedUTF16 {
-                            lastCommittedUTF16 = committedUTF16
-                            lastCommitSampleCount = processedCount
-                        }
                         await MainActor.run {
                             appState.partialTranscript = trimmed
                             appState.partialTranscriptCommittedUTF16 = committedUTF16
@@ -611,12 +603,7 @@ struct HarkApp: App {
             // Strip the trigger phrase from the text.
             lastText = HarkApp.stripTrigger(lastText, signal: signal)
 
-            return StreamingResult(
-                text: lastText,
-                signal: signal,
-                processedSampleCount: processedCount,
-                lastCommitSampleCount: lastCommitSampleCount
-            )
+            return StreamingResult(text: lastText, signal: signal, processedSampleCount: processedCount)
         }
 
         // Watcher: handles "over" and "over and out" when they fire mid-recording.
@@ -787,15 +774,6 @@ struct HarkApp: App {
 
         // Feed any remaining samples and finalize the session to get the complete transcript.
         var text = appState.partialTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        let committedPrefixAtStop: String = {
-            let snapshot = appState.partialTranscript
-            let committedUTF16 = min(
-                max(0, appState.partialTranscriptCommittedUTF16),
-                (snapshot as NSString).length
-            )
-            let prefix = (snapshot as NSString).substring(to: committedUTF16)
-            return prefix.trimmingCharacters(in: .whitespacesAndNewlines)
-        }()
         Self.logger.warning("[hark] stop: partial='\(text, privacy: .public)' sessionExists=\(streamingSession != nil) samples=\(allSamples.count)")
         if let session = streamingSession {
             appState.isFinishing = true
@@ -803,7 +781,6 @@ struct HarkApp: App {
             // Wait for the streaming loop to exit so we don't race on the session.
             let result = await stask?.value
             let processedCount = result?.processedSampleCount ?? 0
-            let lastCommitSampleCount = min(max(0, result?.lastCommitSampleCount ?? 0), allSamples.count)
             let remainingCount = max(0, allSamples.count - processedCount)
 
             Self.logger.warning("[hark] finalize: processed=\(processedCount) total=\(allSamples.count) remaining=\(remainingCount)")
@@ -816,7 +793,7 @@ struct HarkApp: App {
                 Int((Self.finalizationSilencePaddingSeconds * Self.transcriptionSampleRate).rounded())
             )
             var finalizeChunk = remaining ?? []
-            if !finalizeChunk.isEmpty, padSampleCount > 0 {
+            if padSampleCount > 0 {
                 finalizeChunk.append(contentsOf: repeatElement(Float(0), count: padSampleCount))
             }
             let finalText: String? = await Task.detached {
@@ -829,39 +806,6 @@ struct HarkApp: App {
                 let trimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
                     text = trimmed
-                }
-            }
-
-            // Recovery pass for the mutable tail:
-            // keep committed text from streaming, but run one-shot on recent
-            // uncommitted audio to avoid losing words around early commits.
-            if !committedPrefixAtStop.isEmpty {
-                let lookbackSamples = max(
-                    0,
-                    Int((Self.tailRecoveryLookbackSeconds * Self.transcriptionSampleRate).rounded())
-                )
-                let tailStart = max(0, lastCommitSampleCount - lookbackSamples)
-                let tailSamples = tailStart < allSamples.count ? Array(allSamples[tailStart...]) : []
-
-                if !tailSamples.isEmpty && !Self.isEffectivelySilent(tailSamples) {
-                    let transcriptionService = self.transcriptionService
-                    var recoverySamples = tailSamples
-                    if padSampleCount > 0 {
-                        recoverySamples.append(contentsOf: repeatElement(Float(0), count: padSampleCount))
-                    }
-                    let recoveryTailText: String? = await Task.detached {
-                        transcriptionService.transcribeSamples(recoverySamples)
-                    }.value
-
-                    if let recoveryTailText {
-                        let trimmedTail = recoveryTailText.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmedTail.isEmpty {
-                            let merged = Self.mergeCommittedPrefix(committedPrefixAtStop, withTail: trimmedTail)
-                            if !merged.isEmpty {
-                                text = merged
-                            }
-                        }
-                    }
                 }
             }
 
@@ -899,34 +843,6 @@ struct HarkApp: App {
         let sumSquares = samples.reduce(Float(0)) { $0 + ($1 * $1) }
         let rms = sqrtf(sumSquares / Float(samples.count))
         return rms < rmsThreshold
-    }
-
-    private nonisolated static func mergeCommittedPrefix(_ committedPrefix: String, withTail tail: String) -> String {
-        let committedWords = committedPrefix.split(whereSeparator: \.isWhitespace).map(String.init)
-        let tailWords = tail.split(whereSeparator: \.isWhitespace).map(String.init)
-
-        guard !committedWords.isEmpty else {
-            return tail.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        guard !tailWords.isEmpty else {
-            return committedPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-
-        let overlapLimit = min(12, committedWords.count, tailWords.count)
-        var overlap = 0
-        if overlapLimit > 0 {
-            for count in stride(from: overlapLimit, through: 1, by: -1) {
-                let committedSuffix = committedWords.suffix(count).map { $0.lowercased() }
-                let tailPrefix = tailWords.prefix(count).map { $0.lowercased() }
-                if committedSuffix.elementsEqual(tailPrefix) {
-                    overlap = count
-                    break
-                }
-            }
-        }
-
-        let mergedWords = committedWords + tailWords.dropFirst(overlap)
-        return mergedWords.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     @MainActor
