@@ -115,6 +115,7 @@ struct MenuBarView: View {
                 ForEach(AppState.supportedLanguages, id: \.name) { lang in
                     languageButton(label: lang.label, language: lang.name)
                 }
+                autoSubmitButton
             }
             .padding(.horizontal, 2)
 
@@ -155,6 +156,30 @@ struct MenuBarView: View {
                 }
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var autoSubmitButton: some View {
+        let isEnabled = appState.currentAutoSubmit
+        Button {
+            appState.setAutoSubmitForFrontmostApp(!isEnabled)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: isEnabled ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("↩︎")
+                    .font(.system(.caption2, weight: .semibold))
+            }
+            .foregroundStyle(isEnabled ? .white : .primary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(isEnabled ? Color.accentColor : Color.primary.opacity(0.08))
+            }
+        }
+        .buttonStyle(.plain)
+        .help("Auto submit (paste + Enter)")
     }
 
     // MARK: - Recent transcriptions

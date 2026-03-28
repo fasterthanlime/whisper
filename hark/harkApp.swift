@@ -244,6 +244,9 @@ struct HarkApp: App {
         if let saved = UserDefaults.standard.dictionary(forKey: "appVocabPrompts") as? [String: String] {
             appState.appVocabPrompts = saved
         }
+        if let saved = UserDefaults.standard.dictionary(forKey: AppState.appAutoSubmitDefaultsKey) as? [String: Bool] {
+            appState.appAutoSubmit = saved
+        }
         if let saved = UserDefaults.standard.dictionary(
             forKey: AppState.inputDeviceWarmPreferencesDefaultsKey
         ) as? [String: Bool] {
@@ -864,7 +867,7 @@ struct HarkApp: App {
             )
         }
 
-        let shouldSubmit = forceSubmit || PasteController.isReturnKeyPressed() || Self.isAutoSubmitApp()
+        let shouldSubmit = forceSubmit || PasteController.isReturnKeyPressed() || appState.currentAutoSubmit
 
         // Paste immediately (don't wait for overlay dismiss).
         _ = appState.transition(to: .pasting)
@@ -1150,19 +1153,6 @@ struct HarkApp: App {
                 _ = appState.transition(to: .idle)
             }
         }
-    }
-
-    // MARK: - Auto-Submit
-
-    /// Apps where dictated text should automatically be followed by Enter.
-    private static let autoSubmitBundleIDs: Set<String> = [
-        "com.googlecode.iterm2",
-        "com.mitchellh.ghostty",
-    ]
-
-    private static func isAutoSubmitApp() -> Bool {
-        guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return false }
-        return autoSubmitBundleIDs.contains(bundleID)
     }
 
     // MARK: - Fonts

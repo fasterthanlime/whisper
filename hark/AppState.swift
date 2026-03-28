@@ -44,6 +44,7 @@ private extension AppPhase {
 @MainActor
 final class AppState {
     static let inputDeviceWarmPreferencesDefaultsKey = "inputDeviceKeepWarmByUID"
+    static let appAutoSubmitDefaultsKey = "appAutoSubmit"
 
     var phase: AppPhase = .idle
     var selectedModelID: String = STTModelDefinition.default.id
@@ -156,6 +157,38 @@ final class AppState {
 
     static func languageShortLabel(_ name: String) -> String {
         supportedLanguages.first { $0.name == name }?.label ?? name.prefix(2).uppercased()
+    }
+
+    // MARK: - Per-app auto-submit
+
+    /// Apps where dictated text should be followed by Enter by default.
+    static let defaultAutoSubmitBundleIDs: Set<String> = [
+        "com.googlecode.iterm2",
+        "com.mitchellh.ghostty",
+    ]
+
+    /// Explicit auto-submit preference per app. Missing key = default policy.
+    var appAutoSubmit: [String: Bool] = [:] {
+        didSet {
+            UserDefaults.standard.set(appAutoSubmit, forKey: Self.appAutoSubmitDefaultsKey)
+        }
+    }
+
+    /// Whether the current frontmost app should auto-submit after paste.
+    var currentAutoSubmit: Bool {
+        guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else {
+            return false
+        }
+        if let configured = appAutoSubmit[bundleID] {
+            return configured
+        }
+        return Self.defaultAutoSubmitBundleIDs.contains(bundleID)
+    }
+
+    /// Set auto-submit behavior for the current frontmost app.
+    func setAutoSubmitForFrontmostApp(_ enabled: Bool) {
+        guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
+        appAutoSubmit[bundleID] = enabled
     }
 
     // MARK: - Vocabulary prompt (per-app)
