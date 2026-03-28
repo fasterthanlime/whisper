@@ -1,10 +1,12 @@
 use anyhow::Result;
 use rand::prelude::*;
 use std::io::Write;
+use std::time::Instant;
 
 pub mod adapter_import;
 pub mod llm;
 mod qwen2;
+mod qwen3_5;
 
 const MLX_LM_PACKAGE: &str = "mlx-lm==0.31.1";
 const AGX_RELAX_CDM_CTXSTORE_TIMEOUT_ENV: &str = "AGX_RELAX_CDM_CTXSTORE_TIMEOUT";
@@ -694,9 +696,16 @@ fn sanitize_correction_output(prompt: &str, raw: &str) -> String {
 #[derive(Debug, Clone)]
 struct CorrectionModelSpec {
     base_model: String,
+    family: CorrectionModelFamily,
     gguf_repo: String,
     gguf_file: String,
     tokenizer_repo: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CorrectionModelFamily {
+    Qwen2,
+    Qwen3_5,
 }
 
 fn load_adapter_base_model(adapters_dir: &str) -> Option<String> {
@@ -712,15 +721,31 @@ fn resolve_correction_model(config: &InferenceConfig) -> Result<CorrectionModelS
     match base_model.as_str() {
         "Qwen/Qwen2.5-0.5B" => Ok(CorrectionModelSpec {
             base_model,
+            family: CorrectionModelFamily::Qwen2,
             gguf_repo: "QuantFactory/Qwen2.5-0.5B-GGUF".into(),
             gguf_file: "Qwen2.5-0.5B.Q4_K_M.gguf".into(),
             tokenizer_repo: "Qwen/Qwen2.5-0.5B".into(),
         }),
         "Qwen/Qwen2.5-0.5B-Instruct" => Ok(CorrectionModelSpec {
             base_model,
+            family: CorrectionModelFamily::Qwen2,
             gguf_repo: "Qwen/Qwen2.5-0.5B-Instruct-GGUF".into(),
             gguf_file: "qwen2.5-0.5b-instruct-q4_k_m.gguf".into(),
             tokenizer_repo: "Qwen/Qwen2.5-0.5B-Instruct".into(),
+        }),
+        "Qwen/Qwen3.5-0.8B" => Ok(CorrectionModelSpec {
+            base_model,
+            family: CorrectionModelFamily::Qwen3_5,
+            gguf_repo: "unsloth/Qwen3.5-0.8B-GGUF".into(),
+            gguf_file: "Qwen3.5-0.8B-Q4_K_M.gguf".into(),
+            tokenizer_repo: "Qwen/Qwen3.5-0.8B".into(),
+        }),
+        "Qwen/Qwen3.5-2B" => Ok(CorrectionModelSpec {
+            base_model,
+            family: CorrectionModelFamily::Qwen3_5,
+            gguf_repo: "unsloth/Qwen3.5-2B-GGUF".into(),
+            gguf_file: "Qwen3.5-2B-Q4_K_M.gguf".into(),
+            tokenizer_repo: "Qwen/Qwen3.5-2B".into(),
         }),
         other => anyhow::bail!("unsupported correction base model: {other}"),
     }
@@ -728,7 +753,7 @@ fn resolve_correction_model(config: &InferenceConfig) -> Result<CorrectionModelS
 
 /// An in-process correction model that keeps the GGUF weights loaded in Rust.
 pub struct InferenceServer {
-    model_runtime: llm::Qwen2Model,
+    model_runtime: llm::CorrectionModel,
     pub port: u16,
     pub max_tokens: usize,
     pub model: String,
@@ -743,12 +768,24 @@ impl InferenceServer {
             "[inference] Loading in-process correction model {} from {}/{}...",
             spec.base_model, spec.gguf_repo, spec.gguf_file
         );
-        let model_runtime = llm::Qwen2Model::load_with_mlx_adapters(
-            &spec.gguf_repo,
-            &spec.gguf_file,
-            &spec.tokenizer_repo,
-            &config.adapters,
-        )?;
+        let model_runtime = match spec.family {
+            CorrectionModelFamily::Qwen2 => {
+                llm::CorrectionModel::Qwen2(llm::Qwen2Model::load_with_mlx_adapters(
+                    &spec.gguf_repo,
+                    &spec.gguf_file,
+                    &spec.tokenizer_repo,
+                    &config.adapters,
+                )?)
+            }
+            CorrectionModelFamily::Qwen3_5 => {
+                llm::CorrectionModel::Qwen3_5(llm::Qwen3_5Model::load_with_mlx_adapters(
+                    &spec.gguf_repo,
+                    &spec.gguf_file,
+                    &spec.tokenizer_repo,
+                    &config.adapters,
+                )?)
+            }
+        };
         eprintln!("[inference] Correction model ready");
 
         Ok(Self {
@@ -762,10 +799,15 @@ impl InferenceServer {
 
     /// Run inference on a single prompt. Returns the corrected text.
     pub fn infer(&mut self, prompt: &str) -> Result<String> {
+        let started = Instant::now();
+        let encode_started = Instant::now();
         let prompt_tokens = self.model_runtime.encode_text(prompt)?;
+        let encode_elapsed = encode_started.elapsed();
+        let generate_started = Instant::now();
         let mut text = self
             .model_runtime
             .generate(&prompt_tokens, self.max_tokens, 0.0, 0)?;
+        let generate_elapsed = generate_started.elapsed();
 
         for marker in [
             "<|endoftext|>",
@@ -779,7 +821,15 @@ impl InferenceServer {
             }
         }
 
-        Ok(sanitize_correction_output(prompt, text.trim()))
+        let sanitized = sanitize_correction_output(prompt, text.trim());
+        eprintln!(
+            "[inference] infer done: prompt_tokens={} encode_ms={} generate_ms={} total_ms={}",
+            prompt_tokens.len(),
+            encode_elapsed.as_millis(),
+            generate_elapsed.as_millis(),
+            started.elapsed().as_millis(),
+        );
+        Ok(sanitized)
     }
 }
 
@@ -789,9 +839,12 @@ impl InferenceServer {
     }
 
     pub fn matches(&self, config: &InferenceConfig) -> bool {
+        let resolved_model = resolve_correction_model(config)
+            .map(|spec| spec.base_model)
+            .unwrap_or_else(|_| config.model.clone());
         self.port == config.port
             && self.max_tokens == config.max_tokens
-            && self.model == config.model
+            && self.model == resolved_model
             && self.adapters == config.adapters
     }
 }
@@ -934,7 +987,7 @@ pub fn write_jsonl(path: &str, entries: &[serde_json::Value]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_gpu_metrics;
+    use super::{InferenceConfig, parse_gpu_metrics, resolve_correction_model};
 
     #[test]
     fn parses_ioreg_performance_statistics() {
@@ -946,5 +999,20 @@ mod tests {
         assert_eq!(in_use, Some(2048.0));
         assert_eq!(alloc, Some(8192.0));
         assert_eq!(driver, Some(1.0));
+    }
+
+    #[test]
+    fn resolves_qwen3_5_correction_models() {
+        let config = InferenceConfig {
+            model: "Qwen/Qwen3.5-2B".into(),
+            adapters: "/definitely/missing".into(),
+            max_tokens: 64,
+            port: 8899,
+        };
+        let spec = resolve_correction_model(&config).expect("Qwen3.5-2B should resolve");
+        assert_eq!(spec.base_model, "Qwen/Qwen3.5-2B");
+        assert_eq!(spec.gguf_repo, "unsloth/Qwen3.5-2B-GGUF");
+        assert_eq!(spec.gguf_file, "Qwen3.5-2B-Q4_K_M.gguf");
+        assert_eq!(spec.tokenizer_repo, "Qwen/Qwen3.5-2B");
     }
 }

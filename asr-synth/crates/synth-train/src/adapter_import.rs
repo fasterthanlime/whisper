@@ -38,7 +38,13 @@ struct ModuleWeights {
     lora_b: Option<Tensor>,
 }
 
+enum LoraLayout {
+    Standard,
+    MlxTransposed,
+}
+
 fn parse_module_tensor_name(name: &str) -> Option<(&str, TensorKind)> {
+    let name = name.strip_prefix("language_model.").unwrap_or(name);
     if let Some(module_name) = name.strip_suffix(".lora_a") {
         Some((module_name, TensorKind::A))
     } else if let Some(module_name) = name.strip_suffix(".lora_b") {
@@ -58,6 +64,29 @@ fn alpha_from_mlx_scale(rank: usize, scale: f64) -> Result<usize> {
         bail!("non-integral alpha derived from MLX scale {scale} and rank {rank}");
     }
     Ok(rounded as usize)
+}
+
+fn detect_lora_layout(lora_a_dims: &[usize], lora_b_dims: &[usize], rank: usize) -> Result<LoraLayout> {
+    if lora_a_dims.len() != 2 || lora_b_dims.len() != 2 {
+        bail!(
+            "expected 2D LoRA tensors, got {:?} and {:?}",
+            lora_a_dims,
+            lora_b_dims
+        );
+    }
+
+    if lora_a_dims[0] == rank && lora_b_dims[1] == rank {
+        Ok(LoraLayout::Standard)
+    } else if lora_a_dims[1] == rank && lora_b_dims[0] == rank {
+        Ok(LoraLayout::MlxTransposed)
+    } else {
+        bail!(
+            "rank mismatch: config rank {}, tensors {:?} and {:?}",
+            rank,
+            lora_a_dims,
+            lora_b_dims
+        );
+    }
 }
 
 pub fn load_mlx_lora_dir(dir: impl AsRef<Path>, device: &Device) -> Result<ImportedLoraAdapters> {
@@ -114,28 +143,24 @@ pub fn load_mlx_lora_dir(dir: impl AsRef<Path>, device: &Device) -> Result<Impor
             .lora_b
             .with_context(|| format!("missing lora_b tensor for {module_name}"))?;
 
-        let lora_a_dims = lora_a.dims();
-        let lora_b_dims = lora_b.dims();
-        if lora_a_dims.len() != 2 || lora_b_dims.len() != 2 {
-            bail!(
-                "expected 2D LoRA tensors for {module_name}, got {:?} and {:?}",
-                lora_a_dims,
-                lora_b_dims
-            );
-        }
-        if lora_a_dims[0] != config.lora_parameters.rank
-            || lora_b_dims[1] != config.lora_parameters.rank
+        let lora_a_dims = lora_a.dims().to_vec();
+        let lora_b_dims = lora_b.dims().to_vec();
+        let (lora_a, lora_b, in_features, out_features) = match detect_lora_layout(
+            &lora_a_dims,
+            &lora_b_dims,
+            config.lora_parameters.rank,
+        )
+        .with_context(|| format!("invalid LoRA tensor layout for {module_name}"))?
         {
-            bail!(
-                "rank mismatch for {module_name}: config rank {}, tensors {:?} and {:?}",
-                config.lora_parameters.rank,
-                lora_a_dims,
-                lora_b_dims
-            );
-        }
+            LoraLayout::Standard => (lora_a, lora_b, lora_a_dims[1], lora_b_dims[0]),
+            LoraLayout::MlxTransposed => (
+                lora_a.transpose(0, 1)?,
+                lora_b.transpose(0, 1)?,
+                lora_a_dims[0],
+                lora_b_dims[1],
+            ),
+        };
 
-        let in_features = lora_a_dims[1];
-        let out_features = lora_b_dims[0];
         let mut layer_config = base_config.clone();
         layer_config.target_modules = vec![module_name.clone()];
 
@@ -167,6 +192,12 @@ mod tests {
         assert_eq!(
             parse_module_tensor_name("model.layers.20.self_attn.q_proj.lora_a"),
             Some(("model.layers.20.self_attn.q_proj", TensorKind::A))
+        );
+        assert_eq!(
+            parse_module_tensor_name(
+                "language_model.model.layers.20.linear_attn.in_proj_qkv.lora_b"
+            ),
+            Some(("model.layers.20.linear_attn.in_proj_qkv", TensorKind::B))
         );
         assert_eq!(
             parse_module_tensor_name("model.layers.23.mlp.down_proj.lora_b"),
