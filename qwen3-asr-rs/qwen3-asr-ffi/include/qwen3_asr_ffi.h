@@ -83,6 +83,17 @@ char *asr_session_feed(AsrSession *session,
                        char **out_err);
 
 /*
+ * Feed finalization-time samples (stop path).
+ *
+ * Same semantics as asr_session_feed, but avoids dropping low-energy chunks
+ * during stop/finalize so tail words are not lost.
+ */
+char *asr_session_feed_finalizing(AsrSession *session,
+                                  const float *samples,
+                                  size_t num_samples,
+                                  char **out_err);
+
+/*
  * Return committed transcript prefix length in UTF-16 code units.
  * This excludes the current pending/uncommitted tail.
  */
@@ -100,6 +111,13 @@ char *asr_session_last_language(const AsrSession *session);
  * Returns true on success, false on error (check *out_err).
  */
 bool asr_session_set_language(AsrSession *session, const char *language, char **out_err);
+
+/*
+ * Drain and return structured ASR debug events as a JSON array string.
+ * The returned string is always valid JSON (typically "[]").
+ * Caller must free with asr_string_free.
+ */
+char *asr_session_take_debug_events_json(AsrSession *session);
 
 /*
  * Finalize the session and return the complete transcript.

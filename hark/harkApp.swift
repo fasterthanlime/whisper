@@ -1,8 +1,6 @@
 import AppKit
-import AudioToolbox
 import AVFoundation
 import Carbon.HIToolbox.Events
-import CoreAudio
 import os
 import ServiceManagement
 import SwiftUI
@@ -23,6 +21,351 @@ private struct StreamingResult {
     let signal: StreamingSignal
     let processedSampleCount: Int
     let autoLockedLanguage: String?
+}
+
+private struct TailDebugMetadata: Codable, Sendable {
+    let id: String
+    let timestampISO8601: String
+    let appBundle: String?
+    let recordingDurationMs: Int
+    let skipPaste: Bool
+    let forceSubmit: Bool
+    let totalSamples: Int
+    let processedSamples: Int
+    let remainingSamples: Int
+    let finalizeSamples: Int
+    let padSamples: Int
+    let preFinalizeTextChars: Int
+    let finalTextChars: Int
+    let preFinalizeText: String
+    let finalText: String
+    let captureStopMs: Int
+    let streamJoinMs: Int
+    let finalizeFeedMs: Int
+    let finishMs: Int
+    let fallbackMs: Int?
+}
+
+private struct ForensicsSwiftEvent: Codable, Sendable {
+    let tsUnixMs: Int64
+    let name: String
+    let payload: [String: String]
+}
+
+private struct ForensicsRustBatch: Codable, Sendable {
+    let pulledTsUnixMs: Int64
+    let eventsJSON: String
+}
+
+private struct ForensicsDump: Codable, Sendable {
+    let id: String
+    let startedTsUnixMs: Int64
+    let finishedTsUnixMs: Int64
+    let swiftEvents: [ForensicsSwiftEvent]
+    let rustBatches: [ForensicsRustBatch]
+    let finalText: String
+}
+
+private final class ForensicsSession: @unchecked Sendable {
+    private let id: String
+    private let startedTsUnixMs: Int64
+    private let sessionDir: URL
+    private let lock = NSLock()
+    private let bufferWriteQueue = DispatchQueue(label: "hark.forensics.buffer-writer", qos: .utility)
+    private var swiftEvents: [ForensicsSwiftEvent] = []
+    private var rustBatches: [ForensicsRustBatch] = []
+    private var allSamples: [Float] = []
+    private var remainingSamples: [Float] = []
+    private var finalizeSamples: [Float] = []
+    private var finalText: String = ""
+    private var nextStreamBufferIndex = 0
+    private var nextFinalizeBufferIndex = 0
+
+    init(id: String) {
+        self.id = id
+        self.startedTsUnixMs = Self.nowUnixMs()
+        let root = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("hark-forensics", isDirectory: true)
+        self.sessionDir = root.appendingPathComponent(id, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: sessionDir.appendingPathComponent("buffers", isDirectory: true), withIntermediateDirectories: true)
+        } catch {
+            print("[hark] forensics init failed: \(error.localizedDescription)")
+        }
+    }
+
+    func event(_ name: String, _ payload: [String: String] = [:]) {
+        lock.lock()
+        swiftEvents.append(
+            ForensicsSwiftEvent(
+                tsUnixMs: Self.nowUnixMs(),
+                name: name,
+                payload: payload
+            )
+        )
+        lock.unlock()
+    }
+
+    func addRustBatch(_ json: String) {
+        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "[]" else { return }
+        lock.lock()
+        rustBatches.append(
+            ForensicsRustBatch(
+                pulledTsUnixMs: Self.nowUnixMs(),
+                eventsJSON: trimmed
+            )
+        )
+        lock.unlock()
+    }
+
+    func setAudio(all: [Float], remaining: [Float], finalize: [Float]) {
+        lock.lock()
+        allSamples = all
+        remainingSamples = remaining
+        finalizeSamples = finalize
+        lock.unlock()
+    }
+
+    func setFinalText(_ text: String) {
+        lock.lock()
+        finalText = text
+        lock.unlock()
+    }
+
+    @discardableResult
+    func writeASRBuffer(mode: String, samples: [Float]) -> String {
+        let index: Int
+        lock.lock()
+        if mode == "finalize" {
+            nextFinalizeBufferIndex += 1
+            index = nextFinalizeBufferIndex
+        } else {
+            nextStreamBufferIndex += 1
+            index = nextStreamBufferIndex
+        }
+        lock.unlock()
+
+        let relPath = "buffers/\(mode)-\(String(format: "%05d", index)).wav"
+        let outputURL = sessionDir.appendingPathComponent(relPath)
+        let samplesCopy = samples
+        bufferWriteQueue.async {
+            do {
+                try Self.writePCM16WAV(samples: samplesCopy, sampleRate: 16_000, to: outputURL)
+            } catch {
+                print("[hark] forensics buffer write failed: \(error.localizedDescription)")
+            }
+        }
+        return relPath
+    }
+
+    func writeHTMLDump() {
+        let snapshot: (
+            swiftEvents: [ForensicsSwiftEvent],
+            rustBatches: [ForensicsRustBatch],
+            allSamples: [Float],
+            remainingSamples: [Float],
+            finalizeSamples: [Float],
+            finalText: String
+        )
+        lock.lock()
+        snapshot = (swiftEvents, rustBatches, allSamples, remainingSamples, finalizeSamples, finalText)
+        lock.unlock()
+
+        do {
+            bufferWriteQueue.sync {}
+            try Self.writePCM16WAV(
+                samples: snapshot.allSamples,
+                sampleRate: 16_000,
+                to: sessionDir.appendingPathComponent("all.wav")
+            )
+            if !snapshot.remainingSamples.isEmpty {
+                try Self.writePCM16WAV(
+                    samples: snapshot.remainingSamples,
+                    sampleRate: 16_000,
+                    to: sessionDir.appendingPathComponent("remaining.wav")
+                )
+            }
+            if !snapshot.finalizeSamples.isEmpty {
+                try Self.writePCM16WAV(
+                    samples: snapshot.finalizeSamples,
+                    sampleRate: 16_000,
+                    to: sessionDir.appendingPathComponent("finalize.wav")
+                )
+            }
+
+            let dump = ForensicsDump(
+                id: id,
+                startedTsUnixMs: startedTsUnixMs,
+                finishedTsUnixMs: Self.nowUnixMs(),
+                swiftEvents: snapshot.swiftEvents,
+                rustBatches: snapshot.rustBatches,
+                finalText: snapshot.finalText
+            )
+            let dumpData = try JSONEncoder().encode(dump)
+            let dumpJSON = String(data: dumpData, encoding: .utf8) ?? "{}"
+            let escapedJSON = dumpJSON
+                .replacingOccurrences(of: "</script>", with: "<\\/script>")
+            let html = Self.htmlTemplate(json: escapedJSON, finalText: snapshot.finalText)
+            let htmlURL = sessionDir.appendingPathComponent("index.html")
+            try html.write(to: htmlURL, atomically: true, encoding: .utf8)
+            print("[hark] forensics dump: \(htmlURL.path)")
+        } catch {
+            print("[hark] forensics write failed: \(error.localizedDescription)")
+        }
+    }
+
+    private static func nowUnixMs() -> Int64 {
+        Int64((Date().timeIntervalSince1970 * 1000).rounded())
+    }
+
+    private static func htmlTemplate(json: String, finalText: String) -> String {
+        let escapedFinal = finalText
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+        return """
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hark Forensics</title>
+  <style>
+    :root { --bg: #0b0d12; --card: #121722; --card2: #171d2b; --text: #eaf0ff; --muted: #93a2c5; --line: #2a3550; --accent: #6ecbff; }
+    body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: radial-gradient(1200px 500px at 10% -10%, #1b2f56 0%, transparent 50%), var(--bg); color: var(--text); margin: 0; padding: 20px; }
+    h1, h2 { margin: 0 0 12px 0; letter-spacing: 0.2px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+    .card { background: linear-gradient(180deg, var(--card2), var(--card)); border: 1px solid var(--line); border-radius: 12px; padding: 12px; min-width: 280px; box-shadow: 0 8px 20px rgba(0,0,0,0.35); }
+    .small { font-size: 11px; color: var(--muted); }
+    audio { width: 340px; max-width: 100%; height: 32px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { border-bottom: 1px solid var(--line); padding: 7px 6px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); position: sticky; top: 0; background: #0f1420; z-index: 2; }
+    pre { white-space: pre-wrap; background: #0f1420; border: 1px solid var(--line); padding: 10px; border-radius: 8px; max-height: 260px; overflow: auto; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .payload-k { color: #8fb4ff; }
+    .payload-v { color: #e5eeff; }
+    .payload-item { margin-bottom: 6px; }
+    .payload-audio { margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Hark Forensics Timeline</h1>
+  <div class="row">
+    <div class="card"><strong>all.wav</strong><br/><audio controls src="./all.wav"></audio></div>
+    <div class="card"><strong>remaining.wav</strong><br/><audio controls src="./remaining.wav"></audio></div>
+    <div class="card"><strong>finalize.wav</strong><br/><audio controls src="./finalize.wav"></audio></div>
+  </div>
+  <div class="card">
+    <h2>Final Text</h2>
+    <pre>\(escapedFinal)</pre>
+  </div>
+  <div class="card" style="margin-top: 16px;">
+    <h2>Timeline</h2>
+    <table id="timeline"><thead><tr><th>t+ms</th><th>source</th><th>name</th><th>payload</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <script id="forensics-data" type="application/json">\(json)</script>
+  <script>
+    const raw = document.getElementById('forensics-data').textContent;
+    const dump = JSON.parse(raw);
+    const rows = [];
+    for (const e of dump.swiftEvents || []) {
+      rows.push({ ts: e.tsUnixMs, source: "swift", name: e.name, payload: e.payload || {} });
+    }
+    for (const b of dump.rustBatches || []) {
+      try {
+        const events = JSON.parse(b.eventsJSON || "[]");
+        for (const e of events) {
+          rows.push({ ts: Number(e.ts_unix_ms || b.pulledTsUnixMs), source: "rust", name: e.stage || "unknown", payload: e.payload || {} });
+        }
+      } catch (_) {
+        rows.push({ ts: b.pulledTsUnixMs, source: "rust", name: "batch_parse_error", payload: { eventsJSON: b.eventsJSON }});
+      }
+    }
+    rows.sort((a, b) => a.ts - b.ts);
+    const t0 = rows.length ? rows[0].ts : Date.now();
+    const tbody = document.querySelector("#timeline tbody");
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      const rel = document.createElement("td");
+      rel.textContent = String(r.ts - t0);
+      const src = document.createElement("td");
+      src.textContent = r.source;
+      const name = document.createElement("td");
+      name.textContent = r.name;
+      const payload = document.createElement("td");
+      payload.innerHTML = renderPayload(r.payload);
+      tr.append(rel, src, name, payload);
+      tbody.appendChild(tr);
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function renderPayload(payload) {
+      const entries = Object.entries(payload || {});
+      if (!entries.length) return "{}";
+      return entries.map(([k, v]) => {
+        const value = String(v);
+        const escaped = escapeHtml(value);
+        const key = `<span class="payload-k">${escapeHtml(k)}</span>`;
+        if (value.endsWith(".wav")) {
+          return `<div class="payload-item">${key}: <a href="./${escaped}" target="_blank" rel="noopener">${escaped}</a><div class="payload-audio"><audio controls preload="none" src="./${escaped}"></audio></div></div>`;
+        }
+        if (k === "text" || k.endsWith("_text")) {
+          return `<div class="payload-item">${key}: <pre>${escaped}</pre></div>`;
+        }
+        return `<div class="payload-item">${key}: <span class="payload-v">${escaped}</span></div>`;
+      }).join("");
+    }
+  </script>
+</body>
+</html>
+"""
+    }
+
+    private static func writePCM16WAV(samples: [Float], sampleRate: Int, to url: URL) throws {
+        let channelCount: UInt16 = 1
+        let bitsPerSample: UInt16 = 16
+        let bytesPerSample = Int(bitsPerSample / 8)
+        let pcmDataByteCount = samples.count * bytesPerSample
+        let byteRate = sampleRate * Int(channelCount) * bytesPerSample
+        let blockAlign = Int(channelCount) * bytesPerSample
+        let riffChunkSize = 36 + pcmDataByteCount
+
+        var data = Data(capacity: 44 + pcmDataByteCount)
+        data.append("RIFF".data(using: .ascii)!)
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(riffChunkSize).littleEndian, Array.init))
+        data.append("WAVE".data(using: .ascii)!)
+        data.append("fmt ".data(using: .ascii)!)
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(16).littleEndian, Array.init))
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian, Array.init))
+        data.append(contentsOf: withUnsafeBytes(of: channelCount.littleEndian, Array.init))
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(sampleRate).littleEndian, Array.init))
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(byteRate).littleEndian, Array.init))
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(blockAlign).littleEndian, Array.init))
+        data.append(contentsOf: withUnsafeBytes(of: bitsPerSample.littleEndian, Array.init))
+        data.append("data".data(using: .ascii)!)
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(pcmDataByteCount).littleEndian, Array.init))
+
+        for sample in samples {
+            let clamped = max(-1.0, min(1.0, sample))
+            let pcm = Int16((clamped * Float(Int16.max)).rounded())
+            data.append(contentsOf: withUnsafeBytes(of: pcm.littleEndian, Array.init))
+        }
+
+        try data.write(to: url, options: .atomic)
+    }
 }
 
 /// Intercepts Esc/Return while recording so those keys do not leak to the app behind Hark.
@@ -153,6 +496,10 @@ struct HarkApp: App {
     @State private var streamingSession: StreamingSession?
     @State private var inputDeviceMonitor = InputDeviceMonitor()
     @State private var keyDownTime: Date?
+    @State private var recordingStartedAt: Date?
+    @State private var ignoreHotkeyUntil: Date?
+    @State private var pasteTargetBundleID: String?
+    @State private var forensicsSession: ForensicsSession?
     /// Skip the next keyUp after locking (so releasing the hotkey after ⌘-lock doesn't submit).
     @State private var skipNextKeyUp = false
     @State private var recordingControlInterceptor = RecordingControlInterceptor()
@@ -161,9 +508,14 @@ struct HarkApp: App {
     private static let maxRecordingDurationSeconds = AudioRecorder.defaultMaximumDuration
     private static let toggleModeThresholdSeconds: TimeInterval = 0.3
     private static let minimumSpeechDurationSeconds = 0.2
+    private static let accidentalDoublePressRecordingThresholdSeconds: TimeInterval = 0.5
+    private static let accidentalDoublePressIgnoreWindowSeconds: TimeInterval = 0.5
+    private static let streamingChunkSizeSec: Float = 0.75
     private static let transcriptionSampleRate = 16_000.0
     private static let finalizationSilencePaddingSeconds = 0.20
     private static let finalizationMinimumSilencePaddingSeconds = 0.05
+    private static let tailDebugDumpEnabled = true
+    private static let forensicsDumpEnabled = true
 
     var body: some Scene {
         MenuBarExtra {
@@ -464,6 +816,16 @@ struct HarkApp: App {
         binding.save()
     }
 
+    private func traceEvent(_ name: String, _ payload: [String: String] = [:]) {
+        forensicsSession?.event(name, payload)
+    }
+
+    private func drainAsrDebugEvents(into trace: ForensicsSession?, session: StreamingSession) {
+        guard let trace else { return }
+        let json = transcriptionService.takeDebugEventsJSON(session: session)
+        trace.addRustBatch(json)
+    }
+
     @MainActor
     private func handleKeyDown() async {
         refreshPermissionState()
@@ -483,8 +845,14 @@ struct HarkApp: App {
             _ = appState.transition(to: .idle)
         }
 
+        if let ignoreUntil = ignoreHotkeyUntil, Date() < ignoreUntil {
+            Self.logger.warning("[hark] hotkey: ignored accidental double-press until=\(ignoreUntil.timeIntervalSince1970)")
+            return
+        }
+
         guard appState.phase == .idle else { return }
         guard appState.modelStatus == .loaded else { return }
+        traceEvent("hotkey_down")
 
         guard appState.hasRequiredPermissions else {
             _ = appState.transition(
@@ -495,9 +863,26 @@ struct HarkApp: App {
         }
 
         _ = appState.transition(to: .recording)
+        if Self.forensicsDumpEnabled {
+            let trace = ForensicsSession(id: Self.newTailDebugSessionID())
+            forensicsSession = trace
+            trace.event("recording_start", [
+                "front_app_bundle": NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none",
+                "front_app_name": NSWorkspace.shared.frontmostApplication?.localizedName ?? "none",
+                "language_pref": appState.currentLanguage ?? "auto",
+            ])
+        } else {
+            forensicsSession = nil
+        }
         appState.partialTranscript = ""
         appState.partialTranscriptCommittedUTF16 = 0
         keyDownTime = Date()
+        recordingStartedAt = Date()
+        let frontApp = NSWorkspace.shared.frontmostApplication
+        pasteTargetBundleID = frontApp?.bundleIdentifier
+        appState.overlayLockedBundleID = pasteTargetBundleID
+        appState.overlayLockedAppName = frontApp?.localizedName
+        appState.overlayTetherOutOfApp = false
         appState.isLockedMode = false
         hotkeyMonitor.allowExtraModifiers = true
 
@@ -512,6 +897,7 @@ struct HarkApp: App {
 
         // Create streaming session with per-app language preference
         streamingSession = transcriptionService.createSession(
+            chunkSizeSec: Self.streamingChunkSizeSec,
             language: appState.currentLanguage,
             prompt: appState.vocabPrompt
         )
@@ -521,11 +907,18 @@ struct HarkApp: App {
             audioRecorder.startCapture()
         } else {
             do {
-                try audioRecorder.start { [appState] (level: Float) in
-                    Task { @MainActor in
-                        appState.audioLevel = level
+                try audioRecorder.start(
+                    onLevel: { [appState] (level: Float) in
+                        Task { @MainActor in
+                            appState.audioLevel = level
+                        }
+                    },
+                    onSpectrum: { [appState] bands in
+                        Task { @MainActor in
+                            appState.spectrumBands = bands
+                        }
                     }
-                }
+                )
             } catch {
                 cancelRecordingTimeout()
                 _ = appState.transition(to: .error(error.localizedDescription))
@@ -536,6 +929,10 @@ struct HarkApp: App {
         }
 
         // Start streaming transcription
+        traceEvent("streaming_session_create", [
+            "session_exists": (streamingSession != nil).description,
+            "chunk_size_sec": String(format: "%.2f", Self.streamingChunkSizeSec),
+        ])
         startStreamingTranscription()
     }
 
@@ -552,6 +949,7 @@ struct HarkApp: App {
         let audioRecorder = self.audioRecorder
         let appState = self.appState
         let session = self.streamingSession!
+        let trace = self.forensicsSession
         let shouldAutoLockLanguage = appState.currentLanguage == nil
 
         streamingTask = Task.detached { () -> StreamingResult in
@@ -572,13 +970,28 @@ struct HarkApp: App {
                     continue
                 }
 
+                let processedBefore = processedCount
                 let newChunk = Array(allSamples[processedCount...])
+                let bufferRelPath = trace?.writeASRBuffer(mode: "stream", samples: newChunk)
+                trace?.event("stream_feed_call", [
+                    "new_chunk_samples": String(newChunk.count),
+                    "all_samples": String(allSamples.count),
+                    "processed_before": String(processedBefore),
+                    "buffer_audio_relpath": bufferRelPath ?? "",
+                ])
 
                 let update: StreamingTranscriptUpdate? = transcriptionService.feed(session: session, samples: newChunk)
+                let rustEvents = transcriptionService.takeDebugEventsJSON(session: session)
+                trace?.addRustBatch(rustEvents)
                 processedCount = allSamples.count
 
                 if let update {
                     let trimmed = update.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    trace?.event("stream_feed_result", [
+                        "text_len": String(trimmed.count),
+                        "committed_utf16": String(update.committedUTF16Count),
+                        "detected_language": update.detectedLanguage ?? "none",
+                    ])
                     if !trimmed.isEmpty {
                         lastText = trimmed
                         let committedUTF16 = min(
@@ -595,6 +1008,11 @@ struct HarkApp: App {
                                 if transcriptionService.setLanguage(session: session, language: detectedLanguage) {
                                     autoLockedLanguage = detectedLanguage
                                     print("[hark] language-lock lang=\(detectedLanguage)")
+                                    trace?.event("language_lock", [
+                                        "language": detectedLanguage,
+                                    ])
+                                    let langEvents = transcriptionService.takeDebugEventsJSON(session: session)
+                                    trace?.addRustBatch(langEvents)
                                 }
                             }
                         }
@@ -615,6 +1033,11 @@ struct HarkApp: App {
 
             // Strip the trigger phrase from the text.
             lastText = HarkApp.stripTrigger(lastText, signal: signal)
+            trace?.event("streaming_loop_exit", [
+                "signal": String(describing: signal),
+                "processed_samples": String(processedCount),
+                "text_len": String(lastText.count),
+            ])
 
             return StreamingResult(
                 text: lastText,
@@ -628,6 +1051,10 @@ struct HarkApp: App {
         Task { @MainActor in
             guard let result = await streamingTask?.value else { return }
             guard result.signal != .none && appState.phase == .recording else { return }
+            traceEvent("signal_detected", [
+                "signal": String(describing: result.signal),
+                "text_len": String(result.text.count),
+            ])
 
             print("[hark] signal: \(result.signal) text='\(result.text)'")
             appState.partialTranscript = ""
@@ -637,13 +1064,21 @@ struct HarkApp: App {
                 // Paste + Enter for the current sentence.
                 // Temporarily leave recording to paste, then come back if "over" (not "over and out").
                 _ = appState.transition(to: .transcribing)
-                _ = appState.transition(to: .pasting)
-                do {
-                    try await PasteController.paste(result.text, submit: true)
-                } catch {
-                    print("[hark] paste error: \(error)")
+                if self.canPasteIntoLockedTarget() {
+                    _ = appState.transition(to: .pasting)
+                    do {
+                        traceEvent("over_paste_begin", ["text_len": String(result.text.count)])
+                        try await PasteController.paste(result.text, submit: true)
+                        traceEvent("over_paste_done", ["submit": "true"])
+                    } catch {
+                        traceEvent("over_paste_error", ["error": error.localizedDescription])
+                        print("[hark] paste error: \(error)")
+                    }
+                    appState.addToHistory(result.text)
+                } else {
+                    overlayManager.hideWithResult(.cancelled)
+                    playCancelSound()
                 }
-                appState.addToHistory(result.text)
             }
 
             if result.signal == .over {
@@ -664,12 +1099,17 @@ struct HarkApp: App {
                 startStreamingLoop()
             } else {
                 // "Over and out" — stop recording entirely.
+                traceEvent("over_and_out_stop")
                 cancelRecordingTimeout()
                 removeEscapeMonitor()
                 appState.isLockedMode = false
                 keyDownTime = nil
                 streamingTask = nil
                 streamingSession = nil
+                pasteTargetBundleID = nil
+                appState.overlayLockedBundleID = nil
+                appState.overlayLockedAppName = nil
+                appState.overlayTetherOutOfApp = false
 
                 if audioRecorder.isWarmedUp {
                     _ = audioRecorder.stopCapture()
@@ -680,6 +1120,14 @@ struct HarkApp: App {
                 if MediaController.isEnabled { MediaController.resumeIfPaused() }
                 _ = appState.transition(to: .idle)
                 overlayManager.hideWithResult(.success)
+                if let trace = forensicsSession {
+                    trace.event("session_end")
+                    let traceCopy = trace
+                    Task.detached {
+                        traceCopy.writeHTMLDump()
+                    }
+                    forensicsSession = nil
+                }
             }
         }
     }
@@ -746,6 +1194,7 @@ struct HarkApp: App {
     @MainActor
     private func handleKeyUp() async {
         guard appState.phase == .recording else { return }
+        traceEvent("hotkey_up")
 
         // After ⌘-lock, skip the keyUp from releasing the original hotkey hold.
         if skipNextKeyUp {
@@ -797,6 +1246,14 @@ struct HarkApp: App {
     private func stopRecordingAndTranscribe(cancelTimeoutTask: Bool = true, skipPaste: Bool = false, forceSubmit: Bool = false) async {
         guard appState.phase == .recording else { return }
         let stopStartedAt = ProcessInfo.processInfo.systemUptime
+        let recordingDurationMs = Int(
+            ((recordingStartedAt.map { Date().timeIntervalSince($0) } ?? 0) * 1000).rounded()
+        )
+        traceEvent("stop_begin", [
+            "recording_duration_ms": String(recordingDurationMs),
+            "skip_paste": String(skipPaste),
+            "force_submit": String(forceSubmit),
+        ])
 
         _ = appState.transition(to: .transcribing)
 
@@ -806,6 +1263,7 @@ struct HarkApp: App {
         removeEscapeMonitor()
         appState.isLockedMode = false
         keyDownTime = nil
+        recordingStartedAt = nil
         hotkeyMonitor.allowExtraModifiers = false
 
         // Stop the streaming loop.
@@ -823,6 +1281,10 @@ struct HarkApp: App {
             allSamples = audioRecorder.stop()
         }
         let captureStopMs = Int(((ProcessInfo.processInfo.systemUptime - captureStopStartedAt) * 1000).rounded())
+        traceEvent("capture_stopped", [
+            "capture_stop_ms": String(captureStopMs),
+            "all_samples": String(allSamples.count),
+        ])
         appState.audioLevel = 0
         if !appState.activeInputDeviceKeepWarm, audioRecorder.isWarmedUp {
             audioRecorder.coolDown()
@@ -831,6 +1293,15 @@ struct HarkApp: App {
 
         // Feed any remaining samples and finalize the session to get the complete transcript.
         var text = appState.partialTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let preFinalizeText = text
+        var debugProcessedCount = 0
+        var debugRemainingSamples: [Float] = []
+        var debugFinalizeChunk: [Float] = []
+        var debugPadSampleCount = 0
+        var debugStreamJoinMs = 0
+        var debugFinalizeFeedMs = 0
+        var debugFinishMs = 0
+        var debugFallbackMs: Int?
         Self.logger.warning("[hark] stop: partial='\(text, privacy: .public)' sessionExists=\(streamingSession != nil) samples=\(allSamples.count)")
         if let session = streamingSession {
             appState.isFinishing = true
@@ -841,6 +1312,14 @@ struct HarkApp: App {
             let streamJoinMs = Int(((ProcessInfo.processInfo.systemUptime - streamJoinStartedAt) * 1000).rounded())
             let processedCount = result?.processedSampleCount ?? 0
             let remainingCount = max(0, allSamples.count - processedCount)
+            drainAsrDebugEvents(into: forensicsSession, session: session)
+            debugProcessedCount = processedCount
+            debugStreamJoinMs = streamJoinMs
+            traceEvent("stream_join_done", [
+                "stream_join_ms": String(streamJoinMs),
+                "processed_samples": String(processedCount),
+                "remaining_samples": String(remainingCount),
+            ])
 
             Self.logger.warning("[hark] finalize: processed=\(processedCount) total=\(allSamples.count) remaining=\(remainingCount)")
 
@@ -866,12 +1345,16 @@ struct HarkApp: App {
                 }
                 return chunk
             }()
+            let finalizeBufferRel = forensicsSession?.writeASRBuffer(mode: "finalize", samples: finalizeChunk)
+            debugRemainingSamples = remaining ?? []
+            debugFinalizeChunk = finalizeChunk
+            debugPadSampleCount = padSampleCount
             let finalizeMetrics: (text: String?, feedMs: Int, finishMs: Int) = await Task.detached {
                 [transcriptionService, session, finalizeChunk] in
                 var feedMs = 0
                 if !finalizeChunk.isEmpty {
                     let feedStartedAt = ProcessInfo.processInfo.systemUptime
-                    _ = transcriptionService.feed(session: session, samples: finalizeChunk)
+                    _ = transcriptionService.feedFinalizing(session: session, samples: finalizeChunk)
                     feedMs = Int(((ProcessInfo.processInfo.systemUptime - feedStartedAt) * 1000).rounded())
                 }
                 let finishStartedAt = ProcessInfo.processInfo.systemUptime
@@ -879,6 +1362,16 @@ struct HarkApp: App {
                 let finishMs = Int(((ProcessInfo.processInfo.systemUptime - finishStartedAt) * 1000).rounded())
                 return (text: finishText, feedMs: feedMs, finishMs: finishMs)
             }.value
+            debugFinalizeFeedMs = finalizeMetrics.feedMs
+            debugFinishMs = finalizeMetrics.finishMs
+            drainAsrDebugEvents(into: forensicsSession, session: session)
+            traceEvent("finalize_done", [
+                "finalize_feed_ms": String(finalizeMetrics.feedMs),
+                "finish_ms": String(finalizeMetrics.finishMs),
+                "finalize_chunk_samples": String(finalizeChunk.count),
+                "pad_samples": String(padSampleCount),
+                "finalize_buffer_audio_relpath": finalizeBufferRel ?? "",
+            ])
             let finalText = finalizeMetrics.text
             if let finalText {
                 let trimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -887,9 +1380,20 @@ struct HarkApp: App {
                 }
             }
 
-            // If streaming produced nothing, fall back to a single-shot
-            // transcription of all captured audio.
-            if text.isEmpty && !allSamples.isEmpty && !Self.isEffectivelySilent(allSamples) {
+            // If finalization produced nothing, or failed to grow despite meaningful
+            // unprocessed tail audio, run a one-shot fallback on full captured audio.
+            let fallbackTailThresholdSamples = max(1, Int((0.18 * Self.transcriptionSampleRate).rounded()))
+            let shouldRunFallback =
+                !allSamples.isEmpty
+                && !Self.isEffectivelySilent(allSamples)
+                && (
+                    text.isEmpty
+                    || (
+                        remainingCount >= fallbackTailThresholdSamples
+                        && text.count <= preFinalizeText.count
+                    )
+                )
+            if shouldRunFallback {
                 let transcriptionService = self.transcriptionService
                 var samples = allSamples
                 if padSampleCount > 0 {
@@ -900,13 +1404,20 @@ struct HarkApp: App {
                     transcriptionService.transcribeSamples(samples)
                 }.value
                 let fallbackMs = Int(((ProcessInfo.processInfo.systemUptime - fallbackStartedAt) * 1000).rounded())
+                debugFallbackMs = fallbackMs
+                traceEvent("fallback_decode_done", [
+                    "fallback_ms": String(fallbackMs),
+                    "fallback_samples": String(samples.count),
+                ])
                 if let fallbackText {
                     let trimmed = fallbackText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
+                    if !trimmed.isEmpty && (text.isEmpty || trimmed.count > text.count) {
                         text = trimmed
                     }
                 }
-                Self.logger.warning("[hark] stop-timing fallback_ms=\(fallbackMs) samples=\(samples.count)")
+                Self.logger.warning(
+                    "[hark] stop-timing fallback_ms=\(fallbackMs) samples=\(samples.count) pre_len=\(preFinalizeText.count) post_len=\(text.count) remaining=\(remainingCount)"
+                )
             }
 
             Self.logger.warning(
@@ -922,6 +1433,59 @@ struct HarkApp: App {
 
         let totalStopMs = Int(((ProcessInfo.processInfo.systemUptime - stopStartedAt) * 1000).rounded())
         Self.logger.warning("[hark] stop-timing total_stop_to_finish_ms=\(totalStopMs)")
+        traceEvent("stop_ready_to_paste", [
+            "total_stop_to_finish_ms": String(totalStopMs),
+            "final_text_len": String(text.count),
+        ])
+
+        if recordingDurationMs > 0,
+           recordingDurationMs < Int((Self.accidentalDoublePressRecordingThresholdSeconds * 1000).rounded()) {
+            let ignoreUntil = Date().addingTimeInterval(Self.accidentalDoublePressIgnoreWindowSeconds)
+            ignoreHotkeyUntil = ignoreUntil
+            Self.logger.warning(
+                "[hark] hotkey: short_recording duration_ms=\(recordingDurationMs) ignore_until=\(ignoreUntil.timeIntervalSince1970)"
+            )
+        }
+
+        if Self.tailDebugDumpEnabled {
+            let dumpID = Self.newTailDebugSessionID()
+            let finalTextChars = text.count
+            let metadata = TailDebugMetadata(
+                id: dumpID,
+                timestampISO8601: ISO8601DateFormatter().string(from: Date()),
+                appBundle: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+                recordingDurationMs: recordingDurationMs,
+                skipPaste: skipPaste,
+                forceSubmit: forceSubmit,
+                totalSamples: allSamples.count,
+                processedSamples: debugProcessedCount,
+                remainingSamples: debugRemainingSamples.count,
+                finalizeSamples: debugFinalizeChunk.count,
+                padSamples: debugPadSampleCount,
+                preFinalizeTextChars: preFinalizeText.count,
+                finalTextChars: finalTextChars,
+                preFinalizeText: preFinalizeText,
+                finalText: text,
+                captureStopMs: captureStopMs,
+                streamJoinMs: debugStreamJoinMs,
+                finalizeFeedMs: debugFinalizeFeedMs,
+                finishMs: debugFinishMs,
+                fallbackMs: debugFallbackMs
+            )
+            Task.detached {
+                Self.dumpTailDebugArtifacts(
+                    metadata: metadata,
+                    allSamples: allSamples,
+                    remainingSamples: debugRemainingSamples,
+                    finalizeSamples: debugFinalizeChunk
+                )
+            }
+            Self.logger.warning("[hark] tail-debug dump_id=\(dumpID, privacy: .public)")
+        }
+
+        forensicsSession?.setAudio(all: allSamples, remaining: debugRemainingSamples, finalize: debugFinalizeChunk)
+        forensicsSession?.setFinalText(text)
+
         await finishAndPaste(text: text, skipPaste: skipPaste, forceSubmit: forceSubmit)
     }
 
@@ -944,16 +1508,188 @@ struct HarkApp: App {
         return isEffectivelySilent(tail, rmsThreshold: rmsThreshold)
     }
 
+    private nonisolated static func newTailDebugSessionID() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
+        return formatter.string(from: Date())
+    }
+
+    private nonisolated static func tailDebugRootDirectory() -> URL? {
+        guard let libraryDir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return libraryDir
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("hark", isDirectory: true)
+            .appendingPathComponent("tail-debug", isDirectory: true)
+    }
+
+    private nonisolated static func dumpTailDebugArtifacts(
+        metadata: TailDebugMetadata,
+        allSamples: [Float],
+        remainingSamples: [Float],
+        finalizeSamples: [Float]
+    ) {
+        guard let root = tailDebugRootDirectory() else { return }
+        let fm = FileManager.default
+
+        do {
+            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+            let sessionDir = root.appendingPathComponent(metadata.id, isDirectory: true)
+            try fm.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let metadataURL = sessionDir.appendingPathComponent("metadata.json")
+            let metadataData = try encoder.encode(metadata)
+            try metadataData.write(to: metadataURL, options: .atomic)
+
+            try writePCM16WAV(
+                samples: allSamples,
+                sampleRate: Int(transcriptionSampleRate),
+                to: sessionDir.appendingPathComponent("all.wav")
+            )
+            if !remainingSamples.isEmpty {
+                try writePCM16WAV(
+                    samples: remainingSamples,
+                    sampleRate: Int(transcriptionSampleRate),
+                    to: sessionDir.appendingPathComponent("remaining.wav")
+                )
+            }
+            if !finalizeSamples.isEmpty {
+                try writePCM16WAV(
+                    samples: finalizeSamples,
+                    sampleRate: Int(transcriptionSampleRate),
+                    to: sessionDir.appendingPathComponent("finalize.wav")
+                )
+            }
+
+            pruneTailDebugSessions(in: root, keepLatest: 60)
+        } catch {
+            Self.logger.error("[hark] tail-debug write failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private nonisolated static func pruneTailDebugSessions(in root: URL, keepLatest: Int) {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey, .creationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        let directories = entries.filter { url in
+            (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        }
+        guard directories.count > keepLatest else { return }
+
+        let sorted = directories.sorted { lhs, rhs in
+            let l = (try? lhs.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+            let r = (try? rhs.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+            return l < r
+        }
+        let toDelete = sorted.prefix(max(0, sorted.count - keepLatest))
+        for dir in toDelete {
+            try? fm.removeItem(at: dir)
+        }
+    }
+
+    private nonisolated static func writePCM16WAV(samples: [Float], sampleRate: Int, to url: URL) throws {
+        let channelCount: UInt16 = 1
+        let bitsPerSample: UInt16 = 16
+        let bytesPerSample = Int(bitsPerSample / 8)
+        let pcmDataByteCount = samples.count * bytesPerSample
+        let byteRate = sampleRate * Int(channelCount) * bytesPerSample
+        let blockAlign = Int(channelCount) * bytesPerSample
+        let riffChunkSize = 36 + pcmDataByteCount
+
+        var data = Data(capacity: 44 + pcmDataByteCount)
+
+        data.append("RIFF".data(using: .ascii)!)
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(riffChunkSize).littleEndian, Array.init))
+        data.append("WAVE".data(using: .ascii)!)
+        data.append("fmt ".data(using: .ascii)!)
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(16).littleEndian, Array.init))
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian, Array.init)) // PCM
+        data.append(contentsOf: withUnsafeBytes(of: channelCount.littleEndian, Array.init))
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(sampleRate).littleEndian, Array.init))
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(byteRate).littleEndian, Array.init))
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(blockAlign).littleEndian, Array.init))
+        data.append(contentsOf: withUnsafeBytes(of: bitsPerSample.littleEndian, Array.init))
+        data.append("data".data(using: .ascii)!)
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(pcmDataByteCount).littleEndian, Array.init))
+
+        for sample in samples {
+            let clamped = max(-1.0, min(1.0, sample))
+            let pcm = Int16((clamped * Float(Int16.max)).rounded())
+            data.append(contentsOf: withUnsafeBytes(of: pcm.littleEndian, Array.init))
+        }
+
+        try data.write(to: url, options: .atomic)
+    }
+
+    @MainActor
+    private func canPasteIntoLockedTarget() -> Bool {
+        guard let lockedBundle = pasteTargetBundleID else { return true }
+        let currentBundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let matches = currentBundle == lockedBundle
+        if !matches {
+            Self.logger.warning(
+                "[hark] paste-lock: blocked locked_bundle=\(lockedBundle, privacy: .public) current_bundle=\(currentBundle ?? "none", privacy: .public)"
+            )
+        }
+        return matches
+    }
+
     @MainActor
     private func finishAndPaste(text: String, skipPaste: Bool = false, forceSubmit: Bool = false) async {
         // Don't clear partialTranscript here — let the dismiss animation show the final text.
         if MediaController.isEnabled { MediaController.resumeIfPaused() }
+        traceEvent("finish_and_paste_enter", [
+            "text_len": String(text.count),
+            "skip_paste": String(skipPaste),
+            "force_submit": String(forceSubmit),
+            "text": text,
+        ])
+        forensicsSession?.setFinalText(text)
+        defer {
+            if let trace = forensicsSession {
+                trace.event("session_end")
+                let traceCopy = trace
+                Task.detached {
+                    traceCopy.writeHTMLDump()
+                }
+            }
+            forensicsSession = nil
+            pasteTargetBundleID = nil
+            appState.overlayLockedBundleID = nil
+            appState.overlayLockedAppName = nil
+            appState.overlayTetherOutOfApp = false
+        }
 
         if text.isEmpty || skipPaste {
+            traceEvent("finish_no_paste", [
+                "reason": text.isEmpty ? "empty_text" : "skip_paste",
+            ])
             _ = appState.transition(to: .idle)
             overlayManager.hideWithResult(.cancelled)
             playCancelSound()
             if !text.isEmpty { appState.addToHistory(text) }
+            return
+        }
+
+        guard canPasteIntoLockedTarget() else {
+            traceEvent("finish_paste_blocked", [
+                "reason": "locked_target_mismatch",
+            ])
+            _ = appState.transition(to: .idle)
+            overlayManager.hideWithResult(.cancelled)
+            playCancelSound()
+            appState.addToHistory(text)
             return
         }
 
@@ -968,6 +1704,11 @@ struct HarkApp: App {
         }
 
         let shouldSubmit = forceSubmit || PasteController.isReturnKeyPressed() || appState.currentAutoSubmit
+        traceEvent("paste_begin", [
+            "submit": String(shouldSubmit),
+            "text_len": String(text.count),
+            "text": text,
+        ])
 
         // Paste immediately (don't wait for overlay dismiss).
         _ = appState.transition(to: .pasting)
@@ -981,9 +1722,17 @@ struct HarkApp: App {
 
         do {
             try await pasteTask.value
+            traceEvent("paste_success", [
+                "submit": String(shouldSubmit),
+                "text_len": String(text.count),
+                "text": text,
+            ])
             playPastedSound()
             _ = appState.transition(to: .idle)
         } catch {
+            traceEvent("paste_error", [
+                "error": error.localizedDescription,
+            ])
             _ = appState.transition(to: .error(error.localizedDescription))
             overlayManager.hide()
             resetAfterDelay(seconds: 1)
@@ -1109,6 +1858,13 @@ struct HarkApp: App {
     @discardableResult
     @MainActor
     private func startModelLoad(_ model: STTModelDefinition) -> Task<Void, Never> {
+        // Ensure any existing streaming session is fully released before
+        // loading a different model. A live session keeps an Arc to the old
+        // engine and can delay VRAM reclamation.
+        streamingTask?.cancel()
+        streamingTask = nil
+        streamingSession = nil
+
         modelLoadTask?.cancel()
         modelLoadGeneration &+= 1
         let generation = modelLoadGeneration
@@ -1271,70 +2027,34 @@ struct HarkApp: App {
 
     // MARK: - Sound Effects
 
-    private func getSystemOutputVolume() -> Float {
-        var defaultOutputDeviceID = AudioDeviceID(0)
-        var defaultOutputDeviceIDSize = UInt32(MemoryLayout.size(ofValue: defaultOutputDeviceID))
-
-        var getDefaultOutputDevicePropertyAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        let status1 = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &getDefaultOutputDevicePropertyAddress,
-            0,
-            nil,
-            &defaultOutputDeviceIDSize,
-            &defaultOutputDeviceID
-        )
-
-        guard status1 == noErr else { return 1.0 }
-
-        var volume = Float32(0.0)
-        var volumeSize = UInt32(MemoryLayout.size(ofValue: volume))
-
-        var volumePropertyAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
-            mScope: kAudioDevicePropertyScopeOutput,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        let status2 = AudioObjectGetPropertyData(
-            defaultOutputDeviceID,
-            &volumePropertyAddress,
-            0,
-            nil,
-            &volumeSize,
-            &volume
-        )
-
-        guard status2 == noErr else { return 1.0 }
-        return volume
-    }
-
-    private func calculateSoundVolume() -> Float {
-        let systemVolume = getSystemOutputVolume()
-        let effectiveSystemVol = max(systemVolume, 0.2)
-        return min(0.2 / effectiveSystemVol, 1.0)
+    private func systemNotificationVolume() -> Float {
+        let globalDefaults = UserDefaults(suiteName: UserDefaults.globalDomain)
+        if let raw = globalDefaults?.object(forKey: "com.apple.sound.beep.volume") {
+            if let number = raw as? NSNumber {
+                return min(max(number.floatValue, 0.0), 1.0)
+            }
+            if let string = raw as? String, let value = Float(string) {
+                return min(max(value, 0.0), 1.0)
+            }
+        }
+        return 1.0
     }
 
     private func playStartSound() {
         guard let sound = NSSound(named: "Tink") else { return }
-        sound.volume = calculateSoundVolume()
+        sound.volume = systemNotificationVolume()
         sound.play()
     }
 
     private func playPastedSound() {
-        guard let sound = NSSound(named: "Hero") else { return }
-        sound.volume = calculateSoundVolume()
+        guard let sound = NSSound(named: "Tink") else { return }
+        sound.volume = systemNotificationVolume() * 0.6
         sound.play()
     }
 
     private func playCancelSound() {
         guard let sound = NSSound(named: "Pop") else { return }
-        sound.volume = calculateSoundVolume()
+        sound.volume = systemNotificationVolume()
         sound.play()
     }
 }

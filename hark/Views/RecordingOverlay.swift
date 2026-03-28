@@ -22,9 +22,7 @@ struct RecordingOverlayView: View {
     private var dismissResult: OverlayResult { appState.overlayDismiss }
 
     private var scale: CGFloat {
-        if dismissResult == .success { return 1.3 }
-        if dismissResult == .cancelled { return 0.7 }
-        return isAppearing ? 1.0 : 0.8
+        1.0
     }
 
     private var opacity: Double {
@@ -32,108 +30,159 @@ struct RecordingOverlayView: View {
         return isAppearing ? 1.0 : 0.0
     }
 
-    private let maxTextHeight: CGFloat = 120 // ~6 lines at 17pt
-    private let committedRGB = (r: 1.00, g: 1.00, b: 1.00)
-    private let pendingRGB = (r: 0.86, g: 0.84, b: 0.80)
-    private let freshRGB = (r: 0.98, g: 0.72, b: 0.46)
-    private let pendingOpacity: Double = 0.82
+    private var introOffsetY: CGFloat {
+        0
+    }
+
+    private var introBlurRadius: CGFloat {
+        0
+    }
+
+    private let footerBandHeight: CGFloat = 36
+    private let footerOutsideGap: CGFloat = 6
+    private let committedRGB = (r: 0.93, g: 0.93, b: 0.92)
+    private let pendingRGB = (r: 0.80, g: 0.79, b: 0.76)
+    private let freshRGB = (r: 0.95, g: 0.72, b: 0.54)
+    private let pendingOpacity: Double = 0.74
     private let freshStartOpacity: Double = 0.5
 
-    private var isScrolling: Bool { textContentHeight > maxTextHeight }
-
     var body: some View {
-        mainContent
+        GeometryReader { geo in
+            controlFrameLayout(size: geo.size)
             .scaleEffect(scale)
+            .offset(y: introOffsetY)
+            .blur(radius: introBlurRadius)
             .opacity(opacity)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isAppearing)
+            .animation(.easeOut(duration: 0.18), value: isAppearing)
             .animation(.easeIn(duration: 0.25), value: dismissResult)
-            .frame(width: 700, height: 300, alignment: .top)
-            .onAppear {
-                withAnimation {
-                    isAppearing = true
-                }
-            }
-            .onChange(of: appState.partialTranscript) { _, newValue in
-                animateTextChange(to: newValue)
-            }
-    }
-
-    private var mainContent: some View {
-        VStack(spacing: 0) {
-            // Text area with scroll
-            ScrollViewReader { proxy in
-                ScrollView(.vertical, showsIndicators: false) {
-                    Text(styledDisplayText)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                        .background(GeometryReader { geo in
-                            Color.clear.preference(key: TextHeightKey.self, value: geo.size.height)
-                        })
-                        .id("transcript")
-                }
-                .frame(maxHeight: maxTextHeight, alignment: .top)
-                .mask(isScrolling ? textScrollMask : AnyView(Color.white))
-                .onPreferenceChange(TextHeightKey.self) { textContentHeight = $0 }
-                .onChange(of: displayedText) { _, _ in
-                    withAnimation(.easeOut(duration: 0.1)) {
-                        proxy.scrollTo("transcript", anchor: .bottom)
-                    }
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
-            .padding(.bottom, 10)
-
-            // Bottom bar: indicator on left, hints on right — closer to edges
-            HStack(alignment: .center) {
-                if appState.isFinishing {
-                    ThinkingBarsView()
-                } else {
-                    SpectrumBarsView(bands: appState.spectrumBands)
-                }
-
-                Spacer()
-
-                hintView
-                    .animation(.easeInOut(duration: 0.15), value: appState.isLockedMode)
-                    .animation(.easeInOut(duration: 0.15), value: appState.isFinishing)
-            }
-            .padding(.leading, 20)
-            .padding(.trailing, 14)
-            .padding(.bottom, 12)
         }
-        .frame(width: 500, alignment: .topLeading)
-        .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.black.opacity(0.8))
+        .onAppear {
+            withAnimation {
+                isAppearing = true
             }
-            .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+        }
+        .onChange(of: appState.partialTranscript) { _, newValue in
+            animateTextChange(to: newValue)
+        }
+    }
+
+    @ViewBuilder
+    private func controlFrameLayout(size: CGSize) -> some View {
+        let reservedHeight = footerBandHeight + footerOutsideGap
+        let textViewportHeight = max(24, size.height - reservedHeight)
+        VStack(spacing: 0) {
+            if appState.overlayFooterAbove {
+                footerBand
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, footerOutsideGap)
+            }
+
+            transcriptBody(maxTextHeight: textViewportHeight)
+                .frame(maxWidth: .infinity, maxHeight: textViewportHeight, alignment: .topLeading)
+
+            if !appState.overlayFooterAbove {
+                footerBand
+                    .padding(.horizontal, 6)
+                    .padding(.top, footerOutsideGap)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func transcriptBody(maxTextHeight: CGFloat) -> some View {
+        return ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                Text(styledDisplayText)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .background(GeometryReader { geo in
+                        Color.clear.preference(key: TextHeightKey.self, value: geo.size.height)
+                    })
+                    .id("transcript")
+            }
+            .frame(maxHeight: maxTextHeight, alignment: .top)
+            .mask(Color.white)
+            .onPreferenceChange(TextHeightKey.self) { textContentHeight = $0 }
+            .onChange(of: displayedText) { _, _ in
+                withAnimation(.easeOut(duration: 0.1)) {
+                    proxy.scrollTo("transcript", anchor: .bottom)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.black.opacity(0.94))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                    )
+            )
+        }
+    }
+
+    private var footerBand: some View {
+        HStack(alignment: .center) {
+            waveformBlock
+
+            Spacer(minLength: 8)
+
+            controlsBlock
+                .animation(.easeInOut(duration: 0.15), value: appState.isLockedMode)
+                .animation(.easeInOut(duration: 0.15), value: appState.isFinishing)
+        }
+        .padding(.horizontal, 2)
+        .frame(height: footerBandHeight)
+    }
+
+    private var waveformBlock: some View {
+        Group {
+            if appState.isFinishing {
+                ThinkingBarsView()
+            } else {
+                SpectrumBarsView(bands: appState.spectrumBands)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 28)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.black.opacity(0.82))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+                )
         )
     }
 
-    // Gradient mask that fades the top when content is scrolling
-    private var textScrollMask: AnyView {
-        AnyView(
-            VStack(spacing: 0) {
-                LinearGradient(
-                    colors: [.clear, .white],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 20)
-                Color.white
-            }
-        )
+    private var controlsBlock: some View {
+        hintView
+            .lineLimit(1)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.black.opacity(0.82))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+                    )
+            )
     }
 
     // MARK: - Hints
 
     @ViewBuilder
     private var hintView: some View {
+        if appState.overlayTetherOutOfApp {
+            let appName = appState.overlayLockedAppName ?? "original app"
+            HStack(spacing: 6) {
+                keyCap("🔒")
+                hintLabel("Recording locked to \(appName)")
+            }
+        } else
         if appState.isFinishing {
             hintLabel("Finalizing...")
         } else if appState.isLockedMode {
@@ -192,7 +241,7 @@ struct RecordingOverlayView: View {
     private var styledDisplayText: AttributedString {
         let full = displayedTextValue
         var result = AttributedString(full)
-        let font = NSFont(name: "Jost-Medium", size: 15) ?? .systemFont(ofSize: 15, weight: .medium)
+        let font = NSFont(name: "Jost-Regular", size: 15.2) ?? .systemFont(ofSize: 15.2, weight: .regular)
         let committedCount = committedCharacterCount(in: full)
         let pendingStart = min(max(committedCount, 0), full.count)
         let freshStartClamped = min(max(freshStart, pendingStart), full.count)

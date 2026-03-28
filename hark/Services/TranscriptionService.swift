@@ -4,6 +4,9 @@ import os
 @_silgen_name("asr_session_committed_utf16_len")
 private func asr_session_committed_utf16_len_ffi(_ session: OpaquePointer) -> UInt
 
+@_silgen_name("asr_session_take_debug_events_json")
+private func asr_session_take_debug_events_json_ffi(_ session: OpaquePointer) -> UnsafeMutablePointer<CChar>?
+
 /// Wraps the Rust qwen3-asr-ffi library for streaming transcription.
 ///
 /// Thread-safe: the engine uses an internal mutex. However, a single session
@@ -201,6 +204,38 @@ final class TranscriptionService: @unchecked Sendable {
         )
     }
 
+    /// Feed stop/finalization-time audio into a streaming session.
+    ///
+    /// Uses a dedicated FFI entrypoint that keeps low-energy tail chunks instead
+    /// of dropping them as silence, which helps avoid missing trailing words.
+    func feedFinalizing(session: StreamingSession, samples: [Float]) -> StreamingTranscriptUpdate? {
+        var err: UnsafeMutablePointer<CChar>?
+        let result = samples.withUnsafeBufferPointer { buf in
+            asr_session_feed_finalizing(session.ptr, buf.baseAddress, buf.count, &err)
+        }
+
+        if let err {
+            let msg = String(cString: err, encoding: .utf8) ?? "unknown"
+            asr_string_free(err)
+            Self.logger.error("feedFinalizing error: \(msg, privacy: .public)")
+            return nil
+        }
+
+        guard let result else { return nil }
+        let text = String(cString: result)
+        asr_string_free(result)
+
+        let committedUTF16 = Int(asr_session_committed_utf16_len_ffi(session.ptr))
+        let clampedCommittedUTF16 = min(max(0, committedUTF16), (text as NSString).length)
+        let detectedLanguage = sessionLastLanguage(session: session)
+
+        return StreamingTranscriptUpdate(
+            text: text,
+            committedUTF16Count: clampedCommittedUTF16,
+            detectedLanguage: detectedLanguage
+        )
+    }
+
     /// Finalize a streaming session and return the complete transcript.
     func finish(session: StreamingSession) -> String? {
         var err: UnsafeMutablePointer<CChar>?
@@ -248,6 +283,17 @@ final class TranscriptionService: @unchecked Sendable {
         asr_string_free(raw)
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Drain ASR-internal debug events as a JSON array string.
+    /// Returns "[]" if unavailable.
+    func takeDebugEventsJSON(session: StreamingSession) -> String {
+        guard let raw = asr_session_take_debug_events_json_ffi(session.ptr) else {
+            return "[]"
+        }
+        let text = String(cString: raw)
+        asr_string_free(raw)
+        return text
     }
 }
 

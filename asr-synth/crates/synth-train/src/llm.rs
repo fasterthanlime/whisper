@@ -95,6 +95,14 @@ pub(crate) struct GenerateStats {
     pub decode_ms: u64,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct NextTokenScores {
+    pub prompt_tokens: usize,
+    pub prefill_ms: u64,
+    pub logits: Vec<f32>,
+    pub probs: Vec<f32>,
+}
+
 impl<M: AdapterModel> LocalModel<M> {
     fn discover_stop_tokens(tokenizer: &tokenizers::Tokenizer) -> BTreeSet<u32> {
         const STOP_TEXTS: &[&str] = &[
@@ -242,11 +250,77 @@ impl<M: AdapterModel> LocalModel<M> {
     }
 
     pub fn encode_text(&self, prompt: &str) -> Result<Vec<u32>> {
+        self.encode_text_with_special_tokens(prompt, true)
+    }
+
+    pub fn encode_text_with_special_tokens(
+        &self,
+        prompt: &str,
+        add_special_tokens: bool,
+    ) -> Result<Vec<u32>> {
         let encoding = self
             .tokenizer
-            .encode(prompt, true)
+            .encode(prompt, add_special_tokens)
             .map_err(|e| anyhow::anyhow!("tokenizer encode failed: {e}"))?;
         Ok(encoding.get_ids().to_vec())
+    }
+
+    pub fn token_id(&self, token: &str) -> Option<u32> {
+        self.tokenizer.token_to_id(token)
+    }
+
+    pub fn score_next_tokens(
+        &mut self,
+        prompt_tokens: &[u32],
+        candidate_token_ids: &[u32],
+    ) -> Result<NextTokenScores> {
+        if candidate_token_ids.is_empty() {
+            anyhow::bail!("candidate_token_ids is empty");
+        }
+
+        self.model.clear_kv_cache();
+        let prefill_started = Instant::now();
+        let input = Tensor::new(prompt_tokens, &self.device)?.unsqueeze(0)?;
+        let logits = self
+            .model
+            .forward(&input, 0)
+            .map_err(|e| anyhow::anyhow!("forward (prefill) failed: {e}"))?;
+        let prefill_elapsed = prefill_started.elapsed();
+        let seq_len = prompt_tokens.len();
+        let next_logits = logits.narrow(1, seq_len - 1, 1)?.squeeze(1)?.squeeze(0)?;
+        let logits_f32 = next_logits.to_dtype(candle_core::DType::F32)?;
+        let logits_vec = logits_f32.to_vec1::<f32>()?;
+
+        let selected_logits = candidate_token_ids
+            .iter()
+            .map(|&token_id| {
+                logits_vec
+                    .get(token_id as usize)
+                    .copied()
+                    .ok_or_else(|| anyhow::anyhow!("token id {token_id} out of bounds"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let max_logit = selected_logits
+            .iter()
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
+        let exp_sum: f32 = selected_logits.iter().map(|logit| (*logit - max_logit).exp()).sum();
+        let probs = if exp_sum.is_finite() && exp_sum > 0.0 {
+            selected_logits
+                .iter()
+                .map(|logit| (*logit - max_logit).exp() / exp_sum)
+                .collect()
+        } else {
+            vec![0.0; selected_logits.len()]
+        };
+
+        Ok(NextTokenScores {
+            prompt_tokens: prompt_tokens.len(),
+            prefill_ms: prefill_elapsed.as_millis() as u64,
+            logits: selected_logits,
+            probs,
+        })
     }
 
     pub fn generate_with_stats(
@@ -455,10 +529,48 @@ pub(crate) enum CorrectionModel {
 }
 
 impl CorrectionModel {
+    pub fn encode_chat(&self, system: &str, user: &str) -> Result<Vec<u32>> {
+        match self {
+            Self::Qwen2(model) => model.encode_chat(system, user),
+            Self::Qwen3_5(model) => model.encode_chat(system, user),
+        }
+    }
+
     pub fn encode_text(&self, prompt: &str) -> Result<Vec<u32>> {
         match self {
             Self::Qwen2(model) => model.encode_text(prompt),
             Self::Qwen3_5(model) => model.encode_text(prompt),
+        }
+    }
+
+    pub fn encode_text_with_special_tokens(
+        &self,
+        prompt: &str,
+        add_special_tokens: bool,
+    ) -> Result<Vec<u32>> {
+        match self {
+            Self::Qwen2(model) => model.encode_text_with_special_tokens(prompt, add_special_tokens),
+            Self::Qwen3_5(model) => {
+                model.encode_text_with_special_tokens(prompt, add_special_tokens)
+            }
+        }
+    }
+
+    pub fn token_id(&self, token: &str) -> Option<u32> {
+        match self {
+            Self::Qwen2(model) => model.token_id(token),
+            Self::Qwen3_5(model) => model.token_id(token),
+        }
+    }
+
+    pub fn score_next_tokens(
+        &mut self,
+        prompt_tokens: &[u32],
+        candidate_token_ids: &[u32],
+    ) -> Result<NextTokenScores> {
+        match self {
+            Self::Qwen2(model) => model.score_next_tokens(prompt_tokens, candidate_token_ids),
+            Self::Qwen3_5(model) => model.score_next_tokens(prompt_tokens, candidate_token_ids),
         }
     }
 

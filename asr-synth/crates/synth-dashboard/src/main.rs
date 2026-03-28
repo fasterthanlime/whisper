@@ -1,5 +1,6 @@
 mod db;
 mod jobs;
+mod prototype;
 mod review;
 mod tts;
 
@@ -40,6 +41,8 @@ pub struct AppState {
     training_exclusive: AtomicBool,
     /// Shared inference server for live correction (started on first use)
     inference_server: std::sync::Mutex<Option<synth_train::InferenceServer>>,
+    /// Shared reranker server for prototype candidate scoring.
+    prototype_reranker_server: std::sync::Mutex<Option<synth_train::InferenceServer>>,
 }
 
 struct LazyTtsManager {
@@ -245,6 +248,9 @@ impl AppState {
         self.parakeet.unload();
         self.aligner.unload();
         if let Some(mut server) = self.inference_server.lock().unwrap().take() {
+            server.kill();
+        }
+        if let Some(mut server) = self.prototype_reranker_server.lock().unwrap().take() {
             server.kill();
         }
     }
@@ -1371,6 +1377,7 @@ async fn main() -> anyhow::Result<()> {
         job_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         training_exclusive: AtomicBool::new(false),
         inference_server: std::sync::Mutex::new(None),
+        prototype_reranker_server: std::sync::Mutex::new(None),
     });
 
     // Start background pre-computation loop
@@ -2288,6 +2295,10 @@ async fn main() -> anyhow::Result<()> {
         // Pipeline jobs
         .route("/api/jobs/corpus", post(jobs::api_start_corpus_job))
         .route("/api/jobs/prepare", post(jobs::api_start_prepare_job))
+        .route(
+            "/api/jobs/prototype-reranker-prepare",
+            post(jobs::api_start_prototype_reranker_prepare_job),
+        )
         .route("/api/jobs/train", post(jobs::api_start_train_job))
         .route("/api/jobs/eval", post(jobs::api_start_eval_job))
         .route("/api/jobs/vocab-scan", post(jobs::api_start_vocab_scan))
@@ -2340,6 +2351,15 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/pipeline/scan-results", get(jobs::api_scan_results))
         .route("/api/correct", post(jobs::api_correct))
+        .route("/api/correct-prototype", post(jobs::api_correct_prototype))
+        .route(
+            "/api/correct-prototype/bakeoff",
+            post(jobs::api_correct_prototype_bakeoff),
+        )
+        .route(
+            "/api/correct-prototype/bakeoff/detail",
+            post(jobs::api_correct_prototype_bakeoff_detail),
+        )
         .route("/api/test-term", post(jobs::api_test_term))
         // Authoring
         .route("/api/author/next", get(api_author_next))

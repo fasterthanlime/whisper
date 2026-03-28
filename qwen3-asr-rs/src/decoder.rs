@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle_core::{Device, Tensor};
+use candle_core::{DType, Device, Tensor};
 use candle_nn::ops::softmax_last_dim;
 use candle_nn::{Module, RmsNorm};
 
@@ -377,7 +377,15 @@ impl TextDecoder {
         prefix: &str,
         config: &TextDecoderConfig,
     ) -> Result<Self> {
-        let embed_tokens = weights.get_tensor(&format!("{}.embed_tokens.weight", prefix))?;
+        let mut embed_tokens = weights.get_tensor(&format!("{}.embed_tokens.weight", prefix))?;
+        // GGUF dequantization commonly yields f32. Keep embeddings in bf16 on
+        // accelerator backends to reduce memory footprint.
+        //
+        // Decoder can now handle mixed dtype RMSNorm via our local candle-nn
+        // patch, so we keep activations in the embedding dtype.
+        if !embed_tokens.device().is_cpu() && embed_tokens.dtype() == DType::F32 {
+            embed_tokens = embed_tokens.to_dtype(DType::BF16)?;
+        }
 
         let mut layers = Vec::new();
         for i in 0..config.num_hidden_layers {
@@ -404,7 +412,7 @@ impl TextDecoder {
         })
     }
 
-    /// Look up token embeddings. Returns the native dtype of the embedding table (BF16).
+    /// Look up token embeddings.
     pub(crate) fn embed(&self, input_ids: &Tensor) -> Result<Tensor> {
         self.embed_tokens
             .index_select(input_ids, 0)

@@ -2259,6 +2259,16 @@
             return buf;
         }
 
+        function bytesToBase64(bytes) {
+            const chunkSize = 0x8000;
+            let out = '';
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+                const chunk = bytes.subarray(i, i + chunkSize);
+                out += String.fromCharCode(...chunk);
+            }
+            return btoa(out);
+        }
+
         const rawMicAudioConstraints = {
             channelCount: 1,
             sampleRate: 48000,
@@ -4599,10 +4609,12 @@
         }
 
         const TRAIN_PRESETS = [
-            { id: 'q35-2b-q4', label: '2B Q4', model: 'mlx-community/Qwen3.5-2B-4bit', iters: 2000, batch: 4, layers: 8 },
-            { id: 'q35-2b-q4-smoke', label: '2B Q4 Smoke', model: 'mlx-community/Qwen3.5-2B-4bit', iters: 600, batch: 4, layers: 4 },
-            { id: 'q35-08b-q4', label: '0.8B Q4', model: 'mlx-community/Qwen3.5-0.8B-4bit', iters: 2000, batch: 4, layers: 8 },
-            { id: 'q35-2b-bf16', label: '2B BF16', model: 'Qwen/Qwen3.5-2B', iters: 2000, batch: 4, layers: 8 },
+            { id: 'correction-2b-q4', label: 'Correction 2B Q4', data: 'training/data', adapters: 'training/adapters', model: 'mlx-community/Qwen3.5-2B-4bit', iters: 2000, batch: 4, layers: 8 },
+            { id: 'correction-2b-q4-smoke', label: 'Correction Smoke', data: 'training/data', adapters: 'training/adapters', model: 'mlx-community/Qwen3.5-2B-4bit', iters: 600, batch: 4, layers: 4 },
+            { id: 'reranker-2b-q4', label: 'Reranker 2B Q4', data: 'training/prototype-reranker', adapters: 'training/prototype-reranker-adapters', model: 'mlx-community/Qwen3.5-2B-4bit', iters: 2000, batch: 4, layers: 8 },
+            { id: 'reranker-smoke', label: 'Reranker Smoke', data: 'training/prototype-reranker', adapters: 'training/prototype-reranker-adapters', model: 'mlx-community/Qwen3.5-2B-4bit', iters: 400, batch: 1, layers: 2 },
+            { id: 'q35-08b-q4', label: '0.8B Q4', data: 'training/data', adapters: 'training/adapters', model: 'mlx-community/Qwen3.5-0.8B-4bit', iters: 2000, batch: 4, layers: 8 },
+            { id: 'q35-2b-bf16', label: '2B BF16', data: 'training/data', adapters: 'training/adapters', model: 'Qwen/Qwen3.5-2B', iters: 2000, batch: 4, layers: 8 },
         ];
 
         // ==================== TRAIN PAGE ====================
@@ -4612,6 +4624,8 @@
             const [runningJob, setRunningJob] = useState(null);
             const [jobLog, setJobLog] = useState('');
             const [error, setError] = useState(null);
+            const [trainDataDir, setTrainDataDir] = useState('training/data');
+            const [trainAdaptersDir, setTrainAdaptersDir] = useState('training/adapters');
             const [model, setModel] = useState('mlx-community/Qwen3.5-2B-4bit');
             const [iters, setIters] = useState(2000);
             const [batch, setBatch] = useState(4);
@@ -4668,6 +4682,8 @@
 
             if (!status) return <div className="container"><p>Loading...</p></div>;
             const isRunning = !!runningJob;
+            const isDefaultTrainDataset = trainDataDir === 'training/data';
+            const trainDatasetReady = !isDefaultTrainDataset || !!status.training_data_exists;
 
             const trainExamples = status.train_count || 0;
             const epochSteps = batch > 0 ? Math.ceil(trainExamples / batch) : 0;
@@ -4686,6 +4702,8 @@
             const formatTrainConfig = cfg => {
                 if (!cfg) return [];
                 return [
+                    ['Data', cfg.data || 'training/data'],
+                    ['Adapters', cfg.adapters || 'training/adapters'],
                     ['Model', cfg.model || ''],
                     ['Batch', cfg.batch_size ?? ''],
                     ['Layers', cfg.num_layers ?? ''],
@@ -5178,6 +5196,20 @@
 
                     <div className="card">
                         <div style={paramRow}>
+                            <div style={paramLabel}>Data</div>
+                            <div style={{flex:1}}>
+                                <input value={trainDataDir} onChange={e => setTrainDataDir(e.target.value)} disabled={isRunning} style={{...inputStyle,width:'100%',maxWidth:320}} />
+                                <div style={helpStyle}>Dataset directory containing `train.jsonl` and `valid.jsonl`. Use `training/data` for the normal corrector or `training/prototype-reranker` for the learned reranker.</div>
+                            </div>
+                        </div>
+                        <div style={paramRow}>
+                            <div style={paramLabel}>Adapters</div>
+                            <div style={{flex:1}}>
+                                <input value={trainAdaptersDir} onChange={e => setTrainAdaptersDir(e.target.value)} disabled={isRunning} style={{...inputStyle,width:'100%',maxWidth:320}} />
+                                <div style={helpStyle}>Output directory for LoRA adapters. Keep reranker adapters separate from the main correction adapters.</div>
+                            </div>
+                        </div>
+                        <div style={paramRow}>
                             <div style={paramLabel}>Model</div>
                             <div style={{flex:1}}>
                                 <input value={model} onChange={e => setModel(e.target.value)} disabled={isRunning} style={{...inputStyle,width:'100%',maxWidth:260}} />
@@ -5222,11 +5254,11 @@
 
                         <div style={{display:'flex',gap:8,alignItems:'center',marginTop:8,borderTop:'1px solid var(--border)',paddingTop:12}}>
                             <div style={{flex:1}} />
-                            {!status.training_data_exists && <span style={{fontSize:12,color:'var(--text-muted)'}}>Prepare training data first (see above).</span>}
+                            {!trainDatasetReady && <span style={{fontSize:12,color:'var(--text-muted)'}}>Prepare training data first (see above).</span>}
                             {isRunning
                                 ? <button className="btn" style={{borderColor:'var(--warning)',color:'var(--warning)',background:'rgba(210,153,34,0.1)'}} onClick={stopJob}>Stop</button>
-                                : <button className="btn btn-primary" disabled={!status.training_data_exists}
-                                    onClick={() => startJob('train', {model, iters, batch_size: batch, num_layers: layers, patience, steps_per_eval: stepsPerEval})}>Train</button>
+                                : <button className="btn btn-primary" disabled={!trainDatasetReady}
+                                    onClick={() => startJob('train', {data: trainDataDir, adapters: trainAdaptersDir, model, iters, batch_size: batch, num_layers: layers, patience, steps_per_eval: stepsPerEval})}>Train</button>
                             }
                         </div>
                         {jobLog && <pre ref={logRef} className="stage-log" style={{marginTop:12,maxHeight:400}}>{jobLog}</pre>}
@@ -5742,9 +5774,19 @@
             const [input, setInput] = useState('');
             const [correcting, setCorrecting] = useState(false);
             const [result, setResult] = useState(null);
+            const [bakeoff, setBakeoff] = useState(null);
+            const [runningBakeoff, setRunningBakeoff] = useState(false);
+            const [bakeoffSource, setBakeoffSource] = useState('human');
+            const [bakeoffLimit, setBakeoffLimit] = useState(150);
+            const [bakeoffDetails, setBakeoffDetails] = useState({});
+            const [loadingBakeoffDetails, setLoadingBakeoffDetails] = useState({});
+            const [bakeoffTimelineZoom, setBakeoffTimelineZoom] = useState({});
+            const [bakeoffPlayback, setBakeoffPlayback] = useState(null);
             const [recording, setRecording] = useState(false);
             const [transcribing, setTranscribing] = useState(false);
+            const [usePrototypeReranker, setUsePrototypeReranker] = useState(true);
             const mediaRef = useRef(null);
+            const bakeoffAudioRef = useRef(null);
 
             const demoRowLabelStyle = {
                 fontSize: 11,
@@ -5760,6 +5802,13 @@
                 display: 'flex',
                 gap: 12,
                 alignItems: 'flex-start',
+            };
+
+            const bakeoffActionBtnStyle = {
+                padding:'2px 8px',
+                minHeight:'auto',
+                fontSize:11,
+                lineHeight:1.4,
             };
 
             const renderCorrectedDiff = (baseline, corrected) => {
@@ -5784,14 +5833,195 @@
                 });
             };
 
-            const correct = async (parakeet, qwen) => {
+            const renderTiming = timing => {
+                if (!timing) return null;
+                return (
+                    <div style={{marginTop: 6, fontSize: 11, color: 'var(--text-muted)'}}>
+                        {timing.total_ms != null && <span>total {(timing.total_ms/1000).toFixed(2)}s </span>}
+                        {timing.prefill_ms != null && <span>prefill {(timing.prefill_ms/1000).toFixed(2)}s </span>}
+                        {timing.decode_ms != null && <span>decode {(timing.decode_ms/1000).toFixed(2)}s </span>}
+                        {timing.output_tokens != null && <span>{timing.output_tokens} toks</span>}
+                    </div>
+                );
+            };
+
+            const formatMs = ms => {
+                if (ms == null) return '—';
+                const n = Number(ms);
+                if (!Number.isFinite(n)) return '—';
+                if (n >= 1000) return `${(n / 1000).toFixed(2)}s`;
+                return `${Math.round(n)}ms`;
+            };
+
+            useEffect(() => () => {
+                if (bakeoffAudioRef.current) {
+                    bakeoffAudioRef.current.pause();
+                    bakeoffAudioRef.current.src = '';
+                    bakeoffAudioRef.current = null;
+                }
+            }, []);
+
+            const renderBakeoffTL = (label, items, color, maxTime, pxPerSec, activeTime) => {
+                if (!items || !items.length) return null;
+                const timelineWidth = Math.max(720, Math.ceil(Math.max(maxTime || 1, 0.001) * pxPerSec));
+                const px = v => `${Math.max(0, Number(v || 0) * pxPerSec).toFixed(1)}px`;
+                const playheadLeft = activeTime == null ? null : Math.max(0, Number(activeTime || 0) * pxPerSec);
+                return (
+                    <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
+                        <span style={{fontSize:10,color:'var(--text-muted)',width:65,textAlign:'right',flexShrink:0,fontWeight:600}}>{label}</span>
+                        <div style={{position:'relative',height:28,width:timelineWidth,background:'rgba(255,255,255,0.03)',borderRadius:4,overflow:'hidden',flexShrink:0}}>
+                            {playheadLeft != null && (
+                                <div style={{
+                                    position:'absolute',
+                                    left:`${playheadLeft.toFixed(1)}px`,
+                                    top:0,
+                                    bottom:0,
+                                    width:2,
+                                    background:'rgba(255,255,255,0.9)',
+                                    boxShadow:'0 0 0 1px rgba(0,0,0,0.35), 0 0 8px rgba(255,255,255,0.25)',
+                                    zIndex:3,
+                                    pointerEvents:'none',
+                                }} />
+                            )}
+                            {items.map((a, j) => {
+                                const isActive = activeTime != null && Number(activeTime) >= Number(a.s || 0) && Number(activeTime) < Number(a.e || 0);
+                                return (
+                                    <div
+                                        key={j}
+                                        title={a.t || `${a.w} (${Number(a.s).toFixed(3)}s–${Number(a.e).toFixed(3)}s)${a.avg_logprob != null ? ` lp=${Number(a.avg_logprob).toFixed(2)}` : ''}`}
+                                        style={{
+                                            position:'absolute',
+                                            left:px(a.s),
+                                            width:px(Math.max((a.e - a.s) || 0, 0.03)),
+                                            top:2,
+                                            bottom:2,
+                                            borderRadius:3,
+                                            background: isActive ? color.replace(/[\d.]+\)$/, '0.95)') : color,
+                                            border:`1px solid ${color.replace(/[\d.]+\)$/,'0.9)')}`,
+                                            display:'flex',
+                                            alignItems:'center',
+                                            justifyContent:'center',
+                                            overflow:'hidden',
+                                            boxShadow: isActive ? `0 0 0 2px ${color.replace(/[\d.]+\)$/, '0.55)')}, inset 0 0 0 1px rgba(255,255,255,0.25)` : 'none',
+                                            zIndex: isActive ? 2 : 1,
+                                        }}
+                                    >
+                                        <span style={{fontSize:10,color:'#fff',whiteSpace:'nowrap',padding:'0 4px'}}>{a.w}</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                );
+            };
+
+            const buildGroupedPhoneLane = (phoneItems, scaffoldItems, labelPrefix) => {
+                if (!phoneItems?.length || !scaffoldItems?.length) return [];
+                return scaffoldItems.map((word, idx) => {
+                    const ws = Number(word.s || 0);
+                    const we = Number(word.e || 0);
+                    const overlapping = phoneItems.filter(phone => Number(phone.e || 0) > ws && Number(phone.s || 0) < we);
+                    const phones = overlapping.map(phone => phone.w).filter(Boolean);
+                    return {
+                        s: ws,
+                        e: we,
+                        w: phones.length ? phones.join(' ') : '∅',
+                        t: `${labelPrefix} ${word.w}: ${phones.length ? phones.join(' ') : '∅'} (${ws.toFixed(3)}s–${we.toFixed(3)}s)`,
+                    };
+                });
+            };
+
+            const playBakeoffRecording = async (entryKey, entry) => {
+                if (!entry.recording_id) return;
+                if (!bakeoffDetails[entryKey] && !loadingBakeoffDetails[entryKey]) {
+                    loadBakeoffDetail(entryKey, entry);
+                }
+                let audio = bakeoffAudioRef.current;
+                if (audio && bakeoffPlayback?.entryKey === entryKey) {
+                    if (audio.paused) {
+                        await audio.play();
+                    } else {
+                        audio.pause();
+                    }
+                    return;
+                }
+                if (audio) {
+                    audio.pause();
+                    audio.src = '';
+                }
+                audio = new Audio(`/api/author/recordings/${entry.recording_id}/audio`);
+                bakeoffAudioRef.current = audio;
+                const sync = playing => setBakeoffPlayback(prev => ({
+                    entryKey,
+                    time: Number.isFinite(audio.currentTime) ? audio.currentTime : (prev?.entryKey === entryKey ? prev.time : 0),
+                    duration: Number.isFinite(audio.duration) ? audio.duration : (prev?.entryKey === entryKey ? prev.duration : null),
+                    playing,
+                }));
+                audio.addEventListener('loadedmetadata', () => sync(false));
+                audio.addEventListener('timeupdate', () => sync(!audio.paused));
+                audio.addEventListener('play', () => sync(true));
+                audio.addEventListener('pause', () => sync(false));
+                audio.addEventListener('ended', () => {
+                    setBakeoffPlayback(prev => prev?.entryKey === entryKey ? {...prev, time: 0, playing: false} : prev);
+                });
+                audio.addEventListener('error', () => {
+                    setBakeoffPlayback(prev => prev?.entryKey === entryKey ? {...prev, playing: false} : prev);
+                });
+                setBakeoffPlayback({entryKey, time: 0, duration: null, playing: false});
+                await audio.play();
+            };
+
+            const loadBakeoffDetail = async (entryKey, entry) => {
+                if (bakeoffDetails[entryKey] || loadingBakeoffDetails[entryKey]) return;
+                setLoadingBakeoffDetails(prev => ({...prev, [entryKey]: true}));
+                try {
+                    const detail = await api('/api/correct-prototype/bakeoff/detail', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            source: bakeoff?.source || bakeoffSource,
+                            recording_id: entry.recording_id,
+                            qwen: entry.qwen,
+                            expected: entry.expected,
+                            current: entry.current,
+                            prototype: entry.prototype,
+                            use_model_reranker: usePrototypeReranker,
+                            use_prototype_adapters: false,
+                        }),
+                    });
+                    setBakeoffDetails(prev => ({...prev, [entryKey]: detail}));
+                    setBakeoffTimelineZoom(prev => ({...prev, [entryKey]: prev[entryKey] || 220}));
+                } catch (e) {
+                    setBakeoffDetails(prev => ({...prev, [entryKey]: {error: e.message}}));
+                }
+                setLoadingBakeoffDetails(prev => ({...prev, [entryKey]: false}));
+            };
+
+            const correct = async (parakeet, qwen, audioWavBase64 = null) => {
                 setCorrecting(true);
                 try {
-                    const res = await api('/api/correct', {
-                        method: 'POST', body: JSON.stringify({parakeet: '', qwen}),
+                    const [baseline, prototype] = await Promise.all([
+                        api('/api/correct', {
+                            method: 'POST', body: JSON.stringify({parakeet: '', qwen}),
+                        }),
+                        api('/api/correct-prototype', {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                qwen,
+                                audio_wav_base64: audioWavBase64,
+                                use_model_reranker: usePrototypeReranker,
+                                use_adapters: false,
+                            }),
+                        }),
+                    ]);
+                    setResult({
+                        parakeet,
+                        qwen,
+                        baseline,
+                        prototype,
                     });
-                    setResult({parakeet, qwen, corrected: res.corrected, correctedFrom: 'qwen'});
-                } catch (e) { setResult({parakeet, qwen, corrected: `(error: ${e.message})`}); }
+                } catch (e) {
+                    setResult({parakeet, qwen, error: `(error: ${e.message})`});
+                }
                 setCorrecting(false);
             };
 
@@ -5817,7 +6047,11 @@
                             if (res.ok) {
                                 const asr = await res.json();
                                 setTranscribing(false);
-                                await correct(asr.parakeet || '', asr.qwen || '');
+                                await correct(
+                                    asr.parakeet || '',
+                                    asr.qwen || '',
+                                    bytesToBase64(new Uint8Array(wavBytes)),
+                                );
                             } else { setTranscribing(false); }
                         } catch (e) { console.error(e); setTranscribing(false); }
                     };
@@ -5836,6 +6070,28 @@
             const manualCorrect = () => {
                 if (!input.trim()) return;
                 correct('', input.trim());
+            };
+
+            const runBakeoff = async () => {
+                setRunningBakeoff(true);
+                try {
+                    const next = await api('/api/correct-prototype/bakeoff', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            source: bakeoffSource,
+                            limit: Math.max(1, Math.min(250, Number(bakeoffLimit) || 150)),
+                            use_model_reranker: usePrototypeReranker,
+                            use_current_adapters: true,
+                            use_prototype_adapters: false,
+                        }),
+                    });
+                    setBakeoff(next);
+                    setBakeoffDetails({});
+                    setLoadingBakeoffDetails({});
+                } catch (e) {
+                    setBakeoff({error: e.message});
+                }
+                setRunningBakeoff(false);
             };
 
             return (
@@ -5860,11 +6116,37 @@
                                 style={recording ? {borderColor: 'var(--danger)', color: 'var(--danger)', background: 'rgba(248,81,73,0.1)'} : {}}>
                                 {recording ? 'Stop' : transcribing ? 'Transcribing\u2026' : correcting ? 'Correcting\u2026' : 'Record'}
                             </button>
-                            <span style={{color: 'var(--text-muted)', fontSize: 11}}>or</span>
+                                <span style={{color: 'var(--text-muted)', fontSize: 11}}>or</span>
                             <input value={input} onChange={e => setInput(e.target.value)} placeholder="Type ASR text to correct..."
                                 style={{flex: 1}} onKeyDown={e => { if (e.key === 'Enter') manualCorrect(); }} />
                             <button className="stage-launch-btn" onClick={manualCorrect} disabled={!input.trim() || correcting}>
                                 Correct
+                            </button>
+                            <label style={{display:'flex', alignItems:'center', gap:6, fontSize:12, color:'var(--text-muted)'}}>
+                                <input type="checkbox" checked={usePrototypeReranker} onChange={e => setUsePrototypeReranker(e.target.checked)} />
+                                prototype model judge
+                            </label>
+                            <label style={{display:'flex', alignItems:'center', gap:6, fontSize:12, color:'var(--text-muted)'}}>
+                                source
+                                <select value={bakeoffSource} onChange={e => setBakeoffSource(e.target.value)} style={{width:100}}>
+                                    <option value="human">human</option>
+                                    <option value="corpus">corpus</option>
+                                </select>
+                            </label>
+                            <label style={{display:'flex', alignItems:'center', gap:6, fontSize:12, color:'var(--text-muted)'}}>
+                                bakeoff
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max="250"
+                                    step="1"
+                                    value={bakeoffLimit}
+                                    onChange={e => setBakeoffLimit(e.target.value)}
+                                    style={{width:72}}
+                                />
+                            </label>
+                            <button className="stage-launch-btn" onClick={runBakeoff} disabled={runningBakeoff || correcting || transcribing}>
+                                {runningBakeoff ? 'Running bakeoff…' : 'Bakeoff'}
                             </button>
                         </div>
                         {result && (
@@ -5884,12 +6166,458 @@
                                         <div style={{flex: 1}}>{result.qwen}</div>
                                     </div>
                                 )}
-                                <div style={{marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(88,166,255,0.1)'}}>
-                                    <div style={demoRowStyle}>
-                                        <span style={{...demoRowLabelStyle, color: 'var(--success)'}}>Corrected qwen</span>
-                                        <div style={{flex: 1}}>{renderCorrectedDiff(result.qwen, result.corrected)}</div>
+                                {result.error ? (
+                                    <div style={{marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(88,166,255,0.1)', color: 'var(--danger)'}}>
+                                        {result.error}
+                                    </div>
+                                ) : (
+                                    <div style={{marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(88,166,255,0.1)', display:'grid', gap:10}}>
+                                        <div style={demoRowStyle}>
+                                            <span style={{...demoRowLabelStyle, color: 'var(--success)'}}>Current</span>
+                                            <div style={{flex: 1}}>
+                                                {renderCorrectedDiff(result.qwen, result.baseline?.corrected)}
+                                                {renderTiming(result.baseline?.timing)}
+                                            </div>
+                                        </div>
+                                        <div style={demoRowStyle}>
+                                            <span style={{...demoRowLabelStyle, color: '#e3b341'}}>Prototype</span>
+                                            <div style={{flex: 1}}>
+                                                {renderCorrectedDiff(result.qwen, result.prototype?.corrected)}
+                                                {renderTiming(result.prototype?.reranker?.result?.timing)}
+                                            </div>
+                                        </div>
+                                        {result.prototype?.accepted?.length > 0 && (
+                                            <div style={demoRowStyle}>
+                                                <span style={{...demoRowLabelStyle, color: '#e3b341'}}>Accepted</span>
+                                                <div style={{flex:1, display:'flex', flexWrap:'wrap', gap:8}}>
+                                                    {result.prototype.accepted.map((edit, idx) => (
+                                                        <span key={idx} style={{padding:'2px 8px', borderRadius:999, background:'rgba(227,179,65,0.12)', border:'1px solid rgba(227,179,65,0.25)'}}>
+                                                            {edit.from} → {edit.to}
+                                                            {edit.acoustic_score != null && (
+                                                                <span style={{marginLeft:6, color:'#7ee787'}}>a {edit.acoustic_score.toFixed(2)}</span>
+                                                            )}
+                                                            {edit.acoustic_delta != null && (
+                                                                <span style={{marginLeft:6, color: edit.acoustic_delta >= 0 ? '#7ee787' : '#ff7b72'}}>
+                                                                    Δ {edit.acoustic_delta.toFixed(2)}
+                                                                </span>
+                                                            )}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                        {result.prototype?.proposals?.length > 0 && (
+                                            <div style={demoRowStyle}>
+                                                <span style={{...demoRowLabelStyle, color: '#58a6ff'}}>Top proposals</span>
+                                                <div style={{flex:1, display:'grid', gap:6}}>
+                                                    {result.prototype.proposals.slice(0, 5).map((proposal, idx) => (
+                                                        <div key={idx} style={{padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.06)'}}>
+                                                            <div><strong>{proposal.raw_text}</strong></div>
+                                                            {proposal.phonemes && (
+                                                                <div style={{fontSize:12, color:'#c297ff', marginTop:2}}>
+                                                                    / {proposal.phonemes} /
+                                                                </div>
+                                                            )}
+                                                            <div style={{fontSize:12, color:'var(--text-muted)'}}>
+                                                                {proposal.candidates.slice(0, 3).map((candidate, cidx) => (
+                                                                    <span key={cidx} style={{display:'inline-block', marginRight:12, marginTop:4}}>
+                                                                        <span>{candidate.term} ({candidate.via}, {candidate.score.toFixed(2)})</span>
+                                                                        {candidate.phonetic_score != null && (
+                                                                            <span style={{marginLeft:6, color:'#c297ff'}}>phon {candidate.phonetic_score.toFixed(2)}</span>
+                                                                        )}
+                                                                        {candidate.acoustic_score != null && (
+                                                                            <span style={{marginLeft:6, color:'#7ee787'}}>acoustic {candidate.acoustic_score.toFixed(2)}</span>
+                                                                        )}
+                                                                        {candidate.acoustic_delta != null && (
+                                                                            <span style={{marginLeft:6, color: candidate.acoustic_delta >= 0 ? '#7ee787' : '#ff7b72'}}>
+                                                                                Δ {candidate.acoustic_delta.toFixed(2)}
+                                                                            </span>
+                                                                        )}
+                                                                        {candidate.phonemes && (
+                                                                            <span style={{display:'block', color:'#c297ff'}}>/ {candidate.phonemes} /</span>
+                                                                        )}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                        {result.prototype?.reranker && (
+                                            <div style={demoRowStyle}>
+                                                <span style={{...demoRowLabelStyle, color: '#c297ff'}}>Reranker</span>
+                                                <div style={{flex:1}}>
+                                                    chose {result.prototype.reranker.chosen_index != null ? String.fromCharCode(65 + result.prototype.reranker.chosen_index) : '(unparsed)'}
+                                                    {result.prototype.reranker?.chosen_label && (
+                                                        <span style={{marginLeft:8, color:'var(--text-muted)'}}>
+                                                            {result.prototype.reranker.chosen_label}
+                                                        </span>
+                                                    )}
+                                                    {result.prototype.reranker?.chosen_text && (
+                                                        <div style={{fontSize:12, marginTop:4}}>
+                                                            {result.prototype.reranker.chosen_text}
+                                                        </div>
+                                                    )}
+                                                    {Array.isArray(result.prototype.reranker?.candidates) && (
+                                                        <div style={{fontSize:12, color:'var(--text-muted)', marginTop:4}}>
+                                                            {result.prototype.reranker.candidates.map(c => (
+                                                                <div key={c.index}>
+                                                                    {String.fromCharCode(65 + c.index)} yes {Number(c.yes_prob ?? 0).toFixed(3)} no {Number(c.no_prob ?? 0).toFixed(3)}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {bakeoff && (
+                            <div style={{padding: '14px 16px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: '1px solid rgba(88,166,255,0.1)', fontSize: 13, lineHeight: 1.6, width:'100%', maxWidth:'100%', overflowX:'hidden', boxSizing:'border-box'}}>
+                                <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom:12}}>
+                                    <div>
+                                        <div style={{fontSize:12, textTransform:'uppercase', letterSpacing:'0.5px', color:'var(--text-muted)'}}>Prototype Bakeoff</div>
+                                        <div style={{fontSize:13, color:'var(--text-muted)'}}>
+                                            {bakeoff.source === 'human'
+                                                ? `Top ${bakeoff.limit || bakeoff.summary?.n || 0} cached human takes, scored on target fragments`
+                                                : `Top ${bakeoff.limit || bakeoff.summary?.n || 0} high-hit corpus mistakes, scored on full spliced sentences`}
+                                        </div>
+                                        {bakeoff.source === 'human' && (
+                                            <div style={{fontSize:12, color:'var(--text-muted)', marginTop:2}}>
+                                                Full-sentence exactness is shown per row as secondary detail.
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
+                                {bakeoff.error ? (
+                                    <div style={{color:'var(--danger)'}}>{bakeoff.error}</div>
+                                ) : (
+                                    <>
+                                        <div style={{display:'grid', gridTemplateColumns:'repeat(6, minmax(0, 1fr))', gap:10, marginBottom:14}}>
+                                            {[
+                                                ['Baseline', (bakeoff.source === 'human' && bakeoff.target_summary ? bakeoff.target_summary : bakeoff.summary)?.baseline, '#8b949e'],
+                                                ['Current', (bakeoff.source === 'human' && bakeoff.target_summary ? bakeoff.target_summary : bakeoff.summary)?.current, 'var(--success)'],
+                                                ['Prototype', (bakeoff.source === 'human' && bakeoff.target_summary ? bakeoff.target_summary : bakeoff.summary)?.prototype, '#e3b341'],
+                                                ['Proto only', (bakeoff.source === 'human' && bakeoff.target_summary ? bakeoff.target_summary : bakeoff.summary)?.prototype_only, '#58a6ff'],
+                                                ['Current only', (bakeoff.source === 'human' && bakeoff.target_summary ? bakeoff.target_summary : bakeoff.summary)?.current_only, '#c297ff'],
+                                                ['Both wrong', (bakeoff.source === 'human' && bakeoff.target_summary ? bakeoff.target_summary : bakeoff.summary)?.both_wrong, 'var(--danger)'],
+                                            ].map(([label, value, color]) => (
+                                                <div key={label} style={{padding:'10px 12px', borderRadius:8, background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.06)'}}>
+                                                    <div style={{fontSize:11, textTransform:'uppercase', letterSpacing:'0.5px', color:'var(--text-muted)'}}>{label}</div>
+                                                    <div style={{fontSize:28, fontWeight:800, color, lineHeight:1.1, marginTop:4}}>{value ?? 0}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <div style={{display:'grid', gap:8, width:'100%', minWidth:0}}>
+                                            {bakeoff.entries?.map((entry, idx) => {
+                                                const entryKey = `${bakeoff.source || bakeoffSource}:${entry.recording_id || `${entry.term}:${idx}`}`;
+                                                const detail = bakeoffDetails[entryKey];
+                                                const sentenceVerdict = entry.prototype_ok && !entry.current_ok
+                                                    ? {label:'prototype win', color:'#58a6ff'}
+                                                    : entry.current_ok && !entry.prototype_ok
+                                                        ? {label:'current win', color:'#c297ff'}
+                                                        : entry.current_ok && entry.prototype_ok
+                                                            ? {label:'both ok', color:'var(--success)'}
+                                                            : {label:'both wrong', color:'var(--danger)'};
+                                                const targetVerdict = entry.prototype_target_ok && !entry.current_target_ok
+                                                    ? {label:'target: prototype', color:'#58a6ff'}
+                                                    : entry.current_target_ok && !entry.prototype_target_ok
+                                                        ? {label:'target: current', color:'#c297ff'}
+                                                        : entry.current_target_ok && entry.prototype_target_ok
+                                                            ? {label:'target: both ok', color:'var(--success)'}
+                                                            : {label:'target: both wrong', color:'var(--danger)'};
+                                                const playbackLabel = bakeoffPlayback?.entryKey === entryKey
+                                                    ? (bakeoffPlayback.playing ? 'Pause' : 'Resume')
+                                                    : 'Play';
+                                                return (
+                                                    <div key={idx} style={{padding:'10px 12px', borderRadius:8, background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.06)', width:'100%', maxWidth:'100%', minWidth:0, overflowX:'hidden', boxSizing:'border-box'}}>
+                                                        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom:6}}>
+                                                            <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+                                                                <div style={{fontWeight:700}}>{entry.term} <span style={{fontWeight:400, color:'var(--text-muted)'}}>({entry.hit_count} hits)</span></div>
+                                                                {entry.recording_id && !detail && (
+                                                                    <button
+                                                                        className="btn"
+                                                                        onClick={() => playBakeoffRecording(entryKey, entry)}
+                                                                        style={bakeoffActionBtnStyle}
+                                                                    >
+                                                                        {playbackLabel}
+                                                                    </button>
+                                                                )}
+                                                                {entry.recording_id && (
+                                                                    <button
+                                                                        className="btn"
+                                                                        onClick={() => loadBakeoffDetail(entryKey, entry)}
+                                                                        style={bakeoffActionBtnStyle}
+                                                                        disabled={!!loadingBakeoffDetails[entryKey]}
+                                                                    >
+                                                                        {detail ? 'Reload' : loadingBakeoffDetails[entryKey] ? 'Loading…' : 'Details'}
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                            {bakeoff.source === 'human' ? (
+                                                                <span style={{padding:'2px 8px', borderRadius:999, border:`1px solid ${targetVerdict.color}55`, color:targetVerdict.color, background:`${targetVerdict.color}12`, fontSize:12}}>{targetVerdict.label}</span>
+                                                            ) : (
+                                                                <span style={{padding:'2px 8px', borderRadius:999, border:`1px solid ${sentenceVerdict.color}55`, color:sentenceVerdict.color, background:`${sentenceVerdict.color}12`, fontSize:12}}>{sentenceVerdict.label}</span>
+                                                            )}
+                                                        </div>
+                                                        <div style={{display:'grid', gap:8, fontSize:13, width:'100%', minWidth:0}}>
+                                                            {bakeoff.source === 'human' && (
+                                                                <div style={{fontSize:12, color:'var(--text-muted)'}}>
+                                                                    Full sentence: <span style={{color:sentenceVerdict.color}}>{sentenceVerdict.label}</span>
+                                                                </div>
+                                                            )}
+                                                            {entry.template_sentence && (
+                                                                <div><span style={{color:'var(--text-muted)', width:80, display:'inline-block'}}>Template</span>{entry.template_sentence}</div>
+                                                            )}
+                                                            {entry.qwen_fragment && (
+                                                                <div style={{padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)'}}>
+                                                                    <div><span style={{color:'var(--text-muted)', width:80, display:'inline-block'}}>Fragment</span>{entry.qwen_fragment} → {entry.expected_fragment}</div>
+                                                                    {(entry.qwen_fragment_phonemes || entry.expected_fragment_phonemes) && (
+                                                                        <div style={{fontSize:12, color:'#c297ff', marginTop:4, paddingLeft:80}}>
+                                                                            {entry.qwen_fragment_phonemes && <div>{entry.qwen_fragment} / {entry.qwen_fragment_phonemes} /</div>}
+                                                                            {entry.expected_fragment_phonemes && <div>{entry.expected_fragment} / {entry.expected_fragment_phonemes} /</div>}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                            <div>
+                                                                <div style={{color:'var(--text-muted)', marginBottom:2}}>Qwen</div>
+                                                                <div>{entry.qwen}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div style={{color:'var(--text-muted)', marginBottom:2}}>Expected</div>
+                                                                <div>{renderCorrectedDiff(entry.qwen, entry.expected)}</div>
+                                                            </div>
+                                                            {entry.expected_fragment && (
+                                                                <div style={{padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)'}}>
+                                                                    <div style={{color:'var(--text-muted)', marginBottom:4}}>Target term verdict</div>
+                                                                    <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:6}}>
+                                                                        <span style={{fontSize:12, color:'var(--text-muted)'}}>expected fragment</span>
+                                                                        <span style={{fontFamily:'ui-monospace, SFMono-Regular, Menlo, monospace'}}>{entry.expected_fragment}</span>
+                                                                    </div>
+                                                                    <div style={{display:'grid', gap:4, fontSize:12}}>
+                                                                        <div><span style={{color:'var(--text-muted)', width:72, display:'inline-block'}}>Qwen</span>{entry.baseline_target_ok ? 'ok' : 'wrong'}</div>
+                                                                        <div><span style={{color:'var(--text-muted)', width:72, display:'inline-block'}}>Current</span>{entry.current_target_ok ? 'ok' : 'wrong'}</div>
+                                                                        <div><span style={{color:'var(--text-muted)', width:72, display:'inline-block'}}>Prototype</span>{entry.prototype_target_ok ? 'ok' : 'wrong'}</div>
+                                                                    </div>
+                                                                </div>
+                                                            )}
+                                                            <div>
+                                                                <div style={{color:'var(--success)', marginBottom:2}}>Current</div>
+                                                                <div>{renderCorrectedDiff(entry.qwen, entry.current)}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div style={{color:'#e3b341', marginBottom:2}}>Prototype</div>
+                                                                <div>{renderCorrectedDiff(entry.qwen, entry.prototype)}</div>
+                                                            </div>
+                                                            {entry.prototype_accepted?.length > 0 && (
+                                                                <div style={{padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)'}}>
+                                                                    <div style={{color:'#e3b341', marginBottom:6}}>Prototype accepted edits</div>
+                                                                    <div style={{display:'grid', gap:6}}>
+                                                                        {entry.prototype_accepted.map((edit, eidx) => (
+                                                                            <div key={eidx}>
+                                                                                <div>
+                                                                                    {edit.from} → {edit.to} <span style={{color:'var(--text-muted)'}}>({edit.via}, {Number(edit.score).toFixed(2)})</span>
+                                                                                    {edit.acoustic_score != null && <span style={{marginLeft:6, color:'#7ee787'}}>a {Number(edit.acoustic_score).toFixed(2)}</span>}
+                                                                                    {edit.acoustic_delta != null && (
+                                                                                        <span style={{marginLeft:6, color: edit.acoustic_delta >= 0 ? '#7ee787' : '#ff7b72'}}>
+                                                                                            Δ {Number(edit.acoustic_delta).toFixed(2)}
+                                                                                        </span>
+                                                                                    )}
+                                                                                </div>
+                                                                                {(edit.from_phonemes || edit.to_phonemes) && (
+                                                                                    <div style={{fontSize:12, color:'#c297ff', marginTop:2}}>
+                                                                                        {edit.from_phonemes && <div>{edit.from} / {edit.from_phonemes} /</div>}
+                                                                                        {edit.to_phonemes && <div>{edit.to} / {edit.to_phonemes} /</div>}
+                                                                                    </div>
+                                                                                )}
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                </div>
+                                                            )}
+                                                            {detail && (
+                                                                <div style={{padding:'10px 12px', borderRadius:6, background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)', width:'100%', maxWidth:'100%', minWidth:0, overflowX:'hidden', boxSizing:'border-box'}}>
+                                                                    {detail.error ? (
+                                                                        <div style={{color:'var(--danger)'}}>{detail.error}</div>
+                                                                    ) : (
+                                                                        (() => {
+                                                                            const al = detail.alignments || {};
+                                                                            const pt = detail.prototype_trace || {};
+                                                                            const zoom = bakeoffTimelineZoom[entryKey] || 220;
+                                                                            const zipaByQwen = al.zipa_qwen?.length ? al.zipa_qwen : buildGroupedPhoneLane(al.zipa, al.qwen, 'Qwen');
+                                                                            const allItems = [
+                                                                                ...(al.zipa || []),
+                                                                                ...zipaByQwen,
+                                                                                ...(al.expected || []),
+                                                                                ...(al.qwen || []),
+                                                                                ...(al.current || []),
+                                                                                ...(al.prototype || []),
+                                                                            ];
+                                                                            const maxTime = allItems.length ? Math.max(...allItems.map(a => a.e || 0)) : 1;
+                                                                            const timelineWidth = Math.max(720, Math.ceil(Math.max(maxTime || 1, 0.001) * zoom));
+                                                                            return (
+                                                                                <>
+                                                                                    {pt.proposals?.length > 0 && (
+                                                                                        <div style={{display:'grid', gap:8, marginBottom:10}}>
+                                                                                            <div style={{fontSize:12, textTransform:'uppercase', letterSpacing:'0.5px', color:'var(--text-muted)'}}>Prototype trace</div>
+                                                                                            <div style={{display:'grid', gap:6}}>
+                                                                                                {pt.proposals.slice(0, 5).map((proposal, pidx) => (
+                                                                                                    <div key={pidx} style={{padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.05)'}}>
+                                                                                                        <div><strong>{proposal.raw_text}</strong></div>
+                                                                                                        <div style={{fontSize:12, color:'var(--text-muted)', marginTop:2}}>
+                                                                                                            Qwen span
+                                                                                                            {proposal.acoustic_window_start_sec != null && proposal.acoustic_window_end_sec != null && (
+                                                                                                                <span style={{marginLeft:8}}>
+                                                                                                                    {proposal.acoustic_window_start_sec.toFixed(2)}s–{proposal.acoustic_window_end_sec.toFixed(2)}s
+                                                                                                                </span>
+                                                                                                            )}
+                                                                                                        </div>
+                                                                                                        <div style={{display:'grid', gap:2, fontSize:12, marginTop:4}}>
+                                                                                                            {proposal.phonemes && (
+                                                                                                                <div>
+                                                                                                                    <span style={{color:'var(--text-muted)', display:'inline-block', width:140}}>Qwen span G2P</span>
+                                                                                                                    <span style={{color:'#c297ff'}}>/ {proposal.phonemes} /</span>
+                                                                                                                </div>
+                                                                                                            )}
+                                                                                                            {proposal.acoustic_phonemes && (
+                                                                                                                <div>
+                                                                                                                    <span style={{color:'var(--text-muted)', display:'inline-block', width:140}}>ZIPA over that window</span>
+                                                                                                                    <span style={{color:'#c297ff'}}>/ {proposal.acoustic_phonemes} /</span>
+                                                                                                                </div>
+                                                                                                            )}
+                                                                                                        </div>
+                                                                                                        <div style={{fontSize:12, color:'var(--text-muted)', marginTop:4}}>
+                                                                                                            {proposal.candidates.slice(0, 3).map((candidate, cidx) => (
+                                                                                                                <div key={cidx} style={{marginTop:6}}>
+                                                                                                                    <div>
+                                                                                                                        <span>{candidate.term} ({candidate.via}, {Number(candidate.score).toFixed(2)})</span>
+                                                                                                                    </div>
+                                                                                                                    {candidate.phonemes && (
+                                                                                                                        <div style={{marginTop:2}}>
+                                                                                                                            <span style={{color:'var(--text-muted)', display:'inline-block', width:140}}>candidate G2P</span>
+                                                                                                                            <span style={{color:'#c297ff'}}>/ {candidate.phonemes} /</span>
+                                                                                                                        </div>
+                                                                                                                    )}
+                                                                                                                    {candidate.phonetic_score != null && <span style={{marginLeft:6, color:'#c297ff'}}>phon {Number(candidate.phonetic_score).toFixed(2)}</span>}
+                                                                                                                    {candidate.acoustic_score != null && <span style={{marginLeft:6, color:'#7ee787'}}>a {Number(candidate.acoustic_score).toFixed(2)}</span>}
+                                                                                                                    {candidate.acoustic_delta != null && (
+                                                                                                                        <span style={{marginLeft:6, color: candidate.acoustic_delta >= 0 ? '#7ee787' : '#ff7b72'}}>
+                                                                                                                            Δ {Number(candidate.acoustic_delta).toFixed(2)}
+                                                                                                                        </span>
+                                                                                                                    )}
+                                                                                                                </div>
+                                                                                                            ))}
+                                                                                                        </div>
+                                                                                                    </div>
+                                                                                                ))}
+                                                                                            </div>
+                                                                                            {pt.sentence_candidates?.length > 0 && (
+                                                                                                <div style={{padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.05)'}}>
+                                                                                                    <div style={{color:'var(--text-muted)', marginBottom:6}}>Sentence candidates</div>
+                                                                                                    <div style={{display:'grid', gap:6, fontSize:12}}>
+                                                                                                        {pt.sentence_candidates.slice(0, 8).map((candidate, cidx) => (
+                                                                                                            <div key={cidx}>
+                                                                                                                <div><strong>{String.fromCharCode(65 + cidx)}.</strong> <span style={{color:'var(--text-muted)'}}>{candidate.label}</span> <span style={{marginLeft:6, color:'#e3b341'}}>score {Number(candidate.score).toFixed(2)}</span></div>
+                                                                                                                <div>{candidate.text}</div>
+                                                                                                            </div>
+                                                                                                        ))}
+                                                                                                    </div>
+                                                                                                </div>
+                                                                                            )}
+                                                                                            {pt.reranker && (
+                                                                                                <div style={{padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.05)', fontSize:12}}>
+                                                                                                    <div style={{color:'var(--text-muted)', marginBottom:6}}>Reranker</div>
+                                                                                                    <div>chose {pt.reranker.chosen_index != null ? String.fromCharCode(65 + pt.reranker.chosen_index) : '(unparsed)'}{pt.reranker.chosen_label ? <span style={{marginLeft:8, color:'var(--text-muted)'}}>{pt.reranker.chosen_label}</span> : null}</div>
+                                                                                                    {pt.reranker.chosen_text && <div style={{marginTop:4}}>{pt.reranker.chosen_text}</div>}
+                                                                                                    {Array.isArray(pt.reranker.candidates) && (
+                                                                                                        <div style={{display:'grid', gap:4, marginTop:6}}>
+                                                                                                            {pt.reranker.candidates.map(candidate => (
+                                                                                                                <div key={candidate.index} style={{color:'var(--text-muted)'}}>
+                                                                                                                    {String.fromCharCode(65 + candidate.index)} yes {Number(candidate.yes_prob ?? 0).toFixed(3)} no {Number(candidate.no_prob ?? 0).toFixed(3)} <span style={{marginLeft:6}}>heur {Number(candidate.heuristic_score ?? 0).toFixed(2)}</span>
+                                                                                                                </div>
+                                                                                                            ))}
+                                                                                                        </div>
+                                                                                                    )}
+                                                                                                </div>
+                                                                                            )}
+                                                                                        </div>
+                                                                                    )}
+                                                                                    <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom:8, flexWrap:'wrap'}}>
+                                                                                        <div style={{display:'flex', alignItems:'center', gap:6, flexShrink:0, flexWrap:'wrap', justifyContent:'flex-start'}}>
+                                                                                            {entry.recording_id && (
+                                                                                                <button
+                                                                                                    className="btn"
+                                                                                                    onClick={() => playBakeoffRecording(entryKey, entry)}
+                                                                                                    style={bakeoffActionBtnStyle}
+                                                                                                >
+                                                                                                    {playbackLabel}
+                                                                                                </button>
+                                                                                            )}
+                                                                                            {entry.recording_id && (
+                                                                                                <button
+                                                                                                    className="btn"
+                                                                                                    onClick={() => loadBakeoffDetail(entryKey, entry)}
+                                                                                                    style={bakeoffActionBtnStyle}
+                                                                                                    disabled={!!loadingBakeoffDetails[entryKey]}
+                                                                                                >
+                                                                                                    {loadingBakeoffDetails[entryKey] ? 'Loading…' : 'Reload'}
+                                                                                                </button>
+                                                                                            )}
+                                                                                            <span style={{fontSize:11, color:'var(--text-muted)'}}>zoom</span>
+                                                                                            {[140, 220, 320, 480].map(level => (
+                                                                                                <button
+                                                                                                    key={level}
+                                                                                                    onClick={() => setBakeoffTimelineZoom(prev => ({...prev, [entryKey]: level}))}
+                                                                                                    style={{
+                                                                                                        padding:'2px 8px',
+                                                                                                        borderRadius:999,
+                                                                                                        border:'1px solid rgba(255,255,255,0.12)',
+                                                                                                        background: zoom === level ? 'rgba(88,166,255,0.16)' : 'rgba(255,255,255,0.03)',
+                                                                                                        color: zoom === level ? '#58a6ff' : 'var(--text-muted)',
+                                                                                                        fontSize:11,
+                                                                                                    }}
+                                                                                                >
+                                                                                                    {Math.round(level / 100 * 10) / 10}x
+                                                                                                </button>
+                                                                                            ))}
+                                                                                        </div>
+                                                                                        {detail.zipa_trace?.timing_ms ? (
+                                                                                            <div style={{fontSize:11, color:'var(--text-muted)', flex:'1 1 320px', textAlign:'right'}}>
+                                                                                                ZIPA total {formatMs(detail.zipa_trace.timing_ms.total)}{' '}
+                                                                                                build {formatMs(detail.zipa_trace.timing_ms.build_session)}{' '}
+                                                                                                feats {formatMs(detail.zipa_trace.timing_ms.feature_extract)}{' '}
+                                                                                                infer {formatMs(detail.zipa_trace.timing_ms.infer)}
+                                                                                            </div>
+                                                                                        ) : <div style={{flex:'1 1 320px'}} />}
+                                                                                    </div>
+                                                                                    <div style={{width:'100%', maxWidth:'100%', minWidth:0, overflowX:'auto', overflowY:'hidden', paddingBottom:4}}>
+                                                                                        {renderBakeoffTL('ZIPA', al.zipa, 'rgba(194,151,255,0.72)', maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
+                                                                                        {renderBakeoffTL('ZIPA@Qwen', zipaByQwen, 'rgba(171,132,245,0.72)', maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
+                                                                                        {renderBakeoffTL('Expected', al.expected, 'rgba(88,166,255,0.6)', maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
+                                                                                        {renderBakeoffTL('Qwen', al.qwen, 'rgba(210,153,34,0.7)', maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
+                                                                                        {renderBakeoffTL('Current', al.current, 'rgba(126,231,135,0.7)', maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
+                                                                                        {renderBakeoffTL('Prototype', al.prototype, 'rgba(227,179,65,0.78)', maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
+                                                                                        <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'var(--text-muted)',marginTop:3,paddingLeft:71,width:timelineWidth}}>
+                                                                                            <span>0s</span><span>{maxTime.toFixed(1)}s</span>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                </>
+                                                                            );
+                                                                        })()
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </>
+                                )}
                             </div>
                         )}
                     </div>
@@ -5910,6 +6638,8 @@
             const [trainBatch, setTrainBatch] = useState(defaultTrainPreset.batch);
             const [trainLayers, setTrainLayers] = useState(defaultTrainPreset.layers);
             const [trainModel, setTrainModel] = useState(defaultTrainPreset.model);
+            const [trainDataDir, setTrainDataDir] = useState(defaultTrainPreset.data);
+            const [trainAdaptersDir, setTrainAdaptersDir] = useState(defaultTrainPreset.adapters);
             const [prepareTotalExamples, setPrepareTotalExamples] = useState(12000);
             const [prepareErrorRate, setPrepareErrorRate] = useState(25);
             // Vocab scan config
@@ -6135,6 +6865,8 @@
             };
 
             const applyTrainPreset = preset => {
+                setTrainDataDir(preset.data);
+                setTrainAdaptersDir(preset.adapters);
                 setTrainModel(preset.model);
                 setTrainIters(preset.iters);
                 setTrainBatch(preset.batch);
@@ -6156,6 +6888,7 @@
             const s2 = stageState('prepare', status.training_data_exists, status.corpus_exists);
             const s3 = stageState('train', status.adapters_exist, status.training_data_exists);
             const s4 = stageState('eval', false, status.adapters_exist && status.corpus_exists);
+            const pipelineTrainDatasetReady = trainDataDir !== 'training/data' || !!status.training_data_exists;
 
             const cardClass = (state, type) => {
                 let c = 'stage-card';
@@ -6321,7 +7054,7 @@
                                             className="stage-launch-btn"
                                             style={{
                                                 padding:'6px 10px',
-                                                background: trainModel === preset.model && trainIters === preset.iters && trainBatch === preset.batch && trainLayers === preset.layers
+                                                background: trainDataDir === preset.data && trainAdaptersDir === preset.adapters && trainModel === preset.model && trainIters === preset.iters && trainBatch === preset.batch && trainLayers === preset.layers
                                                     ? 'rgba(88,166,255,0.14)'
                                                     : 'rgba(255,255,255,0.02)',
                                             }}
@@ -6334,6 +7067,10 @@
                                 </div>
                                 <label>Model</label>
                                 <input value={trainModel} onChange={e => setTrainModel(e.target.value)} style={{width: 220}} />
+                                <label>Data</label>
+                                <input value={trainDataDir} onChange={e => setTrainDataDir(e.target.value)} style={{width: 170}} />
+                                <label>Adapters</label>
+                                <input value={trainAdaptersDir} onChange={e => setTrainAdaptersDir(e.target.value)} style={{width: 190}} />
                                 <label>Iters</label>
                                 <input type="number" value={trainIters} onChange={e => setTrainIters(parseInt(e.target.value) || defaultTrainPreset.iters)} style={{width: 60}} />
                                 <label>Batch</label>
@@ -6341,8 +7078,8 @@
                                 <label>Layers</label>
                                 <input type="number" value={trainLayers} onChange={e => setTrainLayers(parseInt(e.target.value) || defaultTrainPreset.layers)} style={{width: 40}} />
                                 <div style={{flex: 1}} />
-                                <button className="stage-launch-btn" disabled={isRunning || !status.training_data_exists}
-                                    onClick={() => startJob('train', {model: trainModel, iters: trainIters, batch_size: trainBatch, num_layers: trainLayers})}>
+                                <button className="stage-launch-btn" disabled={isRunning || !pipelineTrainDatasetReady}
+                                    onClick={() => startJob('train', {data: trainDataDir, adapters: trainAdaptersDir, model: trainModel, iters: trainIters, batch_size: trainBatch, num_layers: trainLayers})}>
                                     {rt === 'train' ? 'Running\u2026' : 'Train'}
                                 </button>
                             </div>

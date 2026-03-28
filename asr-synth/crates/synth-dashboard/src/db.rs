@@ -575,6 +575,12 @@ impl Db {
              FROM authored_sentence_recordings r
              LEFT JOIN authored_sentences a
                ON LOWER(a.term) = LOWER(r.term) AND LOWER(a.sentence) = LOWER(r.sentence)
+             WHERE EXISTS (
+               SELECT 1
+               FROM vocab v
+               WHERE LOWER(v.term) = LOWER(r.term)
+                 AND v.reviewed = 1
+             )
              ORDER BY r.created_at ASC, r.id ASC",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -1696,6 +1702,29 @@ impl Db {
         for row in rows {
             let (term, alt) = row?;
             map.entry(term.to_lowercase()).or_default().push(alt);
+        }
+        Ok(map)
+    }
+
+    /// Get all distinct Qwen confusion surfaces as a map: term -> heard surfaces.
+    pub fn get_all_qwen_confusions(&self) -> Result<HashMap<String, Vec<String>>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT term, qwen_heard
+             FROM vocab_confusions
+             WHERE qwen_match = 0
+               AND qwen_heard IS NOT NULL
+               AND TRIM(qwen_heard) != ''",
+        )?;
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (term, heard) = row?;
+            let entry = map.entry(term.to_lowercase()).or_default();
+            if !entry.iter().any(|existing| existing.eq_ignore_ascii_case(&heard)) {
+                entry.push(heard);
+            }
         }
         Ok(map)
     }

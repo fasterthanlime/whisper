@@ -124,6 +124,36 @@ const VAD_WINDOW_SIZE: usize = 160; // 10ms at 16kHz
 const VAD_SPEECH_RMS_THRESHOLD: f32 = 0.01; // ~-40dBFS
 const POST_SPEECH_SILENCE_RMS_THRESHOLD: f32 = 0.006; // ~-44dBFS
 
+#[derive(Debug, Clone, Default)]
+pub struct FeedAudioDebugInfo {
+    pub mode: &'static str,
+    pub input_samples: usize,
+    pub speech_detected_before: bool,
+    pub speech_detected_after: bool,
+    pub speech_start_offset: Option<usize>,
+    pub buffer_len_before: usize,
+    pub buffer_len_after: usize,
+    pub audio_accum_len_before: usize,
+    pub audio_accum_len_after: usize,
+    pub chunk_id_before: usize,
+    pub chunk_id_after: usize,
+    pub drop_reason: Option<&'static str>,
+    pub drained_chunk: bool,
+    pub ran_inference: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FinishStreamingDebugInfo {
+    pub buffer_len_before: usize,
+    pub buffer_len_after: usize,
+    pub audio_accum_len_before: usize,
+    pub audio_accum_len_after: usize,
+    pub chunk_id_before: usize,
+    pub chunk_id_after: usize,
+    pub flushed_remaining: bool,
+    pub returned_empty: bool,
+}
+
 impl AsrInference {
     /// Initialize a new streaming transcription session.
     pub fn init_streaming(&self, options: StreamingOptions) -> StreamingState {
@@ -152,30 +182,110 @@ impl AsrInference {
         state: &mut StreamingState,
         samples: &[f32],
     ) -> crate::Result<Option<TranscribeResult>> {
+        self.feed_audio_with_debug(state, samples)
+            .map(|(result, _debug)| result)
+    }
+
+    /// Feed audio while finalizing a session.
+    ///
+    /// Unlike normal streaming feed, this path does not drop post-speech chunks
+    /// just because they are low-energy/silent. This avoids losing late tail
+    /// words near stop-time when the final chunk RMS is diluted by padding or
+    /// trailing quiet speech.
+    pub fn feed_audio_finalizing(
+        &self,
+        state: &mut StreamingState,
+        samples: &[f32],
+    ) -> crate::Result<Option<TranscribeResult>> {
+        self.feed_audio_finalizing_with_debug(state, samples)
+            .map(|(result, _debug)| result)
+    }
+
+    pub fn feed_audio_with_debug(
+        &self,
+        state: &mut StreamingState,
+        samples: &[f32],
+    ) -> crate::Result<(Option<TranscribeResult>, FeedAudioDebugInfo)> {
+        self.feed_audio_internal(state, samples, false, "stream")
+    }
+
+    pub fn feed_audio_finalizing_with_debug(
+        &self,
+        state: &mut StreamingState,
+        samples: &[f32],
+    ) -> crate::Result<(Option<TranscribeResult>, FeedAudioDebugInfo)> {
+        self.feed_audio_internal(state, samples, true, "finalize")
+    }
+
+    fn feed_audio_internal(
+        &self,
+        state: &mut StreamingState,
+        samples: &[f32],
+        allow_post_speech_silent_chunk: bool,
+        mode: &'static str,
+    ) -> crate::Result<(Option<TranscribeResult>, FeedAudioDebugInfo)> {
+        let mut debug_info = FeedAudioDebugInfo {
+            mode,
+            input_samples: samples.len(),
+            speech_detected_before: state.speech_detected,
+            speech_detected_after: state.speech_detected,
+            speech_start_offset: None,
+            buffer_len_before: state.buffer.len(),
+            buffer_len_after: state.buffer.len(),
+            audio_accum_len_before: state.audio_accum.len(),
+            audio_accum_len_after: state.audio_accum.len(),
+            chunk_id_before: state.chunk_id,
+            chunk_id_after: state.chunk_id,
+            drop_reason: None,
+            drained_chunk: false,
+            ran_inference: false,
+        };
+
         // VAD gate: skip silent audio until we detect speech.
         // This prevents the ASR from hallucinating on background noise.
         if !state.speech_detected {
             if let Some(speech_start) = detect_speech_onset(samples) {
                 state.speech_detected = true;
                 debug!("VAD: speech detected at sample offset {speech_start}");
+                debug_info.speech_start_offset = Some(speech_start);
                 state.buffer.extend_from_slice(&samples[speech_start..]);
             }
             // Still no speech — discard these samples
             if !state.speech_detected {
-                return Ok(None);
+                debug_info.speech_detected_after = false;
+                debug_info.drop_reason = Some("pre_speech_silence");
+                debug_info.buffer_len_after = state.buffer.len();
+                debug_info.audio_accum_len_after = state.audio_accum.len();
+                debug_info.chunk_id_after = state.chunk_id;
+                return Ok((None, debug_info));
             }
         } else {
             // After speech has started, skip fully silent chunks when no partial
             // chunk is pending. This avoids sending long empty/silent tails that
             // can induce hallucinations.
-            if state.buffer.is_empty() && is_effectively_silent(samples, POST_SPEECH_SILENCE_RMS_THRESHOLD) {
-                return Ok(None);
+            if !allow_post_speech_silent_chunk
+                && state.buffer.is_empty()
+                && is_effectively_silent(samples, POST_SPEECH_SILENCE_RMS_THRESHOLD)
+            {
+                debug_info.speech_detected_after = true;
+                debug_info.drop_reason = Some("post_speech_silent_chunk");
+                debug_info.buffer_len_after = state.buffer.len();
+                debug_info.audio_accum_len_after = state.audio_accum.len();
+                debug_info.chunk_id_after = state.chunk_id;
+                return Ok((None, debug_info));
             }
             state.buffer.extend_from_slice(samples);
         }
 
-        if !try_drain_chunk(state) {
-            return Ok(None);
+        let drained_chunk = try_drain_chunk(state);
+        debug_info.drained_chunk = drained_chunk;
+        if !drained_chunk {
+            debug_info.speech_detected_after = state.speech_detected;
+            debug_info.drop_reason = Some("buffering_partial_chunk");
+            debug_info.buffer_len_after = state.buffer.len();
+            debug_info.audio_accum_len_after = state.audio_accum.len();
+            debug_info.chunk_id_after = state.chunk_id;
+            return Ok((None, debug_info));
         }
 
         // Acquire lock once for the entire step
@@ -185,8 +295,12 @@ impl AsrInference {
             .map_err(|_| AsrError::Inference(anyhow::anyhow!("mutex poisoned")))?;
 
         let result = run_streaming_step(&inner, state).map_err(AsrError::Inference)?;
-
-        Ok(Some(result))
+        debug_info.ran_inference = true;
+        debug_info.speech_detected_after = state.speech_detected;
+        debug_info.buffer_len_after = state.buffer.len();
+        debug_info.audio_accum_len_after = state.audio_accum.len();
+        debug_info.chunk_id_after = state.chunk_id;
+        Ok((Some(result), debug_info))
     }
 
     /// Finish the streaming session: flush any remaining buffered audio and run
@@ -194,12 +308,36 @@ impl AsrInference {
     ///
     /// Returns the final transcription result.
     pub fn finish_streaming(&self, state: &mut StreamingState) -> crate::Result<TranscribeResult> {
-        if !flush_remaining_buffer(state) {
-            return Ok(TranscribeResult {
-                text: String::new(),
-                language: String::new(),
-                raw_output: String::new(),
-            });
+        self.finish_streaming_with_debug(state)
+            .map(|(result, _debug)| result)
+    }
+
+    pub fn finish_streaming_with_debug(
+        &self,
+        state: &mut StreamingState,
+    ) -> crate::Result<(TranscribeResult, FinishStreamingDebugInfo)> {
+        let mut debug_info = FinishStreamingDebugInfo {
+            buffer_len_before: state.buffer.len(),
+            buffer_len_after: state.buffer.len(),
+            audio_accum_len_before: state.audio_accum.len(),
+            audio_accum_len_after: state.audio_accum.len(),
+            chunk_id_before: state.chunk_id,
+            chunk_id_after: state.chunk_id,
+            flushed_remaining: false,
+            returned_empty: false,
+        };
+
+        debug_info.flushed_remaining = flush_remaining_buffer(state);
+        if !debug_info.flushed_remaining {
+            debug_info.returned_empty = true;
+            return Ok((
+                TranscribeResult {
+                    text: String::new(),
+                    language: String::new(),
+                    raw_output: String::new(),
+                },
+                debug_info,
+            ));
         }
 
         // Acquire lock once for the entire final step
@@ -232,7 +370,11 @@ impl AsrInference {
         state.language = result.language.clone();
         state.raw_token_ids = full_ids;
 
-        Ok(result)
+        debug_info.buffer_len_after = state.buffer.len();
+        debug_info.audio_accum_len_after = state.audio_accum.len();
+        debug_info.chunk_id_after = state.chunk_id;
+
+        Ok((result, debug_info))
     }
 
     /// Override or clear the forced language for an active streaming state.

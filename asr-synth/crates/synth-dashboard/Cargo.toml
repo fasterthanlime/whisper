@@ -20,6 +20,7 @@ hound.workspace = true
 synth-textgen = { path = "../synth-textgen" }
 synth-pipeline = { path = "../synth-pipeline" }
 synth-train = { path = "../synth-train" }
+synth-corrupt = { path = "../synth-corrupt" }
 shellexpand = "3"
 rand = "0.9"
 

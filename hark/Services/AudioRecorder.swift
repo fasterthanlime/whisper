@@ -34,12 +34,12 @@ final class AudioRecorder: @unchecked Sendable {
     private var stopCaptureSamplesUntilTimeout = 0
     private var stopCaptureCompletionReason = "none"
     private var lastObservedRms: Float = 0
-    private let stopCaptureFastWaitSeconds: TimeInterval = 0.05
-    private let stopCaptureSpeechWaitSeconds: TimeInterval = 0.18
-    private let stopCaptureRequiredSilenceSeconds: TimeInterval = 0.03
+    private let stopCaptureFastWaitSeconds: TimeInterval = 0.12
+    private let stopCaptureSpeechWaitSeconds: TimeInterval = 0.28
+    private let stopCaptureRequiredSilenceSeconds: TimeInterval = 0.05
     private let stopCaptureSpeechRmsThreshold: Float = 0.012
     private let stopCaptureSilenceRmsThreshold: Float = 0.008
-    private let stopCaptureBoundaryTimeoutSeconds: TimeInterval = 0.4
+    private let stopCaptureBoundaryTimeoutSeconds: TimeInterval = 0.55
 
     private var onLevel: (@Sendable (Float) -> Void)?
     private var onSpectrum: (@Sendable ([Float]) -> Void)?
@@ -271,8 +271,11 @@ final class AudioRecorder: @unchecked Sendable {
     }
 
     /// Legacy API: Start recording from cold (initializes engine).
-    func start(onLevel: (@Sendable (Float) -> Void)? = nil) throws {
-        try warmUp(onLevel: onLevel)
+    func start(
+        onLevel: (@Sendable (Float) -> Void)? = nil,
+        onSpectrum: (@Sendable ([Float]) -> Void)? = nil
+    ) throws {
+        try warmUp(onLevel: onLevel, onSpectrum: onSpectrum)
         startCapture()
     }
 

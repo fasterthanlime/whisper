@@ -528,6 +528,15 @@ pub struct InferenceConfig {
     pub port: u16,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InferenceScoreOutput {
+    pub tokens: Vec<String>,
+    pub token_ids: Vec<u32>,
+    pub logits: Vec<f32>,
+    pub probs: Vec<f32>,
+    pub stats: InferenceStats,
+}
+
 impl Default for InferenceConfig {
     fn default() -> Self {
         Self {
@@ -743,6 +752,13 @@ fn resolve_correction_model(config: &InferenceConfig) -> Result<CorrectionModelS
             gguf_file: "Qwen3.5-2B-Q4_K_M.gguf".into(),
             tokenizer_repo: "Qwen/Qwen3.5-2B".into(),
         }),
+        "Qwen/Qwen3-Reranker-0.6B" => Ok(CorrectionModelSpec {
+            base_model,
+            family: CorrectionModelFamily::Qwen3_5,
+            gguf_repo: "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF".into(),
+            gguf_file: "qwen3-reranker-0.6b-q8_0.gguf".into(),
+            tokenizer_repo: "Qwen/Qwen3-Reranker-0.6B".into(),
+        }),
         other => anyhow::bail!("unsupported correction base model: {other}"),
     }
 }
@@ -827,9 +843,43 @@ impl InferenceServer {
         })
     }
 
+    fn infer_tokens(&mut self, prompt_tokens: &[u32]) -> Result<InferenceOutput> {
+        let started = Instant::now();
+        let generate_started = Instant::now();
+        let generation = self
+            .model_runtime
+            .generate_with_stats(prompt_tokens, self.max_tokens, 0.0, 0)?;
+        let generate_elapsed = generate_started.elapsed();
+        let raw_text = generation.text.trim().to_string();
+        Ok(InferenceOutput {
+            text: raw_text.clone(),
+            raw_text,
+            stats: InferenceStats {
+                prompt_tokens: generation.prompt_tokens,
+                output_tokens: generation.output_tokens,
+                encode_ms: 0,
+                prefill_ms: generation.prefill_ms,
+                decode_ms: generation.decode_ms,
+                generate_ms: generate_elapsed.as_millis() as u64,
+                total_ms: started.elapsed().as_millis() as u64,
+            },
+        })
+    }
+
     /// Run inference on a single prompt. Returns the corrected text.
     pub fn infer(&mut self, prompt: &str) -> Result<String> {
         Ok(self.infer_with_stats(prompt)?.text)
+    }
+
+    pub fn infer_chat_with_stats(&mut self, system: &str, user: &str) -> Result<InferenceOutput> {
+        let started = Instant::now();
+        let encode_started = Instant::now();
+        let prompt_tokens = self.model_runtime.encode_chat(system, user)?;
+        let encode_elapsed = encode_started.elapsed();
+        let mut output = self.infer_tokens(&prompt_tokens)?;
+        output.stats.encode_ms = encode_elapsed.as_millis() as u64;
+        output.stats.total_ms = started.elapsed().as_millis() as u64;
+        Ok(output)
     }
 
     pub fn infer_with_stats(&mut self, prompt: &str) -> Result<InferenceOutput> {
@@ -837,12 +887,8 @@ impl InferenceServer {
         let encode_started = Instant::now();
         let prompt_tokens = self.model_runtime.encode_text(prompt)?;
         let encode_elapsed = encode_started.elapsed();
-        let generate_started = Instant::now();
-        let generation = self
-            .model_runtime
-            .generate_with_stats(&prompt_tokens, self.max_tokens, 0.0, 0)?;
-        let generate_elapsed = generate_started.elapsed();
-        let mut text = generation.text;
+        let mut output = self.infer_tokens(&prompt_tokens)?;
+        let mut text = output.text;
 
         for marker in [
             "<|endoftext|>",
@@ -858,28 +904,61 @@ impl InferenceServer {
 
         let raw_text = text.trim().to_string();
         let sanitized = sanitize_correction_output(prompt, &raw_text);
-        let stats = InferenceStats {
-            prompt_tokens: generation.prompt_tokens,
-            output_tokens: generation.output_tokens,
-            encode_ms: encode_elapsed.as_millis() as u64,
-            prefill_ms: generation.prefill_ms,
-            decode_ms: generation.decode_ms,
-            generate_ms: generate_elapsed.as_millis() as u64,
-            total_ms: started.elapsed().as_millis() as u64,
-        };
+        output.stats.encode_ms = encode_elapsed.as_millis() as u64;
+        output.stats.total_ms = started.elapsed().as_millis() as u64;
         eprintln!(
             "[inference] infer done: prompt_tokens={} encode_ms={} prefill_ms={} decode_ms={} generate_ms={} total_ms={}",
-            stats.prompt_tokens,
-            stats.encode_ms,
-            stats.prefill_ms,
-            stats.decode_ms,
-            stats.generate_ms,
-            stats.total_ms,
+            output.stats.prompt_tokens,
+            output.stats.encode_ms,
+            output.stats.prefill_ms,
+            output.stats.decode_ms,
+            output.stats.generate_ms,
+            output.stats.total_ms,
         );
         Ok(InferenceOutput {
             text: sanitized,
             raw_text,
-            stats,
+            stats: output.stats,
+        })
+    }
+
+    pub fn score_next_tokens_with_stats(
+        &mut self,
+        prompt: &str,
+        add_special_tokens: bool,
+        candidate_tokens: &[&str],
+    ) -> Result<InferenceScoreOutput> {
+        let started = Instant::now();
+        let encode_started = Instant::now();
+        let prompt_tokens = self
+            .model_runtime
+            .encode_text_with_special_tokens(prompt, add_special_tokens)?;
+        let encode_elapsed = encode_started.elapsed();
+        let token_ids = candidate_tokens
+            .iter()
+            .map(|token| {
+                self.model_runtime
+                    .token_id(token)
+                    .ok_or_else(|| anyhow::anyhow!("tokenizer has no single token for {token:?}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let scored = self
+            .model_runtime
+            .score_next_tokens(&prompt_tokens, &token_ids)?;
+        Ok(InferenceScoreOutput {
+            tokens: candidate_tokens.iter().map(|t| (*t).to_string()).collect(),
+            token_ids,
+            logits: scored.logits,
+            probs: scored.probs,
+            stats: InferenceStats {
+                prompt_tokens: scored.prompt_tokens,
+                output_tokens: 0,
+                encode_ms: encode_elapsed.as_millis() as u64,
+                prefill_ms: scored.prefill_ms,
+                decode_ms: 0,
+                generate_ms: scored.prefill_ms,
+                total_ms: started.elapsed().as_millis() as u64,
+            },
         })
     }
 }

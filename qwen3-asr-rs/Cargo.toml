@@ -42,6 +42,9 @@ no-default-features = true
 [workspace]
 members = ["qwen3-asr-ffi"]
 
+[patch.crates-io]
+candle-nn = { path = "vendor/candle-nn" }
+
 [[example]]
 name = "transcribe"
 required-features = ["hub"]

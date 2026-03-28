@@ -4921,6 +4921,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shellexpand",
+ "synth-corrupt",
  "synth-pipeline",
  "synth-textgen",
  "synth-train",

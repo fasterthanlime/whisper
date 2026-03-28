@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::process::Command;
 use std::sync::Arc;
 
 use axum::{
@@ -25,6 +26,13 @@ struct PreparedExample {
 struct CounterexampleExample {
     sentence: String,
     weight: u32,
+}
+
+#[derive(Deserialize)]
+pub struct PrototypeRerankerPrepareBody {
+    pub corpus_limit: Option<usize>,
+    pub human_limit: Option<usize>,
+    pub max_candidates_per_row: Option<usize>,
 }
 
 fn normalize_prepare_text(text: &str) -> String {
@@ -119,6 +127,89 @@ fn counterexample_example_repeat_count(weight: u32) -> usize {
         0..=3 => 1,
         _ => 2,
     }
+}
+
+fn build_prototype_reranker_prompt(
+    qwen: &str,
+    candidate: &crate::prototype::SentenceCandidate,
+) -> String {
+    let mut prompt = format!(
+        "<task> Decide whether the candidate sentence is the correct technical correction of the ASR sentence.\n\
+<rules> Answer yes or no only. Prefer plausible repairs to reviewed vocabulary. Reject candidates that change meaning, invent terms, or apply weak edits.\n\
+<qwen> {}\n\
+<candidate> {}\n\
+<edits>",
+        qwen.trim(),
+        candidate.text.trim(),
+    );
+
+    if candidate.edits.is_empty() {
+        prompt.push_str(" none");
+    } else {
+        for edit in &candidate.edits {
+            let mut line = format!(
+                "\n- {} -> {} | via {} | score {:.2}",
+                edit.from, edit.to, edit.via, edit.score
+            );
+            if let Some(delta) = edit.acoustic_delta {
+                line.push_str(&format!(" | Δ {:.2}", delta));
+            }
+            if let Some(from) = &edit.from_phonemes {
+                line.push_str(&format!(" | from {}", from));
+            }
+            if let Some(to) = &edit.to_phonemes {
+                line.push_str(&format!(" | to {}", to));
+            }
+            prompt.push_str(&line);
+        }
+    }
+    prompt.push_str("\n<answer>");
+    prompt
+}
+
+fn load_human_prototype_items(
+    db: &crate::db::Db,
+    qwen_model_key: &str,
+    alt_spellings: &HashMap<String, Vec<String>>,
+    limit: usize,
+) -> anyhow::Result<Vec<PrototypeBakeoffItem>> {
+    let mut items = db
+        .authored_sentence_recordings_for_eval()?
+        .into_iter()
+        .filter_map(|rec| {
+            let qwen = rec.qwen_clean?;
+            if rec.qwen_clean_model.as_deref() != Some(qwen_model_key) {
+                return None;
+            }
+            let expected_fragment = rec
+                .surface_form
+                .as_deref()
+                .filter(|_| rec.kind == "counterexample")
+                .unwrap_or(&rec.term)
+                .to_string();
+            if !eval_fragment_matches(
+                alt_spellings,
+                &rec.term,
+                &expected_fragment,
+                &rec.sentence,
+            ) {
+                return None;
+            }
+            Some(PrototypeBakeoffItem {
+                term: rec.term,
+                qwen,
+                expected: rec.sentence,
+                hit_count: 1,
+                recording_id: Some(rec.id),
+                wav_path: Some(rec.wav_path),
+                template_sentence: None,
+                qwen_fragment: None,
+                expected_fragment: Some(expected_fragment),
+            })
+        })
+        .collect::<Vec<_>>();
+    items.truncate(limit);
+    Ok(items)
 }
 
 fn latest_eval_failure_term_weights(state: &AppState) -> HashMap<String, usize> {
@@ -941,6 +1032,102 @@ fn load_authored_recording_16k(path: &str) -> anyhow::Result<Vec<f32>> {
     tts::resample_to_16k(&mono, sample_rate)
 }
 
+fn write_temp_wav_16k(samples: &[f32], stem: &str) -> anyhow::Result<std::path::PathBuf> {
+    let mut path = std::env::temp_dir();
+    let unique = format!(
+        "hark_{}_{:x}_{}.wav",
+        stem,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    );
+    path.push(unique);
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(&path, spec)?;
+    for &sample in samples {
+        let clamped = sample.clamp(-1.0, 1.0);
+        writer.write_sample((clamped * i16::MAX as f32) as i16)?;
+    }
+    writer.finalize()?;
+    Ok(path)
+}
+
+fn decode_powsm_trace_from_16k(samples_16k: &[f32]) -> anyhow::Result<serde_json::Value> {
+    let temp_wav = write_temp_wav_16k(samples_16k, "powsm")?;
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/phone_decode_powsm.sh");
+    let output = Command::new("bash")
+        .arg(script)
+        .arg("--json")
+        .arg(&temp_wav)
+        .output()?;
+    let _ = std::fs::remove_file(&temp_wav);
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "phone_decode_powsm failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let stdout = String::from_utf8(output.stdout)?;
+    let line = stdout
+        .lines()
+        .rev()
+        .find(|line| line.trim_start().starts_with('{'))
+        .ok_or_else(|| anyhow::anyhow!("phone_decode_powsm produced no JSON"))?;
+    Ok(serde_json::from_str(line)?)
+}
+
+fn decode_zipa_trace_from_16k(samples_16k: &[f32]) -> anyhow::Result<serde_json::Value> {
+    let temp_wav = write_temp_wav_16k(samples_16k, "zipa")?;
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/phone_decode_zipa.sh");
+    let output = Command::new("bash")
+        .arg(script)
+        .arg("--json")
+        .arg(&temp_wav)
+        .output()?;
+    let _ = std::fs::remove_file(&temp_wav);
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "phone_decode_zipa failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let stdout = String::from_utf8(output.stdout)?;
+    let line = stdout
+        .lines()
+        .rev()
+        .find(|line| line.trim_start().starts_with('{'))
+        .ok_or_else(|| anyhow::anyhow!("phone_decode_zipa produced no JSON"))?;
+    Ok(serde_json::from_str(line)?)
+}
+
+fn phone_segments_to_alignment(phone_trace: &serde_json::Value) -> serde_json::Value {
+    let segments = phone_trace
+        .get("segments")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    serde_json::json!(segments
+        .into_iter()
+        .filter(|seg| seg.get("within_original_audio").and_then(|v| v.as_bool()).unwrap_or(true))
+        .filter_map(|seg| {
+            Some(serde_json::json!({
+                "w": seg.get("phone")?.as_str()?,
+                "s": seg.get("start_sec")?.as_f64()?,
+                "e": seg.get("end_sec")?.as_f64()?,
+                "avg_logprob": seg.get("avg_logprob").and_then(|v| v.as_f64()),
+            }))
+        })
+        .collect::<Vec<_>>())
+}
+
 pub fn spawn_authored_asr_precompute_loop(state: Arc<AppState>, notify: Arc<tokio::sync::Notify>) {
     tokio::spawn(async move {
         loop {
@@ -1408,6 +1595,20 @@ fn normalize_eval_fragment_loose(text: &str) -> String {
     normalize_eval_fragment(text).replace('-', "_")
 }
 
+fn normalized_phrase_in_candidate(candidate_norm: &str, phrase_norm: &str) -> bool {
+    let phrase_words: Vec<&str> = phrase_norm.split_whitespace().collect();
+    if phrase_words.is_empty() {
+        return false;
+    }
+    let candidate_words: Vec<&str> = candidate_norm.split_whitespace().collect();
+    if candidate_words.len() < phrase_words.len() {
+        return false;
+    }
+    candidate_words
+        .windows(phrase_words.len())
+        .any(|window| window == phrase_words)
+}
+
 fn eval_fragment_matches(
     alt_spellings: &HashMap<String, Vec<String>>,
     term: &str,
@@ -1416,16 +1617,32 @@ fn eval_fragment_matches(
 ) -> bool {
     let expected_norm = normalize_eval_fragment_loose(expected);
     let candidate_norm = normalize_eval_fragment_loose(candidate);
-    if candidate_norm == expected_norm {
+    if candidate_norm == expected_norm
+        || normalized_phrase_in_candidate(&candidate_norm, &expected_norm)
+    {
         return true;
     }
     alt_spellings
         .get(&term.to_lowercase())
         .map(|alts| {
-            alts.iter()
-                .any(|alt| normalize_eval_fragment_loose(alt) == candidate_norm)
+            alts.iter().any(|alt| {
+                let alt_norm = normalize_eval_fragment_loose(alt);
+                alt_norm == candidate_norm
+                    || normalized_phrase_in_candidate(&candidate_norm, &alt_norm)
+            })
         })
         .unwrap_or(false)
+}
+
+fn candidate_edits_supported_by_expected(
+    candidate: &crate::prototype::SentenceCandidate,
+    expected: &str,
+) -> bool {
+    let expected_norm = normalize_eval_fragment_loose(expected);
+    candidate.edits.iter().all(|edit| {
+        let to_norm = normalize_eval_fragment_loose(&edit.to);
+        !to_norm.is_empty() && normalized_phrase_in_candidate(&expected_norm, &to_norm)
+    })
 }
 
 fn splice_fragment(sentence: &str, term: &str, fragment: &str) -> String {
@@ -1538,17 +1755,19 @@ fn extract_eval_focus(
 
     let expected_norm = normalize_eval_fragment(target_fragment);
     let extracted_expected_norm = normalize_eval_fragment(&extracted.original);
-    let alignment_failed = extracted.original.trim().is_empty();
+    let extraction_failed = extracted.original.trim().is_empty();
+    let expected_fragment_mismatch = extracted_expected_norm != expected_norm;
     let overlap_asr = words_inside_range(&asr_align, term_range.0, term_range.1);
     let overlap_corrected = words_inside_range(&corrected_align, term_range.0, term_range.1);
-    let use_overlap_fallback = alignment_failed;
+    let use_overlap_fallback = extraction_failed;
     let trace = serde_json::json!({
         "target_fragment": target_fragment,
         "raw_term_range": raw_term_range.map(|(s, e)| serde_json::json!([s, e])),
         "expanded_term_range": [term_range.0, term_range.1],
         "expected_norm": expected_norm,
         "extracted_expected_norm": extracted_expected_norm,
-        "alignment_failed": alignment_failed,
+        "alignment_failed": extraction_failed,
+        "expected_fragment_mismatch": expected_fragment_mismatch,
         "used_overlap_fallback": use_overlap_fallback,
         "overlap_asr": overlap_asr,
         "overlap_corrected": overlap_corrected,
@@ -1577,7 +1796,7 @@ fn extract_eval_focus(
             extracted.cons_range
         },
         trim_info: extracted.trim_info,
-        alignment_failed: alignment_failed || extracted_expected_norm != expected_norm,
+        alignment_failed: extraction_failed,
         trace,
     })
 }
@@ -2224,6 +2443,8 @@ pub struct PrepareJobBody {
 
 #[derive(Deserialize)]
 pub struct TrainJobBody {
+    pub data: Option<String>,
+    pub adapters: Option<String>,
     pub model: Option<String>,
     pub iters: Option<usize>,
     pub batch_size: Option<usize>,
@@ -3111,6 +3332,275 @@ pub async fn api_start_prepare_job(
     Ok(Json(serde_json::json!({"job_id": job_id})).into_response())
 }
 
+pub async fn api_start_prototype_reranker_prepare_job(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PrototypeRerankerPrepareBody>,
+) -> Result<Response, AppError> {
+    check_no_running_jobs(&state)?;
+
+    let corpus_limit = body.corpus_limit.unwrap_or(4000).clamp(0, 20_000);
+    let human_limit = body.human_limit.unwrap_or(2000).clamp(0, 10_000);
+    let max_candidates_per_row = body.max_candidates_per_row.unwrap_or(6).clamp(2, 12);
+    let config_json = serde_json::json!({
+        "corpus_limit": corpus_limit,
+        "human_limit": human_limit,
+        "max_candidates_per_row": max_candidates_per_row,
+    })
+    .to_string();
+
+    let job_id = {
+        let db = state.db.lock().unwrap();
+        db.create_job("prototype-reranker-prepare", Some(&config_json))
+            .map_err(err)?
+    };
+
+    let state2 = state.clone();
+    tokio::spawn(async move {
+        let state3 = state2.clone();
+        let handle = tokio::task::spawn_blocking(move || {
+            let (corpus_items, human_items, vocab, alt_spellings, confusion_forms) = {
+                let db = state3.db.lock().unwrap();
+                let vocab = db.list_reviewed_vocab().unwrap_or_default();
+                let alt_spellings = db.get_all_alt_spellings().unwrap_or_default();
+                let confusion_forms = db.get_all_qwen_confusions().unwrap_or_default();
+
+                let mut corpus_items = db.corpus_eval_set().unwrap_or_default();
+                corpus_items.retain(|item| item.is_mistake);
+                corpus_items.sort_by(|a, b| {
+                    b.hit_count
+                        .cmp(&a.hit_count)
+                        .then_with(|| a.term.cmp(&b.term))
+                        .then_with(|| a.qwen.cmp(&b.qwen))
+                });
+                corpus_items.truncate(corpus_limit);
+                let corpus_items = corpus_items
+                    .into_iter()
+                    .map(|item| PrototypeBakeoffItem {
+                        term: item.term.clone(),
+                        qwen: splice_fragment(&item.sentence, &item.term, &item.qwen),
+                        expected: splice_fragment(&item.sentence, &item.term, &item.original),
+                        hit_count: item.hit_count,
+                        recording_id: None,
+                        wav_path: None,
+                        template_sentence: Some(item.sentence),
+                        qwen_fragment: Some(item.qwen),
+                        expected_fragment: Some(item.original),
+                    })
+                    .collect::<Vec<_>>();
+
+                let human_items = load_human_prototype_items(
+                    &db,
+                    &state3.qwen_model_key,
+                    &alt_spellings,
+                    human_limit,
+                )
+                .unwrap_or_default();
+
+                (corpus_items, human_items, vocab, alt_spellings, confusion_forms)
+            };
+
+            {
+                let db = state3.db.lock().unwrap();
+                let _ = db.append_job_log(
+                    job_id,
+                    &format!(
+                        "Preparing prototype reranker dataset from {} corpus rows + {} human rows",
+                        corpus_items.len(),
+                        human_items.len()
+                    ),
+                );
+            }
+
+            let prototype_config = crate::prototype::PrototypeConfig::default();
+            let mut examples = Vec::<serde_json::Value>::new();
+            let mut seen = HashSet::<(String, String)>::new();
+            let mut rng = rand::rng();
+            let mut source_rows = 0usize;
+            let mut rows_with_positive = 0usize;
+            let mut rows_without_positive = 0usize;
+            let mut corpus_positive_rows = 0usize;
+            let mut human_positive_rows = 0usize;
+            let mut positives = 0usize;
+            let mut negatives = 0usize;
+
+            for (source_name, items) in [("corpus", corpus_items), ("human", human_items)] {
+                for item in items {
+                    source_rows += 1;
+                    let acoustic_input = if source_name == "human" {
+                        item.wav_path.as_deref().and_then(|wav_path| {
+                            let wav = std::fs::read(wav_path).ok()?;
+                            let (mono, sample_rate) = decode_wav_mono(&wav).ok()?;
+                            let samples_16k = tts::resample_to_16k(&mono, sample_rate).ok()?;
+                            build_acoustic_input_from_samples_16k(
+                                &state3.aligner,
+                                &samples_16k,
+                                &item.qwen,
+                            )
+                        })
+                    } else {
+                        None
+                    };
+                    let acoustic_context = acoustic_input
+                        .as_ref()
+                        .map(|(qwen_alignment, _, zipa_segments, zipa_by_qwen)| {
+                            crate::prototype::AcousticContext {
+                                qwen_alignment,
+                                zipa_segments,
+                                zipa_by_qwen,
+                            }
+                        });
+                    let result = crate::prototype::prototype_correct_with_acoustics(
+                        &item.qwen,
+                        &vocab,
+                        &alt_spellings,
+                        &confusion_forms,
+                        prototype_config,
+                        acoustic_context.as_ref(),
+                    );
+
+                    let mut candidates = result
+                        .sentence_candidates
+                        .into_iter()
+                        .take(max_candidates_per_row)
+                        .collect::<Vec<_>>();
+                    candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
+
+                    let labels = candidates
+                        .iter()
+                        .map(|candidate| {
+                            let target_ok = item
+                                .expected_fragment
+                                .as_deref()
+                                .map(|fragment| {
+                                    eval_fragment_matches(
+                                        &alt_spellings,
+                                        &item.term,
+                                        fragment,
+                                        &candidate.text,
+                                    )
+                                })
+                                .unwrap_or(false);
+                            let full_ok = normalized_compare_eq(&candidate.text, &item.expected);
+                            let edits_supported =
+                                candidate_edits_supported_by_expected(candidate, &item.expected);
+                            let positive = if source_name == "human" {
+                                target_ok && edits_supported
+                            } else {
+                                full_ok
+                            };
+                            (positive, target_ok, full_ok, edits_supported)
+                        })
+                        .collect::<Vec<_>>();
+
+                    if !labels.iter().any(|(positive, _, _, _)| *positive) {
+                        rows_without_positive += 1;
+                        continue;
+                    }
+
+                    rows_with_positive += 1;
+                    if source_name == "human" {
+                        human_positive_rows += 1;
+                    } else {
+                        corpus_positive_rows += 1;
+                    }
+
+                    for (candidate, (positive, target_ok, full_ok, edits_supported)) in
+                        candidates.into_iter().zip(labels.into_iter())
+                    {
+                        let prompt = build_prototype_reranker_prompt(&item.qwen, &candidate);
+                        let completion = if positive {
+                            " yes<|endoftext|>"
+                        } else {
+                            " no<|endoftext|>"
+                        };
+                        if !seen.insert((prompt.clone(), completion.to_string())) {
+                            continue;
+                        }
+                        if positive {
+                            positives += 1;
+                        } else {
+                            negatives += 1;
+                        }
+                        examples.push(serde_json::json!({
+                            "prompt": prompt,
+                            "completion": completion,
+                            "meta": {
+                                "source": source_name,
+                                "term": item.term,
+                                "qwen": item.qwen,
+                                "expected": item.expected,
+                                "expected_fragment": item.expected_fragment,
+                                "hit_count": item.hit_count,
+                                "recording_id": item.recording_id,
+                                "candidate_text": candidate.text,
+                                "candidate_label": candidate.label,
+                                "candidate_score": candidate.score,
+                                "edits": candidate.edits,
+                                "target_ok": target_ok,
+                                "full_ok": full_ok,
+                                "edits_supported_by_expected": edits_supported,
+                                "positive": positive,
+                            }
+                        }));
+                    }
+                }
+            }
+
+            examples.shuffle(&mut rng);
+            let n = examples.len();
+            let n_train = ((n as f64) * 0.9) as usize;
+            let train = &examples[..n_train];
+            let valid = &examples[n_train..];
+
+            std::fs::create_dir_all("training/prototype-reranker").ok();
+            synth_train::write_jsonl("training/prototype-reranker/train.jsonl", train).ok();
+            synth_train::write_jsonl("training/prototype-reranker/valid.jsonl", valid).ok();
+
+            let stats = serde_json::json!({
+                "requested_corpus_limit": corpus_limit,
+                "requested_human_limit": human_limit,
+                "max_candidates_per_row": max_candidates_per_row,
+                "source_rows": source_rows,
+                "rows_with_positive": rows_with_positive,
+                "rows_without_positive": rows_without_positive,
+                "corpus_positive_rows": corpus_positive_rows,
+                "human_positive_rows": human_positive_rows,
+                "positives": positives,
+                "negatives": negatives,
+                "total": n,
+                "train_count": train.len(),
+                "valid_count": valid.len(),
+                "output_dir": "training/prototype-reranker",
+            });
+
+            let db = state3.db.lock().unwrap();
+            let _ = db.append_job_log(
+                job_id,
+                &format!(
+                    "Done: {} rows with at least one positive candidate, {} rows with none\n\
+                     Exported {} examples ({} positive / {} negative) to training/prototype-reranker ({} train / {} valid)",
+                    rows_with_positive,
+                    rows_without_positive,
+                    n,
+                    positives,
+                    negatives,
+                    train.len(),
+                    valid.len(),
+                ),
+            );
+            let _ = db.finish_job(job_id, "completed", Some(&stats.to_string()));
+        });
+
+        if let Err(e) = handle.await {
+            let db = state2.db.lock().unwrap();
+            let _ = db.append_job_log(job_id, &format!("ERROR: {e}"));
+            let _ = db.finish_job(job_id, "failed", None);
+        }
+    });
+
+    Ok(Json(serde_json::json!({"job_id": job_id})).into_response())
+}
+
 // ==================== Train ====================
 
 pub async fn api_start_train_job(
@@ -3120,6 +3610,8 @@ pub async fn api_start_train_job(
     check_no_running_jobs(&state)?;
 
     let config = synth_train::TrainConfig {
+        data: body.data.unwrap_or_else(|| "training/data".into()),
+        adapters: body.adapters.unwrap_or_else(|| "training/adapters".into()),
         model: body
             .model
             .unwrap_or_else(|| "mlx-community/Qwen3.5-2B-4bit".into()),
@@ -3131,6 +3623,8 @@ pub async fn api_start_train_job(
         ..Default::default()
     };
     let config_json = serde_json::json!({
+        "data": config.data,
+        "adapters": config.adapters,
         "model": config.model,
         "iters": config.iters,
         "batch_size": config.batch_size,
@@ -3155,8 +3649,8 @@ pub async fn api_start_train_job(
             let _ = db.append_job_log(
                 job_id,
                 &format!(
-                    "Starting training: model={}, iters={}, batch_size={}, num_layers={}, patience={}, steps_per_eval={}",
-                    config.model, config.iters, config.batch_size, config.num_layers,
+                    "Starting training: data={}, adapters={}, model={}, iters={}, batch_size={}, num_layers={}, patience={}, steps_per_eval={}",
+                    config.data, config.adapters, config.model, config.iters, config.batch_size, config.num_layers,
                     config.early_stop_patience, config.steps_per_eval
                 ),
             );
@@ -3174,7 +3668,7 @@ pub async fn api_start_train_job(
         let db = state2.db.lock().unwrap();
 
         // Compute adapter size on disk
-        let adapter_size = std::fs::read_dir("training/adapters")
+        let adapter_size = std::fs::read_dir(&config.adapters)
             .ok()
             .map(|entries| {
                 entries
@@ -3808,10 +4302,27 @@ pub async fn api_start_eval_job(
         .map_err(err)?
     };
 
+    let alt_spellings = {
+        let db = state.db.lock().unwrap();
+        db.get_all_alt_spellings().map_err(err)?
+    };
+
     // Gather eval data up front so we can validate the chosen source before spawning.
     let (recordings, synthetic_items, all_texts, overrides) = {
         let db = state.db.lock().unwrap();
-        let recordings = db.authored_sentence_recordings_for_eval().map_err(err)?;
+        let recordings = db
+            .authored_sentence_recordings_for_eval()
+            .map_err(err)?
+            .into_iter()
+            .filter(|rec| {
+                let expected_fragment = rec
+                    .surface_form
+                    .as_deref()
+                    .filter(|_| rec.kind == "counterexample")
+                    .unwrap_or(&rec.term);
+                eval_fragment_matches(&alt_spellings, &rec.term, expected_fragment, &rec.sentence)
+            })
+            .collect::<Vec<_>>();
         let synthetic_items = db.corpus_eval_set().map_err(err)?;
         let all_texts = db.all_sentence_texts().map_err(err)?;
         let overrides = db.get_spoken_overrides().map_err(err)?;
@@ -3830,11 +4341,6 @@ pub async fn api_start_eval_job(
         let _ = db.finish_job(job_id, "failed", None);
         return Ok(Json(serde_json::json!({"job_id": job_id, "error": "No human recordings. Record some takes in the Author tab first."})).into_response());
     }
-
-    let alt_spellings = {
-        let db = state.db.lock().unwrap();
-        db.get_all_alt_spellings().map_err(err)?
-    };
 
     let synthetic_mistakes: Vec<_> = synthetic_items
         .into_iter()
@@ -4647,6 +5153,86 @@ pub struct CorrectionBody {
     pub use_adapters: Option<bool>,
 }
 
+#[derive(Deserialize)]
+pub struct PrototypeCorrectionBody {
+    pub qwen: String,
+    pub audio_wav_base64: Option<String>,
+    pub max_span_tokens: Option<usize>,
+    pub max_span_proposals: Option<usize>,
+    pub max_candidates_per_span: Option<usize>,
+    pub use_model_reranker: Option<bool>,
+    pub use_adapters: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct PrototypeBakeoffBody {
+    pub source: Option<String>,
+    pub limit: Option<usize>,
+    pub use_model_reranker: Option<bool>,
+    pub use_current_adapters: Option<bool>,
+    pub use_prototype_adapters: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct PrototypeBakeoffDetailBody {
+    pub source: Option<String>,
+    pub recording_id: Option<i64>,
+    pub qwen: String,
+    pub expected: String,
+    pub current: String,
+    pub prototype: String,
+    pub use_model_reranker: Option<bool>,
+    pub use_prototype_adapters: Option<bool>,
+}
+
+#[derive(Clone)]
+struct PrototypeBakeoffItem {
+    term: String,
+    qwen: String,
+    expected: String,
+    hit_count: i64,
+    recording_id: Option<i64>,
+    wav_path: Option<String>,
+    template_sentence: Option<String>,
+    qwen_fragment: Option<String>,
+    expected_fragment: Option<String>,
+}
+
+type AcousticInput = (
+    Vec<qwen3_asr::ForcedAlignItem>,
+    serde_json::Value,
+    Vec<crate::prototype::AcousticSegment>,
+    Vec<Vec<String>>,
+);
+
+fn build_acoustic_input_from_samples_16k(
+    aligner: &crate::LazyAligner,
+    samples_16k: &[f32],
+    qwen_text: &str,
+) -> Option<AcousticInput> {
+    let qwen_alignment = aligner.align(samples_16k, qwen_text).ok()?;
+    let zipa_trace = decode_zipa_trace_from_16k(samples_16k).ok()?;
+    let zipa_segments = zipa_segments_from_trace(&zipa_trace);
+    let zipa_by_qwen =
+        crate::prototype::zipa_grouped_arpabet_by_alignment(&qwen_alignment, &zipa_segments);
+    Some((qwen_alignment, zipa_trace, zipa_segments, zipa_by_qwen))
+}
+
+fn zipa_segments_from_trace(trace: &serde_json::Value) -> Vec<crate::prototype::AcousticSegment> {
+    trace.get("segments")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|seg| {
+            Some(crate::prototype::AcousticSegment {
+                phone: seg.get("phone")?.as_str()?.to_string(),
+                start_sec: seg.get("start_sec")?.as_f64()?,
+                end_sec: seg.get("end_sec")?.as_f64()?,
+            })
+        })
+        .collect()
+}
+
 /// Run a single correction inference via a temporary server.
 /// For batch work, use the eval job which keeps the server running.
 pub async fn api_correct(
@@ -4690,6 +5276,704 @@ pub async fn api_correct(
 
     let parsed: serde_json::Value = serde_json::from_str(&result).map_err(err)?;
     Ok(Json(parsed).into_response())
+}
+
+pub async fn api_correct_prototype(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PrototypeCorrectionBody>,
+) -> Result<Response, AppError> {
+    let (vocab, alt_spellings, confusion_forms) = {
+        let db = state.db.lock().unwrap();
+        (
+            db.list_reviewed_vocab().map_err(err)?,
+            db.get_all_alt_spellings().map_err(err)?,
+            db.get_all_qwen_confusions().map_err(err)?,
+        )
+    };
+    let config = crate::prototype::PrototypeConfig {
+        max_span_tokens: body.max_span_tokens.unwrap_or(4).clamp(1, 6),
+        max_span_proposals: body.max_span_proposals.unwrap_or(24).clamp(1, 64),
+        max_candidates_per_span: body.max_candidates_per_span.unwrap_or(3).clamp(1, 8),
+    };
+    let acoustic_input = if let Some(audio_b64) = body.audio_wav_base64.clone() {
+        let state2 = state.clone();
+        let qwen_text = body.qwen.clone();
+        tokio::task::spawn_blocking(move || -> Option<(
+            Vec<qwen3_asr::ForcedAlignItem>,
+            serde_json::Value,
+            Vec<crate::prototype::AcousticSegment>,
+            Vec<Vec<String>>,
+        )> {
+            use base64::Engine as _;
+            let wav = base64::engine::general_purpose::STANDARD
+                .decode(audio_b64)
+                .ok()?;
+            let (mono, sample_rate) = decode_wav_mono(&wav).ok()?;
+            let samples_16k = tts::resample_to_16k(&mono, sample_rate).ok()?;
+            build_acoustic_input_from_samples_16k(&state2.aligner, &samples_16k, &qwen_text)
+        })
+        .await
+        .map_err(err)?
+    } else {
+        None
+    };
+    let acoustic_context =
+        acoustic_input
+            .as_ref()
+            .map(|(qwen_alignment, _, zipa_segments, zipa_by_qwen)| {
+        crate::prototype::AcousticContext {
+            qwen_alignment,
+            zipa_segments,
+            zipa_by_qwen,
+        }
+    });
+    let mut result = crate::prototype::prototype_correct_with_acoustics(
+        &body.qwen,
+        &vocab,
+        &alt_spellings,
+        &confusion_forms,
+        config,
+        acoustic_context.as_ref(),
+    );
+
+    let reranker =
+        if body.use_model_reranker.unwrap_or(true) && should_run_prototype_reranker(&result.sentence_candidates)
+    {
+        let candidates = result
+            .sentence_candidates
+            .iter()
+            .take(8)
+            .cloned()
+            .collect::<Vec<_>>();
+        let reranker_candidates = candidates.clone();
+        let state2 = state.clone();
+        let rerank_value =
+            tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+                run_prototype_reranker(state2.as_ref(), &body.qwen, &reranker_candidates)
+            })
+            .await
+            .map_err(err)?
+            .map_err(err)?;
+
+        let chosen_index = rerank_value.get("chosen_index").and_then(|v| v.as_u64()).map(|v| v as usize);
+        if let Some(idx) = chosen_index {
+            if let Some(candidate) = candidates.get(idx) {
+                result.corrected = candidate.text.clone();
+                result.accepted = candidate.edits.clone();
+            }
+        }
+        Some(rerank_value)
+    } else {
+        None
+    };
+
+    Ok(Json(serde_json::json!({
+        "original": result.original,
+        "corrected": result.corrected,
+        "accepted": result.accepted,
+        "proposals": result.proposals,
+        "sentence_candidates": result.sentence_candidates,
+        "zipa_trace": acoustic_input.as_ref().map(|(_, trace, _, _)| trace.clone()),
+        "reranker": reranker,
+    }))
+    .into_response())
+}
+
+pub async fn api_correct_prototype_bakeoff(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PrototypeBakeoffBody>,
+) -> Result<Response, AppError> {
+    let limit = body.limit.unwrap_or(150).clamp(1, 250);
+    let source = body
+        .source
+        .as_deref()
+        .unwrap_or("human")
+        .trim()
+        .to_ascii_lowercase();
+    let use_model_reranker = body.use_model_reranker.unwrap_or(true);
+    let use_current_adapters = body.use_current_adapters.unwrap_or(true);
+    let use_prototype_adapters = body.use_prototype_adapters.unwrap_or(false);
+    let state2 = state.clone();
+    let value = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+        let (mut items, vocab, alt_spellings, confusion_forms) = {
+            let db = state2.db.lock().unwrap();
+            let vocab = db.list_reviewed_vocab()?;
+            let alt_spellings = db.get_all_alt_spellings()?;
+            let confusion_forms = db.get_all_qwen_confusions()?;
+            let items = if source == "corpus" {
+                let mut items = db.corpus_eval_set()?;
+                items.retain(|item| item.is_mistake);
+                items.sort_by(|a, b| {
+                    b.hit_count
+                        .cmp(&a.hit_count)
+                        .then_with(|| a.term.cmp(&b.term))
+                        .then_with(|| a.qwen.cmp(&b.qwen))
+                });
+                items
+                    .into_iter()
+                    .map(|item| PrototypeBakeoffItem {
+                        term: item.term.clone(),
+                        qwen: splice_fragment(&item.sentence, &item.term, &item.qwen),
+                        expected: splice_fragment(&item.sentence, &item.term, &item.original),
+                        hit_count: item.hit_count,
+                        recording_id: None,
+                        wav_path: None,
+                        template_sentence: Some(item.sentence),
+                        qwen_fragment: Some(item.qwen),
+                        expected_fragment: Some(item.original),
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                db.authored_sentence_recordings_for_eval()?
+                    .into_iter()
+                    .filter_map(|rec| {
+                        let qwen = rec.qwen_clean?;
+                        if rec.qwen_clean_model.as_deref() != Some(&state2.qwen_model_key) {
+                            return None;
+                        }
+                        let expected_fragment = rec
+                            .surface_form
+                            .as_deref()
+                            .filter(|_| rec.kind == "counterexample")
+                            .unwrap_or(&rec.term)
+                            .to_string();
+                        if !eval_fragment_matches(
+                            &alt_spellings,
+                            &rec.term,
+                            &expected_fragment,
+                            &rec.sentence,
+                        ) {
+                            return None;
+                        }
+                        Some(PrototypeBakeoffItem {
+                            term: rec.term,
+                            qwen,
+                            expected: rec.sentence,
+                            hit_count: 1,
+                            recording_id: Some(rec.id),
+                            wav_path: Some(rec.wav_path),
+                            template_sentence: None,
+                            qwen_fragment: None,
+                            expected_fragment: Some(expected_fragment),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            };
+            (items, vocab, alt_spellings, confusion_forms)
+        };
+        items.truncate(limit);
+
+        let current_config = synth_train::InferenceConfig {
+            attach_adapters: use_current_adapters,
+            ..Default::default()
+        };
+        let current_outputs = {
+            let mut server_guard = state2.inference_server.lock().unwrap();
+            if server_guard
+                .as_ref()
+                .map(|server| !server.matches(&current_config))
+                .unwrap_or(true)
+            {
+                if let Some(mut server) = server_guard.take() {
+                    server.kill();
+                }
+                *server_guard = Some(synth_train::InferenceServer::start(&current_config)?);
+            }
+            let server = server_guard.as_mut().unwrap();
+            let mut outputs = Vec::with_capacity(items.len());
+            for item in &items {
+                let prompt = synth_train::build_correction_prompt("", &item.qwen);
+                let output = server.infer_with_stats(&prompt)?;
+                outputs.push(output.text);
+            }
+            outputs
+        };
+
+        let prototype_config = crate::prototype::PrototypeConfig::default();
+        let mut prototype_results = Vec::with_capacity(items.len());
+        if use_model_reranker {
+            let infer_config = synth_train::InferenceConfig {
+                attach_adapters: use_prototype_adapters,
+                max_tokens: 12,
+                ..Default::default()
+            };
+            let mut server_guard = state2.inference_server.lock().unwrap();
+            if server_guard
+                .as_ref()
+                .map(|server| !server.matches(&infer_config))
+                .unwrap_or(true)
+            {
+                if let Some(mut server) = server_guard.take() {
+                    server.kill();
+                }
+                *server_guard = Some(synth_train::InferenceServer::start(&infer_config)?);
+            }
+            let server = server_guard.as_mut().unwrap();
+            for item in &items {
+                let acoustic_input = if source == "human" {
+                    item.wav_path.as_deref().and_then(|wav_path| {
+                        let wav = std::fs::read(wav_path).ok()?;
+                        let (mono, sample_rate) = decode_wav_mono(&wav).ok()?;
+                        let samples_16k = tts::resample_to_16k(&mono, sample_rate).ok()?;
+                        build_acoustic_input_from_samples_16k(
+                            &state2.aligner,
+                            &samples_16k,
+                            &item.qwen,
+                        )
+                    })
+                } else {
+                    None
+                };
+                let acoustic_context =
+                    acoustic_input
+                        .as_ref()
+                        .map(|(qwen_alignment, _, zipa_segments, zipa_by_qwen)| {
+                            crate::prototype::AcousticContext {
+                                qwen_alignment,
+                                zipa_segments,
+                                zipa_by_qwen,
+                            }
+                        });
+                let mut result = crate::prototype::prototype_correct_with_acoustics(
+                    &item.qwen,
+                    &vocab,
+                    &alt_spellings,
+                    &confusion_forms,
+                    prototype_config,
+                    acoustic_context.as_ref(),
+                );
+                if should_run_prototype_reranker(&result.sentence_candidates) {
+                    let candidates = result
+                        .sentence_candidates
+                        .iter()
+                        .take(8)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let reranker = run_prototype_reranker(state2.as_ref(), &item.qwen, &candidates)?;
+                    if let Some(idx) = reranker.get("chosen_index").and_then(|v| v.as_u64()).map(|v| v as usize) {
+                        if let Some(candidate) = candidates.get(idx) {
+                            result.corrected = candidate.text.clone();
+                            result.accepted = candidate.edits.clone();
+                        }
+                    }
+                }
+                prototype_results.push(result);
+            }
+        } else {
+            for item in &items {
+                let acoustic_input = if source == "human" {
+                    item.wav_path.as_deref().and_then(|wav_path| {
+                        let wav = std::fs::read(wav_path).ok()?;
+                        let (mono, sample_rate) = decode_wav_mono(&wav).ok()?;
+                        let samples_16k = tts::resample_to_16k(&mono, sample_rate).ok()?;
+                        build_acoustic_input_from_samples_16k(
+                            &state2.aligner,
+                            &samples_16k,
+                            &item.qwen,
+                        )
+                    })
+                } else {
+                    None
+                };
+                let acoustic_context =
+                    acoustic_input
+                        .as_ref()
+                        .map(|(qwen_alignment, _, zipa_segments, zipa_by_qwen)| {
+                            crate::prototype::AcousticContext {
+                                qwen_alignment,
+                                zipa_segments,
+                                zipa_by_qwen,
+                            }
+                        });
+                let result = crate::prototype::prototype_correct_with_acoustics(
+                    &item.qwen,
+                    &vocab,
+                    &alt_spellings,
+                    &confusion_forms,
+                    prototype_config,
+                    acoustic_context.as_ref(),
+                );
+                prototype_results.push(result);
+            }
+        }
+
+        let mut baseline_ok = 0usize;
+        let mut current_ok = 0usize;
+        let mut prototype_ok = 0usize;
+        let mut prototype_only = 0usize;
+        let mut current_only = 0usize;
+        let mut both_wrong = 0usize;
+        let mut baseline_target_ok = 0usize;
+        let mut current_target_ok = 0usize;
+        let mut prototype_target_ok = 0usize;
+        let mut prototype_only_target = 0usize;
+        let mut current_only_target = 0usize;
+        let mut both_wrong_target = 0usize;
+        let mut entries = Vec::with_capacity(items.len());
+
+        for ((item, current), prototype) in items
+            .into_iter()
+            .zip(current_outputs.into_iter())
+            .zip(prototype_results.into_iter())
+        {
+            let prototype_text = prototype.corrected.clone();
+            let baseline_hit = normalized_compare_eq(&item.qwen, &item.expected);
+            let current_hit = normalized_compare_eq(&current, &item.expected);
+            let prototype_hit = normalized_compare_eq(&prototype_text, &item.expected);
+            let baseline_target_hit = item
+                .expected_fragment
+                .as_deref()
+                .map(|fragment| eval_fragment_matches(&alt_spellings, &item.term, fragment, &item.qwen))
+                .unwrap_or(false);
+            let current_target_hit = item
+                .expected_fragment
+                .as_deref()
+                .map(|fragment| eval_fragment_matches(&alt_spellings, &item.term, fragment, &current))
+                .unwrap_or(false);
+            let prototype_target_hit = item
+                .expected_fragment
+                .as_deref()
+                .map(|fragment| {
+                    eval_fragment_matches(&alt_spellings, &item.term, fragment, &prototype_text)
+                })
+                .unwrap_or(false);
+            baseline_ok += usize::from(baseline_hit);
+            current_ok += usize::from(current_hit);
+            prototype_ok += usize::from(prototype_hit);
+            prototype_only += usize::from(prototype_hit && !current_hit);
+            current_only += usize::from(current_hit && !prototype_hit);
+            both_wrong += usize::from(!current_hit && !prototype_hit);
+            baseline_target_ok += usize::from(baseline_target_hit);
+            current_target_ok += usize::from(current_target_hit);
+            prototype_target_ok += usize::from(prototype_target_hit);
+            prototype_only_target += usize::from(prototype_target_hit && !current_target_hit);
+            current_only_target += usize::from(current_target_hit && !prototype_target_hit);
+            both_wrong_target += usize::from(!current_target_hit && !prototype_target_hit);
+            entries.push(serde_json::json!({
+                "term": item.term,
+                "source": source,
+                "expected": item.expected,
+                "qwen": item.qwen,
+                "recording_id": item.recording_id,
+                "template_sentence": item.template_sentence,
+                "expected_fragment": item.expected_fragment,
+                "expected_fragment_phonemes": item.expected_fragment.as_deref().and_then(crate::prototype::phonetic_preview),
+                "qwen_fragment": item.qwen_fragment,
+                "qwen_fragment_phonemes": item.qwen_fragment.as_deref().and_then(crate::prototype::phonetic_preview),
+                "hit_count": item.hit_count,
+                "baseline_ok": baseline_hit,
+                "baseline_target_ok": baseline_target_hit,
+                "current": current,
+                "current_ok": current_hit,
+                "current_target_ok": current_target_hit,
+                "prototype": prototype_text,
+                "prototype_ok": prototype_hit,
+                "prototype_target_ok": prototype_target_hit,
+                "prototype_accepted": prototype.accepted.iter().map(|edit| serde_json::json!({
+                    "from": edit.from,
+                    "to": edit.to,
+                    "score": edit.score,
+                    "via": edit.via,
+                    "acoustic_score": edit.acoustic_score,
+                    "acoustic_delta": edit.acoustic_delta,
+                    "from_phonemes": crate::prototype::phonetic_preview(&edit.from),
+                    "to_phonemes": crate::prototype::phonetic_preview(&edit.to),
+                })).collect::<Vec<_>>(),
+            }));
+        }
+
+        Ok(serde_json::json!({
+            "source": source,
+            "limit": limit,
+            "summary": {
+                "n": entries.len(),
+                "baseline": baseline_ok,
+                "current": current_ok,
+                "prototype": prototype_ok,
+                "prototype_only": prototype_only,
+                "current_only": current_only,
+                "both_wrong": both_wrong,
+            },
+            "target_summary": {
+                "n": entries.len(),
+                "baseline": baseline_target_ok,
+                "current": current_target_ok,
+                "prototype": prototype_target_ok,
+                "prototype_only": prototype_only_target,
+                "current_only": current_only_target,
+                "both_wrong": both_wrong_target,
+            },
+            "entries": entries,
+        }))
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)?;
+
+    Ok(Json(value).into_response())
+}
+
+pub async fn api_correct_prototype_bakeoff_detail(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PrototypeBakeoffDetailBody>,
+) -> Result<Response, AppError> {
+    let source = body
+        .source
+        .as_deref()
+        .unwrap_or("human")
+        .trim()
+        .to_ascii_lowercase();
+    if source != "human" {
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": "Bakeoff details are only supported for human rows right now."
+        }))
+        .into_response());
+    }
+    let Some(recording_id) = body.recording_id else {
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": "Missing recording_id for human bakeoff detail."
+        }))
+        .into_response());
+    };
+
+    let state2 = state.clone();
+    let expected = body.expected;
+    let qwen = body.qwen;
+    let current = body.current;
+    let prototype = body.prototype;
+    let use_model_reranker = body.use_model_reranker.unwrap_or(true);
+    let use_prototype_adapters = body.use_prototype_adapters.unwrap_or(false);
+    let value = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+        let (recording, vocab, alt_spellings, confusion_forms) = {
+            let db = state2.db.lock().unwrap();
+            let recording = db
+                .get_authored_sentence_recording(recording_id)?
+                .ok_or_else(|| anyhow::anyhow!("recording not found"))?;
+            let vocab = db.list_reviewed_vocab()?;
+            let alt_spellings = db.get_all_alt_spellings()?;
+            let confusion_forms = db.get_all_qwen_confusions()?;
+            (recording, vocab, alt_spellings, confusion_forms)
+        };
+        let samples_16k = load_authored_recording_16k(&recording.wav_path)?;
+        let expected_alignment = state2.aligner.align(&samples_16k, &expected)?;
+        let qwen_alignment = state2.aligner.align(&samples_16k, &qwen)?;
+        let current_alignment = state2.aligner.align(&samples_16k, &current)?;
+        let prototype_alignment = state2.aligner.align(&samples_16k, &prototype)?;
+        let zipa_trace = decode_zipa_trace_from_16k(&samples_16k).ok();
+        let zipa_segments = zipa_trace
+            .as_ref()
+            .map(zipa_segments_from_trace)
+            .unwrap_or_default();
+        let zipa_by_qwen =
+            crate::prototype::zipa_grouped_arpabet_by_alignment(&qwen_alignment, &zipa_segments);
+        let acoustic_context = crate::prototype::AcousticContext {
+            qwen_alignment: &qwen_alignment,
+            zipa_segments: &zipa_segments,
+            zipa_by_qwen: &zipa_by_qwen,
+        };
+        let mut prototype_result = crate::prototype::prototype_correct_with_acoustics(
+            &qwen,
+            &vocab,
+            &alt_spellings,
+            &confusion_forms,
+            crate::prototype::PrototypeConfig::default(),
+            Some(&acoustic_context),
+        );
+        let reranker =
+            if use_model_reranker && should_run_prototype_reranker(&prototype_result.sentence_candidates) {
+            let candidates = prototype_result
+                .sentence_candidates
+                .iter()
+                .take(8)
+                .cloned()
+                .collect::<Vec<_>>();
+            let rerank_value = run_prototype_reranker(state.as_ref(), &qwen, &candidates)?;
+            let chosen_index = rerank_value.get("chosen_index").and_then(|v| v.as_u64()).map(|v| v as usize);
+            if let Some(idx) = chosen_index {
+                if let Some(candidate) = candidates.get(idx) {
+                    prototype_result.corrected = candidate.text.clone();
+                    prototype_result.accepted = candidate.edits.clone();
+                }
+            }
+            Some(rerank_value)
+        } else {
+            None
+        };
+        let zipa_alignment = zipa_trace
+            .as_ref()
+            .map(phone_segments_to_alignment)
+            .unwrap_or_else(|| serde_json::json!([]));
+        Ok(serde_json::json!({
+            "ok": true,
+            "recording_id": recording_id,
+            "alignments": {
+                "expected": fmt_alignment_json(&expected_alignment),
+                "qwen": fmt_alignment_json(&qwen_alignment),
+                "current": fmt_alignment_json(&current_alignment),
+                "prototype": fmt_alignment_json(&prototype_alignment),
+                "zipa": zipa_alignment,
+                "zipa_qwen": crate::prototype::zipa_grouped_by_alignment_json(&qwen_alignment, &zipa_segments),
+            },
+            "zipa_trace": zipa_trace,
+            "prototype_trace": {
+                "corrected": prototype_result.corrected,
+                "accepted": prototype_result.accepted,
+                "proposals": prototype_result.proposals,
+                "sentence_candidates": prototype_result.sentence_candidates,
+                "reranker": reranker,
+            },
+        }))
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)?;
+
+    Ok(Json(value).into_response())
+}
+
+const PROTOTYPE_RERANKER_MODEL: &str = "Qwen/Qwen3-Reranker-0.6B";
+const PROTOTYPE_RERANKER_PORT: u16 = 8901;
+
+fn format_prototype_reranker_edits(candidate: &crate::prototype::SentenceCandidate) -> String {
+    if candidate.edits.is_empty() {
+        return "no edits".to_string();
+    }
+    candidate
+        .edits
+        .iter()
+        .map(|edit| {
+            let mut evidence = vec![format!("via {}", edit.via), format!("score {:.2}", edit.score)];
+            if let Some(delta) = edit.acoustic_delta {
+                evidence.push(format!("Δ {:.2}", delta));
+            } else if let Some(acoustic) = edit.acoustic_score {
+                evidence.push(format!("a {:.2}", acoustic));
+            }
+            if let Some(phones) = &edit.from_phonemes {
+                evidence.push(format!("from /{phones}/"));
+            }
+            if let Some(phones) = &edit.to_phonemes {
+                evidence.push(format!("to /{phones}/"));
+            }
+            format!("{} -> {} ({})", edit.from, edit.to, evidence.join(", "))
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn build_qwen3_reranker_prompt(
+    asr_text: &str,
+    candidate: &crate::prototype::SentenceCandidate,
+) -> String {
+    let instruction = "Given an ASR sentence, determine whether the Document is the correct technical correction. Prefer reviewed technical-vocabulary repairs that preserve meaning. Reject candidates that invent terms, over-correct, or change unrelated words.";
+    let query = format!(
+        "ASR sentence: {}\nHeuristic sentence score: {:.2}\nEdits: {}",
+        asr_text.trim(),
+        candidate.score,
+        format_prototype_reranker_edits(candidate)
+    );
+    format!(
+        "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {document}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+        document = candidate.text.trim(),
+    )
+}
+
+fn prototype_reranker_config() -> synth_train::InferenceConfig {
+    synth_train::InferenceConfig {
+        model: PROTOTYPE_RERANKER_MODEL.to_string(),
+        adapters: String::new(),
+        attach_adapters: false,
+        max_tokens: 1,
+        port: PROTOTYPE_RERANKER_PORT,
+    }
+}
+
+fn should_run_prototype_reranker(
+    candidates: &[crate::prototype::SentenceCandidate],
+) -> bool {
+    candidates.len() > 1
+}
+
+fn run_prototype_reranker(
+    state: &AppState,
+    asr_text: &str,
+    candidates: &[crate::prototype::SentenceCandidate],
+) -> anyhow::Result<serde_json::Value> {
+    let infer_config = prototype_reranker_config();
+    let mut server_guard = state.prototype_reranker_server.lock().unwrap();
+    if server_guard
+        .as_ref()
+        .map(|server| !server.matches(&infer_config))
+        .unwrap_or(true)
+    {
+        if let Some(mut server) = server_guard.take() {
+            server.kill();
+        }
+        *server_guard = Some(synth_train::InferenceServer::start(&infer_config)?);
+    }
+    let server = server_guard.as_mut().unwrap();
+
+    let mut best_index = None;
+    let mut best_yes = f32::NEG_INFINITY;
+    let mut best_heuristic = f32::NEG_INFINITY;
+    let mut scored_candidates = Vec::new();
+
+    for (idx, candidate) in candidates.iter().enumerate() {
+        let prompt = build_qwen3_reranker_prompt(asr_text, candidate);
+        let output = server.score_next_tokens_with_stats(&prompt, false, &["no", "yes"])?;
+        let no_prob = output.probs.first().copied().unwrap_or(0.0);
+        let yes_prob = output.probs.get(1).copied().unwrap_or(0.0);
+        let no_logit = output.logits.first().copied().unwrap_or(0.0);
+        let yes_logit = output.logits.get(1).copied().unwrap_or(0.0);
+
+        if yes_prob > best_yes
+            || ((yes_prob - best_yes).abs() < 1e-6 && candidate.score > best_heuristic)
+        {
+            best_yes = yes_prob;
+            best_heuristic = candidate.score;
+            best_index = Some(idx);
+        }
+
+        scored_candidates.push(serde_json::json!({
+            "index": idx,
+            "label": candidate.label,
+            "text": candidate.text,
+            "heuristic_score": candidate.score,
+            "yes_prob": yes_prob,
+            "no_prob": no_prob,
+            "yes_logit": yes_logit,
+            "no_logit": no_logit,
+            "prompt": prompt,
+            "timing": output.stats,
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "mode": "qwen3-reranker-0.6b",
+        "model": PROTOTYPE_RERANKER_MODEL,
+        "use_adapters": false,
+        "candidate_count": candidates.len(),
+        "chosen_index": best_index,
+        "chosen_label": best_index.and_then(|idx| candidates.get(idx).map(|c| c.label.clone())),
+        "chosen_text": best_index.and_then(|idx| candidates.get(idx).map(|c| c.text.clone())),
+        "candidates": scored_candidates,
+    }))
+}
+
+fn normalized_compare_eq(a: &str, b: &str) -> bool {
+    fn normalize(text: &str) -> String {
+        text.chars()
+            .filter_map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '_' {
+                    Some(ch.to_ascii_lowercase())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+    normalize(a) == normalize(b)
 }
 
 // ==================== Scan Results ====================
@@ -5756,5 +7040,24 @@ mod tests {
         assert_eq!(ti.trimmed_right, 2); // "for", "you"
         assert_eq!(ti.pre_orig, vec!["the", "reqwest", "for", "you"]);
         assert_eq!(ti.pre_qwen, vec!["the", "requests", "for", "you"]);
+    }
+
+    #[test]
+    fn eval_match_allows_expected_phrase_inside_context() {
+        let alt = HashMap::new();
+        assert!(eval_fragment_matches(&alt, "kajit", "kajit", "while kajit"));
+    }
+
+    #[test]
+    fn eval_match_rejects_similar_spelling_without_alt() {
+        let alt = HashMap::new();
+        assert!(!eval_fragment_matches(&alt, "tokio", "tokio", "while tokyo"));
+    }
+
+    #[test]
+    fn eval_match_allows_alt_spelling_inside_context() {
+        let mut alt = HashMap::new();
+        alt.insert("tokio".to_string(), vec!["tokyo".to_string()]);
+        assert!(eval_fragment_matches(&alt, "tokio", "tokio", "while tokyo"));
     }
 }

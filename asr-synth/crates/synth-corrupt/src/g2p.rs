@@ -104,7 +104,7 @@ impl G2p {
 }
 
 /// Convert IPA string to ARPAbet phoneme sequence (approximate).
-fn ipa_to_arpabet(ipa: &str) -> Vec<String> {
+pub fn ipa_to_arpabet(ipa: &str) -> Vec<String> {
     let mut result = Vec::new();
     let chars: Vec<char> = ipa.chars().collect();
     let mut i = 0;

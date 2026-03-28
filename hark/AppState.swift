@@ -242,6 +242,16 @@ final class AppState {
 
     /// Overlay dismiss animation state (driven by OverlayManager, observed by the view).
     var overlayDismiss: OverlayResult = .none
+    /// When true, render the overlay footer above the text body; otherwise below.
+    var overlayFooterAbove = false
+    /// When true, overlay is pinned to a concrete input frame and includes an in-bounds footer.
+    var overlayControlFrameMode = false
+    /// Bundle ID of the app the current recording is tethered to.
+    var overlayLockedBundleID: String?
+    /// Human-readable app name for tether lock UI.
+    var overlayLockedAppName: String?
+    /// True when focus moved to a different app while tether lock is active.
+    var overlayTetherOutOfApp = false
 
     /// Recent transcription history (newest first), max 20 items.
     var transcriptionHistory: [TranscriptionHistoryItem] = []
