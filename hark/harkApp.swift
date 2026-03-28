@@ -161,6 +161,7 @@ struct HarkApp: App {
     private static let toggleModeThresholdSeconds: TimeInterval = 0.3
     private static let minimumSpeechDurationSeconds = 0.2
     private static let transcriptionSampleRate = 16_000.0
+    private static let finalizationSilencePaddingSeconds = 0.25
 
     var body: some Scene {
         MenuBarExtra {
@@ -784,9 +785,17 @@ struct HarkApp: App {
             // Feed remaining unprocessed audio and finalize — off main thread.
             let transcriptionService = self.transcriptionService
             let remaining = processedCount < allSamples.count ? Array(allSamples[processedCount...]) : nil
+            let padSampleCount = max(
+                0,
+                Int((Self.finalizationSilencePaddingSeconds * Self.transcriptionSampleRate).rounded())
+            )
+            var finalizeChunk = remaining ?? []
+            if !allSamples.isEmpty, padSampleCount > 0 {
+                finalizeChunk.append(contentsOf: repeatElement(Float(0), count: padSampleCount))
+            }
             let finalText: String? = await Task.detached {
-                if let remaining, !remaining.isEmpty {
-                    _ = transcriptionService.feed(session: session, samples: remaining)
+                if !finalizeChunk.isEmpty {
+                    _ = transcriptionService.feed(session: session, samples: finalizeChunk)
                 }
                 return transcriptionService.finish(session: session)
             }.value
@@ -801,7 +810,10 @@ struct HarkApp: App {
             // fall back to a single-shot transcription of all captured audio.
             if text.isEmpty && !allSamples.isEmpty {
                 let transcriptionService = self.transcriptionService
-                let samples = allSamples
+                var samples = allSamples
+                if padSampleCount > 0 {
+                    samples.append(contentsOf: repeatElement(Float(0), count: padSampleCount))
+                }
                 let fallbackText: String? = await Task.detached {
                     transcriptionService.transcribeSamples(samples)
                 }.value
