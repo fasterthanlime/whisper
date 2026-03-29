@@ -2003,16 +2003,20 @@ struct HarkApp: App {
             return
         }
 
-        guard canPasteIntoLockedTarget() else {
-            traceEvent("finish_paste_blocked", [
-                "reason": "locked_target_mismatch",
-            ])
-            restoreDirectInputOriginalText()
-            _ = appState.transition(to: .idle)
-            overlayManager.hideWithResult(.cancelled)
-            playCancelSound()
-            appState.addToHistory(text)
-            return
+        // For IME/AX modes, we handle app switching ourselves.
+        // For paste mode, block if we're not in the locked app.
+        if activeInsertionStrategy == .paste {
+            guard canPasteIntoLockedTarget() else {
+                traceEvent("finish_paste_blocked", [
+                    "reason": "locked_target_mismatch",
+                ])
+                restoreDirectInputOriginalText()
+                _ = appState.transition(to: .idle)
+                overlayManager.hideWithResult(.cancelled)
+                playCancelSound()
+                appState.addToHistory(text)
+                return
+            }
         }
 
         appState.addToHistory(text)

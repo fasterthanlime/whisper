@@ -192,6 +192,17 @@ final class OverlayManager {
                     "[hark] overlay-anchor event=\(event, privacy: .public) source=locked reason=app_mismatch locked_bundle='\(lockedBundle, privacy: .public)' front_bundle='\(frontBundle, privacy: .public)'"
                 )
             }
+            // Move overlay to top-center of the screen
+            if let screen = NSScreen.main {
+                let screenFrame = screen.visibleFrame
+                let x = screenFrame.midX - overlaySize.width / 2
+                let y = screenFrame.maxY - overlaySize.height - 20
+                for panel in panels {
+                    panel.setFrameOrigin(NSPoint(x: x, y: y))
+                }
+            }
+            updateFocusHighlight(with: nil)
+            connectorPanel?.orderOut(nil)
             return
         }
         currentAppState?.overlayTetherOutOfApp = false
