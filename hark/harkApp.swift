@@ -1293,7 +1293,9 @@ struct HarkApp: App {
                                     directInputLastText = trimmed
                                 }
                             case .ime:
-                                HarkInputClient.sendSetMarkedText(trimmed)
+                                if !appState.overlayTetherOutOfApp {
+                                    HarkInputClient.sendSetMarkedText(trimmed)
+                                }
                             case .paste:
                                 break
                             }
@@ -2033,6 +2035,16 @@ struct HarkApp: App {
                 "submit": String(shouldSubmit),
             ])
             _ = appState.transition(to: .pasting)
+
+            // If we're tethered to a different app, bring it back before committing.
+            if let lockedBundle = pasteTargetBundleID,
+               NSWorkspace.shared.frontmostApplication?.bundleIdentifier != lockedBundle {
+                if let app = NSRunningApplication.runningApplications(withBundleIdentifier: lockedBundle).first {
+                    app.activate()
+                    // Give the app a moment to come to front and re-activate the IME
+                    try? await Task.sleep(for: .milliseconds(300))
+                }
+            }
 
             switch activeInsertionStrategy {
             case .ax:
