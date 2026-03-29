@@ -149,11 +149,9 @@ struct PasteController {
         return CapturedTextField(element: element, text: text, cursorPosition: cursorPosition)
     }
 
-    /// Write text directly into a text field using keyboard simulation.
-    /// Computes the diff between `previousText` and `text`:
-    /// - Common prefix is left alone
-    /// - Changed tail is deleted with Delete keypresses, then new tail is typed
-    /// - No AX value rewriting, no selection flashing
+    /// Write text directly into an AX text element by rewriting kAXValueAttribute.
+    /// Splices dictated text at `replaceFrom`, preserving text before and after.
+    /// Cursor is placed at the end of the inserted text.
     @discardableResult
     static func setDirectText(
         _ text: String,
@@ -161,71 +159,50 @@ struct PasteController {
         on element: AXUIElement,
         replaceFrom: Int
     ) -> Bool {
-        if previousText.isEmpty && text.isEmpty { return true }
-
-        // Find where old and new text diverge
-        let commonPrefix = previousText.commonPrefix(with: text)
-        let oldTail = String(previousText[commonPrefix.endIndex...])
-        let newTail = String(text[commonPrefix.endIndex...])
-
-        if previousText.isEmpty {
-            // First insertion: position cursor via AX, then type
-            var range = CFRange(location: replaceFrom, length: 0)
-            if let rangeValue = AXValueCreate(.cfRange, &range) {
-                AXUIElementSetAttributeValue(
-                    element,
-                    kAXSelectedTextRangeAttribute as CFString,
-                    rangeValue
-                )
-            }
-            typeText(newTail)
-            return true
+        // Read current value
+        var valueRef: AnyObject?
+        let currentText: String
+        if AXUIElementCopyAttributeValue(
+            element,
+            kAXValueAttribute as CFString,
+            &valueRef
+        ) == .success, let existing = valueRef as? String {
+            currentText = existing
+        } else {
+            currentText = ""
         }
 
-        // Delete the old tail character by character
-        if !oldTail.isEmpty {
-            deleteBackward(count: oldTail.utf16.count)
-        }
+        let ns = currentText as NSString
+        let clampedFrom = min(max(0, replaceFrom), ns.length)
 
-        // Type the new tail
-        if !newTail.isEmpty {
-            typeText(newTail)
+        // The previous dictated text starts at clampedFrom and extends
+        // for previousText.utf16.count characters. Everything after that is suffix.
+        let previousUTF16Len = (previousText as NSString).length
+        let replaceEnd = min(clampedFrom + previousUTF16Len, ns.length)
+
+        let prefix = ns.substring(to: clampedFrom)
+        let suffix = ns.substring(from: replaceEnd)
+        let newValue = prefix + text + suffix
+
+        let setResult = AXUIElementSetAttributeValue(
+            element,
+            kAXValueAttribute as CFString,
+            newValue as CFTypeRef
+        )
+        guard setResult == .success else { return false }
+
+        // Place cursor right after the inserted text
+        let cursorPos = clampedFrom + (text as NSString).length
+        var range = CFRange(location: cursorPos, length: 0)
+        if let rangeValue = AXValueCreate(.cfRange, &range) {
+            AXUIElementSetAttributeValue(
+                element,
+                kAXSelectedTextRangeAttribute as CFString,
+                rangeValue
+            )
         }
 
         return true
-    }
-
-    /// Delete `count` characters backward from the cursor using plain Delete.
-    private static func deleteBackward(count: Int) {
-        let deleteKeyCode = CGKeyCode(kVK_Delete)
-        for _ in 0..<count {
-            guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: deleteKeyCode, keyDown: true),
-                  let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: deleteKeyCode, keyDown: false)
-            else { continue }
-            keyDown.flags = []
-            keyUp.flags = []
-            keyDown.post(tap: .cghidEventTap)
-            keyUp.post(tap: .cghidEventTap)
-        }
-    }
-
-    /// Type text via CGEvent unicode keyboard events.
-    private static func typeText(_ text: String) {
-        let utf16 = Array(text.utf16)
-        let chunkSize = 20
-        for offset in stride(from: 0, to: utf16.count, by: chunkSize) {
-            let end = min(offset + chunkSize, utf16.count)
-            var chunk = Array(utf16[offset..<end])
-
-            guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else { continue }
-            keyDown.flags = []
-            keyDown.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: &chunk)
-            keyDown.post(tap: .cghidEventTap)
-
-            guard let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { continue }
-            keyUp.flags = []
-            keyUp.post(tap: .cghidEventTap)
-        }
     }
 
     // MARK: - Private
