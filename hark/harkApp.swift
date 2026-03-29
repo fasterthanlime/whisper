@@ -1142,7 +1142,6 @@ struct HarkApp: App {
             }
         case .ime:
             if !HarkInputClient.activateIME() {
-                // Fallback to paste if IME activation fails
                 activeInsertionStrategy = .paste
             }
             directInputElement = nil
@@ -1614,6 +1613,7 @@ struct HarkApp: App {
 
         // Immediately clear the IME marked text
         HarkInputClient.sendCancelInput()
+        HarkInputClient.deactivateIME()
 
         // Stop audio and UI immediately
         cancelRecordingTimeout()
@@ -2104,7 +2104,9 @@ struct HarkApp: App {
             pasteTargetBundleID = nil
             directInputElement = nil
             directInputOriginalText = nil
-            // Don't deactivate IME — keep it active to avoid controller loss
+            if activeInsertionStrategy == .ime {
+                HarkInputClient.deactivateIME()
+            }
             activeInsertionStrategy = .paste
             appState.overlayLockedBundleID = nil
             appState.overlayLockedAppName = nil
@@ -2179,7 +2181,11 @@ struct HarkApp: App {
                     PasteController.setDirectText(text, previousText: directInputLastText, on: element, replaceFrom: directInputOrigin, originalText: directInputOriginalText ?? "")
                 }
             case .ime:
-                HarkInputClient.sendCommitText(text, submit: shouldSubmit)
+                HarkInputClient.sendCommitText(text)
+                HarkInputClient.deactivateIME()
+                if shouldSubmit {
+                    simulateReturn()
+                }
             case .paste:
                 break
             }

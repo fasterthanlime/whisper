@@ -34,9 +34,9 @@ class HarkXPCService: NSObject, HarkInputProtocol {
 
     /// The currently active input controller (set by HarkInputController).
     weak var activeController: HarkInputController?
-    /// The last controller that was active — used as fallback when
-    /// transient deactivations nil out activeController.
-    weak var lastController: HarkInputController?
+    /// The last controller that was active — kept alive (strong ref) as
+    /// fallback when transient deactivations nil out activeController.
+    var lastController: HarkInputController?
 
     /// Whether Hark is actively dictating (set by setMarkedText, cleared by commit/cancel).
     var isDictating = false
