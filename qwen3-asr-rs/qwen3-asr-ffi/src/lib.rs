@@ -1,3 +1,5 @@
+use std::any::Any;
+use std::backtrace::Backtrace;
 use std::ffi::{c_char, c_float, CStr, CString};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -57,6 +59,22 @@ fn set_error(out_err: *mut *mut c_char, msg: String) {
             *out_err = to_c_string(msg);
         }
     }
+}
+
+fn panic_payload_to_string(payload: &(dyn Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<String>() {
+        return s.clone();
+    }
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        return (*s).to_string();
+    }
+    "non-string panic payload".to_string()
+}
+
+fn format_panic(context: &str, payload: Box<dyn Any + Send>) -> String {
+    let message = panic_payload_to_string(payload.as_ref());
+    let backtrace = Backtrace::force_capture();
+    format!("panic during {context}: {message}\n{backtrace}")
 }
 
 /// Return the last N chars of `s`.
@@ -122,6 +140,7 @@ const MIN_COMMIT_WORDS: usize = 4;
 const MIN_COMMIT_CHARS: usize = 16;
 const MIN_COMPLETE_SENTENCES_BEFORE_COMMIT: usize = 2;
 const MIN_COMMIT_STABLE_UPDATES: usize = 3;
+const MIN_COMMIT_STABLE_UPDATES_TERMINAL_TAIL: usize = 5;
 
 fn content_word_count(text: &str) -> usize {
     text.split_whitespace()
@@ -197,15 +216,15 @@ fn reset_commit_candidate(s: &mut AsrSession) {
     s.commit_candidate_hits = 0;
 }
 
-fn should_early_commit(s: &mut AsrSession, text: &str) -> bool {
-    // If the current prediction itself ends at sentence punctuation, treat it
-    // as unstable: we do not commit on this update because the model often
-    // revises that boundary on subsequent chunks.
+fn required_commit_stable_updates(text: &str) -> usize {
     if ends_at_sentence_terminal(text) {
-        reset_commit_candidate(s);
-        return false;
+        MIN_COMMIT_STABLE_UPDATES_TERMINAL_TAIL
+    } else {
+        MIN_COMMIT_STABLE_UPDATES
     }
+}
 
+fn should_early_commit(s: &mut AsrSession, text: &str) -> bool {
     let Some((committed, _)) = split_for_commit(text) else {
         reset_commit_candidate(s);
         return false;
@@ -218,7 +237,7 @@ fn should_early_commit(s: &mut AsrSession, text: &str) -> bool {
         s.commit_candidate_hits = 1;
     }
 
-    s.commit_candidate_hits >= MIN_COMMIT_STABLE_UPDATES
+    s.commit_candidate_hits >= required_commit_stable_updates(text)
 }
 
 fn build_context_text(s: &AsrSession) -> String {
@@ -268,8 +287,8 @@ pub extern "C" fn asr_engine_load(
             set_error(out_err, msg);
             std::ptr::null_mut()
         }
-        Err(_) => {
-            set_error(out_err, "panic during engine load".into());
+        Err(panic) => {
+            set_error(out_err, format_panic("engine load", panic));
             std::ptr::null_mut()
         }
     }
@@ -317,8 +336,8 @@ pub extern "C" fn asr_engine_from_pretrained(
             set_error(out_err, msg);
             std::ptr::null_mut()
         }
-        Err(_) => {
-            set_error(out_err, "panic during engine load".into());
+        Err(panic) => {
+            set_error(out_err, format_panic("engine load", panic));
             std::ptr::null_mut()
         }
     }
@@ -383,8 +402,8 @@ pub extern "C" fn asr_engine_from_gguf(
             set_error(out_err, msg);
             std::ptr::null_mut()
         }
-        Err(_) => {
-            set_error(out_err, "panic during GGUF engine load".into());
+        Err(panic) => {
+            set_error(out_err, format_panic("GGUF engine load", panic));
             std::ptr::null_mut()
         }
     }
@@ -428,8 +447,8 @@ pub extern "C" fn asr_engine_transcribe_samples(
             set_error(out_err, msg);
             std::ptr::null_mut()
         }
-        Err(_) => {
-            set_error(out_err, "panic during transcribe_samples".into());
+        Err(panic) => {
+            set_error(out_err, format_panic("transcribe_samples", panic));
             std::ptr::null_mut()
         }
     }
@@ -587,7 +606,7 @@ pub extern "C" fn asr_session_feed(
                         "commit_ready": commit_ready,
                         "candidate": s.commit_candidate.clone(),
                         "candidate_hits": s.commit_candidate_hits,
-                        "required_hits": MIN_COMMIT_STABLE_UPDATES,
+                        "required_hits": required_commit_stable_updates(&current_text),
                         "ends_with_terminal": ends_at_sentence_terminal(&current_text),
                     }),
                 );
@@ -730,8 +749,8 @@ pub extern "C" fn asr_session_feed(
             set_error(out_err, msg);
             std::ptr::null_mut()
         }
-        Err(_) => {
-            set_error(out_err, "panic during feed".into());
+        Err(panic) => {
+            set_error(out_err, format_panic("feed", panic));
             std::ptr::null_mut()
         }
     }
@@ -809,7 +828,7 @@ pub extern "C" fn asr_session_feed_finalizing(
                         "commit_ready": commit_ready,
                         "candidate": s.commit_candidate.clone(),
                         "candidate_hits": s.commit_candidate_hits,
-                        "required_hits": MIN_COMMIT_STABLE_UPDATES,
+                        "required_hits": required_commit_stable_updates(&current_text),
                         "ends_with_terminal": ends_at_sentence_terminal(&current_text),
                     }),
                 );
@@ -949,8 +968,8 @@ pub extern "C" fn asr_session_feed_finalizing(
             set_error(out_err, msg);
             std::ptr::null_mut()
         }
-        Err(_) => {
-            set_error(out_err, "panic during finalizing feed".into());
+        Err(panic) => {
+            set_error(out_err, format_panic("finalizing feed", panic));
             std::ptr::null_mut()
         }
     }
@@ -1043,8 +1062,8 @@ pub extern "C" fn asr_session_set_language(
             set_error(out_err, msg);
             false
         }
-        Err(_) => {
-            set_error(out_err, "panic during set_language".into());
+        Err(panic) => {
+            set_error(out_err, format_panic("set_language", panic));
             false
         }
     }
@@ -1111,8 +1130,8 @@ pub extern "C" fn asr_session_finish(
             set_error(out_err, msg);
             std::ptr::null_mut()
         }
-        Err(_) => {
-            set_error(out_err, "panic during finish".into());
+        Err(panic) => {
+            set_error(out_err, format_panic("finish", panic));
             std::ptr::null_mut()
         }
     }
@@ -1254,6 +1273,18 @@ mod tests {
         assert!(
             split_for_commit("Yep. This is a full second sentence indeed. Third sentence is complete.")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn required_commit_hits_is_higher_for_terminal_tail() {
+        assert_eq!(
+            required_commit_stable_updates("First sentence is done. Second sentence also done."),
+            MIN_COMMIT_STABLE_UPDATES_TERMINAL_TAIL
+        );
+        assert_eq!(
+            required_commit_stable_updates("First sentence is done. Second sentence continues"),
+            MIN_COMMIT_STABLE_UPDATES
         );
     }
 

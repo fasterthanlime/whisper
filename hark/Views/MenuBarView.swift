@@ -13,6 +13,7 @@ struct MenuBarView: View {
     var onRunOnStartupToggle: () -> Void
     var onSelectInputDevice: (String) -> Void
     var onSetActiveInputDeviceKeepWarm: (Bool) -> Void
+    var onToggleForensicsHTMLDump: () -> Void
     var onRequestMicrophonePermission: () -> Void
     var onRequestAccessibilityPermission: () -> Void
     var onRecheckPermissions: () -> Void
@@ -25,6 +26,7 @@ struct MenuBarView: View {
     @State private var isHoveringRunOnStartup = false
     @State private var isHoveringPauseMedia = false
     @State private var isHoveringKeepWarmForInput = false
+    @State private var isHoveringForensicsHTMLDump = false
     @State private var pauseMediaEnabled = MediaController.isEnabled
     @State private var isHoveringQuit = false
     @State private var isHoveringSettings = false
@@ -509,6 +511,13 @@ struct MenuBarView: View {
                 isOn: pauseMediaEnabled,
                 isHovering: $isHoveringPauseMedia,
                 action: { pauseMediaEnabled.toggle(); MediaController.isEnabled = pauseMediaEnabled }
+            )
+
+            toggleRow(
+                label: "Forensics HTML Dumps",
+                isOn: appState.forensicsHTMLDumpEnabled,
+                isHovering: $isHoveringForensicsHTMLDump,
+                action: onToggleForensicsHTMLDump
             )
         }
     }

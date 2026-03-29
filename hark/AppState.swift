@@ -45,6 +45,7 @@ private extension AppPhase {
 final class AppState {
     static let inputDeviceWarmPreferencesDefaultsKey = "inputDeviceKeepWarmByUID"
     static let appAutoSubmitDefaultsKey = "appAutoSubmit"
+    static let forensicsHTMLDumpEnabledDefaultsKey = "forensicsHTMLDumpEnabled"
 
     var phase: AppPhase = .idle
     var selectedModelID: String = STTModelDefinition.default.id
@@ -255,6 +256,16 @@ final class AppState {
 
     /// Recent transcription history (newest first), max 20 items.
     var transcriptionHistory: [TranscriptionHistoryItem] = []
+
+    /// Whether to write HTML forensics dumps under /tmp/hark-forensics.
+    var forensicsHTMLDumpEnabled: Bool = false {
+        didSet {
+            UserDefaults.standard.set(
+                forensicsHTMLDumpEnabled,
+                forKey: Self.forensicsHTMLDumpEnabledDefaultsKey
+            )
+        }
+    }
 
     /// Add a transcription to history, keeping max 20 items.
     func addToHistory(_ text: String) {

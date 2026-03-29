@@ -23,6 +23,20 @@ private struct StreamingResult {
     let autoLockedLanguage: String?
 }
 
+private struct FinalizationRunResult: Sendable {
+    let text: String
+    let remainingSamples: [Float]
+    let finalizeChunk: [Float]
+    let remainingCount: Int
+    let padSampleCount: Int
+    let prepareMs: Int
+    let feedMs: Int
+    let finishMs: Int
+    let fallbackMs: Int?
+    let fallbackSamples: Int?
+    let finalizeBufferRelPath: String?
+}
+
 private struct TailDebugMetadata: Codable, Sendable {
     let id: String
     let timestampISO8601: String
@@ -67,6 +81,8 @@ private struct ForensicsDump: Codable, Sendable {
 }
 
 private final class ForensicsSession: @unchecked Sendable {
+    private static let retainedSessionCount = 20
+
     private let id: String
     private let startedTsUnixMs: Int64
     private let sessionDir: URL
@@ -92,6 +108,10 @@ private final class ForensicsSession: @unchecked Sendable {
             try FileManager.default.createDirectory(at: sessionDir.appendingPathComponent("buffers", isDirectory: true), withIntermediateDirectories: true)
         } catch {
             print("[hark] forensics init failed: \(error.localizedDescription)")
+        }
+        let currentSessionDir = sessionDir
+        bufferWriteQueue.async {
+            Self.pruneOldSessions(root: root, excluding: currentSessionDir, keepLatest: Self.retainedSessionCount)
         }
     }
 
@@ -218,6 +238,42 @@ private final class ForensicsSession: @unchecked Sendable {
 
     private static func nowUnixMs() -> Int64 {
         Int64((Date().timeIntervalSince1970 * 1000).rounded())
+    }
+
+    private static func pruneOldSessions(root: URL, excluding currentSessionDir: URL, keepLatest: Int) {
+        guard keepLatest > 0 else { return }
+        do {
+            let urls = try FileManager.default.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: [.isDirectoryKey, .creationDateKey],
+                options: [.skipsHiddenFiles]
+            )
+            let dirs: [(url: URL, date: Date)] = urls.compactMap { url in
+                guard url != currentSessionDir else { return nil }
+                let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .creationDateKey])
+                guard values?.isDirectory == true else { return nil }
+                let date = values?.creationDate ?? Date.distantPast
+                return (url: url, date: date)
+            }
+            guard dirs.count > keepLatest else { return }
+            let stale = dirs
+                .sorted { lhs, rhs in
+                    if lhs.date != rhs.date {
+                        return lhs.date > rhs.date
+                    }
+                    return lhs.url.lastPathComponent > rhs.url.lastPathComponent
+                }
+                .dropFirst(keepLatest)
+            for entry in stale {
+                do {
+                    try FileManager.default.removeItem(at: entry.url)
+                } catch {
+                    print("[hark] forensics cleanup failed for \(entry.url.lastPathComponent): \(error.localizedDescription)")
+                }
+            }
+        } catch {
+            print("[hark] forensics cleanup scan failed: \(error.localizedDescription)")
+        }
     }
 
     private static func htmlTemplate(json: String, finalText: String) -> String {
@@ -482,6 +538,7 @@ struct HarkApp: App {
         subsystem: Bundle.main.bundleIdentifier ?? "hark",
         category: "startup"
     )
+    private static let menuBarImageCache = NSCache<NSString, NSImage>()
 
     @State private var appState = AppState()
     @State private var overlayManager = OverlayManager()
@@ -500,6 +557,9 @@ struct HarkApp: App {
     @State private var ignoreHotkeyUntil: Date?
     @State private var pasteTargetBundleID: String?
     @State private var forensicsSession: ForensicsSession?
+    @State private var tinkSound: NSSound?
+    @State private var popSound: NSSound?
+    @State private var didWarmUpSoundPlayback = false
     /// Skip the next keyUp after locking (so releasing the hotkey after ⌘-lock doesn't submit).
     @State private var skipNextKeyUp = false
     @State private var recordingControlInterceptor = RecordingControlInterceptor()
@@ -515,7 +575,6 @@ struct HarkApp: App {
     private static let finalizationSilencePaddingSeconds = 0.20
     private static let finalizationMinimumSilencePaddingSeconds = 0.05
     private static let tailDebugDumpEnabled = true
-    private static let forensicsDumpEnabled = true
 
     var body: some Scene {
         MenuBarExtra {
@@ -545,6 +604,9 @@ struct HarkApp: App {
                 onSetActiveInputDeviceKeepWarm: { keepWarm in
                     setActiveInputDeviceKeepWarm(keepWarm)
                 },
+                onToggleForensicsHTMLDump: {
+                    appState.forensicsHTMLDumpEnabled.toggle()
+                },
                 onRequestMicrophonePermission: {
                     Task { @MainActor in
                         await requestMicrophonePermissionFromMenu()
@@ -573,10 +635,15 @@ struct HarkApp: App {
     }
 
     private func menuBarNSImage(symbolName: String, size: CGFloat) -> NSImage {
+        let cacheKey = "\(symbolName)-\(size)" as NSString
+        if let cached = Self.menuBarImageCache.object(forKey: cacheKey) {
+            return cached
+        }
         let config = NSImage.SymbolConfiguration(pointSize: size, weight: .regular)
         let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
             .withSymbolConfiguration(config) ?? NSImage()
         image.isTemplate = true
+        Self.menuBarImageCache.setObject(image, forKey: cacheKey)
         return image
     }
 
@@ -585,6 +652,9 @@ struct HarkApp: App {
     @MainActor
     private func onLaunch() async {
         registerBundledFonts()
+        preloadSoundEffects()
+        warmUpTextRendering()
+        await warmUpSoundPlayback()
 
         let savedID = UserDefaults.standard.string(forKey: "selectedModelID")
         let validIDs = Set(STTModelDefinition.allModels.map(\.id))
@@ -605,6 +675,13 @@ struct HarkApp: App {
             forKey: AppState.inputDeviceWarmPreferencesDefaultsKey
         ) as? [String: Bool] {
             appState.inputDeviceKeepWarmByUID = saved
+        }
+        if UserDefaults.standard.object(forKey: AppState.forensicsHTMLDumpEnabledDefaultsKey) != nil {
+            appState.forensicsHTMLDumpEnabled = UserDefaults.standard.bool(
+                forKey: AppState.forensicsHTMLDumpEnabledDefaultsKey
+            )
+        } else {
+            appState.forensicsHTMLDumpEnabled = false
         }
         syncRunOnStartupState()
         configureHotkeyFromDefaults()
@@ -820,10 +897,118 @@ struct HarkApp: App {
         forensicsSession?.event(name, payload)
     }
 
-    private func drainAsrDebugEvents(into trace: ForensicsSession?, session: StreamingSession) {
+    @MainActor
+    private func drainAsrDebugEventsAsync(into trace: ForensicsSession?, session: StreamingSession) async {
         guard let trace else { return }
-        let json = transcriptionService.takeDebugEventsJSON(session: session)
+        let json = await Task.detached(priority: .utility) { [transcriptionService] in
+            transcriptionService.takeDebugEventsJSON(session: session)
+        }.value
         trace.addRustBatch(json)
+    }
+
+    @MainActor
+    private func runFinalization(
+        session: StreamingSession,
+        allSamples: [Float],
+        processedCount: Int,
+        preFinalizeText: String,
+        trace: ForensicsSession?
+    ) async -> FinalizationRunResult {
+        let transcriptionService = self.transcriptionService
+        let finalizationSilencePaddingSeconds = Self.finalizationSilencePaddingSeconds
+        let finalizationMinimumSilencePaddingSeconds = Self.finalizationMinimumSilencePaddingSeconds
+        let transcriptionSampleRate = Self.transcriptionSampleRate
+        return await Task.detached(priority: .userInitiated) {
+            let prepareStartedAt = ProcessInfo.processInfo.systemUptime
+            let remaining = processedCount < allSamples.count ? Array(allSamples[processedCount...]) : []
+            let remainingCount = max(0, allSamples.count - processedCount)
+
+            let configuredPadSampleCount = max(
+                0,
+                Int((finalizationSilencePaddingSeconds * transcriptionSampleRate).rounded())
+            )
+            let minimumPadSampleCount = max(
+                0,
+                Int((finalizationMinimumSilencePaddingSeconds * transcriptionSampleRate).rounded())
+            )
+            let hasTrailingSilence = Self.hasTrailingSilence(allSamples)
+            let padSampleCount = hasTrailingSilence ? minimumPadSampleCount : configuredPadSampleCount
+
+            var finalizeChunk = remaining
+            if padSampleCount > 0 {
+                finalizeChunk.append(contentsOf: repeatElement(Float(0), count: padSampleCount))
+            }
+            let finalizeBufferRelPath = trace?.writeASRBuffer(mode: "finalize", samples: finalizeChunk)
+            let prepareMs = Int(((ProcessInfo.processInfo.systemUptime - prepareStartedAt) * 1000).rounded())
+
+            var feedMs = 0
+            if !finalizeChunk.isEmpty {
+                let feedStartedAt = ProcessInfo.processInfo.systemUptime
+                _ = transcriptionService.feedFinalizing(session: session, samples: finalizeChunk)
+                feedMs = Int(((ProcessInfo.processInfo.systemUptime - feedStartedAt) * 1000).rounded())
+            }
+
+            let finishStartedAt = ProcessInfo.processInfo.systemUptime
+            let finishText = transcriptionService.finish(session: session)
+            let finishMs = Int(((ProcessInfo.processInfo.systemUptime - finishStartedAt) * 1000).rounded())
+
+            var text = preFinalizeText
+            if let finishText {
+                let trimmed = finishText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    text = trimmed
+                }
+            }
+
+            let fallbackTailThresholdSamples = max(1, Int((0.45 * transcriptionSampleRate).rounded()))
+            let finalizationDidGrow = text.count > preFinalizeText.count
+            let remainingHasSpeech = !remaining.isEmpty && !Self.isEffectivelySilent(remaining)
+            let shouldRunFallback =
+                !allSamples.isEmpty
+                && !Self.isEffectivelySilent(allSamples)
+                && (
+                    text.isEmpty
+                    || (
+                        !finalizationDidGrow
+                        &&
+                        remainingCount >= fallbackTailThresholdSamples
+                        && remainingHasSpeech
+                    )
+                )
+
+            var fallbackMs: Int?
+            var fallbackSamples: Int?
+            if shouldRunFallback {
+                var samples = allSamples
+                if padSampleCount > 0 {
+                    samples.append(contentsOf: repeatElement(Float(0), count: padSampleCount))
+                }
+                let fallbackStartedAt = ProcessInfo.processInfo.systemUptime
+                let fallbackText = transcriptionService.transcribeSamples(samples)
+                fallbackMs = Int(((ProcessInfo.processInfo.systemUptime - fallbackStartedAt) * 1000).rounded())
+                fallbackSamples = samples.count
+                if let fallbackText {
+                    let trimmed = fallbackText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty && (text.isEmpty || trimmed.count > text.count) {
+                        text = trimmed
+                    }
+                }
+            }
+
+            return FinalizationRunResult(
+                text: text,
+                remainingSamples: remaining,
+                finalizeChunk: finalizeChunk,
+                remainingCount: remainingCount,
+                padSampleCount: padSampleCount,
+                prepareMs: prepareMs,
+                feedMs: feedMs,
+                finishMs: finishMs,
+                fallbackMs: fallbackMs,
+                fallbackSamples: fallbackSamples,
+                finalizeBufferRelPath: finalizeBufferRelPath
+            )
+        }.value
     }
 
     @MainActor
@@ -863,7 +1048,7 @@ struct HarkApp: App {
         }
 
         _ = appState.transition(to: .recording)
-        if Self.forensicsDumpEnabled {
+        if appState.forensicsHTMLDumpEnabled {
             let trace = ForensicsSession(id: Self.newTailDebugSessionID())
             forensicsSession = trace
             trace.event("recording_start", [
@@ -1163,7 +1348,7 @@ struct HarkApp: App {
                 if let trace = forensicsSession {
                     trace.event("session_end")
                     let traceCopy = trace
-                    Task.detached {
+                    Task.detached(priority: .background) {
                         traceCopy.writeHTMLDump()
                     }
                     forensicsSession = nil
@@ -1301,6 +1486,7 @@ struct HarkApp: App {
         ])
 
         _ = appState.transition(to: .transcribing)
+        appState.isFinishing = true
 
         if cancelTimeoutTask {
             cancelRecordingTimeout()
@@ -1358,15 +1544,13 @@ struct HarkApp: App {
         var debugFallbackMs: Int?
         Self.logger.warning("[hark] stop: partial='\(text, privacy: .public)' sessionExists=\(streamingSession != nil) samples=\(allSamples.count)")
         if let session = streamingSession {
-            appState.isFinishing = true
-
             // Wait for the streaming loop to exit so we don't race on the session.
             let streamJoinStartedAt = ProcessInfo.processInfo.systemUptime
             let result = await stask?.value
             let streamJoinMs = Int(((ProcessInfo.processInfo.systemUptime - streamJoinStartedAt) * 1000).rounded())
             let processedCount = result?.processedSampleCount ?? 0
             let remainingCount = max(0, allSamples.count - processedCount)
-            drainAsrDebugEvents(into: forensicsSession, session: session)
+            await drainAsrDebugEventsAsync(into: forensicsSession, session: session)
             debugProcessedCount = processedCount
             debugStreamJoinMs = streamJoinMs
             traceEvent("stream_join_done", [
@@ -1377,113 +1561,55 @@ struct HarkApp: App {
 
             Self.logger.warning("[hark] finalize: processed=\(processedCount) total=\(allSamples.count) remaining=\(remainingCount)")
 
-            // Feed remaining unprocessed audio and finalize — off main thread.
-            let transcriptionService = self.transcriptionService
-            let remaining = processedCount < allSamples.count ? Array(allSamples[processedCount...]) : nil
-            let configuredPadSampleCount = max(
-                0,
-                Int((Self.finalizationSilencePaddingSeconds * Self.transcriptionSampleRate).rounded())
+            let finalization = await runFinalization(
+                session: session,
+                allSamples: allSamples,
+                processedCount: processedCount,
+                preFinalizeText: preFinalizeText,
+                trace: forensicsSession
             )
-            let minimumPadSampleCount = max(
-                0,
-                Int((Self.finalizationMinimumSilencePaddingSeconds * Self.transcriptionSampleRate).rounded())
-            )
-            let hasTrailingSilence = Self.hasTrailingSilence(allSamples)
-            let padSampleCount = hasTrailingSilence
-                ? minimumPadSampleCount
-                : configuredPadSampleCount
-            let finalizeChunk: [Float] = {
-                var chunk = remaining ?? []
-                if padSampleCount > 0 {
-                    chunk.append(contentsOf: repeatElement(Float(0), count: padSampleCount))
-                }
-                return chunk
-            }()
-            let finalizeBufferRel = forensicsSession?.writeASRBuffer(mode: "finalize", samples: finalizeChunk)
-            debugRemainingSamples = remaining ?? []
-            debugFinalizeChunk = finalizeChunk
-            debugPadSampleCount = padSampleCount
-            let finalizeMetrics: (text: String?, feedMs: Int, finishMs: Int) = await Task.detached {
-                [transcriptionService, session, finalizeChunk] in
-                var feedMs = 0
-                if !finalizeChunk.isEmpty {
-                    let feedStartedAt = ProcessInfo.processInfo.systemUptime
-                    _ = transcriptionService.feedFinalizing(session: session, samples: finalizeChunk)
-                    feedMs = Int(((ProcessInfo.processInfo.systemUptime - feedStartedAt) * 1000).rounded())
-                }
-                let finishStartedAt = ProcessInfo.processInfo.systemUptime
-                let finishText = transcriptionService.finish(session: session)
-                let finishMs = Int(((ProcessInfo.processInfo.systemUptime - finishStartedAt) * 1000).rounded())
-                return (text: finishText, feedMs: feedMs, finishMs: finishMs)
-            }.value
-            debugFinalizeFeedMs = finalizeMetrics.feedMs
-            debugFinishMs = finalizeMetrics.finishMs
-            drainAsrDebugEvents(into: forensicsSession, session: session)
-            traceEvent("finalize_done", [
-                "finalize_feed_ms": String(finalizeMetrics.feedMs),
-                "finish_ms": String(finalizeMetrics.finishMs),
-                "finalize_chunk_samples": String(finalizeChunk.count),
-                "pad_samples": String(padSampleCount),
-                "finalize_buffer_audio_relpath": finalizeBufferRel ?? "",
-            ])
-            let finalText = finalizeMetrics.text
-            if let finalText {
-                let trimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    text = trimmed
-                }
-            }
+            debugRemainingSamples = finalization.remainingSamples
+            debugFinalizeChunk = finalization.finalizeChunk
+            debugPadSampleCount = finalization.padSampleCount
+            debugFinalizeFeedMs = finalization.feedMs
+            debugFinishMs = finalization.finishMs
+            debugFallbackMs = finalization.fallbackMs
 
-            // If finalization produced nothing, or failed to grow despite meaningful
-            // unprocessed tail audio, run a one-shot fallback on full captured audio.
-            let fallbackTailThresholdSamples = max(1, Int((0.18 * Self.transcriptionSampleRate).rounded()))
-            let shouldRunFallback =
-                !allSamples.isEmpty
-                && !Self.isEffectivelySilent(allSamples)
-                && (
-                    text.isEmpty
-                    || (
-                        remainingCount >= fallbackTailThresholdSamples
-                        && text.count <= preFinalizeText.count
-                    )
-                )
-            if shouldRunFallback {
-                let transcriptionService = self.transcriptionService
-                var samples = allSamples
-                if padSampleCount > 0 {
-                    samples.append(contentsOf: repeatElement(Float(0), count: padSampleCount))
-                }
-                let fallbackStartedAt = ProcessInfo.processInfo.systemUptime
-                let fallbackText: String? = await Task.detached {
-                    transcriptionService.transcribeSamples(samples)
-                }.value
-                let fallbackMs = Int(((ProcessInfo.processInfo.systemUptime - fallbackStartedAt) * 1000).rounded())
-                debugFallbackMs = fallbackMs
+            await drainAsrDebugEventsAsync(into: forensicsSession, session: session)
+            traceEvent("finalize_prepare_done", [
+                "prepare_ms": String(finalization.prepareMs),
+                "remaining_samples": String(finalization.remainingCount),
+                "finalize_chunk_samples": String(finalization.finalizeChunk.count),
+                "pad_samples": String(finalization.padSampleCount),
+            ])
+            traceEvent("finalize_done", [
+                "finalize_feed_ms": String(finalization.feedMs),
+                "finish_ms": String(finalization.finishMs),
+                "finalize_chunk_samples": String(finalization.finalizeChunk.count),
+                "pad_samples": String(finalization.padSampleCount),
+                "finalize_buffer_audio_relpath": finalization.finalizeBufferRelPath ?? "",
+            ])
+            if let fallbackMs = finalization.fallbackMs {
                 traceEvent("fallback_decode_done", [
                     "fallback_ms": String(fallbackMs),
-                    "fallback_samples": String(samples.count),
+                    "fallback_samples": String(finalization.fallbackSamples ?? 0),
                 ])
-                if let fallbackText {
-                    let trimmed = fallbackText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty && (text.isEmpty || trimmed.count > text.count) {
-                        text = trimmed
-                    }
-                }
                 Self.logger.warning(
-                    "[hark] stop-timing fallback_ms=\(fallbackMs) samples=\(samples.count) pre_len=\(preFinalizeText.count) post_len=\(text.count) remaining=\(remainingCount)"
+                    "[hark] stop-timing fallback_ms=\(fallbackMs) samples=\(finalization.fallbackSamples ?? 0) pre_len=\(preFinalizeText.count) post_len=\(finalization.text.count) remaining=\(finalization.remainingCount)"
                 )
             }
+            text = finalization.text
 
             Self.logger.warning(
-                "[hark] stop-timing capture_stop_ms=\(captureStopMs) stream_join_ms=\(streamJoinMs) finalize_feed_ms=\(finalizeMetrics.feedMs) finish_ms=\(finalizeMetrics.finishMs) finalize_chunk=\(finalizeChunk.count) pad_samples=\(padSampleCount) processed=\(processedCount) remaining=\(remainingCount)"
+                "[hark] stop-timing capture_stop_ms=\(captureStopMs) stream_join_ms=\(streamJoinMs) finalize_prepare_ms=\(finalization.prepareMs) finalize_feed_ms=\(finalization.feedMs) finish_ms=\(finalization.finishMs) finalize_chunk=\(finalization.finalizeChunk.count) pad_samples=\(finalization.padSampleCount) processed=\(processedCount) remaining=\(finalization.remainingCount)"
             )
 
             // Show the final transcript in the overlay (no animation).
             appState.partialTranscript = text
             appState.partialTranscriptCommittedUTF16 = (text as NSString).length
-            appState.isFinishing = false
         }
         streamingSession = nil
+        appState.isFinishing = false
 
         let totalStopMs = Int(((ProcessInfo.processInfo.systemUptime - stopStartedAt) * 1000).rounded())
         Self.logger.warning("[hark] stop-timing total_stop_to_finish_ms=\(totalStopMs)")
@@ -1501,7 +1627,7 @@ struct HarkApp: App {
             )
         }
 
-        if Self.tailDebugDumpEnabled {
+        if Self.tailDebugDumpEnabled && appState.forensicsHTMLDumpEnabled {
             let dumpID = Self.newTailDebugSessionID()
             let finalTextChars = text.count
             let metadata = TailDebugMetadata(
@@ -1526,7 +1652,7 @@ struct HarkApp: App {
                 finishMs: debugFinishMs,
                 fallbackMs: debugFallbackMs
             )
-            Task.detached {
+            Task.detached(priority: .background) {
                 Self.dumpTailDebugArtifacts(
                     metadata: metadata,
                     allSamples: allSamples,
@@ -1537,8 +1663,15 @@ struct HarkApp: App {
             Self.logger.warning("[hark] tail-debug dump_id=\(dumpID, privacy: .public)")
         }
 
-        forensicsSession?.setAudio(all: allSamples, remaining: debugRemainingSamples, finalize: debugFinalizeChunk)
-        forensicsSession?.setFinalText(text)
+        if let trace = forensicsSession {
+            let allSamplesCopy = allSamples
+            let remainingCopy = debugRemainingSamples
+            let finalizeCopy = debugFinalizeChunk
+            await Task.detached(priority: .utility) {
+                trace.setAudio(all: allSamplesCopy, remaining: remainingCopy, finalize: finalizeCopy)
+                trace.setFinalText(text)
+            }.value
+        }
 
         await finishAndPaste(text: text, skipPaste: skipPaste, forceSubmit: forceSubmit)
     }
@@ -1714,7 +1847,7 @@ struct HarkApp: App {
             if let trace = forensicsSession {
                 trace.event("session_end")
                 let traceCopy = trace
-                Task.detached {
+                Task.detached(priority: .background) {
                     traceCopy.writeHTMLDump()
                 }
             }
@@ -2081,6 +2214,62 @@ struct HarkApp: App {
 
     // MARK: - Sound Effects
 
+    @MainActor
+    private func warmUpTextRendering() {
+        let font = NSFont(name: "Jost-Regular", size: 15.2) ?? .systemFont(ofSize: 15.2, weight: .regular)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.alignment = .left
+
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.white,
+            .paragraphStyle: paragraph,
+        ]
+        let sample = NSAttributedString(
+            string: "Listening... Finalizing... Release to submit.",
+            attributes: attrs
+        )
+        _ = sample.boundingRect(
+            with: NSSize(width: 640, height: 400),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+    }
+
+    @MainActor
+    private func preloadSoundEffects() {
+        if tinkSound == nil, let sound = NSSound(named: "Tink") {
+            sound.loops = false
+            _ = sound.duration
+            tinkSound = sound
+        }
+        if popSound == nil, let sound = NSSound(named: "Pop") {
+            sound.loops = false
+            _ = sound.duration
+            popSound = sound
+        }
+    }
+
+    @MainActor
+    private func warmUpSoundPlayback() async {
+        guard !didWarmUpSoundPlayback else { return }
+        if tinkSound == nil || popSound == nil {
+            preloadSoundEffects()
+        }
+        guard let warmupSound = tinkSound else { return }
+
+        didWarmUpSoundPlayback = true
+        let originalVolume = warmupSound.volume
+        warmupSound.stop()
+        warmupSound.currentTime = 0
+        warmupSound.volume = 0
+        warmupSound.play()
+        try? await Task.sleep(for: .milliseconds(80))
+        warmupSound.stop()
+        warmupSound.currentTime = 0
+        warmupSound.volume = originalVolume
+    }
+
     private func systemNotificationVolume() -> Float {
         let globalDefaults = UserDefaults(suiteName: UserDefaults.globalDomain)
         if let raw = globalDefaults?.object(forKey: "com.apple.sound.beep.volume") {
@@ -2094,21 +2283,36 @@ struct HarkApp: App {
         return 1.0
     }
 
+    @MainActor
+    private func playSound(_ sound: NSSound?, volume: Float) {
+        guard let sound else { return }
+        sound.stop()
+        sound.currentTime = 0
+        sound.volume = volume
+        sound.play()
+    }
+
+    @MainActor
     private func playStartSound() {
-        guard let sound = NSSound(named: "Tink") else { return }
-        sound.volume = systemNotificationVolume()
-        sound.play()
+        if tinkSound == nil {
+            preloadSoundEffects()
+        }
+        playSound(tinkSound, volume: systemNotificationVolume())
     }
 
+    @MainActor
     private func playPastedSound() {
-        guard let sound = NSSound(named: "Tink") else { return }
-        sound.volume = systemNotificationVolume() * 0.6
-        sound.play()
+        if tinkSound == nil {
+            preloadSoundEffects()
+        }
+        playSound(tinkSound, volume: systemNotificationVolume() * 0.6)
     }
 
+    @MainActor
     private func playCancelSound() {
-        guard let sound = NSSound(named: "Pop") else { return }
-        sound.volume = systemNotificationVolume()
-        sound.play()
+        if popSound == nil {
+            preloadSoundEffects()
+        }
+        playSound(popSound, volume: systemNotificationVolume())
     }
 }

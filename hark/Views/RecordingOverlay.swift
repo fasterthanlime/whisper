@@ -40,9 +40,6 @@ struct RecordingOverlayView: View {
 
     private let footerBandHeight: CGFloat = 36
     private let footerOutsideGap: CGFloat = 6
-    private let committedRGB = (r: 0.93, g: 0.93, b: 0.92)
-    private let pendingRGB = (r: 0.80, g: 0.79, b: 0.76)
-    private let freshRGB = (r: 0.95, g: 0.72, b: 0.54)
     private let pendingOpacity: Double = 0.74
     private let freshStartOpacity: Double = 0.5
 
@@ -92,7 +89,14 @@ struct RecordingOverlayView: View {
     private func transcriptBody(maxTextHeight: CGFloat) -> some View {
         return ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                Text(styledDisplayText)
+                StyledTranscriptText(
+                    fullText: displayedTextValue,
+                    committedUTF16: appState.partialTranscriptCommittedUTF16,
+                    freshStart: freshStart,
+                    freshOpacity: freshOpacity,
+                    freshColorBlend: freshColorBlend
+                )
+                .equatable()
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -236,37 +240,6 @@ struct RecordingOverlayView: View {
         return "Listening..."
     }
 
-    /// Build an `AttributedString` with 3 visual tiers:
-    /// committed (opaque), pending stable (medium), and fresh (animated fade).
-    private var styledDisplayText: AttributedString {
-        let full = displayedTextValue
-        var result = AttributedString(full)
-        let font = NSFont(name: "Jost-Regular", size: 15.2) ?? .systemFont(ofSize: 15.2, weight: .regular)
-        let committedCount = committedCharacterCount(in: full)
-        let pendingStart = min(max(committedCount, 0), full.count)
-        let freshStartClamped = min(max(freshStart, pendingStart), full.count)
-        let committedColor = Color(red: committedRGB.r, green: committedRGB.g, blue: committedRGB.b)
-        let pendingColor = Color(red: pendingRGB.r, green: pendingRGB.g, blue: pendingRGB.b)
-        let freshColor = blendedFreshColor()
-
-        result.font = font
-        result.foregroundColor = pendingColor.opacity(pendingOpacity)
-
-        // Committed prefix is fully opaque.
-        if committedCount > 0 {
-            let committedEnd = result.index(result.startIndex, offsetByCharacters: committedCount)
-            result[result.startIndex..<committedEnd].foregroundColor = committedColor
-        }
-
-        // Fresh tail fades from stronger fade to pending opacity.
-        if freshStartClamped < full.count {
-            let startIdx = result.index(result.startIndex, offsetByCharacters: freshStartClamped)
-            result[startIdx..<result.endIndex].foregroundColor = freshColor.opacity(freshOpacity)
-        }
-
-        return result
-    }
-
     private func animateTextChange(to newText: String) {
         guard !newText.isEmpty else { return }
 
@@ -324,18 +297,71 @@ struct RecordingOverlayView: View {
         }
     }
 
-    private func committedCharacterCount(in text: String) -> Int {
-        guard !text.isEmpty else { return 0 }
-        let clampedUTF16 = min(max(0, appState.partialTranscriptCommittedUTF16), (text as NSString).length)
-        let ns = text as NSString
+}
+
+private struct StyledTranscriptText: View, Equatable {
+    let fullText: String
+    let committedUTF16: Int
+    let freshStart: Int
+    let freshOpacity: Double
+    let freshColorBlend: Double
+
+    private static let transcriptFont: NSFont =
+        NSFont(name: "Jost-Regular", size: 15.2) ?? .systemFont(ofSize: 15.2, weight: .regular)
+    private static let committedRGB = (r: 0.93, g: 0.93, b: 0.92)
+    private static let pendingRGB = (r: 0.80, g: 0.79, b: 0.76)
+    private static let freshRGB = (r: 0.95, g: 0.72, b: 0.54)
+    private static let pendingOpacity: Double = 0.74
+
+    static func == (lhs: StyledTranscriptText, rhs: StyledTranscriptText) -> Bool {
+        lhs.fullText == rhs.fullText
+            && lhs.committedUTF16 == rhs.committedUTF16
+            && lhs.freshStart == rhs.freshStart
+            && lhs.freshOpacity == rhs.freshOpacity
+            && lhs.freshColorBlend == rhs.freshColorBlend
+    }
+
+    var body: some View {
+        Text(styledText)
+    }
+
+    private var styledText: AttributedString {
+        var result = AttributedString(fullText)
+        let committedCount = committedCharacterCount()
+        let pendingStart = min(max(committedCount, 0), fullText.count)
+        let freshStartClamped = min(max(freshStart, pendingStart), fullText.count)
+        let committedColor = Color(red: Self.committedRGB.r, green: Self.committedRGB.g, blue: Self.committedRGB.b)
+        let pendingColor = Color(red: Self.pendingRGB.r, green: Self.pendingRGB.g, blue: Self.pendingRGB.b)
+        let freshColor = blendedFreshColor()
+
+        result.font = Self.transcriptFont
+        result.foregroundColor = pendingColor.opacity(Self.pendingOpacity)
+
+        if committedCount > 0 {
+            let committedEnd = result.index(result.startIndex, offsetByCharacters: committedCount)
+            result[result.startIndex..<committedEnd].foregroundColor = committedColor
+        }
+
+        if freshStartClamped < fullText.count {
+            let startIdx = result.index(result.startIndex, offsetByCharacters: freshStartClamped)
+            result[startIdx..<result.endIndex].foregroundColor = freshColor.opacity(freshOpacity)
+        }
+
+        return result
+    }
+
+    private func committedCharacterCount() -> Int {
+        guard !fullText.isEmpty else { return 0 }
+        let clampedUTF16 = min(max(0, committedUTF16), (fullText as NSString).length)
+        let ns = fullText as NSString
         return ns.substring(to: clampedUTF16).count
     }
 
     private func blendedFreshColor() -> Color {
         let t = min(max(freshColorBlend, 0), 1)
-        let r = freshRGB.r + (pendingRGB.r - freshRGB.r) * t
-        let g = freshRGB.g + (pendingRGB.g - freshRGB.g) * t
-        let b = freshRGB.b + (pendingRGB.b - freshRGB.b) * t
+        let r = Self.freshRGB.r + (Self.pendingRGB.r - Self.freshRGB.r) * t
+        let g = Self.freshRGB.g + (Self.pendingRGB.g - Self.freshRGB.g) * t
+        let b = Self.freshRGB.b + (Self.pendingRGB.b - Self.freshRGB.b) * t
         return Color(red: r, green: g, blue: b)
     }
 }
