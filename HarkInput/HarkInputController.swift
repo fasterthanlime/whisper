@@ -83,7 +83,7 @@ class HarkInputController: IMKInputController {
 
         currentMarkedText = ""
         client.insertText(
-            text,
+            text + " ",
             replacementRange: NSRange(location: NSNotFound, length: 0)
         )
     }
