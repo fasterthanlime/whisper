@@ -129,15 +129,19 @@ struct RecordingOverlayView: View {
         }
     }
 
+    @ViewBuilder
     private var footerBand: some View {
+        let isIME = appState.currentInsertionStrategy == .ime
         HStack(alignment: .center) {
             waveformBlock
 
-            Spacer(minLength: 8)
+            if !isIME || appState.overlayTetherOutOfApp {
+                Spacer(minLength: 8)
 
-            controlsBlock
-                .animation(.easeInOut(duration: 0.15), value: appState.isLockedMode)
-                .animation(.easeInOut(duration: 0.15), value: appState.isFinishing)
+                controlsBlock
+                    .animation(.easeInOut(duration: 0.15), value: appState.isLockedMode)
+                    .animation(.easeInOut(duration: 0.15), value: appState.isFinishing)
+            }
         }
         .padding(.horizontal, 2)
         .frame(height: footerBandHeight)

@@ -1570,6 +1570,90 @@ struct HarkApp: App {
         recordingTimeoutTask = nil
     }
 
+    /// Instantly cancel IME dictation: clear marked text, stop recording,
+    /// then finalize in the background to add to history.
+    @MainActor
+    private func imeCancelInstant() async {
+        guard appState.phase == .recording else { return }
+
+        // Immediately clear the IME marked text
+        HarkInputClient.sendCancelInput()
+        HarkInputClient.deactivateIME()
+
+        // Stop audio and UI immediately
+        cancelRecordingTimeout()
+        removeEscapeMonitor()
+        appState.isLockedMode = false
+        keyDownTime = nil
+        hotkeyMonitor.allowExtraModifiers = false
+        overlayManager.hideWithResult(.cancelled)
+        playCancelSound()
+
+        // Grab references before transitioning
+        let stask = streamingTask
+        streamingTask = nil
+        stask?.cancel()
+
+        let session = streamingSession
+        let recorder = self.audioRecorder
+        let shouldKeepWarm = appState.activeInputDeviceKeepWarm
+        let trace = forensicsSession
+        let appStateRef = appState
+
+        _ = appState.transition(to: .idle)
+        appState.isFinishing = false
+        recordingStartedAt = nil
+        activeInsertionStrategy = .paste
+
+        // Finalize in background — just for history, no pasting
+        Task.detached(priority: .utility) { [transcriptionService] in
+            // Stop capture
+            let allSamples: [Float]
+            if recorder.isWarmedUp {
+                allSamples = recorder.stopCapture()
+            } else {
+                allSamples = recorder.stop()
+            }
+            if !shouldKeepWarm, recorder.isWarmedUp {
+                recorder.coolDown()
+            }
+
+            // Wait for streaming task to finish
+            let result = await stask?.value
+            let processedCount = result?.processedSampleCount ?? 0
+
+            // Finalize if we have a session
+            if let session {
+                let remaining = processedCount < allSamples.count ? Array(allSamples[processedCount...]) : []
+                if !remaining.isEmpty {
+                    _ = transcriptionService.feedFinalizing(session: session, samples: remaining)
+                }
+                if let finalText = transcriptionService.finish(session: session) {
+                    let trimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        await MainActor.run {
+                            appStateRef.addToHistory(trimmed)
+                        }
+                    }
+                }
+            }
+
+            if let trace {
+                trace.event("session_end")
+                trace.writeHTMLDump()
+            }
+        }
+
+        forensicsSession = nil
+        streamingSession = nil
+        pasteTargetBundleID = nil
+        directInputElement = nil
+        directInputOriginalText = nil
+        appState.overlayLockedBundleID = nil
+        appState.overlayLockedAppName = nil
+        appState.overlayTetherOutOfApp = false
+    }
+
     @MainActor
     private func stopRecordingAndTranscribe(cancelTimeoutTask: Bool = true, skipPaste: Bool = false, forceSubmit: Bool = false) async {
         guard appState.phase == .recording else { return }
@@ -2197,7 +2281,7 @@ struct HarkApp: App {
             Self.logger.warning("[hark] received imeCancel notification, phase=\(String(describing: self.appState.phase))")
             Task { @MainActor in
                 guard self.appState.phase == .recording else { return }
-                await self.stopRecordingAndTranscribe(skipPaste: true, forceSubmit: false)
+                await self.imeCancelInstant()
             }
         }
         imeNotificationObservers.append(imeCancelObserver)
