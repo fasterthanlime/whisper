@@ -594,8 +594,8 @@ struct HarkApp: App {
     // Delays in the commit/submit path (all in milliseconds).
     // Set to 0 to test without delays — increase if things break.
     private static let appReactivationDelayMs = 500  // wait after bringing locked app to front
-    private static let imeCommitDelayMs = 0          // wait after sendCommitText before deactivating IME
-    private static let imeDeactivateDelayMs = 0      // wait after deactivating IME before simulating Enter
+    private static let imeCommitDelayMs = 50          // wait after sendCommitText before deactivating IME
+    private static let imeDeactivateDelayMs = 50      // wait after deactivating IME before simulating Enter
     private static let axSubmitDelayMs = 0            // wait before simulating Enter in AX mode
     private static let tailDebugDumpEnabled = true
 
