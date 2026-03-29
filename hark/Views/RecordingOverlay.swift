@@ -87,6 +87,7 @@ struct RecordingOverlayView: View {
     }
 
     private func transcriptBody(maxTextHeight: CGFloat) -> some View {
+        let directInput = appState.currentDirectInput
         return ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 StyledTranscriptText(
@@ -104,6 +105,7 @@ struct RecordingOverlayView: View {
                         Color.clear.preference(key: TextHeightKey.self, value: geo.size.height)
                     })
                     .id("transcript")
+                    .opacity(directInput ? 0 : 1)
             }
             .frame(maxHeight: maxTextHeight, alignment: .top)
             .mask(Color.white)
@@ -118,10 +120,10 @@ struct RecordingOverlayView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.black.opacity(0.94))
+                    .fill(Color.black.opacity(directInput ? 0.1 : 0.94))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                            .strokeBorder(Color.white.opacity(directInput ? 0.05 : 0.12), lineWidth: 1)
                     )
             )
         }

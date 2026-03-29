@@ -118,6 +118,7 @@ struct MenuBarView: View {
                     languageButton(label: lang.label, language: lang.name)
                 }
                 autoSubmitButton
+                directInputButton
             }
             .padding(.horizontal, 2)
 
@@ -182,6 +183,30 @@ struct MenuBarView: View {
         }
         .buttonStyle(.plain)
         .help("Auto submit (paste + Enter)")
+    }
+
+    @ViewBuilder
+    private var directInputButton: some View {
+        let isEnabled = appState.currentDirectInput
+        Button {
+            appState.setDirectInputForFrontmostApp(!isEnabled)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: isEnabled ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 10, weight: .semibold))
+                Image(systemName: "character.cursor.ibeam")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .foregroundStyle(isEnabled ? .white : .primary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(isEnabled ? Color.accentColor : Color.primary.opacity(0.08))
+            }
+        }
+        .buttonStyle(.plain)
+        .help("Direct input (type into focused text field via accessibility)")
     }
 
     // MARK: - Recent transcriptions

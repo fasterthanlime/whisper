@@ -151,8 +151,6 @@ final class AppState {
     static let supportedLanguages: [(name: String, label: String)] = [
         ("english", "EN"),
         ("french", "FR"),
-        ("spanish", "ES"),
-        ("german", "DE"),
         ("polish", "PL"),
     ]
 
@@ -190,6 +188,31 @@ final class AppState {
     func setAutoSubmitForFrontmostApp(_ enabled: Bool) {
         guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
         appAutoSubmit[bundleID] = enabled
+    }
+
+    // MARK: - Per-app direct input (AX text field manipulation)
+
+    static let appDirectInputDefaultsKey = "appDirectInput"
+
+    /// Explicit direct-input preference per app. Missing key = false (use overlay).
+    var appDirectInput: [String: Bool] = [:] {
+        didSet {
+            UserDefaults.standard.set(appDirectInput, forKey: Self.appDirectInputDefaultsKey)
+        }
+    }
+
+    /// Whether the current frontmost app should use direct AX text field input.
+    var currentDirectInput: Bool {
+        guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else {
+            return false
+        }
+        return appDirectInput[bundleID] ?? false
+    }
+
+    /// Set direct-input behavior for the current frontmost app.
+    func setDirectInputForFrontmostApp(_ enabled: Bool) {
+        guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
+        appDirectInput[bundleID] = enabled
     }
 
     // MARK: - Vocabulary prompt (per-app)

@@ -1056,6 +1056,70 @@
                 .then(r => {if (!r.ok) throw new Error(`${r.status} ${r.statusText}`); const ct = r.headers.get('content-type') || ''; return ct.includes('json') ? r.json() : r.text();});
         }
 
+        function parseJsonSafe(raw, fallback = null) {
+            if (!raw) return fallback;
+            try {
+                return JSON.parse(raw);
+            } catch (_) {
+                return fallback;
+            }
+        }
+
+        function formatPhoneSec(sec) {
+            if (typeof sec !== 'number' || !Number.isFinite(sec)) return '0.000';
+            return sec.toFixed(3);
+        }
+
+        function GroupedPhoneLane({label, raw}) {
+            const groups = useMemo(() => {
+                const parsed = parseJsonSafe(raw, []);
+                return Array.isArray(parsed) ? parsed : [];
+            }, [raw]);
+            return (
+                <div style={{display:'grid',gap:6}}>
+                    <div style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1}}>{label}</div>
+                    {groups.length === 0 ? (
+                        <div style={{fontSize:12,color:'var(--text-muted)'}}>No grouped phones yet.</div>
+                    ) : (
+                        <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                            {groups.map((group, idx) => (
+                                <div key={`${label}-${idx}`} style={{display:'grid',gap:2,padding:'6px 8px',border:'1px solid var(--border)',borderRadius:8,background:'rgba(255,255,255,0.03)',minWidth:96}}>
+                                    <div style={{fontSize:11,color:'var(--text-muted)'}}>
+                                        {group.word || group.t || `#${idx + 1}`}
+                                    </div>
+                                    <div style={{fontFamily:'monospace',fontSize:13,color:'var(--accent)',lineHeight:1.35}}>
+                                        {group.w || group.t || '—'}
+                                    </div>
+                                    <div style={{fontSize:10,color:'var(--text-muted)'}}>
+                                        own {formatPhoneSec(group.own_s)}–{formatPhoneSec(group.own_e)}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        function TimedPhoneTraceSummary({raw}) {
+            const trace = useMemo(() => parseJsonSafe(raw, null), [raw]);
+            if (!trace) return <div style={{fontSize:12,color:'var(--text-muted)'}}>No raw timed phone trace.</div>;
+            const timing = trace.timing_ms || {};
+            return (
+                <div style={{display:'grid',gap:6}}>
+                    <div style={{display:'flex',flexWrap:'wrap',gap:8,fontSize:11,color:'var(--text-muted)'}}>
+                        <span>inventory {trace.inventory_lang || 'unknown'}</span>
+                        <span>frames {trace.output_frames ?? '—'}</span>
+                        <span>seconds {typeof trace.original_seconds === 'number' ? trace.original_seconds.toFixed(2) : '—'}</span>
+                        <span>total {typeof timing.total === 'number' ? `${timing.total.toFixed(1)}ms` : '—'}</span>
+                    </div>
+                    <div style={{fontFamily:'monospace',fontSize:12,color:'var(--accent)',lineHeight:1.5,wordBreak:'break-word'}}>
+                        {trace.phones || '—'}
+                    </div>
+                </div>
+            );
+        }
+
         function useHash() {
             const [hash, setHash] = useState(window.location.hash || '#/');
             useEffect(() => {const h = () => setHash(window.location.hash || '#/'); window.addEventListener('hashchange', h); return () => window.removeEventListener('hashchange', h);}, []);
@@ -1113,6 +1177,11 @@
             source.start();
             _currentSource = source;
             return source;
+        }
+
+        function scrollToCorpusSection(id) {
+            const el = document.getElementById(id);
+            if (el) el.scrollIntoView({behavior: 'smooth', block: 'start'});
         }
 
         // ==================== WAVEFORM ====================
@@ -2945,6 +3014,10 @@
             const inputRef = useRef(null);
             const [recordingSentence, setRecordingSentence] = useState(null);
             const [recordings, setRecordings] = useState([]);
+            const [recordingPhonesOpen, setRecordingPhonesOpen] = useState({});
+            const [recordingPhonesById, setRecordingPhonesById] = useState({});
+            const [recordingPhonesLoading, setRecordingPhonesLoading] = useState({});
+            const [recordingPhonesError, setRecordingPhonesError] = useState({});
             const [recording, setRecording] = useState(false);
             const [recordingBusy, setRecordingBusy] = useState(false);
             const [recordingError, setRecordingError] = useState(null);
@@ -3129,6 +3202,10 @@
                 setRecordingSentence(row);
                 setRecordingError(null);
                 setRecordings([]);
+                setRecordingPhonesOpen({});
+                setRecordingPhonesById({});
+                setRecordingPhonesLoading({});
+                setRecordingPhonesError({});
                 try {
                     await loadRecordings(row);
                 } catch (e) {
@@ -3140,7 +3217,32 @@
                 stopSentenceRecording();
                 setRecordingSentence(null);
                 setRecordings([]);
+                setRecordingPhonesOpen({});
+                setRecordingPhonesById({});
+                setRecordingPhonesLoading({});
+                setRecordingPhonesError({});
                 setRecordingError(null);
+            };
+
+            const loadRecordingPhones = async (recordingId) => {
+                setRecordingPhonesLoading(prev => ({...prev, [recordingId]: true}));
+                setRecordingPhonesError(prev => ({...prev, [recordingId]: null}));
+                try {
+                    const res = await api(`/api/author/recordings/${recordingId}/phones`);
+                    setRecordingPhonesById(prev => ({...prev, [recordingId]: res.trace || null}));
+                } catch (e) {
+                    setRecordingPhonesError(prev => ({...prev, [recordingId]: e.message}));
+                } finally {
+                    setRecordingPhonesLoading(prev => ({...prev, [recordingId]: false}));
+                }
+            };
+
+            const toggleRecordingPhones = async (recordingId) => {
+                const nextOpen = !recordingPhonesOpen[recordingId];
+                setRecordingPhonesOpen(prev => ({...prev, [recordingId]: nextOpen}));
+                if (nextOpen && !(recordingId in recordingPhonesById) && !recordingPhonesLoading[recordingId]) {
+                    await loadRecordingPhones(recordingId);
+                }
             };
 
             const closeRapidFire = async () => {
@@ -3997,16 +4099,46 @@
                                     {recordings.length === 0 ? (
                                         <div style={{padding:16,textAlign:'center',color:'var(--text-muted)'}}>No takes yet.</div>
                                     ) : recordings.map(r => (
-                                        <div key={r.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 10px',borderBottom:'1px solid rgba(255,255,255,0.04)'}}>
-                                            <span style={{minWidth:70,fontFamily:'monospace',color:'var(--accent)',fontWeight:600}}>Take {r.take_no}</span>
-                                            <span style={{flex:1,color:'var(--text-muted)',fontSize:12}}>{r.created_at}</span>
-                                            <button className="btn btn-sm" onClick={async () => {
-                                                if (!r.audio_b64) return;
-                                                const mime = r.audio_mime || 'audio/ogg';
-                                                const a = new Audio(`data:${mime};base64,${r.audio_b64}`);
-                                                a.play();
-                                            }}>Play</button>
-                                            <button className="btn btn-sm" onClick={() => deleteRecording(r)} style={{color:'var(--danger)'}}>Delete</button>
+                                        <div key={r.id} style={{padding:'8px 10px',borderBottom:'1px solid rgba(255,255,255,0.04)'}}>
+                                            <div style={{display:'flex',alignItems:'center',gap:8}}>
+                                                <span style={{minWidth:70,fontFamily:'monospace',color:'var(--accent)',fontWeight:600}}>Take {r.take_no}</span>
+                                                <span style={{flex:1,color:'var(--text-muted)',fontSize:12}}>{r.created_at}</span>
+                                                <span style={{fontSize:11,color:r.has_phone_trace ? 'var(--success)' : 'var(--text-muted)',border:'1px solid var(--border)',borderRadius:999,padding:'2px 8px'}}>
+                                                    {r.has_phone_trace ? `IPA v${r.phone_trace_grouping_version || '?'}` : 'IPA pending'}
+                                                </span>
+                                                <button className="btn btn-sm" onClick={async () => {
+                                                    if (!r.audio_b64) return;
+                                                    const mime = r.audio_mime || 'audio/ogg';
+                                                    const a = new Audio(`data:${mime};base64,${r.audio_b64}`);
+                                                    a.play();
+                                                }}>Play</button>
+                                                <button className="btn btn-sm" onClick={() => toggleRecordingPhones(r.id)} disabled={recordingPhonesLoading[r.id]}>
+                                                    {recordingPhonesOpen[r.id] ? 'Hide IPA' : 'Show IPA'}
+                                                </button>
+                                                <button className="btn btn-sm" onClick={() => deleteRecording(r)} style={{color:'var(--danger)'}}>Delete</button>
+                                            </div>
+                                            {recordingPhonesOpen[r.id] && (
+                                                <div style={{marginTop:10,padding:10,border:'1px solid var(--border)',borderRadius:8,background:'rgba(255,255,255,0.02)',display:'grid',gap:10}}>
+                                                    {recordingPhonesLoading[r.id] ? (
+                                                        <div style={{fontSize:12,color:'var(--text-muted)'}}>Loading IPA trace…</div>
+                                                    ) : recordingPhonesError[r.id] ? (
+                                                        <div className="pipeline-error">{recordingPhonesError[r.id]}</div>
+                                                    ) : !recordingPhonesById[r.id] ? (
+                                                        <div style={{fontSize:12,color:'var(--text-muted)'}}>No IPA trace cached yet for this take.</div>
+                                                    ) : (
+                                                        <>
+                                                            <div style={{display:'flex',flexWrap:'wrap',gap:8,fontSize:11,color:'var(--text-muted)'}}>
+                                                                <span>decoder {recordingPhonesById[r.id].decoder || '—'}</span>
+                                                                <span>grouping v{recordingPhonesById[r.id].grouping_version || '?'}</span>
+                                                                <span>updated {recordingPhonesById[r.id].updated_at || '—'}</span>
+                                                            </div>
+                                                            <GroupedPhoneLane label="Sentence-grouped IPA" raw={recordingPhonesById[r.id].sentence_grouped_json} />
+                                                            <GroupedPhoneLane label="Qwen-grouped IPA" raw={recordingPhonesById[r.id].qwen_grouped_json} />
+                                                            <TimedPhoneTraceSummary raw={recordingPhonesById[r.id].raw_trace_json} />
+                                                        </>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                     ))}
                                 </div>
@@ -4233,6 +4365,16 @@
             const [confusionTermDraft, setConfusionTermDraft] = useState('');
             const [confusionSurfaceDraft, setConfusionSurfaceDraft] = useState('');
             const [confusionSaving, setConfusionSaving] = useState(false);
+            const [recordingSentence, setRecordingSentence] = useState(null);
+            const [recordings, setRecordings] = useState([]);
+            const [recording, setRecording] = useState(false);
+            const [recordingBusy, setRecordingBusy] = useState(false);
+            const [recordingError, setRecordingError] = useState(null);
+            const [recordingPhonesOpen, setRecordingPhonesOpen] = useState({});
+            const [recordingPhonesById, setRecordingPhonesById] = useState({});
+            const [recordingPhonesLoading, setRecordingPhonesLoading] = useState({});
+            const [recordingPhonesError, setRecordingPhonesError] = useState({});
+            const recordingRecorderRef = useRef(null);
 
             const load = async () => {
                 setLoading(true);
@@ -4305,14 +4447,16 @@
                     detail: status.prepare_ready
                         ? 'You have enough corpus inputs to build the applied-mistake dataset.'
                         : 'Need authored sentences and mined confusion evidence before prepare.',
-                    action: { href: '#/train', label: 'Go to Train' },
+                    sectionId: 'corpus-readiness',
+                    action: 'Why',
                 },
                 {
                     title: 'Prepared Dataset',
                     value: `${status.train_count || 0} / ${status.valid_count || 0}`,
                     tone: 'var(--text)',
                     detail: 'Current train / valid rows built from clean sentence + one applied known mistake.',
-                    action: { href: '#/train', label: 'Inspect training' },
+                    sectionId: 'corpus-readiness',
+                    action: 'Details',
                 },
                 {
                     title: 'Held-out Eval',
@@ -4321,7 +4465,8 @@
                     detail: status.applied_eval_exists
                         ? 'Held-out applied-mistake rows ready for evaluation.'
                         : 'Run Prepare to build the held-out applied evaluation set.',
-                    action: { href: '#/eval', label: 'Go to Eval' },
+                    sectionId: 'corpus-readiness',
+                    action: 'Details',
                 },
             ];
             const needsWork = [
@@ -4331,8 +4476,8 @@
                     body: 'Vocabulary terms without an explicit spoken form. These terms are not stable enough for the corpus contract yet.',
                     items: previewTerms(vocabNeedingOverrides).map(row => row.term),
                     empty: 'No override gaps.',
-                    href: '#/vocab',
-                    action: 'Fix vocabulary',
+                    sectionId: 'corpus-vocabulary',
+                    action: 'Fix below',
                 },
                 {
                     title: 'Missing clean sentences',
@@ -4340,8 +4485,8 @@
                     body: 'Reviewed terms with no clean authored sentence. These cannot produce applied-mistake rows yet.',
                     items: previewTerms(missingCleanTerms).map(row => row.term),
                     empty: 'Every ready term has at least one clean sentence.',
-                    href: '#/author',
-                    action: 'Author sentences',
+                    sectionId: 'corpus-sentences',
+                    action: 'Write below',
                 },
                 {
                     title: 'Missing confusion evidence',
@@ -4349,8 +4494,8 @@
                     body: 'Reviewed terms with no observed ASR confusion surface. These terms cannot generate realistic corruptions yet.',
                     items: previewTerms(missingConfusionTerms).map(row => row.term),
                     empty: 'Every ready term has at least one confusion surface.',
-                    href: '#/confusions',
-                    action: 'Inspect confusions',
+                    sectionId: 'corpus-confusions',
+                    action: 'Review below',
                 },
                 {
                     title: 'Missing counterexamples',
@@ -4358,8 +4503,8 @@
                     body: 'Reviewed terms with no authored counterexample. These are still vulnerable to over-correction drift.',
                     items: previewTerms(noCounterexampleTerms).map(row => row.term),
                     empty: 'Every ready term has at least one counterexample.',
-                    href: '#/author',
-                    action: 'Write counterexamples',
+                    sectionId: 'corpus-sentences',
+                    action: 'Write below',
                 },
                 {
                     title: 'Missing timed phones',
@@ -4367,8 +4512,8 @@
                     body: 'Every human recording now needs a persisted timed phone trace and grouped IPA lanes. This is part of the corpus contract.',
                     items: [],
                     empty: 'Every human recording already has persisted timed phones.',
-                    href: '#/author',
-                    action: 'Inspect recordings',
+                    sectionId: 'corpus-recordings',
+                    action: 'Inspect below',
                 },
             ];
             const saveVocab = async () => {
@@ -4486,6 +4631,100 @@
                 }
             };
 
+            const loadRecordings = async (row) => {
+                const res = await api(`/api/author/sentences/${row.id}/recordings`);
+                setRecordings(res.recordings || []);
+            };
+            const openRecordings = async (row) => {
+                setRecordingSentence(row);
+                setRecordingError(null);
+                setRecordings([]);
+                setRecordingPhonesOpen({});
+                setRecordingPhonesById({});
+                setRecordingPhonesLoading({});
+                setRecordingPhonesError({});
+                try {
+                    await loadRecordings(row);
+                } catch (e) {
+                    setRecordingError(e.message);
+                }
+            };
+            const stopSentenceRecording = async (options = {}) => {
+                if (recordingRecorderRef.current && recordingRecorderRef.current.state !== 'inactive') {
+                    const recorder = recordingRecorderRef.current;
+                    recordingRecorderRef.current = null;
+                    await recorder.stop(options);
+                }
+                setRecording(false);
+            };
+            const closeRecordings = () => {
+                stopSentenceRecording();
+                setRecordingSentence(null);
+                setRecordings([]);
+                setRecordingPhonesOpen({});
+                setRecordingPhonesById({});
+                setRecordingPhonesLoading({});
+                setRecordingPhonesError({});
+                setRecordingError(null);
+            };
+            const uploadSentenceTake = async (row, wavBytes) => {
+                const res = await fetch(`/api/author/sentences/${row.id}/recordings`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'audio/wav'},
+                    body: wavBytes,
+                });
+                if (!res.ok) {
+                    const text = await res.text();
+                    throw new Error(text || 'failed to save recording');
+                }
+                return res.json();
+            };
+            const startSentenceRecording = async () => {
+                if (!recordingSentence) return;
+                try {
+                    const recorder = await startMonoWavRecording(async ({wavBytes}) => {
+                        try {
+                            setRecordingBusy(true);
+                            const data = await uploadSentenceTake(recordingSentence, wavBytes);
+                            setRecordings(data.recordings || []);
+                            await load();
+                            setRecordingError(null);
+                        } catch (e) {
+                            setRecordingError(e.message);
+                        } finally {
+                            setRecording(false);
+                            setRecordingBusy(false);
+                        }
+                    });
+                    recordingRecorderRef.current = recorder;
+                    setRecording(true);
+                } catch (e) {
+                    setRecordingError('Microphone access denied');
+                }
+            };
+            const loadRecordingPhones = async (recordingId) => {
+                setRecordingPhonesLoading(prev => ({...prev, [recordingId]: true}));
+                setRecordingPhonesError(prev => ({...prev, [recordingId]: null}));
+                try {
+                    const res = await api(`/api/author/recordings/${recordingId}/phones`);
+                    setRecordingPhonesById(prev => ({...prev, [recordingId]: res.trace || null}));
+                } catch (e) {
+                    setRecordingPhonesError(prev => ({...prev, [recordingId]: e.message}));
+                } finally {
+                    setRecordingPhonesLoading(prev => ({...prev, [recordingId]: false}));
+                }
+            };
+            const toggleRecordingPhones = async (recordingId) => {
+                const nextOpen = !recordingPhonesOpen[recordingId];
+                setRecordingPhonesOpen(prev => ({...prev, [recordingId]: nextOpen}));
+                if (nextOpen && !(recordingId in recordingPhonesById) && !recordingPhonesLoading[recordingId]) {
+                    await loadRecordingPhones(recordingId);
+                }
+            };
+            const recordingsNeedingAttention = authoredRows
+                .filter(row => (row.recording_count || 0) === 0 || (row.phone_trace_count || 0) < (row.recording_count || 0))
+                .slice(0, 12);
+
             return (
                 <div className="container">
                     <div style={{display:'flex',alignItems:'baseline',gap:12,marginBottom:8}}>
@@ -4496,7 +4735,7 @@
                     </div>
                     {error && <div className="pipeline-error" style={{marginBottom:16}}>{error}</div>}
 
-                    <div className="card" style={{marginBottom:16,padding:'14px 16px'}}>
+                    <div id="corpus-readiness" className="card" style={{marginBottom:16,padding:'14px 16px'}}>
                         <div style={{fontSize:13,color:'var(--text-muted)',marginBottom:12}}>
                             The corpus pipeline is: reviewed vocabulary + clean authored sentences + counterexamples + mined confusion surfaces.
                         </div>
@@ -4528,9 +4767,9 @@
                                     <div style={{fontSize:13,color:'var(--text-muted)',lineHeight:1.45,marginBottom:10}}>
                                         {item.detail}
                                     </div>
-                                    <a href={item.action.href} className="btn btn-sm">
-                                        {item.action.label}
-                                    </a>
+                                    <button className="btn btn-sm" onClick={() => scrollToCorpusSection(item.sectionId)}>
+                                        {item.action}
+                                    </button>
                                 </div>
                             ))}
                         </div>
@@ -4566,17 +4805,16 @@
                                             <span style={{fontSize:12,color:'var(--text-muted)'}}>{item.empty}</span>
                                         )}
                                     </div>
-                                    <a href={item.href} className="btn btn-sm">{item.action}</a>
+                                    <button className="btn btn-sm" onClick={() => scrollToCorpusSection(item.sectionId)}>{item.action}</button>
                                 </div>
                             ))}
                         </div>
                     </div>
 
                     <div style={{display:'grid',gap:12}}>
-                        <div className="card" style={{padding:'14px 16px'}}>
+                        <div id="corpus-vocabulary" className="card" style={{padding:'14px 16px'}}>
                             <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',gap:12,marginBottom:10,flexWrap:'wrap'}}>
                                 <h3 style={{margin:0}}>Vocabulary</h3>
-                                <a href="#/vocab" className="btn btn-sm">Open vocabulary</a>
                             </div>
                             <div style={{fontSize:13,color:'var(--text-muted)',lineHeight:1.5,marginBottom:12}}>
                                 Reviewed terms with explicit spoken forms are what the correction system is allowed to prefer.
@@ -4616,10 +4854,9 @@
                             </div>
                         </div>
 
-                        <div className="card" style={{padding:'14px 16px'}}>
+                        <div id="corpus-sentences" className="card" style={{padding:'14px 16px'}}>
                             <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',gap:12,marginBottom:10,flexWrap:'wrap'}}>
                                 <h3 style={{margin:0}}>Sentences</h3>
-                                <a href="#/author" className="btn btn-sm">Open sentence authoring</a>
                             </div>
                             <div style={{fontSize:13,color:'var(--text-muted)',lineHeight:1.5,marginBottom:12}}>
                                 Clean sentences are the source of truth. Counterexamples are explicit no-op cases that teach the system restraint.
@@ -4669,6 +4906,9 @@
                                         <div style={{display:'flex',gap:8,alignItems:'baseline',marginBottom:4,flexWrap:'wrap'}}>
                                             <span style={{fontFamily:'monospace',fontWeight:700,color:'var(--accent)'}}>{row.term}</span>
                                             <span style={{fontSize:11,color:'var(--text-muted)',border:'1px solid var(--border)',borderRadius:999,padding:'2px 6px'}}>clean</span>
+                                            <button className="btn btn-sm" onClick={() => openRecordings(row)}>
+                                                {(row.recording_count || 0) > 0 ? `Takes (${row.recording_count})` : 'Record'}
+                                            </button>
                                         </div>
                                         <div style={{fontSize:13,lineHeight:1.45}}>{row.sentence}</div>
                                     </div>
@@ -4680,6 +4920,9 @@
                                             <span style={{fontSize:11,color:'var(--warning)',border:'1px solid var(--border)',borderRadius:999,padding:'2px 6px'}}>
                                                 counterexample{row.surface_form ? `: ${row.surface_form}` : ''}
                                             </span>
+                                            <button className="btn btn-sm" onClick={() => openRecordings(row)}>
+                                                {(row.recording_count || 0) > 0 ? `Takes (${row.recording_count})` : 'Record'}
+                                            </button>
                                         </div>
                                         <div style={{fontSize:13,lineHeight:1.45}}>{row.sentence}</div>
                                     </div>
@@ -4687,13 +4930,40 @@
                             </div>
                         </div>
 
-                        <div className="card" style={{padding:'14px 16px'}}>
+                        <div id="corpus-recordings" className="card" style={{padding:'14px 16px'}}>
+                            <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',gap:12,marginBottom:10,flexWrap:'wrap'}}>
+                                <h3 style={{margin:0}}>Recordings & IPA</h3>
+                            </div>
+                            <div style={{fontSize:13,color:'var(--text-muted)',lineHeight:1.5,marginBottom:12}}>
+                                Human takes and grouped IPA review live here now. Open any sentence below to inspect or add takes.
+                            </div>
+                            <div className="stats-grid" style={{marginBottom:12}}>
+                                <div className="stat-card"><div className="value">{humanRecordingCount}</div><div className="label">Human Takes</div></div>
+                                <div className="stat-card"><div className="value">{phoneTraceCount}</div><div className="label">IPA Cached</div></div>
+                                <div className="stat-card"><div className="value">{missingPhoneTraces}</div><div className="label">Missing IPA</div></div>
+                            </div>
+                            <div style={{display:'grid',gap:8}}>
+                                {recordingsNeedingAttention.map(row => (
+                                    <div key={`rec-${row.id}`} style={{padding:'8px 10px',border:'1px solid rgba(255,255,255,0.06)',borderRadius:8,display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+                                        <span style={{fontFamily:'monospace',fontWeight:700,color:'var(--accent)',minWidth:120}}>{row.term}</span>
+                                        <span style={{flex:1,fontSize:13}}>{row.sentence}</span>
+                                        <span style={{fontSize:11,color:'var(--text-muted)',border:'1px solid var(--border)',borderRadius:999,padding:'2px 6px'}}>
+                                            takes {row.recording_count || 0}
+                                        </span>
+                                        <button className="btn btn-sm" onClick={() => openRecordings(row)}>
+                                            {(row.recording_count || 0) > 0 ? 'Inspect takes' : 'Record first take'}
+                                        </button>
+                                    </div>
+                                ))}
+                                {recordingsNeedingAttention.length === 0 && (
+                                    <div style={{fontSize:12,color:'var(--text-muted)'}}>No immediate recording gaps in the preview set.</div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div id="corpus-confusions" className="card" style={{padding:'14px 16px'}}>
                             <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',gap:12,marginBottom:10,flexWrap:'wrap'}}>
                                 <h3 style={{margin:0}}>Confusions</h3>
-                                <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                                    <a href="#/confusions" className="btn btn-sm">Browse confusions</a>
-                                    <a href="#/pipeline/scan" className="btn btn-sm">Scan results</a>
-                                </div>
                             </div>
                             <div style={{fontSize:13,color:'var(--text-muted)',lineHeight:1.5,marginBottom:12}}>
                                 These are the ASR surfaces we actually observe. They are the raw material for applied corruptions.
@@ -4748,6 +5018,89 @@
                             </div>
                         </div>
                     </div>
+
+                    {recordingSentence && (
+                        <div className="vocab-overlay" onClick={e => { if (e.target === e.currentTarget) closeRecordings(); }}>
+                            <div className="vocab-editor" style={{maxWidth: 860, width: '92vw'}}>
+                                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+                                    <div className="term" style={{flex:1,textAlign:'left'}}>{recordingSentence.term}</div>
+                                    {recordingSentence.kind === 'counterexample' && (
+                                        <span style={{fontSize:11,color:'var(--warning)',border:'1px solid var(--border)',borderRadius:999,padding:'2px 8px'}}>
+                                            counterexample{recordingSentence.surface_form ? `: ${recordingSentence.surface_form}` : ''}
+                                        </span>
+                                    )}
+                                    <button onClick={closeRecordings} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:18}}>&times;</button>
+                                </div>
+                                <div style={{color:'var(--text-muted)',fontSize:13,marginBottom:12,lineHeight:1.5}}>
+                                    Record multiple takes of the same sentence and inspect grouped IPA for each take directly here.
+                                </div>
+                                <div style={{fontSize:18,lineHeight:1.6,marginBottom:12,textAlign:'center'}}>{recordingSentence.sentence}</div>
+                                {recordingError && <div className="pipeline-error" style={{marginBottom:12}}>{recordingError}</div>}
+                                <div style={{display:'flex',gap:8,alignItems:'center',justifyContent:'center',marginBottom:12}}>
+                                    <button className={`record-btn ${recording ? 'active' : ''}`} onClick={recording ? stopSentenceRecording : startSentenceRecording} disabled={recordingBusy}
+                                        title={recording ? 'Stop recording' : 'Record another take'}>
+                                        {recordingBusy ? '…' : recording ? '\u25A0' : '\u25CF'}
+                                    </button>
+                                    <span style={{fontSize:12,color:'var(--text-muted)'}}>
+                                        {recording ? 'Recording... press the button again to stop' : recordingBusy ? 'Saving take...' : 'Press the button to record another take'}
+                                    </span>
+                                </div>
+                                <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:8}}>
+                                    <div style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1}}>Takes</div>
+                                    <div style={{fontSize:11,color:'var(--text-muted)'}}>{recordings.length} saved</div>
+                                </div>
+                                <div style={{maxHeight:320,overflow:'auto',border:'1px solid var(--border)',borderRadius:8,background:'var(--bg)'}}>
+                                    {recordings.length === 0 ? (
+                                        <div style={{padding:16,textAlign:'center',color:'var(--text-muted)'}}>No takes yet.</div>
+                                    ) : recordings.map(r => (
+                                        <div key={r.id} style={{padding:'8px 10px',borderBottom:'1px solid rgba(255,255,255,0.04)'}}>
+                                            <div style={{display:'flex',alignItems:'center',gap:8}}>
+                                                <span style={{minWidth:70,fontFamily:'monospace',color:'var(--accent)',fontWeight:600}}>Take {r.take_no}</span>
+                                                <span style={{flex:1,color:'var(--text-muted)',fontSize:12}}>{r.created_at}</span>
+                                                <span style={{fontSize:11,color:r.has_phone_trace ? 'var(--success)' : 'var(--text-muted)',border:'1px solid var(--border)',borderRadius:999,padding:'2px 8px'}}>
+                                                    {r.has_phone_trace ? `IPA v${r.phone_trace_grouping_version || '?'}` : 'IPA pending'}
+                                                </span>
+                                                <button className="btn btn-sm" onClick={async () => {
+                                                    if (!r.audio_b64) return;
+                                                    const mime = r.audio_mime || 'audio/ogg';
+                                                    const a = new Audio(`data:${mime};base64,${r.audio_b64}`);
+                                                    a.play();
+                                                }}>Play</button>
+                                                <button className="btn btn-sm" onClick={() => toggleRecordingPhones(r.id)} disabled={recordingPhonesLoading[r.id]}>
+                                                    {recordingPhonesOpen[r.id] ? 'Hide IPA' : 'Show IPA'}
+                                                </button>
+                                            </div>
+                                            {recordingPhonesOpen[r.id] && (
+                                                <div style={{marginTop:10,padding:10,border:'1px solid var(--border)',borderRadius:8,background:'rgba(255,255,255,0.02)',display:'grid',gap:10}}>
+                                                    {recordingPhonesLoading[r.id] ? (
+                                                        <div style={{fontSize:12,color:'var(--text-muted)'}}>Loading IPA trace…</div>
+                                                    ) : recordingPhonesError[r.id] ? (
+                                                        <div className="pipeline-error">{recordingPhonesError[r.id]}</div>
+                                                    ) : !recordingPhonesById[r.id] ? (
+                                                        <div style={{fontSize:12,color:'var(--text-muted)'}}>No IPA trace cached yet for this take.</div>
+                                                    ) : (
+                                                        <>
+                                                            <div style={{display:'flex',flexWrap:'wrap',gap:8,fontSize:11,color:'var(--text-muted)'}}>
+                                                                <span>decoder {recordingPhonesById[r.id].decoder || '—'}</span>
+                                                                <span>grouping v{recordingPhonesById[r.id].grouping_version || '?'}</span>
+                                                                <span>updated {recordingPhonesById[r.id].updated_at || '—'}</span>
+                                                            </div>
+                                                            <GroupedPhoneLane label="Sentence-grouped IPA" raw={recordingPhonesById[r.id].sentence_grouped_json} />
+                                                            <GroupedPhoneLane label="Qwen-grouped IPA" raw={recordingPhonesById[r.id].qwen_grouped_json} />
+                                                            <TimedPhoneTraceSummary raw={recordingPhonesById[r.id].raw_trace_json} />
+                                                        </>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="actions" style={{marginTop:12}}>
+                                    <button className="btn btn-sm" onClick={closeRecordings}>Close</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                     <datalist id="corpus-vocab-terms">
                         {readyVocab.map(row => <option key={row.id} value={row.term} />)}
                     </datalist>

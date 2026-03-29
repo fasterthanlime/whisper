@@ -556,6 +556,10 @@ struct HarkApp: App {
     @State private var recordingStartedAt: Date?
     @State private var ignoreHotkeyUntil: Date?
     @State private var pasteTargetBundleID: String?
+    /// The AX text field captured at recording start for direct input mode.
+    @State private var directInputElement: AXUIElement?
+    /// UTF-16 offset in the AX text field where our dictated text begins.
+    @State private var directInputOrigin: Int = 0
     @State private var forensicsSession: ForensicsSession?
     @State private var tinkSound: NSSound?
     @State private var popSound: NSSound?
@@ -670,6 +674,9 @@ struct HarkApp: App {
         }
         if let saved = UserDefaults.standard.dictionary(forKey: AppState.appAutoSubmitDefaultsKey) as? [String: Bool] {
             appState.appAutoSubmit = saved
+        }
+        if let saved = UserDefaults.standard.dictionary(forKey: AppState.appDirectInputDefaultsKey) as? [String: Bool] {
+            appState.appDirectInput = saved
         }
         if let saved = UserDefaults.standard.dictionary(
             forKey: AppState.inputDeviceWarmPreferencesDefaultsKey
@@ -1065,6 +1072,24 @@ struct HarkApp: App {
         recordingStartedAt = Date()
         let frontApp = NSWorkspace.shared.frontmostApplication
         pasteTargetBundleID = frontApp?.bundleIdentifier
+
+        // Capture AX text field for direct input mode
+        if appState.currentDirectInput, let element = PasteController.captureFocusedTextField() {
+            directInputElement = element
+            // Read current cursor position as our insertion origin
+            var rangeRef: AnyObject?
+            if AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success,
+               let rangeRef, CFGetTypeID(rangeRef) == AXValueGetTypeID() {
+                let rangeValue = unsafeBitCast(rangeRef, to: AXValue.self)
+                var range = CFRange(location: 0, length: 0)
+                if AXValueGetValue(rangeValue, .cfRange, &range) {
+                    directInputOrigin = range.location
+                }
+            }
+        } else {
+            directInputElement = nil
+            directInputOrigin = 0
+        }
         appState.overlayLockedBundleID = pasteTargetBundleID
         appState.overlayLockedAppName = frontApp?.localizedName
         appState.overlayTetherOutOfApp = false
@@ -1226,6 +1251,15 @@ struct HarkApp: App {
                         await MainActor.run {
                             appState.partialTranscript = trimmed
                             appState.partialTranscriptCommittedUTF16 = committedUTF16
+
+                            // Direct input: write into the AX text field
+                            if let element = directInputElement {
+                                PasteController.setDirectText(
+                                    trimmed,
+                                    on: element,
+                                    replaceFrom: directInputOrigin
+                                )
+                            }
                         }
 
                         if shouldAutoLockLanguage, autoLockedLanguage == nil {
@@ -1332,6 +1366,7 @@ struct HarkApp: App {
                 streamingTask = nil
                 streamingSession = nil
                 pasteTargetBundleID = nil
+                directInputElement = nil
                 appState.overlayLockedBundleID = nil
                 appState.overlayLockedAppName = nil
                 appState.overlayTetherOutOfApp = false

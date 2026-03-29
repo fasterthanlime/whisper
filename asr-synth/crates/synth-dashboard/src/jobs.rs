@@ -8456,6 +8456,7 @@ pub async fn api_algorithm_tests() -> Result<Response, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prototype::AcousticSegment;
     use qwen3_asr::ForcedAlignItem;
 
     fn item(word: &str, start: f64, end: f64) -> ForcedAlignItem {
@@ -8468,6 +8469,99 @@ mod tests {
 
     fn protected(terms: &[&str]) -> std::collections::HashSet<String> {
         terms.iter().map(|s| s.to_lowercase()).collect()
+    }
+
+    fn seg(phone: &str, start: f64, end: f64) -> AcousticSegment {
+        AcousticSegment {
+            phone: phone.to_string(),
+            start_sec: start,
+            end_sec: end,
+        }
+    }
+
+    fn grouped_words(json: serde_json::Value) -> Vec<serde_json::Value> {
+        json.as_array().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn ownership_ranges_handle_zero_width_alignment_items() {
+        let alignment = vec![
+            item("the", 1.12, 1.20),
+            item("root,", 1.60, 1.60),
+            item("run", 1.76, 2.00),
+        ];
+
+        let ownership = alignment_group_ownership_ranges(&alignment);
+        assert_eq!(ownership.len(), 3);
+
+        assert!(ownership[0].0 <= ownership[0].1);
+        assert!(ownership[1].0 <= ownership[1].1);
+        assert!(ownership[2].0 <= ownership[2].1);
+
+        assert!(ownership[0].1 <= ownership[1].0 + 1e-9);
+        assert!(ownership[1].1 <= ownership[2].0 + 1e-9);
+
+        assert!(ownership[1].1 - ownership[1].0 > 0.0);
+        assert!(ownership[1].0 <= 1.60 && ownership[1].1 >= 1.60);
+    }
+
+    #[test]
+    fn grouped_phone_segments_assign_each_segment_to_exactly_one_word() {
+        let alignment = vec![
+            item("dash", 2.72, 2.96),
+            item("dash", 2.96, 3.12),
+            item("hidden", 3.12, 3.44),
+        ];
+        let segments = vec![
+            seg("d", 2.754, 2.834),
+            seg("æ", 2.834, 2.894),
+            seg("ʃ", 2.894, 2.955),
+            seg("d", 2.955, 3.035),
+            seg("æ", 3.035, 3.095),
+            seg("ʃ", 3.095, 3.196),
+        ];
+
+        let grouped = grouped_words(group_phone_segments_by_alignment_json(&alignment, &segments));
+        assert_eq!(grouped.len(), 3);
+
+        let counts = grouped
+            .iter()
+            .map(|row| row.get("n").and_then(|v| v.as_u64()).unwrap_or(0))
+            .collect::<Vec<_>>();
+        assert_eq!(counts, vec![3, 3, 0]);
+
+        let total_assigned = counts.iter().sum::<u64>();
+        assert_eq!(total_assigned, segments.len() as u64);
+    }
+
+    #[test]
+    fn grouped_phone_segments_do_not_smear_boundary_phone_across_neighbors() {
+        let alignment = vec![
+            item("you", 0.48, 0.56),
+            item("want", 0.56, 0.64),
+            item("to", 0.64, 0.72),
+        ];
+        let segments = vec![
+            seg("iɪ", 0.5226, 0.5628),
+            seg("w", 0.5628, 0.6030),
+            seg("ʌ", 0.6030, 0.6633),
+        ];
+
+        let grouped = grouped_words(group_phone_segments_by_alignment_json(&alignment, &segments));
+        let phones_for = |idx: usize| {
+            grouped[idx]
+                .get("phones")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|row| row.get("p").and_then(|v| v.as_str()).map(str::to_string))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(phones_for(0), vec!["iɪ".to_string()]);
+        assert_eq!(phones_for(1), vec!["w".to_string(), "ʌ".to_string()]);
+        assert!(phones_for(2).is_empty());
     }
 
     #[test]

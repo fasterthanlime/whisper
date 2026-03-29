@@ -82,6 +82,87 @@ struct PasteController {
         AXIsProcessTrustedWithOptions(options)
     }
 
+    // MARK: - Direct AX input
+
+    /// Captures the focused AX text element so we can write to it repeatedly
+    /// during streaming transcription.
+    static func captureFocusedTextField() -> AXUIElement? {
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedRef: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedRef
+        ) == .success,
+              let focusedRef,
+              CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
+        else {
+            return nil
+        }
+        let element = unsafeBitCast(focusedRef, to: AXUIElement.self)
+
+        // Verify it supports kAXValueAttribute (i.e. it's a text field)
+        var valueRef: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXValueAttribute as CFString,
+            &valueRef
+        ) == .success, valueRef is String else {
+            return nil
+        }
+        return element
+    }
+
+    /// Write text directly into an AX text element, replacing whatever is there
+    /// from position `replaceFrom` onward. Returns the UTF-16 length written
+    /// (for tracking on the next update), or nil on failure.
+    @discardableResult
+    static func setDirectText(
+        _ text: String,
+        on element: AXUIElement,
+        replaceFrom: Int = 0
+    ) -> Bool {
+        // Read current value to splice our text after replaceFrom
+        var valueRef: AnyObject?
+        let currentText: String
+        if AXUIElementCopyAttributeValue(
+            element,
+            kAXValueAttribute as CFString,
+            &valueRef
+        ) == .success, let existing = valueRef as? String {
+            currentText = existing
+        } else {
+            currentText = ""
+        }
+
+        // Build new value: preserve everything before replaceFrom, append new text
+        let ns = currentText as NSString
+        let clampedFrom = min(max(0, replaceFrom), ns.length)
+        let prefix = ns.substring(to: clampedFrom)
+        let newValue = prefix + text
+
+        // Set the value
+        let setResult = AXUIElementSetAttributeValue(
+            element,
+            kAXValueAttribute as CFString,
+            newValue as CFTypeRef
+        )
+        guard setResult == .success else { return false }
+
+        // Move cursor to end
+        let endPos = (newValue as NSString).length
+        var range = CFRange(location: endPos, length: 0)
+        if let rangeValue = AXValueCreate(.cfRange, &range) {
+            AXUIElementSetAttributeValue(
+                element,
+                kAXSelectedTextRangeAttribute as CFString,
+                rangeValue
+            )
+        }
+
+        return true
+    }
+
     // MARK: - Private
 
     /// Check whether the focused text field already has non-whitespace text
