@@ -1187,7 +1187,7 @@ struct HarkApp: App {
         // If no language is explicitly set, try detecting from the text field content.
         var language = appState.currentLanguage
         if language == nil {
-            if let detected = LanguageDetector.detectFromFocusedElement() {
+            if let detected = LanguageDetector.detectFromFocusedWindow() {
                 language = detected
                 traceEvent("language_auto_detected", ["language": detected])
             }
