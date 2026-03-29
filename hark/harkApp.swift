@@ -1102,6 +1102,10 @@ struct HarkApp: App {
                 directInputLastText = ""
             }
         case .ime:
+            if !HarkInputClient.activateIME() {
+                // Fallback to paste if IME activation fails
+                activeInsertionStrategy = .paste
+            }
             directInputElement = nil
             directInputOrigin = 0
             directInputOriginalText = nil
@@ -1416,6 +1420,10 @@ struct HarkApp: App {
                 pasteTargetBundleID = nil
                 directInputElement = nil
                 directInputOriginalText = nil
+                if activeInsertionStrategy == .ime {
+                    HarkInputClient.deactivateIME()
+                }
+                activeInsertionStrategy = .paste
                 appState.overlayLockedBundleID = nil
                 appState.overlayLockedAppName = nil
                 appState.overlayTetherOutOfApp = false
@@ -1972,6 +1980,10 @@ struct HarkApp: App {
             pasteTargetBundleID = nil
             directInputElement = nil
             directInputOriginalText = nil
+            if activeInsertionStrategy == .ime {
+                HarkInputClient.deactivateIME()
+            }
+            activeInsertionStrategy = .paste
             appState.overlayLockedBundleID = nil
             appState.overlayLockedAppName = nil
             appState.overlayTetherOutOfApp = false

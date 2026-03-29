@@ -74,6 +74,49 @@ final class HarkInputClient {
         return true
     }
 
+    // MARK: - Input source switching
+
+    /// The input source that was active before we switched to harkInput.
+    private static var previousInputSource: TISInputSource?
+
+    /// Switch to the harkInput IME, saving the current input source to restore later.
+    static func activateIME() -> Bool {
+        let props = [kTISPropertyBundleID: imeBundleID as CFString] as CFDictionary
+        guard let sources = TISCreateInputSourceList(props, true)?.takeRetainedValue() as? [TISInputSource],
+              let harkSource = sources.first else {
+            logger.warning("Cannot activate IME: not found")
+            return false
+        }
+
+        // Save current input source
+        previousInputSource = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue()
+
+        let status = TISSelectInputSource(harkSource)
+        if status == noErr {
+            logger.info("Switched to harkInput IME")
+            return true
+        } else {
+            logger.error("TISSelectInputSource failed: \(status, privacy: .public)")
+            previousInputSource = nil
+            return false
+        }
+    }
+
+    /// Restore the previous input source (before harkInput was activated).
+    static func deactivateIME() {
+        guard let previous = previousInputSource else {
+            logger.warning("No previous input source to restore")
+            return
+        }
+        let status = TISSelectInputSource(previous)
+        if status == noErr {
+            logger.info("Restored previous input source")
+        } else {
+            logger.error("Failed to restore previous input source: \(status, privacy: .public)")
+        }
+        previousInputSource = nil
+    }
+
     // MARK: - Distributed notification API (stateless, no connection needed)
 
     /// Send provisional (marked) text to the IME via distributed notification.
