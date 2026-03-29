@@ -55,10 +55,14 @@ class HarkXPCService: NSObject, HarkInputProtocol {
     }
 
     func commitText(_ text: String) {
-        Self.logger.warning("commitText: \(text.prefix(40), privacy: .public)")
+        commitText(text, submit: false)
+    }
+
+    func commitText(_ text: String, submit: Bool) {
+        Self.logger.warning("commitText: \(text.prefix(40), privacy: .public) submit=\(submit)")
         isDictating = false
         DispatchQueue.main.async {
-            self.controller?.handleCommitText(text)
+            self.controller?.handleCommitText(text, submit: submit)
         }
     }
 

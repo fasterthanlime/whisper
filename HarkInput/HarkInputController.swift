@@ -104,15 +104,16 @@ class HarkInputController: IMKInputController {
     }
 
     /// Commit final text, replacing marked text.
-    func handleCommitText(_ text: String) {
+    func handleCommitText(_ text: String, submit: Bool = false) {
         guard let client = self.client() else {
             Self.logger.warning("No client for commitText")
             return
         }
 
         currentMarkedText = ""
+        let finalText = submit ? text + "\n" : text + " "
         client.insertText(
-            text + " ",
+            finalText,
             replacementRange: NSRange(location: NSNotFound, length: 0)
         )
     }

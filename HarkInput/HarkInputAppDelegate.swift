@@ -47,7 +47,8 @@ class HarkInputAppDelegate: NSObject, NSApplicationDelegate {
             object: nil, queue: .main
         ) { notification in
             guard let text = notification.userInfo?["text"] as? String else { return }
-            HarkXPCService.shared.commitText(text)
+            let submit = notification.userInfo?["submit"] as? Bool ?? false
+            HarkXPCService.shared.commitText(text, submit: submit)
         }
         dnc.addObserver(
             forName: NSNotification.Name("fasterthanlime.hark.cancelInput"),
