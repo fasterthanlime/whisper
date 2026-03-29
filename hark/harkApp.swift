@@ -2065,15 +2065,29 @@ struct HarkApp: App {
                 }
             case .ime:
                 HarkInputClient.sendCommitText(text)
+                // Wait for the commit to land before switching input source
+                try? await Task.sleep(for: .milliseconds(200))
+                // Restore previous input source after commit
+                HarkInputClient.deactivateIME()
+                if shouldSubmit {
+                    // Wait for input source switch, then simulate Enter
+                    try? await Task.sleep(for: .milliseconds(150))
+                    let returnKeyCode: CGKeyCode = 36
+                    if let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: true),
+                       let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: false) {
+                        keyDown.flags = []
+                        keyDown.post(tap: .cghidEventTap)
+                        try? await Task.sleep(for: .milliseconds(10))
+                        keyUp.flags = []
+                        keyUp.post(tap: .cghidEventTap)
+                    }
+                }
             case .paste:
                 break
             }
 
-            if shouldSubmit {
-                // Wait for the IME commit to land before simulating Enter.
-                // The distributed notification → IME → insertText round trip
-                // needs time, especially in terminals.
-                try? await Task.sleep(for: .milliseconds(300))
+            if activeInsertionStrategy != .ime && shouldSubmit {
+                try? await Task.sleep(for: .milliseconds(50))
                 let returnKeyCode: CGKeyCode = 36
                 if let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: true),
                    let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: false) {
