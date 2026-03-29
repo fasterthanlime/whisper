@@ -345,8 +345,8 @@ struct HotkeyBinding: Codable, Hashable, Sendable {
 /// Marked @unchecked Sendable because we guarantee main-thread-only access but need the C callback
 /// (which runs on main run loop) to be able to call methods without actor isolation overhead.
 final class HotkeyMonitor: @unchecked Sendable {
-    nonisolated(unsafe) var onKeyDown: (() -> Void)?
-    nonisolated(unsafe) var onKeyUp: (() -> Void)?
+    nonisolated(unsafe) var onKeyDown: ((TimeInterval) -> Void)?
+    nonisolated(unsafe) var onKeyUp: ((TimeInterval) -> Void)?
     nonisolated(unsafe) var binding: HotkeyBinding = .defaultBinding {
         didSet {
             guard binding != oldValue else { return }
@@ -418,7 +418,7 @@ final class HotkeyMonitor: @unchecked Sendable {
 
         if isHeld {
             isHeld = false
-            onKeyUp?()
+            onKeyUp?(ProcessInfo.processInfo.systemUptime)
         }
     }
 
@@ -427,7 +427,12 @@ final class HotkeyMonitor: @unchecked Sendable {
     }
 
     /// Called from the C callback on the main run loop with pre-extracted values.
-    fileprivate func handleKeyboardEventExtracted(type: CGEventType, keyCode: UInt16, flagsRaw: UInt64) {
+    fileprivate func handleKeyboardEventExtracted(
+        type: CGEventType,
+        keyCode: UInt16,
+        flagsRaw: UInt64,
+        eventTime: TimeInterval
+    ) {
         switch type {
         case .keyDown:
             pressedKeyCodes.insert(keyCode)
@@ -456,10 +461,10 @@ final class HotkeyMonitor: @unchecked Sendable {
             return
         }
 
-        updateHeldStateAndCallbacks()
+        updateHeldStateAndCallbacks(eventTime: eventTime)
     }
 
-    fileprivate func updateHeldStateAndCallbacks() {
+    fileprivate func updateHeldStateAndCallbacks(eventTime: TimeInterval? = nil) {
         let shouldBeHeld: Bool
         if allowExtraModifiers {
             // During recording: hotkey keys must still be pressed, but extra keys are OK.
@@ -467,13 +472,14 @@ final class HotkeyMonitor: @unchecked Sendable {
         } else {
             shouldBeHeld = !binding.isEmpty && pressedKeyCodes == binding.keyCodeSet
         }
+        let resolvedEventTime = eventTime ?? ProcessInfo.processInfo.systemUptime
 
         if shouldBeHeld && !isHeld {
             isHeld = true
-            onKeyDown?()
+            onKeyDown?(resolvedEventTime)
         } else if !shouldBeHeld && isHeld {
             isHeld = false
-            onKeyUp?()
+            onKeyUp?(resolvedEventTime)
         }
     }
 }
@@ -508,7 +514,13 @@ nonisolated(unsafe) private let hotkeyCallback: CGEventTapCallBack = { proxy, ty
     let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(refcon).takeUnretainedValue()
     let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
     let flagsRaw = event.flags.rawValue
-    monitor.handleKeyboardEventExtracted(type: type, keyCode: keyCode, flagsRaw: flagsRaw)
+    let eventTime = NSEvent(cgEvent: event)?.timestamp ?? ProcessInfo.processInfo.systemUptime
+    monitor.handleKeyboardEventExtracted(
+        type: type,
+        keyCode: keyCode,
+        flagsRaw: flagsRaw,
+        eventTime: eventTime
+    )
 
     return Unmanaged.passUnretained(event)
 }

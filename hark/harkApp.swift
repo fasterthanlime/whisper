@@ -495,7 +495,7 @@ struct HarkApp: App {
     @State private var streamingTask: Task<StreamingResult, Never>?
     @State private var streamingSession: StreamingSession?
     @State private var inputDeviceMonitor = InputDeviceMonitor()
-    @State private var keyDownTime: Date?
+    @State private var keyDownTime: TimeInterval?
     @State private var recordingStartedAt: Date?
     @State private var ignoreHotkeyUntil: Date?
     @State private var pasteTargetBundleID: String?
@@ -778,14 +778,14 @@ struct HarkApp: App {
     private func setupHotkey() {
         hotkeyMonitor.binding = appState.hotkeyBinding
 
-        hotkeyMonitor.onKeyDown = {
+        hotkeyMonitor.onKeyDown = { eventTime in
             Task { @MainActor in
-                await handleKeyDown()
+                await handleKeyDown(eventTime: eventTime)
             }
         }
-        hotkeyMonitor.onKeyUp = {
+        hotkeyMonitor.onKeyUp = { eventTime in
             Task { @MainActor in
-                await handleKeyUp()
+                await handleKeyUp(eventTime: eventTime)
             }
         }
         hotkeyMonitor.onModifierWhileHeld = { keyCode in
@@ -827,7 +827,7 @@ struct HarkApp: App {
     }
 
     @MainActor
-    private func handleKeyDown() async {
+    private func handleKeyDown(eventTime: TimeInterval = ProcessInfo.processInfo.systemUptime) async {
         refreshPermissionState()
 
         guard !appState.isEditingHotkey else { return }
@@ -876,7 +876,7 @@ struct HarkApp: App {
         }
         appState.partialTranscript = ""
         appState.partialTranscriptCommittedUTF16 = 0
-        keyDownTime = Date()
+        keyDownTime = eventTime
         recordingStartedAt = Date()
         let frontApp = NSWorkspace.shared.frontmostApplication
         pasteTargetBundleID = frontApp?.bundleIdentifier
@@ -885,6 +885,15 @@ struct HarkApp: App {
         appState.overlayTetherOutOfApp = false
         appState.isLockedMode = false
         hotkeyMonitor.allowExtraModifiers = true
+
+        Task { @MainActor in
+            await continueRecordingStartup()
+        }
+    }
+
+    @MainActor
+    private func continueRecordingStartup() async {
+        guard appState.phase == .recording else { return }
 
         // Pause media if setting is enabled.
         if MediaController.isEnabled {
@@ -895,14 +904,32 @@ struct HarkApp: App {
         installEscapeMonitor()
         playStartSound()
 
-        // Create streaming session with per-app language preference
-        streamingSession = transcriptionService.createSession(
-            chunkSizeSec: Self.streamingChunkSizeSec,
-            language: appState.currentLanguage,
-            prompt: appState.vocabPrompt
-        )
+        // Create streaming session off-main so first-record startup does not
+        // stall key-up handling or UI responsiveness.
+        guard appState.phase == .recording else { return }
+        let language = appState.currentLanguage
+        let prompt = appState.vocabPrompt
+        let chunkSizeSec = Self.streamingChunkSizeSec
+        let createStartedAt = ProcessInfo.processInfo.systemUptime
+        let createdSession: StreamingSession? = await Task.detached(priority: .userInitiated) {
+            [transcriptionService, language, prompt, chunkSizeSec] in
+            transcriptionService.createSession(
+                chunkSizeSec: chunkSizeSec,
+                language: language,
+                prompt: prompt
+            )
+        }.value
+        let createMs = Int(((ProcessInfo.processInfo.systemUptime - createStartedAt) * 1000).rounded())
+        traceEvent("streaming_session_create_done", [
+            "create_ms": String(createMs),
+            "session_exists": (createdSession != nil).description,
+            "chunk_size_sec": String(format: "%.2f", chunkSizeSec),
+        ])
+        guard appState.phase == .recording else { return }
+        streamingSession = createdSession
 
         // If audio is warm, just start capturing (instant).
+        let audioStartStartedAt = ProcessInfo.processInfo.systemUptime
         if audioRecorder.isWarmedUp {
             audioRecorder.startCapture()
         } else {
@@ -920,6 +947,7 @@ struct HarkApp: App {
                     }
                 )
             } catch {
+                guard appState.phase == .recording else { return }
                 cancelRecordingTimeout()
                 _ = appState.transition(to: .error(error.localizedDescription))
                 overlayManager.hide()
@@ -927,7 +955,19 @@ struct HarkApp: App {
                 return
             }
         }
+        let audioStartMs = Int(((ProcessInfo.processInfo.systemUptime - audioStartStartedAt) * 1000).rounded())
+        traceEvent("audio_start_done", [
+            "audio_start_ms": String(audioStartMs),
+            "warmed_up": String(audioRecorder.isWarmedUp),
+        ])
 
+        guard appState.phase == .recording else { return }
+        guard streamingSession != nil else {
+            _ = appState.transition(to: .error("Could not create streaming session"))
+            overlayManager.hide()
+            resetAfterDelay()
+            return
+        }
         // Start streaming transcription
         traceEvent("streaming_session_create", [
             "session_exists": (streamingSession != nil).description,
@@ -1192,7 +1232,7 @@ struct HarkApp: App {
     }
 
     @MainActor
-    private func handleKeyUp() async {
+    private func handleKeyUp(eventTime: TimeInterval = ProcessInfo.processInfo.systemUptime) async {
         guard appState.phase == .recording else { return }
         traceEvent("hotkey_up")
 
@@ -1208,13 +1248,18 @@ struct HarkApp: App {
             return
         }
 
-        // Check if this was a quick press (toggle mode)
-        if let downTime = keyDownTime {
-            let pressDuration = Date().timeIntervalSince(downTime)
-            if pressDuration < Self.toggleModeThresholdSeconds {
-                appState.isLockedMode = true
-                return
-            }
+        // Check if this was a quick press (toggle mode). Use callback event
+        // times, not handler wall-clock time, to avoid startup latency skew.
+        guard let downTime = keyDownTime else {
+            Self.logger.warning("[hark] hotkey: keyUp without keyDownTime; defaulting to locked mode")
+            appState.isLockedMode = true
+            return
+        }
+
+        let pressDuration = max(0, eventTime - downTime)
+        if pressDuration < Self.toggleModeThresholdSeconds {
+            appState.isLockedMode = true
+            return
         }
 
         await stopRecordingAndTranscribe()
@@ -1271,23 +1316,32 @@ struct HarkApp: App {
         streamingTask = nil
         stask?.cancel()
 
-        // Stop capture and use the definitive captured buffer at stop time.
+        // Stop capture off-main and use the definitive captured buffer at stop time.
         // Using `peekCapture()` here can miss tail audio arriving between peek and stop.
-        let captureStopStartedAt = ProcessInfo.processInfo.systemUptime
-        let allSamples: [Float]
-        if audioRecorder.isWarmedUp {
-            allSamples = audioRecorder.stopCapture()
-        } else {
-            allSamples = audioRecorder.stop()
-        }
-        let captureStopMs = Int(((ProcessInfo.processInfo.systemUptime - captureStopStartedAt) * 1000).rounded())
+        let shouldKeepWarm = appState.activeInputDeviceKeepWarm
+        let recorder = self.audioRecorder
+        let captureStop = await Task.detached(priority: .userInitiated) { () -> (samples: [Float], stopMs: Int, isWarmedAfterStop: Bool) in
+            let captureStopStartedAt = ProcessInfo.processInfo.systemUptime
+            let samples: [Float]
+            if recorder.isWarmedUp {
+                samples = recorder.stopCapture()
+            } else {
+                samples = recorder.stop()
+            }
+            let stopMs = Int(((ProcessInfo.processInfo.systemUptime - captureStopStartedAt) * 1000).rounded())
+            return (samples: samples, stopMs: stopMs, isWarmedAfterStop: recorder.isWarmedUp)
+        }.value
+        let allSamples = captureStop.samples
+        let captureStopMs = captureStop.stopMs
         traceEvent("capture_stopped", [
             "capture_stop_ms": String(captureStopMs),
             "all_samples": String(allSamples.count),
         ])
         appState.audioLevel = 0
-        if !appState.activeInputDeviceKeepWarm, audioRecorder.isWarmedUp {
-            audioRecorder.coolDown()
+        if !shouldKeepWarm, captureStop.isWarmedAfterStop {
+            await Task.detached(priority: .userInitiated) {
+                recorder.coolDown()
+            }.value
             appState.spectrumBands = Array(repeating: 0, count: AudioRecorder.spectrumBandCount)
         }
 
