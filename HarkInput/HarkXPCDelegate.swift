@@ -38,6 +38,9 @@ class HarkXPCService: NSObject, HarkInputProtocol {
     /// transient deactivations nil out activeController.
     weak var lastController: HarkInputController?
 
+    /// Whether Hark is actively dictating (set by setMarkedText, cleared by commit/cancel).
+    var isDictating = false
+
     /// Best available controller.
     var controller: HarkInputController? {
         activeController ?? lastController
@@ -45,6 +48,7 @@ class HarkXPCService: NSObject, HarkInputProtocol {
 
     func setMarkedText(_ text: String) {
         Self.logger.warning("setMarkedText: '\(text.prefix(40), privacy: .public)' activeController=\(self.activeController != nil)")
+        isDictating = true
         DispatchQueue.main.async {
             self.controller?.handleSetMarkedText(text)
         }
@@ -52,12 +56,14 @@ class HarkXPCService: NSObject, HarkInputProtocol {
 
     func commitText(_ text: String) {
         Self.logger.warning("commitText: \(text.prefix(40), privacy: .public)")
+        isDictating = false
         DispatchQueue.main.async {
             self.controller?.handleCommitText(text)
         }
     }
 
     func cancelInput() {
+        isDictating = false
         Self.logger.warning("cancelInput")
         DispatchQueue.main.async {
             self.controller?.handleCancelInput()

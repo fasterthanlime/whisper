@@ -46,7 +46,7 @@ class HarkInputController: IMKInputController {
 
     /// Handle key events — intercept Enter/Escape during active dictation.
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
-        guard let event, event.type == .keyDown, !currentMarkedText.isEmpty else {
+        guard let event, event.type == .keyDown, HarkXPCService.shared.isDictating else {
             return false
         }
 
