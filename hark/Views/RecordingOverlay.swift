@@ -154,6 +154,7 @@ struct RecordingOverlayView: View {
             ThinkingBarsView()
                 .opacity(appState.isFinishing ? 1 : 0)
         }
+        .animation(.easeInOut(duration: 0.4), value: appState.isFinishing)
         .padding(.horizontal, 10)
         .frame(height: 28)
         .background(
