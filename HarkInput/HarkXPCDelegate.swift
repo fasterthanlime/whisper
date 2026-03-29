@@ -34,25 +34,33 @@ class HarkXPCService: NSObject, HarkInputProtocol {
 
     /// The currently active input controller (set by HarkInputController).
     weak var activeController: HarkInputController?
+    /// The last controller that was active — used as fallback when
+    /// transient deactivations nil out activeController.
+    weak var lastController: HarkInputController?
+
+    /// Best available controller.
+    var controller: HarkInputController? {
+        activeController ?? lastController
+    }
 
     func setMarkedText(_ text: String) {
         Self.logger.warning("setMarkedText: '\(text.prefix(40), privacy: .public)' activeController=\(self.activeController != nil)")
         DispatchQueue.main.async {
-            self.activeController?.handleSetMarkedText(text)
+            self.controller?.handleSetMarkedText(text)
         }
     }
 
     func commitText(_ text: String) {
         Self.logger.warning("commitText: \(text.prefix(40), privacy: .public)")
         DispatchQueue.main.async {
-            self.activeController?.handleCommitText(text)
+            self.controller?.handleCommitText(text)
         }
     }
 
     func cancelInput() {
         Self.logger.warning("cancelInput")
         DispatchQueue.main.async {
-            self.activeController?.handleCancelInput()
+            self.controller?.handleCancelInput()
         }
     }
 }

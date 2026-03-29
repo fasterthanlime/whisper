@@ -20,19 +20,21 @@ class HarkInputController: IMKInputController {
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
         HarkXPCService.shared.activeController = self
+        HarkXPCService.shared.lastController = self
         Self.logger.warning("Server activated")
     }
 
     override func deactivateServer(_ sender: Any!) {
-        // If we have uncommitted marked text, commit it before deactivating.
-        if !currentMarkedText.isEmpty {
-            handleCommitText(currentMarkedText)
-        }
-        if HarkXPCService.shared.activeController === self {
-            HarkXPCService.shared.activeController = nil
+        // Don't nil out the controller or auto-commit during an active
+        // dictation session — focus changes cause transient deactivations.
+        if currentMarkedText.isEmpty {
+            if HarkXPCService.shared.activeController === self {
+                HarkXPCService.shared.activeController = nil
+            }
         }
         super.deactivateServer(sender)
-        Self.logger.warning("Server deactivated")
+        let hasMarked = !self.currentMarkedText.isEmpty
+        Self.logger.warning("Server deactivated (hasMarkedText=\(hasMarked ? "yes" : "no"))")
     }
 
     // MARK: - Input handling
