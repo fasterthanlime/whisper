@@ -190,29 +190,54 @@ final class AppState {
         appAutoSubmit[bundleID] = enabled
     }
 
-    // MARK: - Per-app direct input (AX text field manipulation)
+    // MARK: - Per-app insertion strategy
 
-    static let appDirectInputDefaultsKey = "appDirectInput"
+    /// How dictated text gets inserted into the target app.
+    enum InsertionStrategy: String, Codable {
+        /// Default: show overlay, paste via clipboard + Cmd+V.
+        case paste
+        /// Write directly into the focused AX text field.
+        case ax
+        /// Use InputMethodKit (setMarkedText / insertText).
+        case ime
+    }
 
-    /// Explicit direct-input preference per app. Missing key = false (use overlay).
-    var appDirectInput: [String: Bool] = [:] {
+    static let appInsertionStrategyDefaultsKey = "appInsertionStrategy"
+
+    /// Per-app insertion strategy. Missing key = .paste (default).
+    var appInsertionStrategy: [String: String] = [:] {
         didSet {
-            UserDefaults.standard.set(appDirectInput, forKey: Self.appDirectInputDefaultsKey)
+            UserDefaults.standard.set(appInsertionStrategy, forKey: Self.appInsertionStrategyDefaultsKey)
         }
     }
 
-    /// Whether the current frontmost app should use direct AX text field input.
-    var currentDirectInput: Bool {
+    /// The insertion strategy for the current frontmost app.
+    var currentInsertionStrategy: InsertionStrategy {
         guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else {
-            return false
+            return .paste
         }
-        return appDirectInput[bundleID] ?? false
+        guard let raw = appInsertionStrategy[bundleID] else {
+            return .paste
+        }
+        return InsertionStrategy(rawValue: raw) ?? .paste
     }
 
-    /// Set direct-input behavior for the current frontmost app.
-    func setDirectInputForFrontmostApp(_ enabled: Bool) {
+    /// Convenience: whether the current app uses direct input (AX or IME — not paste).
+    var currentDirectInput: Bool {
+        currentInsertionStrategy != .paste
+    }
+
+    /// Cycle the insertion strategy for the frontmost app.
+    func cycleInsertionStrategyForFrontmostApp() {
         guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
-        appDirectInput[bundleID] = enabled
+        let current = currentInsertionStrategy
+        let next: InsertionStrategy
+        switch current {
+        case .paste: next = .ax
+        case .ax: next = .ime
+        case .ime: next = .paste
+        }
+        appInsertionStrategy[bundleID] = next.rawValue
     }
 
     // MARK: - Vocabulary prompt (per-app)

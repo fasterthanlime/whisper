@@ -118,7 +118,7 @@ struct MenuBarView: View {
                     languageButton(label: lang.label, language: lang.name)
                 }
                 autoSubmitButton
-                directInputButton
+                insertionStrategyButton
             }
             .padding(.horizontal, 2)
 
@@ -186,27 +186,32 @@ struct MenuBarView: View {
     }
 
     @ViewBuilder
-    private var directInputButton: some View {
-        let isEnabled = appState.currentDirectInput
+    private var insertionStrategyButton: some View {
+        let strategy = appState.currentInsertionStrategy
+        let (icon, label, help): (String, String, String) = switch strategy {
+        case .paste: ("doc.on.clipboard", "V", "Paste mode (clipboard + Cmd+V)")
+        case .ax: ("character.cursor.ibeam", "AX", "AX mode (direct text field manipulation)")
+        case .ime: ("keyboard", "IME", "IME mode (InputMethodKit)")
+        }
         Button {
-            appState.setDirectInputForFrontmostApp(!isEnabled)
+            appState.cycleInsertionStrategyForFrontmostApp()
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: isEnabled ? "checkmark.square.fill" : "square")
+                Image(systemName: icon)
                     .font(.system(size: 10, weight: .semibold))
-                Image(systemName: "character.cursor.ibeam")
-                    .font(.system(size: 10, weight: .semibold))
+                Text(label)
+                    .font(.system(.caption2, weight: .semibold))
             }
-            .foregroundStyle(isEnabled ? .white : .primary)
+            .foregroundStyle(strategy != .paste ? .white : .primary)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(isEnabled ? Color.accentColor : Color.primary.opacity(0.08))
+                    .fill(strategy != .paste ? Color.accentColor : Color.primary.opacity(0.08))
             }
         }
         .buttonStyle(.plain)
-        .help("Direct input (type into focused text field via accessibility)")
+        .help(help)
     }
 
     // MARK: - Recent transcriptions

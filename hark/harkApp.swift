@@ -556,6 +556,8 @@ struct HarkApp: App {
     @State private var recordingStartedAt: Date?
     @State private var ignoreHotkeyUntil: Date?
     @State private var pasteTargetBundleID: String?
+    /// The insertion strategy active for the current recording session.
+    @State private var activeInsertionStrategy: AppState.InsertionStrategy = .paste
     /// The AX text field captured at recording start for direct input mode.
     @State private var directInputElement: AXUIElement?
     /// UTF-16 offset in the AX text field where our dictated text begins.
@@ -682,8 +684,8 @@ struct HarkApp: App {
         if let saved = UserDefaults.standard.dictionary(forKey: AppState.appAutoSubmitDefaultsKey) as? [String: Bool] {
             appState.appAutoSubmit = saved
         }
-        if let saved = UserDefaults.standard.dictionary(forKey: AppState.appDirectInputDefaultsKey) as? [String: Bool] {
-            appState.appDirectInput = saved
+        if let saved = UserDefaults.standard.dictionary(forKey: AppState.appInsertionStrategyDefaultsKey) as? [String: String] {
+            appState.appInsertionStrategy = saved
         }
         if let saved = UserDefaults.standard.dictionary(
             forKey: AppState.inputDeviceWarmPreferencesDefaultsKey
@@ -1081,13 +1083,30 @@ struct HarkApp: App {
         let frontApp = NSWorkspace.shared.frontmostApplication
         pasteTargetBundleID = frontApp?.bundleIdentifier
 
-        // Capture AX text field for direct input mode
-        if appState.currentDirectInput, let captured = PasteController.captureFocusedTextField() {
-            directInputElement = captured.element
-            directInputOrigin = captured.cursorPosition
-            directInputOriginalText = captured.text
+        // Set up insertion strategy for this recording session
+        let strategy = appState.currentInsertionStrategy
+        activeInsertionStrategy = strategy
+        switch strategy {
+        case .ax:
+            if let captured = PasteController.captureFocusedTextField() {
+                directInputElement = captured.element
+                directInputOrigin = captured.cursorPosition
+                directInputOriginalText = captured.text
+                directInputLastText = ""
+            } else {
+                // Fallback to paste if AX capture fails
+                activeInsertionStrategy = .paste
+                directInputElement = nil
+                directInputOrigin = 0
+                directInputOriginalText = nil
+                directInputLastText = ""
+            }
+        case .ime:
+            directInputElement = nil
+            directInputOrigin = 0
+            directInputOriginalText = nil
             directInputLastText = ""
-        } else {
+        case .paste:
             directInputElement = nil
             directInputOrigin = 0
             directInputOriginalText = nil
@@ -1257,16 +1276,22 @@ struct HarkApp: App {
                             appState.partialTranscript = trimmed
                             appState.partialTranscriptCommittedUTF16 = committedUTF16
 
-                            // Direct input: write into the AX text field
-                            if let element = directInputElement {
-                                PasteController.setDirectText(
-                                    trimmed,
-                                    previousText: directInputLastText,
-                                    on: element,
-                                    replaceFrom: directInputOrigin,
-                                    originalText: directInputOriginalText ?? ""
-                                )
-                                directInputLastText = trimmed
+                            switch activeInsertionStrategy {
+                            case .ax:
+                                if let element = directInputElement {
+                                    PasteController.setDirectText(
+                                        trimmed,
+                                        previousText: directInputLastText,
+                                        on: element,
+                                        replaceFrom: directInputOrigin,
+                                        originalText: directInputOriginalText ?? ""
+                                    )
+                                    directInputLastText = trimmed
+                                }
+                            case .ime:
+                                HarkInputClient.sendSetMarkedText(trimmed)
+                            case .paste:
+                                break
                             }
                         }
 
@@ -1898,23 +1923,29 @@ struct HarkApp: App {
         return matches
     }
 
-    /// Restore the AX text field to its original content (before dictation started).
+    /// Restore/cancel direct input — AX restores original text, IME clears marked text.
     @MainActor
     private func restoreDirectInputOriginalText() {
-        guard let element = directInputElement, let originalText = directInputOriginalText else { return }
-        AXUIElementSetAttributeValue(
-            element,
-            kAXValueAttribute as CFString,
-            originalText as CFTypeRef
-        )
-        // Restore cursor to original position
-        var range = CFRange(location: directInputOrigin, length: 0)
-        if let rangeValue = AXValueCreate(.cfRange, &range) {
+        switch activeInsertionStrategy {
+        case .ax:
+            guard let element = directInputElement, let originalText = directInputOriginalText else { return }
             AXUIElementSetAttributeValue(
                 element,
-                kAXSelectedTextRangeAttribute as CFString,
-                rangeValue
+                kAXValueAttribute as CFString,
+                originalText as CFTypeRef
             )
+            var range = CFRange(location: directInputOrigin, length: 0)
+            if let rangeValue = AXValueCreate(.cfRange, &range) {
+                AXUIElementSetAttributeValue(
+                    element,
+                    kAXSelectedTextRangeAttribute as CFString,
+                    rangeValue
+                )
+            }
+        case .ime:
+            HarkInputClient.sendCancelInput()
+        case .paste:
+            break
         }
     }
 
@@ -1983,18 +2014,28 @@ struct HarkApp: App {
 
         let shouldSubmit = forceSubmit || PasteController.isReturnKeyPressed() || appState.currentAutoSubmit
 
-        // Direct input mode: text is already in the field via AX — just do a
-        // final write with the completed text and skip the clipboard paste.
-        if let element = directInputElement {
-            traceEvent("direct_input_finalize", [
+        // Non-paste strategies: text is already in the field — finalize and skip clipboard.
+        if activeInsertionStrategy != .paste {
+            traceEvent("direct_finalize", [
+                "strategy": activeInsertionStrategy.rawValue,
                 "text_len": String(text.count),
                 "submit": String(shouldSubmit),
             ])
             _ = appState.transition(to: .pasting)
-            PasteController.setDirectText(text, previousText: directInputLastText, on: element, replaceFrom: directInputOrigin, originalText: directInputOriginalText ?? "")
+
+            switch activeInsertionStrategy {
+            case .ax:
+                if let element = directInputElement {
+                    PasteController.setDirectText(text, previousText: directInputLastText, on: element, replaceFrom: directInputOrigin, originalText: directInputOriginalText ?? "")
+                }
+            case .ime:
+                HarkInputClient.sendCommitText(text)
+            case .paste:
+                break
+            }
+
             if shouldSubmit {
                 try? await Task.sleep(for: .milliseconds(50))
-                // Simulate Enter after the direct write
                 let returnKeyCode: CGKeyCode = 36
                 if let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: true),
                    let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: false) {
