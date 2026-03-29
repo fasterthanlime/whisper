@@ -107,12 +107,23 @@ impl LayerNorm {
 
 impl Module for LayerNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x_dtype = x.dtype();
+        let weight = if self.weight.dtype() == x_dtype {
+            self.weight.clone()
+        } else {
+            self.weight.to_dtype(x_dtype)?
+        };
+        let bias = match self.bias.as_ref() {
+            Some(b) if b.dtype() != x_dtype => Some(b.to_dtype(x_dtype)?),
+            Some(b) => Some(b.clone()),
+            None => None,
+        };
+
         if x.is_contiguous() && self.remove_mean {
-            if let Some(bias) = self.bias.as_ref() {
-                return crate::ops::layer_norm(x, &self.weight, bias, self.eps as f32);
+            if let Some(bias) = bias.as_ref() {
+                return crate::ops::layer_norm(x, &weight, bias, self.eps as f32);
             }
         }
-        let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {
             DType::F16 | DType::BF16 => DType::F32,
             d => d,
@@ -127,8 +138,8 @@ impl Module for LayerNorm {
         };
         let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
         let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
-        let x = x_normed.to_dtype(x_dtype)?.broadcast_mul(&self.weight)?;
-        match &self.bias {
+        let x = x_normed.to_dtype(x_dtype)?.broadcast_mul(&weight)?;
+        match bias.as_ref() {
             None => Ok(x),
             Some(bias) => x.broadcast_add(bias),
         }

@@ -1,6 +1,6 @@
 use anyhow::Context;
 use candle_core::{DType, Device, Tensor};
-use log::{debug, info};
+use log::{debug, error, info};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
@@ -99,6 +99,16 @@ pub struct AsrInference {
 // AsrInference: Send + Sync automatically — Mutex<T>: Send+Sync when T: Send.
 
 impl AsrInference {
+    pub(crate) fn lock_inner(&self) -> std::sync::MutexGuard<'_, AsrInferenceInner> {
+        match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                error!("ASR inference mutex was poisoned; recovering guard");
+                poisoned.into_inner()
+            }
+        }
+    }
+
     pub fn load(model_dir: &Path, device: Device) -> crate::Result<Self> {
         info!("Loading config...");
         let config = AsrConfig::from_file(&model_dir.join("config.json"))
@@ -264,9 +274,7 @@ impl AsrInference {
         let samples = load_audio_wav(audio_path, MEL_SAMPLE_RATE)?;
         info!("Audio: {} samples @ {}Hz", samples.len(), MEL_SAMPLE_RATE);
         let inner = self
-            .inner
-            .lock()
-            .map_err(|_| AsrError::Inference(anyhow::anyhow!("mutex poisoned")))?;
+            .lock_inner();
         inner
             .run_inference(&samples, &options)
             .map_err(AsrError::Inference)
@@ -279,9 +287,7 @@ impl AsrInference {
         options: TranscribeOptions,
     ) -> crate::Result<TranscribeResult> {
         let inner = self
-            .inner
-            .lock()
-            .map_err(|_| AsrError::Inference(anyhow::anyhow!("mutex poisoned")))?;
+            .lock_inner();
         inner
             .run_inference(samples, &options)
             .map_err(AsrError::Inference)

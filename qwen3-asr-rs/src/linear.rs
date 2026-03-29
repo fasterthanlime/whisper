@@ -1,5 +1,5 @@
 use candle_core::quantized::QMatMul;
-use candle_core::{Result, Tensor};
+use candle_core::{DType, Result, Tensor};
 use candle_nn::{Linear, Module};
 
 /// Linear layer that supports both dense (safetensors) and quantized (GGUF)
@@ -29,9 +29,27 @@ impl LinearW {
         match self {
             Self::Dense(linear) => linear.forward(x),
             Self::Quant { qmatmul, bias } => {
-                let out = qmatmul.forward(x)?;
+                // Candle's Metal quantized matmul path currently asserts F32
+                // inputs. Cast reduced-precision activations before dispatch.
+                let target_dtype = x.dtype();
+                let q_input = if target_dtype == DType::F32 {
+                    x.clone()
+                } else {
+                    x.to_dtype(DType::F32)?
+                };
+                let mut out = qmatmul.forward(&q_input)?;
+                if out.dtype() != target_dtype {
+                    out = out.to_dtype(target_dtype)?;
+                }
                 match bias {
-                    Some(b) => out.broadcast_add(b),
+                    Some(b) => {
+                        if b.dtype() == out.dtype() {
+                            out.broadcast_add(b)
+                        } else {
+                            let b_cast = b.to_dtype(out.dtype())?;
+                            out.broadcast_add(&b_cast)
+                        }
+                    }
                     None => Ok(out),
                 }
             }

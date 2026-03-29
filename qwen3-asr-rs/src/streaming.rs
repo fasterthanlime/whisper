@@ -289,10 +289,7 @@ impl AsrInference {
         }
 
         // Acquire lock once for the entire step
-        let inner = self
-            .inner
-            .lock()
-            .map_err(|_| AsrError::Inference(anyhow::anyhow!("mutex poisoned")))?;
+        let inner = self.lock_inner();
 
         let result = run_streaming_step(&inner, state).map_err(AsrError::Inference)?;
         debug_info.ran_inference = true;
@@ -341,10 +338,7 @@ impl AsrInference {
         }
 
         // Acquire lock once for the entire final step
-        let inner = self
-            .inner
-            .lock()
-            .map_err(|_| AsrError::Inference(anyhow::anyhow!("mutex poisoned")))?;
+        let inner = self.lock_inner();
 
         // Use incremental encoder for efficiency
         let audio_embeds = encode_audio_incremental(&inner, state).map_err(AsrError::Inference)?;

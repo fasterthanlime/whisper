@@ -40,3 +40,4 @@ asr-synth/training/adapters/
 .env
 .envrc
 *.db*
+.analysis/

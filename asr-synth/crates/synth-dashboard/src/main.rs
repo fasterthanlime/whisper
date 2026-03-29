@@ -43,6 +43,10 @@ pub struct AppState {
     inference_server: std::sync::Mutex<Option<synth_train::InferenceServer>>,
     /// Shared reranker server for prototype candidate scoring.
     prototype_reranker_server: std::sync::Mutex<Option<synth_train::InferenceServer>>,
+    /// Shared MLX reranker sidecar for trained prototype reranker inference.
+    prototype_reranker_sidecar: std::sync::Mutex<Option<jobs::PrototypeRerankerSidecar>>,
+    /// Shared experimental official Qwen3 reranker sidecar.
+    official_qwen3_reranker_server: std::sync::Mutex<Option<jobs::Qwen3RerankerSidecar>>,
 }
 
 struct LazyTtsManager {
@@ -251,6 +255,12 @@ impl AppState {
             server.kill();
         }
         if let Some(mut server) = self.prototype_reranker_server.lock().unwrap().take() {
+            server.kill();
+        }
+        if let Some(mut server) = self.prototype_reranker_sidecar.lock().unwrap().take() {
+            server.kill();
+        }
+        if let Some(mut server) = self.official_qwen3_reranker_server.lock().unwrap().take() {
             server.kill();
         }
     }
@@ -1378,6 +1388,8 @@ async fn main() -> anyhow::Result<()> {
         training_exclusive: AtomicBool::new(false),
         inference_server: std::sync::Mutex::new(None),
         prototype_reranker_server: std::sync::Mutex::new(None),
+        prototype_reranker_sidecar: std::sync::Mutex::new(None),
+        official_qwen3_reranker_server: std::sync::Mutex::new(None),
     });
 
     // Start background pre-computation loop
@@ -1712,6 +1724,7 @@ async fn main() -> anyhow::Result<()> {
         let recordings = recordings
             .into_iter()
             .map(|r| {
+                let phone_trace = db.authored_recording_phone_trace(r.id).ok().flatten();
                 let audio_b64 = std::fs::read(&r.wav_path)
                     .ok()
                     .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes));
@@ -1728,6 +1741,9 @@ async fn main() -> anyhow::Result<()> {
                     "surface_form": r.surface_form,
                     "take_no": r.take_no,
                     "created_at": r.created_at,
+                    "has_phone_trace": phone_trace.is_some(),
+                    "phone_trace_grouping_version": phone_trace.as_ref().map(|trace| trace.grouping_version),
+                    "phone_trace_updated_at": phone_trace.as_ref().map(|trace| trace.updated_at.clone()),
                     "audio_b64": audio_b64,
                     "audio_mime": audio_mime,
                 })
@@ -1878,6 +1894,10 @@ async fn main() -> anyhow::Result<()> {
             "term": term,
             "qwen_clean": validated_qwen_clean,
             "recordings": recordings.into_iter().map(|r| {
+                let phone_trace = {
+                    let db = state.db.lock().unwrap();
+                    db.authored_recording_phone_trace(r.id).ok().flatten()
+                };
                 let audio_b64 = std::fs::read(&r.wav_path)
                     .ok()
                     .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes));
@@ -1888,6 +1908,9 @@ async fn main() -> anyhow::Result<()> {
                     "sentence": r.sentence,
                     "take_no": r.take_no,
                     "created_at": r.created_at,
+                    "has_phone_trace": phone_trace.is_some(),
+                    "phone_trace_grouping_version": phone_trace.as_ref().map(|trace| trace.grouping_version),
+                    "phone_trace_updated_at": phone_trace.as_ref().map(|trace| trace.updated_at.clone()),
                     "audio_b64": audio_b64,
                     "audio_mime": audio_mime,
                 })
@@ -1935,6 +1958,15 @@ async fn main() -> anyhow::Result<()> {
             "audio/wav"
         };
         Ok(([(axum::http::header::CONTENT_TYPE, mime)], bytes).into_response())
+    }
+
+    async fn api_author_sentence_recording_phones(
+        State(state): State<Arc<AppState>>,
+        Path(recording_id): Path<i64>,
+    ) -> Result<Response, AppError> {
+        let db = state.db.lock().unwrap();
+        let trace = db.authored_recording_phone_trace(recording_id).map_err(err)?;
+        Ok(Json(serde_json::json!({"trace": trace})).into_response())
     }
 
     #[derive(Deserialize)]
@@ -2409,6 +2441,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/author/recordings/{id}/audio",
             get(api_author_sentence_recording_audio),
+        )
+        .route(
+            "/api/author/recordings/{id}/phones",
+            get(api_author_sentence_recording_phones),
         )
         .route("/api/author/spellcheck", post(api_author_spellcheck))
         .route("/api/author/suggest-vocab", post(api_author_suggest_vocab))

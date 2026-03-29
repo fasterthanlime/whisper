@@ -78,6 +78,24 @@ CREATE TABLE IF NOT EXISTS authored_sentence_recordings (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS authored_recording_phone_traces (
+    id INTEGER PRIMARY KEY,
+    recording_id INTEGER NOT NULL UNIQUE,
+    decoder TEXT NOT NULL,
+    grouping_version INTEGER NOT NULL DEFAULT 1,
+    inventory TEXT,
+    qwen_text TEXT,
+    sentence_text TEXT,
+    raw_trace_json TEXT NOT NULL,
+    qwen_alignment_json TEXT,
+    qwen_grouped_json TEXT,
+    sentence_alignment_json TEXT,
+    sentence_grouped_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(recording_id) REFERENCES authored_sentence_recordings(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS corpus_pairs (
     id INTEGER PRIMARY KEY,
     term TEXT NOT NULL,
@@ -162,6 +180,22 @@ pub struct AuthoredSentenceRecordingRow {
     pub created_at: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AuthoredRecordingPhoneTraceRow {
+    pub recording_id: i64,
+    pub decoder: String,
+    pub grouping_version: i64,
+    pub inventory: Option<String>,
+    pub qwen_text: Option<String>,
+    pub sentence_text: Option<String>,
+    pub raw_trace_json: String,
+    pub qwen_alignment_json: Option<String>,
+    pub qwen_grouped_json: Option<String>,
+    pub sentence_alignment_json: Option<String>,
+    pub sentence_grouped_json: Option<String>,
+    pub updated_at: String,
+}
+
 // --- Stats ---
 
 #[derive(Debug, Serialize)]
@@ -226,6 +260,9 @@ impl Db {
             .execute_batch("ALTER TABLE authored_sentence_recordings ADD COLUMN qwen_clean TEXT;");
         let _ = conn.execute_batch(
             "ALTER TABLE authored_sentence_recordings ADD COLUMN qwen_clean_model TEXT;",
+        );
+        let _ = conn.execute_batch(
+            "ALTER TABLE authored_recording_phone_traces ADD COLUMN grouping_version INTEGER NOT NULL DEFAULT 1;",
         );
         let _ = conn.execute_batch(
             "ALTER TABLE authored_sentence_recordings ADD COLUMN qwen_clean_updated_at TEXT;",
@@ -739,6 +776,136 @@ impl Db {
             params![id],
         )?;
         Ok(())
+    }
+
+    pub fn authored_recordings_needing_phone_trace(
+        &self,
+        decoder: &str,
+        grouping_version: i64,
+        limit: i64,
+    ) -> Result<Vec<AuthoredSentenceRecordingRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT r.id, r.term, r.sentence,
+                    COALESCE(a.kind, 'term') as kind,
+                    a.surface_form,
+                    r.take_no, r.wav_path, r.qwen_clean, r.qwen_clean_model, r.created_at
+             FROM authored_sentence_recordings r
+             LEFT JOIN authored_sentences a
+               ON LOWER(a.term) = LOWER(r.term) AND LOWER(a.sentence) = LOWER(r.sentence)
+             LEFT JOIN authored_recording_phone_traces p
+               ON p.recording_id = r.id
+             WHERE r.qwen_clean IS NOT NULL
+               AND (p.id IS NULL OR p.decoder != ?1 OR COALESCE(p.grouping_version, 0) < ?2)
+             ORDER BY r.created_at ASC, r.id ASC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![decoder, grouping_version, limit], |row| {
+            Ok(AuthoredSentenceRecordingRow {
+                id: row.get(0)?,
+                term: row.get(1)?,
+                sentence: row.get(2)?,
+                kind: row.get(3)?,
+                surface_form: row.get(4)?,
+                take_no: row.get(5)?,
+                wav_path: row.get(6)?,
+                qwen_clean: row.get(7)?,
+                qwen_clean_model: row.get(8)?,
+                created_at: row.get(9)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn upsert_authored_recording_phone_trace(
+        &self,
+        recording_id: i64,
+        decoder: &str,
+        grouping_version: i64,
+        inventory: Option<&str>,
+        qwen_text: Option<&str>,
+        sentence_text: Option<&str>,
+        raw_trace_json: &str,
+        qwen_alignment_json: Option<&str>,
+        qwen_grouped_json: Option<&str>,
+        sentence_alignment_json: Option<&str>,
+        sentence_grouped_json: Option<&str>,
+    ) -> Result<()> {
+        let now = now_str();
+        self.conn.execute(
+             "INSERT INTO authored_recording_phone_traces (
+                recording_id, decoder, grouping_version, inventory, qwen_text, sentence_text,
+                raw_trace_json, qwen_alignment_json, qwen_grouped_json,
+                sentence_alignment_json, sentence_grouped_json,
+                created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
+             ON CONFLICT(recording_id) DO UPDATE SET
+                decoder = excluded.decoder,
+                grouping_version = excluded.grouping_version,
+                inventory = excluded.inventory,
+                qwen_text = excluded.qwen_text,
+                sentence_text = excluded.sentence_text,
+                raw_trace_json = excluded.raw_trace_json,
+                qwen_alignment_json = excluded.qwen_alignment_json,
+                qwen_grouped_json = excluded.qwen_grouped_json,
+                sentence_alignment_json = excluded.sentence_alignment_json,
+                sentence_grouped_json = excluded.sentence_grouped_json,
+                updated_at = excluded.updated_at",
+            params![
+                recording_id,
+                decoder,
+                grouping_version,
+                inventory,
+                qwen_text,
+                sentence_text,
+                raw_trace_json,
+                qwen_alignment_json,
+                qwen_grouped_json,
+                sentence_alignment_json,
+                sentence_grouped_json,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn authored_recording_phone_trace(
+        &self,
+        recording_id: i64,
+    ) -> Result<Option<AuthoredRecordingPhoneTraceRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT recording_id, decoder, grouping_version, inventory, qwen_text, sentence_text,
+                    raw_trace_json, qwen_alignment_json, qwen_grouped_json,
+                    sentence_alignment_json, sentence_grouped_json, updated_at
+             FROM authored_recording_phone_traces
+             WHERE recording_id = ?1",
+        )?;
+        let mut rows = stmt.query(params![recording_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(AuthoredRecordingPhoneTraceRow {
+                recording_id: row.get(0)?,
+                decoder: row.get(1)?,
+                grouping_version: row.get(2)?,
+                inventory: row.get(3)?,
+                qwen_text: row.get(4)?,
+                sentence_text: row.get(5)?,
+                raw_trace_json: row.get(6)?,
+                qwen_alignment_json: row.get(7)?,
+                qwen_grouped_json: row.get(8)?,
+                sentence_alignment_json: row.get(9)?,
+                sentence_grouped_json: row.get(10)?,
+                updated_at: row.get(11)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn authored_recording_phone_trace_count(&self) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM authored_recording_phone_traces",
+            [],
+            |r| r.get(0),
+        )?)
     }
 
     /// Get unique authored sentences for eval. Returns (sentence, primary_term).

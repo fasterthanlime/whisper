@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
-use std::process::Command;
+use std::hash::{Hash, Hasher};
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Arc;
 
 use axum::{
@@ -26,6 +28,144 @@ struct PreparedExample {
 struct CounterexampleExample {
     sentence: String,
     weight: u32,
+}
+
+#[derive(Clone)]
+struct AppliedMistakePoolRow {
+    term: String,
+    clean_sentence: String,
+    corrupted_sentence: String,
+    corruption_surface: String,
+    source: String,
+    weight: u32,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct AppliedMistakeEvalRow {
+    term: String,
+    clean_sentence: String,
+    corrupted_sentence: String,
+    corruption_surface: String,
+    source: String,
+}
+
+#[derive(Default)]
+struct AppliedMistakeBuildStats {
+    train_mistakes: usize,
+    eval_mistakes: usize,
+    train_identity: usize,
+    train_counterexamples: usize,
+    skipped_missing_term: usize,
+    skipped_acceptable_surface: usize,
+    skipped_duplicate: usize,
+}
+
+struct AppliedMistakeBuildOutput {
+    train_mistakes: Vec<AppliedMistakePoolRow>,
+    eval_mistakes: Vec<AppliedMistakeEvalRow>,
+    train_identity: Vec<String>,
+    train_counterexamples: Vec<CounterexampleExample>,
+    stats: AppliedMistakeBuildStats,
+}
+
+fn load_applied_eval_rows(path: &str) -> anyhow::Result<Vec<AppliedMistakeEvalRow>> {
+    let content = std::fs::read_to_string(path)?;
+    let mut rows = Vec::new();
+    for line in content.lines().filter(|l| !l.trim().is_empty()) {
+        rows.push(serde_json::from_str::<AppliedMistakeEvalRow>(line)?);
+    }
+    Ok(rows)
+}
+
+fn vocab_preview<'a>(
+    vocab: &'a [crate::db::VocabRow],
+    text: &'a str,
+) -> (&'a str, Option<String>) {
+    if let Some(row) = vocab
+        .iter()
+        .find(|row| row.term.eq_ignore_ascii_case(text.trim()))
+    {
+        let spoken = row.spoken().trim();
+        return (
+            spoken,
+            crate::prototype::phonetic_preview(spoken)
+                .or_else(|| crate::prototype::phonetic_preview(text)),
+        );
+    }
+    (text, crate::prototype::phonetic_preview(text))
+}
+
+fn prototype_trace_excerpt(
+    vocab: &[crate::db::VocabRow],
+    result: &crate::prototype::PrototypeCorrectionResult,
+    reranker: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "proposal_count": result.proposals.len(),
+        "accepted_count": result.accepted.len(),
+        "sentence_candidate_count": result.sentence_candidates.len(),
+        "accepted": result.accepted.iter().map(|edit| {
+            let (to_preview, to_preview_phonemes) = vocab_preview(vocab, &edit.to);
+            serde_json::json!({
+                "from": edit.from,
+                "from_phonemes": edit.from_phonemes,
+                "to": edit.to,
+                "to_preview": to_preview,
+                "to_preview_phonemes": to_preview_phonemes,
+                "via": edit.via,
+                "score": edit.score,
+                "acoustic_score": edit.acoustic_score,
+                "acoustic_delta": edit.acoustic_delta,
+            })
+        }).collect::<Vec<_>>(),
+        "proposals": result.proposals.iter().take(4).map(|proposal| {
+            serde_json::json!({
+                "raw_text": proposal.raw_text,
+                "normalized": proposal.normalized,
+                "phonemes": proposal.phonemes,
+                "acoustic_phonemes": proposal.acoustic_phonemes,
+                "observed_acoustic_score": proposal.observed_acoustic_score,
+                "acoustic_trustworthy": proposal.acoustic_trustworthy,
+                "acoustic_window_start_sec": proposal.acoustic_window_start_sec,
+                "acoustic_window_end_sec": proposal.acoustic_window_end_sec,
+                "candidates": proposal.candidates.iter().take(4).map(|candidate| serde_json::json!({
+                    "term": candidate.term,
+                    "via": candidate.via,
+                    "matched_form": candidate.matched_form,
+                    "matched_form_phonemes": candidate.matched_form_phonemes,
+                    "term_preview": candidate.term_preview,
+                    "term_preview_phonemes": candidate.term_preview_phonemes,
+                    "score": candidate.score,
+                    "lexical_score": candidate.lexical_score,
+                    "dice": candidate.dice,
+                    "prefix_ratio": candidate.prefix_ratio,
+                    "length_ratio": candidate.length_ratio,
+                    "phonetic_score": candidate.phonetic_score,
+                    "observed_acoustic_score": candidate.observed_acoustic_score,
+                    "acoustic_score": candidate.acoustic_score,
+                    "acoustic_delta": candidate.acoustic_delta,
+                    "exact_words": candidate.exact_words,
+                    "exact_compact": candidate.exact_compact,
+                })).collect::<Vec<_>>(),
+            })
+        }).collect::<Vec<_>>(),
+        "sentence_candidates": result.sentence_candidates.iter().take(6).map(|candidate| {
+            serde_json::json!({
+                "label": candidate.label,
+                "text": candidate.text,
+                "score": candidate.score,
+                "edits": candidate.edits.iter().map(|edit| serde_json::json!({
+                    "from": edit.from,
+                    "to": edit.to,
+                    "via": edit.via,
+                    "score": edit.score,
+                    "acoustic_score": edit.acoustic_score,
+                    "acoustic_delta": edit.acoustic_delta,
+                })).collect::<Vec<_>>(),
+            })
+        }).collect::<Vec<_>>(),
+        "reranker": reranker.cloned(),
+    })
 }
 
 #[derive(Deserialize)]
@@ -116,6 +256,219 @@ fn sample_weighted_index(weights: &[u32], rng: &mut impl Rng) -> usize {
     weights.len().saturating_sub(1)
 }
 
+fn find_ascii_ci(haystack: &str, needle: &str) -> Option<usize> {
+    haystack
+        .to_ascii_lowercase()
+        .find(&needle.to_ascii_lowercase())
+}
+
+fn is_fragment_boundary_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_' || ch == ':'
+}
+
+fn find_exact_fragment_ascii_ci(haystack: &str, needle: &str) -> Option<usize> {
+    let needle = needle.trim();
+    if needle.is_empty() {
+        return None;
+    }
+    let haystack_lower = haystack.to_ascii_lowercase();
+    let needle_lower = needle.to_ascii_lowercase();
+    for (pos, _) in haystack_lower.match_indices(&needle_lower) {
+        let before = haystack[..pos].chars().next_back();
+        let after = haystack[pos + needle.len()..].chars().next();
+        let left_ok = before.map(|ch| !is_fragment_boundary_char(ch)).unwrap_or(true);
+        let right_ok = after.map(|ch| !is_fragment_boundary_char(ch)).unwrap_or(true);
+        if left_ok && right_ok {
+            return Some(pos);
+        }
+    }
+    None
+}
+
+fn replace_first_exact_fragment_ascii_ci(
+    haystack: &str,
+    needle: &str,
+    replacement: &str,
+) -> Option<String> {
+    let needle = needle.trim();
+    let pos = find_exact_fragment_ascii_ci(haystack, needle)?;
+    Some(format!(
+        "{}{}{}",
+        &haystack[..pos],
+        replacement,
+        &haystack[pos + needle.len()..]
+    ))
+}
+
+fn applied_holdout_sentence(term: &str, sentence: &str) -> bool {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    term.to_ascii_lowercase().hash(&mut hasher);
+    normalize_prepare_text(sentence)
+        .to_ascii_lowercase()
+        .hash(&mut hasher);
+    hasher.finish() % 10 == 0
+}
+
+fn build_applied_mistake_output(
+    db: &crate::db::Db,
+    alt_spellings: &HashMap<String, Vec<String>>,
+) -> anyhow::Result<AppliedMistakeBuildOutput> {
+    let reviewed_vocab = db.list_reviewed_vocab()?;
+    let qwen_confusions = db.get_all_qwen_confusions()?;
+    let corpus_pairs = db.corpus_eval_set()?;
+
+    let mut known_surfaces: HashMap<String, HashMap<String, (u32, String)>> = HashMap::new();
+    for (term, heards) in qwen_confusions {
+        for heard in heards {
+            let heard = normalize_prepare_text(&heard);
+            if heard.is_empty() {
+                continue;
+            }
+            let slot = known_surfaces
+                .entry(term.to_ascii_lowercase())
+                .or_default()
+                .entry(heard.clone())
+                .or_insert((0, "vocab_confusions".to_string()));
+            slot.0 += 1;
+        }
+    }
+    for item in corpus_pairs {
+        if !item.is_mistake {
+            continue;
+        }
+        let qwen = normalize_prepare_text(&item.qwen);
+        if qwen.is_empty() || eval_fragment_matches(alt_spellings, &item.term, &item.original, &qwen)
+        {
+            continue;
+        }
+        let slot = known_surfaces
+            .entry(item.term.to_ascii_lowercase())
+            .or_default()
+            .entry(qwen)
+            .or_insert((0, "corpus_pairs".to_string()));
+        slot.0 += item.hit_count.clamp(1, 5) as u32;
+    }
+
+    let mut train_mistakes = Vec::new();
+    let mut eval_mistakes = Vec::new();
+    let mut train_identity = Vec::new();
+    let mut train_counterexamples = Vec::new();
+    let mut seen = HashSet::<(String, String, String)>::new();
+    let mut stats = AppliedMistakeBuildStats::default();
+
+    for vocab in reviewed_vocab {
+        let term = vocab.term;
+        let term_key = term.to_ascii_lowercase();
+        let surfaces = known_surfaces.get(&term_key).cloned().unwrap_or_default();
+        let term_sentences = db.authored_sentences_for_term(&term).unwrap_or_default();
+        for sentence in term_sentences {
+            let sentence = normalize_prepare_text(&sentence);
+            if sentence.is_empty() {
+                continue;
+            }
+            if find_exact_fragment_ascii_ci(&sentence, &term).is_none() {
+                stats.skipped_missing_term += 1;
+                continue;
+            }
+            let is_holdout = applied_holdout_sentence(&term, &sentence);
+            if is_holdout {
+                for (surface, (weight, source)) in &surfaces {
+                    if eval_fragment_matches(alt_spellings, &term, &term, surface) {
+                        stats.skipped_acceptable_surface += 1;
+                        continue;
+                    }
+                    let Some(corrupted) =
+                        replace_first_exact_fragment_ascii_ci(&sentence, &term, surface)
+                    else {
+                        stats.skipped_missing_term += 1;
+                        continue;
+                    };
+                    let corrupted = normalize_prepare_text(&corrupted);
+                    if corrupted == sentence || !is_prepare_example_reasonable(&corrupted, &sentence)
+                    {
+                        continue;
+                    }
+                    if !seen.insert((term_key.clone(), sentence.clone(), corrupted.clone())) {
+                        stats.skipped_duplicate += 1;
+                        continue;
+                    }
+                    eval_mistakes.push(AppliedMistakeEvalRow {
+                        term: term.clone(),
+                        clean_sentence: sentence.clone(),
+                        corrupted_sentence: corrupted,
+                        corruption_surface: surface.clone(),
+                        source: source.clone(),
+                    });
+                    stats.eval_mistakes += 1;
+                }
+            } else {
+                if is_prepare_example_reasonable(&sentence, &sentence) {
+                    train_identity.push(sentence.clone());
+                    stats.train_identity += 1;
+                }
+                for (surface, (weight, source)) in &surfaces {
+                    if eval_fragment_matches(alt_spellings, &term, &term, surface) {
+                        stats.skipped_acceptable_surface += 1;
+                        continue;
+                    }
+                    let Some(corrupted) =
+                        replace_first_exact_fragment_ascii_ci(&sentence, &term, surface)
+                    else {
+                        stats.skipped_missing_term += 1;
+                        continue;
+                    };
+                    let corrupted = normalize_prepare_text(&corrupted);
+                    if corrupted == sentence || !is_prepare_example_reasonable(&corrupted, &sentence)
+                    {
+                        continue;
+                    }
+                    if !seen.insert((term_key.clone(), sentence.clone(), corrupted.clone())) {
+                        stats.skipped_duplicate += 1;
+                        continue;
+                    }
+                    train_mistakes.push(AppliedMistakePoolRow {
+                        term: term.clone(),
+                        clean_sentence: sentence.clone(),
+                        corrupted_sentence: corrupted,
+                        corruption_surface: surface.clone(),
+                        source: source.clone(),
+                        weight: (*weight).max(1),
+                    });
+                    stats.train_mistakes += 1;
+                }
+            }
+        }
+
+        for (sentence, surface_form) in db.authored_counterexamples_for_term(&term).unwrap_or_default() {
+            let sentence = normalize_prepare_text(&sentence);
+            if sentence.is_empty() || applied_holdout_sentence(&term, &sentence) {
+                continue;
+            }
+            if !sentence
+                .to_ascii_lowercase()
+                .contains(&surface_form.to_ascii_lowercase())
+            {
+                continue;
+            }
+            if is_prepare_example_reasonable(&sentence, &sentence) {
+                train_counterexamples.push(CounterexampleExample {
+                    sentence,
+                    weight: 1,
+                });
+                stats.train_counterexamples += 1;
+            }
+        }
+    }
+
+    Ok(AppliedMistakeBuildOutput {
+        train_mistakes,
+        eval_mistakes,
+        train_identity,
+        train_counterexamples,
+        stats,
+    })
+}
+
 fn correction_example_repeat_count(item: &crate::db::EvalItem, eval_bonus: usize) -> usize {
     let hit_bonus = item.hit_count.clamp(1, 5) as usize;
     let repeat = 1 + (hit_bonus.saturating_sub(1) / 3) + usize::from(eval_bonus > 0);
@@ -165,6 +518,37 @@ fn build_prototype_reranker_prompt(
     }
     prompt.push_str("\n<answer>");
     prompt
+}
+
+fn prototype_reranker_valid_split(term: &str, qwen: &str, expected: &str) -> bool {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    term.to_ascii_lowercase().hash(&mut hasher);
+    normalize_prepare_text(qwen)
+        .to_ascii_lowercase()
+        .hash(&mut hasher);
+    normalize_prepare_text(expected)
+        .to_ascii_lowercase()
+        .hash(&mut hasher);
+    hasher.finish() % 10 == 0
+}
+
+fn select_prototype_reranker_candidates(
+    mut candidates: Vec<crate::prototype::SentenceCandidate>,
+    max_candidates_per_row: usize,
+) -> Vec<crate::prototype::SentenceCandidate> {
+    candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
+    let original = candidates.iter().find(|c| c.label == "original").cloned();
+    let mut selected = candidates
+        .into_iter()
+        .take(max_candidates_per_row)
+        .collect::<Vec<_>>();
+    if let Some(original) = original {
+        if !selected.iter().any(|candidate| candidate.label == "original") {
+            selected.push(original);
+            selected.sort_by(|a, b| b.score.total_cmp(&a.score));
+        }
+    }
+    selected
 }
 
 fn load_human_prototype_items(
@@ -1108,6 +1492,33 @@ fn decode_zipa_trace_from_16k(samples_16k: &[f32]) -> anyhow::Result<serde_json:
     Ok(serde_json::from_str(line)?)
 }
 
+fn decode_allophant_trace_from_16k(samples_16k: &[f32]) -> anyhow::Result<serde_json::Value> {
+    let temp_wav = write_temp_wav_16k(samples_16k, "allophant")?;
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/phone_decode_allophant.sh");
+    let output = Command::new("bash")
+        .arg(script)
+        .arg("--json")
+        .arg(&temp_wav)
+        .output()?;
+    let _ = std::fs::remove_file(&temp_wav);
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "phone_decode_allophant failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let stdout = String::from_utf8(output.stdout)?;
+    let line = stdout
+        .lines()
+        .rev()
+        .find(|line| line.trim_start().starts_with('{'))
+        .ok_or_else(|| anyhow::anyhow!("phone_decode_allophant produced no JSON"))?;
+    Ok(serde_json::from_str(line)?)
+}
+
+const AUTHORED_PHONE_GROUPING_VERSION: i64 = 2;
+
 fn phone_segments_to_alignment(phone_trace: &serde_json::Value) -> serde_json::Value {
     let segments = phone_trace
         .get("segments")
@@ -1126,6 +1537,167 @@ fn phone_segments_to_alignment(phone_trace: &serde_json::Value) -> serde_json::V
             }))
         })
         .collect::<Vec<_>>())
+}
+
+fn alignment_group_ownership_ranges(
+    alignment: &[qwen3_asr::ForcedAlignItem],
+) -> Vec<(f64, f64)> {
+    if alignment.is_empty() {
+        return Vec::new();
+    }
+
+    let centers = alignment
+        .iter()
+        .map(|item| (item.start_time + item.end_time) * 0.5)
+        .collect::<Vec<_>>();
+    let mut boundaries = Vec::with_capacity(alignment.len() + 1);
+    boundaries.push(alignment[0].start_time.min(centers[0]));
+    for pair in centers.windows(2) {
+        let midpoint = (pair[0] + pair[1]) * 0.5;
+        let prev = *boundaries.last().unwrap_or(&midpoint);
+        boundaries.push(midpoint.max(prev));
+    }
+    boundaries.push(alignment.last().unwrap().end_time.max(*boundaries.last().unwrap()));
+    boundaries
+        .windows(2)
+        .map(|pair| (pair[0], pair[1]))
+        .collect()
+}
+
+fn interval_overlap_sec(a_start: f64, a_end: f64, b_start: f64, b_end: f64) -> f64 {
+    (a_end.min(b_end) - a_start.max(b_start)).max(0.0)
+}
+
+fn group_phone_segments_by_alignment_json(
+    alignment: &[qwen3_asr::ForcedAlignItem],
+    segments: &[crate::prototype::AcousticSegment],
+) -> serde_json::Value {
+    let ownership = alignment_group_ownership_ranges(alignment);
+    let mut grouped = vec![Vec::<(crate::prototype::AcousticSegment, f64)>::new(); alignment.len()];
+
+    for seg in segments {
+        if seg.end_sec <= seg.start_sec || ownership.is_empty() {
+            continue;
+        }
+
+        let mut best_idx = None;
+        let mut best_overlap = 0.0f64;
+        let seg_mid = (seg.start_sec + seg.end_sec) * 0.5;
+        let mut best_center_distance = f64::INFINITY;
+
+        for (idx, (own_start, own_end)) in ownership.iter().copied().enumerate() {
+            let overlap = interval_overlap_sec(seg.start_sec, seg.end_sec, own_start, own_end);
+            if overlap <= 0.0 {
+                continue;
+            }
+            let word_mid = (own_start + own_end) * 0.5;
+            let center_distance = (seg_mid - word_mid).abs();
+            let better = overlap > best_overlap + 1e-9
+                || ((overlap - best_overlap).abs() <= 1e-9
+                    && center_distance < best_center_distance);
+            if better {
+                best_idx = Some(idx);
+                best_overlap = overlap;
+                best_center_distance = center_distance;
+            }
+        }
+
+        if let Some(idx) = best_idx {
+            grouped[idx].push((seg.clone(), best_overlap));
+        }
+    }
+
+    serde_json::Value::Array(
+        alignment
+            .iter()
+            .enumerate()
+            .map(|(idx, item)| {
+                let owned = grouped.get(idx).cloned().unwrap_or_default();
+                let phones = owned
+                    .iter()
+                    .map(|(seg, _)| seg.phone.as_str())
+                    .filter(|phone| !phone.trim().is_empty())
+                    .collect::<Vec<_>>();
+                let phone_items = owned
+                    .iter()
+                    .map(|(seg, overlap_sec)| {
+                        serde_json::json!({
+                            "p": seg.phone,
+                            "s": seg.start_sec,
+                            "e": seg.end_sec,
+                            "overlap_sec": overlap_sec,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let (own_start, own_end) = ownership
+                    .get(idx)
+                    .copied()
+                    .unwrap_or((item.start_time, item.end_time));
+                let ipa = if phones.is_empty() {
+                    "∅".to_string()
+                } else {
+                    phones.join(" ")
+                };
+                serde_json::json!({
+                    "word": item.word,
+                    "w": ipa,
+                    "s": item.start_time,
+                    "e": item.end_time,
+                    "own_s": own_start,
+                    "own_e": own_end,
+                    "n": phone_items.len(),
+                    "phones": phone_items,
+                    "t": format!(
+                        "{}: {} | align {:.3}s–{:.3}s | own {:.3}s–{:.3}s",
+                        item.word,
+                        ipa,
+                        item.start_time,
+                        item.end_time,
+                        own_start,
+                        own_end
+                    ),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn persist_authored_recording_phone_trace(
+    state: &Arc<AppState>,
+    rec: &crate::db::AuthoredSentenceRecordingRow,
+) -> anyhow::Result<()> {
+    let qwen_text = rec
+        .qwen_clean
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("recording {} has no qwen_clean", rec.id))?;
+    let samples_16k = load_authored_recording_16k(&rec.wav_path)?;
+    let trace = decode_allophant_trace_from_16k(&samples_16k)?;
+    let segments = zipa_segments_from_trace(&trace);
+    let qwen_alignment = state.aligner.align(&samples_16k, qwen_text)?;
+    let sentence_alignment = state.aligner.align(&samples_16k, &rec.sentence)?;
+    let qwen_alignment_json = fmt_alignment_json(&qwen_alignment).to_string();
+    let sentence_alignment_json = fmt_alignment_json(&sentence_alignment).to_string();
+    let qwen_grouped_json =
+        group_phone_segments_by_alignment_json(&qwen_alignment, &segments).to_string();
+    let sentence_grouped_json =
+        group_phone_segments_by_alignment_json(&sentence_alignment, &segments).to_string();
+    let db = state.db.lock().unwrap();
+    db.upsert_authored_recording_phone_trace(
+        rec.id,
+        "allophant",
+        AUTHORED_PHONE_GROUPING_VERSION,
+        trace.get("inventory_lang").and_then(|v| v.as_str()),
+        Some(qwen_text),
+        Some(&rec.sentence),
+        &trace.to_string(),
+        Some(&qwen_alignment_json),
+        Some(&qwen_grouped_json),
+        Some(&sentence_alignment_json),
+        Some(&sentence_grouped_json),
+    )?;
+    Ok(())
 }
 
 pub fn spawn_authored_asr_precompute_loop(state: Arc<AppState>, notify: Arc<tokio::sync::Notify>) {
@@ -1152,10 +1724,7 @@ pub fn spawn_authored_asr_precompute_loop(state: Arc<AppState>, notify: Arc<toki
                         break;
                     }
                 };
-
-                if pending.is_empty() {
-                    break;
-                }
+                let qwen_pending_empty = pending.is_empty();
 
                 for rec in pending {
                     let state2 = state.clone();
@@ -1184,6 +1753,53 @@ pub fn spawn_authored_asr_precompute_loop(state: Arc<AppState>, notify: Arc<toki
                         }
                         Err(e) => {
                             eprintln!("[authored-asr] task failed for recording {}: {e}", rec.id);
+                        }
+                    }
+                }
+
+                let pending_phone = {
+                    let db = state.db.lock().unwrap();
+                    db.authored_recordings_needing_phone_trace(
+                        "allophant",
+                        AUTHORED_PHONE_GROUPING_VERSION,
+                        4,
+                    )
+                };
+                let pending_phone = match pending_phone {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        eprintln!("[authored-phones] failed to query pending recordings: {e}");
+                        break;
+                    }
+                };
+
+                if qwen_pending_empty && pending_phone.is_empty() {
+                    break;
+                }
+
+                for rec in pending_phone {
+                    let state2 = state.clone();
+                    let rec_id = rec.id;
+                    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                        persist_authored_recording_phone_trace(&state2, &rec)
+                    })
+                    .await;
+
+                    match result {
+                        Ok(Ok(())) => {
+                            eprintln!("[authored-phones] cached timed IPA for recording {}", rec_id);
+                        }
+                        Ok(Err(e)) => {
+                            eprintln!(
+                                "[authored-phones] failed to cache recording {}: {e}",
+                                rec_id
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[authored-phones] task failed for recording {}: {e}",
+                                rec_id
+                            );
                         }
                     }
                 }
@@ -2894,220 +3510,93 @@ pub async fn api_start_prepare_job(
 
     let state2 = state.clone();
     tokio::spawn(async move {
-        let (template_terms, template_bank) = {
-            let db = state2.db.lock().unwrap();
-            let vocab_by_term = db
-                .list_reviewed_vocab()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|row| (row.term.to_ascii_lowercase(), row))
-                .collect::<HashMap<_, _>>();
-            let corpus_pairs = db.corpus_eval_set().unwrap_or_default();
-            let terms = corpus_pairs
-                .iter()
-                .filter(|item| item.is_mistake && !item.original.eq_ignore_ascii_case(&item.qwen))
-                .map(|item| item.term.to_ascii_lowercase())
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .filter_map(|term| {
-                    vocab_by_term
-                        .get(&term)
-                        .map(|row| (row.term.clone(), row.description.clone()))
-                })
-                .collect::<Vec<_>>();
-            drop(db);
-            (terms, HashMap::new())
-        };
-
-        let template_bank = if template_terms.is_empty() {
-            template_bank
-        } else {
-            hydrate_prepare_template_bank(&state2, job_id, &template_terms).await
-        };
-
-        let template_bank_fallback = template_bank.clone();
         let state3 = state2.clone();
-
         let handle = tokio::task::spawn_blocking(move || {
-            // Load corpus pairs: term + fragment errors
-            let corpus_pairs = {
+            let mut rng = rand::rngs::StdRng::from_os_rng();
+            let alt_spellings = {
                 let db = state3.db.lock().unwrap();
-                db.corpus_eval_set().unwrap_or_default()
+                db.get_all_alt_spellings().unwrap_or_default()
+            };
+            let build = {
+                let db = state3.db.lock().unwrap();
+                build_applied_mistake_output(&db, &alt_spellings)
             };
 
-            if corpus_pairs.is_empty() {
+            let Ok(build) = build else {
                 let db = state3.db.lock().unwrap();
-                let _ = db.append_job_log(job_id, "ERROR: No corpus pairs. Generate corpus first.");
+                let _ = db.append_job_log(
+                    job_id,
+                    "ERROR: Failed to build applied-mistake dataset from authored sentences and known confusions.",
+                );
+                let _ = db.finish_job(job_id, "failed", None);
+                return;
+            };
+
+            if build.train_mistakes.is_empty() || build.eval_mistakes.is_empty() {
+                let db = state3.db.lock().unwrap();
+                let _ = db.append_job_log(
+                    job_id,
+                    &format!(
+                        "ERROR: Need both train and held-out applied mistakes. Got {} train mistake rows and {} held-out eval rows.",
+                        build.train_mistakes.len(),
+                        build.eval_mistakes.len()
+                    ),
+                );
                 let _ = db.finish_job(job_id, "failed", None);
                 return;
             }
+            if build.train_identity.is_empty() {
+                let db = state3.db.lock().unwrap();
+                let _ = db.append_job_log(
+                    job_id,
+                    "ERROR: No clean authored train sentences available after filtering.",
+                );
+                let _ = db.finish_job(job_id, "failed", None);
+                return;
+            }
+
+            let n_error = (total_examples as f64 * error_rate).round() as usize;
+            let n_identity = total_examples.saturating_sub(n_error);
+            let n_counterexample_target = if build.train_counterexamples.is_empty() {
+                0
+            } else {
+                ((n_identity as f64) * COUNTEREXAMPLE_SHARE_OF_NOCHANGE).round() as usize
+            };
+            let n_plain_identity_target = n_identity.saturating_sub(n_counterexample_target);
 
             {
                 let db = state3.db.lock().unwrap();
                 let _ = db.append_job_log(
                     job_id,
                     &format!(
-                        "Preparing from {} corpus pairs with template-backed sentence bank...",
-                        corpus_pairs.len()
+                        "Preparing from clean authored sentences + one applied known mistake: {} train mistakes, {} held-out eval mistakes, {} clean train sentences, {} counterexamples",
+                        build.train_mistakes.len(),
+                        build.eval_mistakes.len(),
+                        build.train_identity.len(),
+                        build.train_counterexamples.len(),
+                    ),
+                );
+                let _ = db.append_job_log(
+                    job_id,
+                    &format!(
+                        "Generating {} error + {} no-change ({} plain identity, {} counterexample target) = {} total examples",
+                        n_error,
+                        n_identity,
+                        n_plain_identity_target,
+                        n_counterexample_target,
+                        total_examples,
                     ),
                 );
             }
-            let mut rng = rand::rngs::StdRng::from_os_rng();
-
-            let mistake_pairs: Vec<_> = corpus_pairs
-                .into_iter()
-                .filter(|item| item.is_mistake && !item.original.eq_ignore_ascii_case(&item.qwen))
-                .collect();
-
-            if mistake_pairs.is_empty() {
-                let db = state3.db.lock().unwrap();
-                let _ = db.append_job_log(
-                    job_id,
-                    "ERROR: No mistaken corpus pairs. Generate or review corpus first.",
-                );
-                let _ = db.finish_job(job_id, "failed", None);
-                return;
-            }
-
-            let eval_failure_weights = latest_eval_failure_term_weights(&state3);
-            let weighted_terms = eval_failure_weights.len();
-            let pair_weights: Vec<u32> = mistake_pairs
-                .iter()
-                .map(|item| {
-                    let hit_bonus = item.hit_count.clamp(1, 5) as u32;
-                    let eval_bonus = eval_failure_weights
-                        .get(&item.term.to_ascii_lowercase())
-                        .copied()
-                        .unwrap_or(0) as u32;
-                    1 + hit_bonus + eval_bonus.saturating_mul(6)
-                })
-                .collect();
-
-            let n_error = (total_examples as f64 * error_rate).round() as usize;
-            let n_identity = total_examples - n_error;
-
-            {
-                let db = state3.db.lock().unwrap();
-                let _ = db.append_job_log(
-                job_id,
-                &format!(
-                    "Generating {} error + {} identity = {} total examples ({} mistake pairs, {} eval-weighted terms)",
-                    n_error,
-                    n_identity,
-                    total_examples,
-                    mistake_pairs.len(),
-                    weighted_terms
-                ),
-            );
-            }
 
             let mut examples = Vec::with_capacity(total_examples);
+            let mut seen_prompts = HashMap::<String, String>::new();
             let mut correction_count = 0usize;
             let mut identity_count = 0usize;
             let mut counterexample_count = 0usize;
             let mut duplicate_skips = 0usize;
             let mut conflict_skips = 0usize;
-            let mut quality_skips = 0usize;
-            let mut missing_template_skips = 0usize;
             let mut weighted_repeat_pushes = 0usize;
-            let mut per_term_cap_skips = 0usize;
-            let mut seen_prompts = HashMap::<String, String>::new();
-            let identity_terms: Vec<String> = mistake_pairs
-                .iter()
-                .map(|item| item.term.clone())
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect();
-            let distinct_term_count = identity_terms.len().max(1);
-            let average_error_budget = n_error.div_ceil(distinct_term_count);
-            let per_term_error_cap = average_error_budget
-                .saturating_mul(2)
-                .clamp(
-                    MIN_CORRECTION_EXAMPLES_PER_TERM,
-                    MAX_CORRECTION_EXAMPLES_PER_TERM,
-                );
-            let mut correction_examples_per_term = HashMap::<String, usize>::new();
-            let counterexample_weight_map: HashMap<(String, String), u32> =
-                mistake_pairs.iter().fold(HashMap::new(), |mut acc, item| {
-                    let key = (
-                        item.term.to_ascii_lowercase(),
-                        normalize_prepare_text(&item.qwen).to_ascii_lowercase(),
-                    );
-                    *acc.entry(key).or_insert(0) += item.hit_count.clamp(1, 5) as u32;
-                    acc
-                });
-            let counterexamples: Vec<CounterexampleExample> = {
-                let db = state3.db.lock().unwrap();
-                let mut rows = Vec::new();
-                for term in &identity_terms {
-                    let eval_bonus_for_term = eval_failure_weights
-                        .get(&term.to_ascii_lowercase())
-                        .copied()
-                        .unwrap_or(0) as u32;
-                    for (sentence, surface_form) in db
-                        .authored_counterexamples_for_term(term)
-                        .unwrap_or_default()
-                    {
-                        let sentence = normalize_prepare_text(&sentence);
-                        if sentence.is_empty()
-                            || !sentence
-                                .to_ascii_lowercase()
-                                .contains(&surface_form.to_ascii_lowercase())
-                        {
-                            continue;
-                        }
-                        let surface_hits = counterexample_weight_map
-                            .get(&(
-                                term.to_ascii_lowercase(),
-                                normalize_prepare_text(&surface_form).to_ascii_lowercase(),
-                            ))
-                            .copied()
-                            .unwrap_or(0);
-                        rows.push(CounterexampleExample {
-                            sentence,
-                            weight: 1 + surface_hits + eval_bonus_for_term.saturating_mul(2),
-                        });
-                    }
-                }
-                rows
-            };
-            let counterexample_weights: Vec<u32> = counterexamples
-                .iter()
-                .map(|item| item.weight.max(1))
-                .collect();
-            let template_terms = template_bank_fallback
-                .values()
-                .filter(|items| !items.is_empty())
-                .count();
-
-            // Helper: splice a fragment into a Markov sentence at the term position
-            let splice_fragment = |sentence: &str, term: &str, fragment: &str| -> String {
-                let lower = sentence.to_lowercase();
-                let lower_term = term.to_lowercase();
-                if let Some(pos) = lower.find(&lower_term) {
-                    format!(
-                        "{}{}{}",
-                        &sentence[..pos],
-                        fragment,
-                        &sentence[pos + term.len()..]
-                    )
-                } else {
-                    // Term not found in sentence — just use the fragment
-                    fragment.to_string()
-                }
-            };
-
-            let sample_template_sentence =
-                |term: &str, rng: &mut rand::rngs::StdRng| -> Option<String> {
-                    let key = term.to_ascii_lowercase();
-                    template_bank_fallback.get(&key).and_then(|items| {
-                        if items.is_empty() {
-                            None
-                        } else {
-                            Some(items[rng.random_range(0..items.len())].clone())
-                        }
-                    })
-                };
 
             let mut push_example =
                 |example: PreparedExample| match seen_prompts.get(&example.prompt) {
@@ -3138,84 +3627,39 @@ pub async fn api_start_prepare_job(
                     }
                 };
 
-            // Error examples: pick a mistaken corpus pair, generate a sentence, splice errors in
-            let max_error_attempts = n_error.saturating_mul(40).max(2000);
+            let error_weights: Vec<u32> = build
+                .train_mistakes
+                .iter()
+                .map(|row| row.weight.max(1))
+                .collect();
             let mut error_attempts = 0usize;
+            let max_error_attempts = n_error.saturating_mul(30).max(2000);
             while correction_count < n_error && error_attempts < max_error_attempts {
                 error_attempts += 1;
-                let item = &mistake_pairs[sample_weighted_index(&pair_weights, &mut rng)];
-                let term_key = item.term.to_ascii_lowercase();
-                let current_for_term = correction_examples_per_term
-                    .get(&term_key)
-                    .copied()
-                    .unwrap_or(0);
-                if current_for_term >= per_term_error_cap {
-                    per_term_cap_skips += 1;
-                    continue;
-                }
-                let Some(sentence) = sample_template_sentence(&item.term, &mut rng) else {
-                    missing_template_skips += 1;
-                    continue;
-                };
-
-                let full_original =
-                    normalize_prepare_text(&splice_fragment(&sentence, &item.term, &item.original));
-                let full_qwen =
-                    normalize_prepare_text(&splice_fragment(&sentence, &item.term, &item.qwen));
-
-                if !is_prepare_example_reasonable(&full_qwen, &full_original) {
-                    quality_skips += 1;
-                    continue;
-                }
-
-                let prompt = synth_train::build_correction_prompt("", &full_qwen);
-                let eval_bonus = eval_failure_weights
-                    .get(&item.term.to_ascii_lowercase())
-                    .copied()
-                    .unwrap_or(0);
-                let repeats = correction_example_repeat_count(item, eval_bonus);
-                let mut added = 0usize;
-                for _ in 0..repeats {
-                    if correction_count + added >= n_error {
-                        break;
-                    }
-                    if current_for_term + added >= per_term_error_cap {
-                        per_term_cap_skips += 1;
-                        break;
-                    }
-                    if push_example(PreparedExample {
-                        prompt: prompt.clone(),
-                        completion: format!(" {}<|endoftext|>", full_original),
-                        allow_repeat: true,
-                    }) {
-                        added += 1;
-                    }
-                }
-                if added > 0 {
-                    correction_count += added;
-                    *correction_examples_per_term.entry(term_key).or_insert(0) += added;
+                let row = &build.train_mistakes[sample_weighted_index(&error_weights, &mut rng)];
+                let prompt = synth_train::build_correction_prompt("", &row.corrupted_sentence);
+                if push_example(PreparedExample {
+                    prompt,
+                    completion: format!(" {}<|endoftext|>", row.clean_sentence),
+                    allow_repeat: true,
+                }) {
+                    correction_count += 1;
                 }
             }
 
-            let n_counterexample_target = if counterexamples.is_empty() {
-                0
-            } else {
-                ((n_identity as f64) * COUNTEREXAMPLE_SHARE_OF_NOCHANGE).round() as usize
-            };
-            let n_plain_identity_target = n_identity.saturating_sub(n_counterexample_target);
-
-            let max_counterexample_attempts = n_counterexample_target.saturating_mul(20).max(200);
+            let counterexample_weights: Vec<u32> = build
+                .train_counterexamples
+                .iter()
+                .map(|row| row.weight.max(1))
+                .collect();
             let mut counterexample_attempts = 0usize;
+            let max_counterexample_attempts = n_counterexample_target.saturating_mul(20).max(200);
             while counterexample_count < n_counterexample_target
                 && counterexample_attempts < max_counterexample_attempts
             {
                 counterexample_attempts += 1;
-                let item =
-                    &counterexamples[sample_weighted_index(&counterexample_weights, &mut rng)];
-                if !is_prepare_example_reasonable(&item.sentence, &item.sentence) {
-                    quality_skips += 1;
-                    continue;
-                }
+                let item = &build.train_counterexamples
+                    [sample_weighted_index(&counterexample_weights, &mut rng)];
                 let prompt = synth_train::build_correction_prompt("", &item.sentence);
                 let repeats = counterexample_example_repeat_count(item.weight);
                 let mut added = 0usize;
@@ -3231,30 +3675,17 @@ pub async fn api_start_prepare_job(
                         added += 1;
                     }
                 }
-                if added > 0 {
-                    counterexample_count += added;
-                }
+                counterexample_count += added;
             }
 
-            // Identity examples: generate a sentence, all lanes are the same
-            let max_identity_attempts = n_plain_identity_target.saturating_mul(30).max(1000);
             let mut identity_attempts = 0usize;
+            let max_identity_attempts = n_plain_identity_target.saturating_mul(20).max(1000);
             while identity_count < n_plain_identity_target
                 && identity_attempts < max_identity_attempts
             {
                 identity_attempts += 1;
-                let term = &identity_terms[rng.random_range(0..identity_terms.len())];
-                let Some(sentence) = sample_template_sentence(term, &mut rng) else {
-                    missing_template_skips += 1;
-                    continue;
-                };
-                let sentence = normalize_prepare_text(&sentence);
-                if !is_prepare_example_reasonable(&sentence, &sentence) {
-                    quality_skips += 1;
-                    continue;
-                }
-
-                let prompt = synth_train::build_correction_prompt("", &sentence);
+                let sentence = &build.train_identity[rng.random_range(0..build.train_identity.len())];
+                let prompt = synth_train::build_correction_prompt("", sentence);
                 if push_example(PreparedExample {
                     prompt,
                     completion: format!(" {}<|endoftext|>", sentence),
@@ -3265,8 +3696,6 @@ pub async fn api_start_prepare_job(
             }
 
             examples.shuffle(&mut rng);
-
-            // Fixed 90/10 train/valid split
             let n = examples.len();
             let n_train = (n as f64 * 0.9) as usize;
             let train = &examples[..n_train];
@@ -3275,49 +3704,65 @@ pub async fn api_start_prepare_job(
             std::fs::create_dir_all("training/data").ok();
             synth_train::write_jsonl("training/data/train.jsonl", train).ok();
             synth_train::write_jsonl("training/data/valid.jsonl", valid).ok();
+            let applied_eval_json = build
+                .eval_mistakes
+                .iter()
+                .map(|row| serde_json::to_value(row).unwrap_or(serde_json::Value::Null))
+                .collect::<Vec<_>>();
+            synth_train::write_jsonl("training/applied-eval.jsonl", &applied_eval_json).ok();
 
             let stats = serde_json::json!({
+                "mode": "applied-known-mistake",
+                "requested_total": total_examples,
+                "error_rate": error_rate,
                 "correction_examples": correction_count,
                 "identity_examples": identity_count + counterexample_count,
                 "plain_identity_examples": identity_count,
                 "counterexample_examples": counterexample_count,
+                "train_pool_mistakes": build.train_mistakes.len(),
+                "eval_pool_mistakes": build.eval_mistakes.len(),
+                "train_identity_pool": build.train_identity.len(),
+                "train_counterexample_pool": build.train_counterexamples.len(),
+                "skipped_missing_term": build.stats.skipped_missing_term,
+                "skipped_acceptable_surface": build.stats.skipped_acceptable_surface,
+                "skipped_duplicate_rows": build.stats.skipped_duplicate,
                 "duplicate_skips": duplicate_skips,
                 "conflict_skips": conflict_skips,
-                "quality_skips": quality_skips,
-                "missing_template_skips": missing_template_skips,
                 "weighted_repeat_pushes": weighted_repeat_pushes,
-                "per_term_cap_skips": per_term_cap_skips,
-                "per_term_error_cap": per_term_error_cap,
-                "requested_total": total_examples,
                 "total": n,
                 "train_count": train.len(),
                 "valid_count": valid.len(),
+                "applied_eval_count": build.eval_mistakes.len(),
             });
 
             let db = state3.db.lock().unwrap();
             let _ = db.append_job_log(
-            job_id,
-            &format!(
-                "Done: {} error + {} no-change ({} plain identity, {} counterexample) = {} total ({} train / {} valid, {} terms with cached templates, {} authored counterexamples)\n\
-                 Skipped: {} duplicate, {} conflicting prompt, {} quality filter, {} missing template, {} per-term cap\n\
-                 Weighted repeats kept: {} | Per-term correction cap: {}",
-                correction_count,
-                identity_count + counterexample_count,
-                identity_count,
-                counterexample_count,
-                n,
-                train.len(),
-                valid.len(),
-                template_terms,
-                counterexamples.len(),
-                duplicate_skips,
-                conflict_skips,
-                quality_skips,
-                missing_template_skips,
-                per_term_cap_skips,
-                weighted_repeat_pushes,
-                per_term_error_cap,
-            ),
+                job_id,
+                &format!(
+                    "Done: {} error + {} no-change ({} plain identity, {} counterexample) = {} total ({} train / {} valid)\n\
+                     Held-out applied eval: {} rows\n\
+                     Source pools: {} train mistakes, {} clean train sentences, {} counterexamples\n\
+                     Skipped while building pools: {} missing-term, {} acceptable-surface, {} duplicate-row\n\
+                     Skipped while sampling: {} duplicate, {} conflicting prompt\n\
+                     Weighted repeats kept: {}",
+                    correction_count,
+                    identity_count + counterexample_count,
+                    identity_count,
+                    counterexample_count,
+                    n,
+                    train.len(),
+                    valid.len(),
+                    build.eval_mistakes.len(),
+                    build.train_mistakes.len(),
+                    build.train_identity.len(),
+                    build.train_counterexamples.len(),
+                    build.stats.skipped_missing_term,
+                    build.stats.skipped_acceptable_surface,
+                    build.stats.skipped_duplicate,
+                    duplicate_skips,
+                    conflict_skips,
+                    weighted_repeat_pushes,
+                ),
             );
             let _ = db.finish_job(job_id, "completed", Some(&stats.to_string()));
         });
@@ -3357,181 +3802,137 @@ pub async fn api_start_prototype_reranker_prepare_job(
     let state2 = state.clone();
     tokio::spawn(async move {
         let state3 = state2.clone();
-        let handle = tokio::task::spawn_blocking(move || {
-            let (corpus_items, human_items, vocab, alt_spellings, confusion_forms) = {
+        let handle = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let (mut build, vocab, alt_spellings, confusion_forms) = {
                 let db = state3.db.lock().unwrap();
                 let vocab = db.list_reviewed_vocab().unwrap_or_default();
                 let alt_spellings = db.get_all_alt_spellings().unwrap_or_default();
                 let confusion_forms = db.get_all_qwen_confusions().unwrap_or_default();
-
-                let mut corpus_items = db.corpus_eval_set().unwrap_or_default();
-                corpus_items.retain(|item| item.is_mistake);
-                corpus_items.sort_by(|a, b| {
-                    b.hit_count
-                        .cmp(&a.hit_count)
-                        .then_with(|| a.term.cmp(&b.term))
-                        .then_with(|| a.qwen.cmp(&b.qwen))
-                });
-                corpus_items.truncate(corpus_limit);
-                let corpus_items = corpus_items
-                    .into_iter()
-                    .map(|item| PrototypeBakeoffItem {
-                        term: item.term.clone(),
-                        qwen: splice_fragment(&item.sentence, &item.term, &item.qwen),
-                        expected: splice_fragment(&item.sentence, &item.term, &item.original),
-                        hit_count: item.hit_count,
-                        recording_id: None,
-                        wav_path: None,
-                        template_sentence: Some(item.sentence),
-                        qwen_fragment: Some(item.qwen),
-                        expected_fragment: Some(item.original),
-                    })
-                    .collect::<Vec<_>>();
-
-                let human_items = load_human_prototype_items(
-                    &db,
-                    &state3.qwen_model_key,
-                    &alt_spellings,
-                    human_limit,
-                )
-                .unwrap_or_default();
-
-                (corpus_items, human_items, vocab, alt_spellings, confusion_forms)
+                let build = build_applied_mistake_output(&db, &alt_spellings)?;
+                (build, vocab, alt_spellings, confusion_forms)
             };
+
+            build.train_mistakes.sort_by(|a, b| {
+                b.weight
+                    .cmp(&a.weight)
+                    .then_with(|| a.term.cmp(&b.term))
+                    .then_with(|| a.corrupted_sentence.cmp(&b.corrupted_sentence))
+            });
+            build.train_counterexamples.sort_by(|a, b| a.sentence.cmp(&b.sentence));
+            build.train_identity.sort();
+            if corpus_limit > 0 {
+                build.train_mistakes.truncate(corpus_limit);
+            }
+            let keep_original_limit = human_limit.max(1);
+            if build.train_identity.len() > keep_original_limit {
+                build.train_identity.truncate(keep_original_limit);
+            }
+            if build.train_counterexamples.len() > keep_original_limit {
+                build.train_counterexamples.truncate(keep_original_limit);
+            }
 
             {
                 let db = state3.db.lock().unwrap();
                 let _ = db.append_job_log(
                     job_id,
                     &format!(
-                        "Preparing prototype reranker dataset from {} corpus rows + {} human rows",
-                        corpus_items.len(),
-                        human_items.len()
+                        "Preparing prototype reranker dataset from applied task rows: {} known mistakes + {} identity + {} counterexamples",
+                        build.train_mistakes.len(),
+                        build.train_identity.len(),
+                        build.train_counterexamples.len(),
                     ),
                 );
             }
 
             let prototype_config = crate::prototype::PrototypeConfig::default();
-            let mut examples = Vec::<serde_json::Value>::new();
-            let mut seen = HashSet::<(String, String)>::new();
             let mut rng = rand::rng();
             let mut source_rows = 0usize;
             let mut rows_with_positive = 0usize;
             let mut rows_without_positive = 0usize;
-            let mut corpus_positive_rows = 0usize;
-            let mut human_positive_rows = 0usize;
+            let mut mistake_rows = 0usize;
+            let mut identity_rows = 0usize;
+            let mut counterexample_rows = 0usize;
+            let mut mistake_positive_rows = 0usize;
+            let mut identity_positive_rows = 0usize;
+            let mut counterexample_positive_rows = 0usize;
             let mut positives = 0usize;
             let mut negatives = 0usize;
 
-            for (source_name, items) in [("corpus", corpus_items), ("human", human_items)] {
-                for item in items {
+            let mut train_groups = Vec::<Vec<serde_json::Value>>::new();
+            let mut valid_groups = Vec::<Vec<serde_json::Value>>::new();
+
+            let mut push_row =
+                |source_name: &str,
+                 term: &str,
+                 qwen: &str,
+                 expected: &str,
+                 extra_meta: serde_json::Value| {
                     source_rows += 1;
-                    let acoustic_input = if source_name == "human" {
-                        item.wav_path.as_deref().and_then(|wav_path| {
-                            let wav = std::fs::read(wav_path).ok()?;
-                            let (mono, sample_rate) = decode_wav_mono(&wav).ok()?;
-                            let samples_16k = tts::resample_to_16k(&mono, sample_rate).ok()?;
-                            build_acoustic_input_from_samples_16k(
-                                &state3.aligner,
-                                &samples_16k,
-                                &item.qwen,
-                            )
-                        })
-                    } else {
-                        None
-                    };
-                    let acoustic_context = acoustic_input
-                        .as_ref()
-                        .map(|(qwen_alignment, _, zipa_segments, zipa_by_qwen)| {
-                            crate::prototype::AcousticContext {
-                                qwen_alignment,
-                                zipa_segments,
-                                zipa_by_qwen,
-                            }
-                        });
                     let result = crate::prototype::prototype_correct_with_acoustics(
-                        &item.qwen,
+                        qwen,
                         &vocab,
                         &alt_spellings,
                         &confusion_forms,
                         prototype_config,
-                        acoustic_context.as_ref(),
+                        None,
                     );
-
-                    let mut candidates = result
-                        .sentence_candidates
-                        .into_iter()
-                        .take(max_candidates_per_row)
-                        .collect::<Vec<_>>();
-                    candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
-
-                    let labels = candidates
-                        .iter()
-                        .map(|candidate| {
-                            let target_ok = item
-                                .expected_fragment
-                                .as_deref()
-                                .map(|fragment| {
-                                    eval_fragment_matches(
-                                        &alt_spellings,
-                                        &item.term,
-                                        fragment,
-                                        &candidate.text,
-                                    )
-                                })
-                                .unwrap_or(false);
-                            let full_ok = normalized_compare_eq(&candidate.text, &item.expected);
-                            let edits_supported =
-                                candidate_edits_supported_by_expected(candidate, &item.expected);
-                            let positive = if source_name == "human" {
-                                target_ok && edits_supported
-                            } else {
-                                full_ok
-                            };
-                            (positive, target_ok, full_ok, edits_supported)
-                        })
-                        .collect::<Vec<_>>();
-
-                    if !labels.iter().any(|(positive, _, _, _)| *positive) {
-                        rows_without_positive += 1;
-                        continue;
-                    }
-
-                    rows_with_positive += 1;
-                    if source_name == "human" {
-                        human_positive_rows += 1;
-                    } else {
-                        corpus_positive_rows += 1;
-                    }
-
-                    for (candidate, (positive, target_ok, full_ok, edits_supported)) in
-                        candidates.into_iter().zip(labels.into_iter())
-                    {
-                        let prompt = build_prototype_reranker_prompt(&item.qwen, &candidate);
-                        let completion = if positive {
-                            " yes<|endoftext|>"
-                        } else {
-                            " no<|endoftext|>"
-                        };
-                        if !seen.insert((prompt.clone(), completion.to_string())) {
-                            continue;
+                    let mut candidates = select_prototype_reranker_candidates(
+                        result.sentence_candidates,
+                        max_candidates_per_row,
+                    );
+                    if source_name == "applied-mistake" && !term.is_empty() {
+                        candidates.retain(|candidate| {
+                            candidate.label == "original"
+                                || normalized_compare_eq(&candidate.text, expected)
+                                || (!candidate.edits.is_empty()
+                                    && candidate
+                                        .edits
+                                        .iter()
+                                        .all(|edit| edit.to.eq_ignore_ascii_case(term)))
+                        });
+                    } else if candidates.len() > 3 {
+                        let mut compact = Vec::new();
+                        if let Some(original) =
+                            candidates.iter().find(|candidate| candidate.label == "original")
+                        {
+                            compact.push(original.clone());
                         }
+                        compact.extend(
+                            candidates
+                                .into_iter()
+                                .filter(|candidate| candidate.label != "original")
+                                .take(2),
+                        );
+                        candidates = compact;
+                    }
+                    let mut row_examples = Vec::new();
+                    let mut row_has_positive = false;
+
+                    for candidate in candidates {
+                        let full_ok = normalized_compare_eq(&candidate.text, expected);
+                        let target_ok = if term.is_empty() {
+                            full_ok
+                        } else {
+                            eval_fragment_matches(&alt_spellings, term, term, &candidate.text)
+                        };
+                        let edits_supported =
+                            candidate_edits_supported_by_expected(&candidate, expected);
+                        let positive = full_ok;
+                        row_has_positive |= positive;
                         if positive {
                             positives += 1;
                         } else {
                             negatives += 1;
                         }
-                        examples.push(serde_json::json!({
+                        let prompt = build_prototype_reranker_prompt(qwen, &candidate);
+                        row_examples.push(serde_json::json!({
                             "prompt": prompt,
-                            "completion": completion,
+                            "completion": if positive { " yes<|endoftext|>" } else { " no<|endoftext|>" },
                             "meta": {
                                 "source": source_name,
-                                "term": item.term,
-                                "qwen": item.qwen,
-                                "expected": item.expected,
-                                "expected_fragment": item.expected_fragment,
-                                "hit_count": item.hit_count,
-                                "recording_id": item.recording_id,
+                                "term": term,
+                                "qwen": qwen,
+                                "expected": expected,
                                 "candidate_text": candidate.text,
                                 "candidate_label": candidate.label,
                                 "candidate_score": candidate.score,
@@ -3540,31 +3941,96 @@ pub async fn api_start_prototype_reranker_prepare_job(
                                 "full_ok": full_ok,
                                 "edits_supported_by_expected": edits_supported,
                                 "positive": positive,
+                                "task": "applied-known-mistake",
+                                "row_meta": extra_meta,
                             }
                         }));
                     }
-                }
+
+                    if row_has_positive {
+                        rows_with_positive += 1;
+                        match source_name {
+                            "applied-mistake" => mistake_positive_rows += 1,
+                            "identity" => identity_positive_rows += 1,
+                            "counterexample" => counterexample_positive_rows += 1,
+                            _ => {}
+                        }
+                    } else {
+                        rows_without_positive += 1;
+                    }
+
+                    if prototype_reranker_valid_split(term, qwen, expected) {
+                        valid_groups.push(row_examples);
+                    } else {
+                        train_groups.push(row_examples);
+                    }
+                };
+
+            for item in build.train_mistakes {
+                mistake_rows += 1;
+                push_row(
+                    "applied-mistake",
+                    &item.term,
+                    &item.corrupted_sentence,
+                    &item.clean_sentence,
+                    serde_json::json!({
+                        "corruption_surface": item.corruption_surface,
+                        "corruption_source": item.source,
+                        "weight": item.weight,
+                    }),
+                );
             }
 
-            examples.shuffle(&mut rng);
-            let n = examples.len();
-            let n_train = ((n as f64) * 0.9) as usize;
-            let train = &examples[..n_train];
-            let valid = &examples[n_train..];
+            for sentence in build.train_identity {
+                identity_rows += 1;
+                push_row(
+                    "identity",
+                    "",
+                    &sentence,
+                    &sentence,
+                    serde_json::json!({}),
+                );
+            }
+
+            for item in build.train_counterexamples {
+                counterexample_rows += 1;
+                push_row(
+                    "counterexample",
+                    "",
+                    &item.sentence,
+                    &item.sentence,
+                    serde_json::json!({
+                        "weight": item.weight,
+                    }),
+                );
+            }
+
+            train_groups.shuffle(&mut rng);
+            valid_groups.shuffle(&mut rng);
+            let mut train = train_groups.into_iter().flatten().collect::<Vec<_>>();
+            let mut valid = valid_groups.into_iter().flatten().collect::<Vec<_>>();
+            train.shuffle(&mut rng);
+            valid.shuffle(&mut rng);
+            let n = train.len() + valid.len();
 
             std::fs::create_dir_all("training/prototype-reranker").ok();
-            synth_train::write_jsonl("training/prototype-reranker/train.jsonl", train).ok();
-            synth_train::write_jsonl("training/prototype-reranker/valid.jsonl", valid).ok();
+            synth_train::write_jsonl("training/prototype-reranker/train.jsonl", &train).ok();
+            synth_train::write_jsonl("training/prototype-reranker/valid.jsonl", &valid).ok();
 
             let stats = serde_json::json!({
                 "requested_corpus_limit": corpus_limit,
                 "requested_human_limit": human_limit,
                 "max_candidates_per_row": max_candidates_per_row,
+                "task": "applied-known-mistake",
                 "source_rows": source_rows,
+                "mistake_rows": mistake_rows,
+                "identity_rows": identity_rows,
+                "counterexample_rows": counterexample_rows,
                 "rows_with_positive": rows_with_positive,
                 "rows_without_positive": rows_without_positive,
-                "corpus_positive_rows": corpus_positive_rows,
-                "human_positive_rows": human_positive_rows,
+                "mistake_positive_rows": mistake_positive_rows,
+                "identity_positive_rows": identity_positive_rows,
+                "counterexample_positive_rows": counterexample_positive_rows,
                 "positives": positives,
                 "negatives": negatives,
                 "total": n,
@@ -3577,9 +4043,17 @@ pub async fn api_start_prototype_reranker_prepare_job(
             let _ = db.append_job_log(
                 job_id,
                 &format!(
-                    "Done: {} rows with at least one positive candidate, {} rows with none\n\
+                    "Done: applied task reranker export\n\
+                     Rows: {} mistakes, {} identity, {} counterexamples\n\
+                     Positives by row: {} / {} / {}\n\
+                     Rows with no positive candidate: {}\n\
                      Exported {} examples ({} positive / {} negative) to training/prototype-reranker ({} train / {} valid)",
-                    rows_with_positive,
+                    mistake_rows,
+                    identity_rows,
+                    counterexample_rows,
+                    mistake_positive_rows,
+                    identity_positive_rows,
+                    counterexample_positive_rows,
                     rows_without_positive,
                     n,
                     positives,
@@ -3589,12 +4063,21 @@ pub async fn api_start_prototype_reranker_prepare_job(
                 ),
             );
             let _ = db.finish_job(job_id, "completed", Some(&stats.to_string()));
+            Ok(())
         });
 
-        if let Err(e) = handle.await {
-            let db = state2.db.lock().unwrap();
-            let _ = db.append_job_log(job_id, &format!("ERROR: {e}"));
-            let _ = db.finish_job(job_id, "failed", None);
+        match handle.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                let db = state2.db.lock().unwrap();
+                let _ = db.append_job_log(job_id, &format!("ERROR: {e}"));
+                let _ = db.finish_job(job_id, "failed", None);
+            }
+            Err(e) => {
+                let db = state2.db.lock().unwrap();
+                let _ = db.append_job_log(job_id, &format!("ERROR: {e}"));
+                let _ = db.finish_job(job_id, "failed", None);
+            }
         }
     });
 
@@ -4279,7 +4762,7 @@ pub async fn api_start_eval_job(
     };
     let resolved_model = synth_train::resolved_correction_base_model(&config)
         .unwrap_or_else(|_| config.model.clone());
-    let source = body.source.unwrap_or_else(|| "human".to_string());
+    let source = body.source.unwrap_or_else(|| "applied".to_string());
     let repeats = body.repeats.unwrap_or(1).clamp(1, 32);
     let noise_level = body.noise_level.unwrap_or(0.0).clamp(0.0, 0.5);
 
@@ -4308,6 +4791,15 @@ pub async fn api_start_eval_job(
     };
 
     // Gather eval data up front so we can validate the chosen source before spawning.
+    let applied_eval_rows = if source == "applied" {
+        match load_applied_eval_rows("training/applied-eval.jsonl") {
+            Ok(rows) => rows,
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+
     let (recordings, synthetic_items, all_texts, overrides) = {
         let db = state.db.lock().unwrap();
         let recordings = db
@@ -4329,10 +4821,10 @@ pub async fn api_start_eval_job(
         (recordings, synthetic_items, all_texts, overrides)
     };
 
-    if source != "human" && source != "synthetic" {
+    if source != "human" && source != "synthetic" && source != "applied" {
         let db = state.db.lock().unwrap();
         let _ = db.finish_job(job_id, "failed", None);
-        return Ok(Json(serde_json::json!({"job_id": job_id, "error": "Unknown eval source. Use `human` or `synthetic`."})).into_response());
+        return Ok(Json(serde_json::json!({"job_id": job_id, "error": "Unknown eval source. Use `applied`, `human`, or `synthetic`."})).into_response());
     }
 
     if source == "human" && recordings.is_empty() {
@@ -4355,6 +4847,13 @@ pub async fn api_start_eval_job(
         let _ = db.append_job_log(job_id, "No synthetic mistake templates to evaluate.");
         let _ = db.finish_job(job_id, "failed", None);
         return Ok(Json(serde_json::json!({"job_id": job_id, "error": "No known mistakes in corpus_pairs. Generate or review corpus first."})).into_response());
+    }
+
+    if source == "applied" && applied_eval_rows.is_empty() {
+        let db = state.db.lock().unwrap();
+        let _ = db.append_job_log(job_id, "No held-out applied-mistake eval rows.");
+        let _ = db.finish_job(job_id, "failed", None);
+        return Ok(Json(serde_json::json!({"job_id": job_id, "error": "No applied eval set. Run Prepare first."})).into_response());
     }
 
     let state2 = state.clone();
@@ -4408,6 +4907,8 @@ pub async fn api_start_eval_job(
 
         let total = if source == "synthetic" {
             synthetic_mistakes.len()
+        } else if source == "applied" {
+            applied_eval_rows.len()
         } else {
             recordings.len()
         };
@@ -4428,6 +4929,10 @@ pub async fn api_start_eval_job(
                 format!(
                     "Evaluating {total} synthetic mistake templates x {repeats} variants (fresh Markov sentences, correction-only)..."
                 )
+            } else if source == "applied" {
+                format!(
+                    "Evaluating {total} held-out applied known-mistake sentences (clean authored sentence + one known corruption)..."
+                )
             } else {
                 format!(
                     "Evaluating {total} human recordings x {repeats} repeats (noise {noise_level:.3}, ASR \u{2192} correct, pipelined)..."
@@ -4439,6 +4944,192 @@ pub async fn api_start_eval_job(
 
         let total_attempts = total * repeats;
         let mut attempt_idx = 0usize;
+
+        if source == "applied" {
+            for item in &applied_eval_rows {
+                if state2.job_cancel.load(Ordering::Relaxed) {
+                    let db = state2.db.lock().unwrap();
+                    let _ = db.append_job_log(job_id, "Stopped by user.");
+                    break;
+                }
+
+                attempt_idx += 1;
+                let prompt =
+                    synth_train::build_correction_prompt("", &item.corrupted_sentence);
+                let infer_started = std::time::Instant::now();
+                let result = {
+                    let mut guard = state2.inference_server.lock().unwrap();
+                    guard.as_mut().unwrap().infer_with_stats(&prompt)
+                };
+                let infer_total_ms = infer_started.elapsed().as_millis() as u64;
+                let infer_stats = result.as_ref().ok().map(|output| output.stats.clone());
+                let raw_output = result
+                    .as_ref()
+                    .ok()
+                    .map(|output| output.raw_text.clone())
+                    .unwrap_or_default();
+                evaluated += 1;
+
+                let asr_was_correct =
+                    normalized_compare_eq(&item.corrupted_sentence, &item.clean_sentence);
+                if asr_was_correct {
+                    asr_correct += 1;
+                }
+
+                let (category, corrected_text) = match result {
+                    Ok(ref output) if output.text.trim().is_empty() => {
+                        blank += 1;
+                        ("blank", String::new())
+                    }
+                    Ok(output) => {
+                        let corrected = output.text;
+                        if normalized_compare_eq(&corrected, &item.clean_sentence) {
+                            correct += 1;
+                            if asr_was_correct {
+                                ("kept", corrected)
+                            } else {
+                                ("fixed", corrected)
+                            }
+                        } else {
+                            wrong += 1;
+                            if asr_was_correct {
+                                ("broken", corrected)
+                            } else {
+                                ("wrong", corrected)
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        timeouts += 1;
+                        if msg.contains("timeout") {
+                            ("timeout", "(timeout)".into())
+                        } else {
+                            ("error", format!("(error: {msg})"))
+                        }
+                    }
+                };
+
+                let asr_accuracy = if evaluated > 0 {
+                    asr_correct as f64 / evaluated as f64 * 100.0
+                } else {
+                    0.0
+                };
+                let post_accuracy = if evaluated > 0 {
+                    correct as f64 / evaluated as f64 * 100.0
+                } else {
+                    0.0
+                };
+
+                entries.push(serde_json::json!({
+                    "source": "applied",
+                    "term": item.term,
+                    "source_kind": item.source,
+                    "sentence": item.clean_sentence,
+                    "qwen": item.corrupted_sentence,
+                    "output": corrected_text.trim(),
+                    "raw_output": raw_output,
+                    "expected": item.clean_sentence,
+                    "corruption_surface": item.corruption_surface,
+                    "cat": category,
+                    "timing": {
+                        "infer_total_ms": infer_total_ms,
+                        "encode_ms": infer_stats.as_ref().map(|stats| stats.encode_ms),
+                        "prefill_ms": infer_stats.as_ref().map(|stats| stats.prefill_ms),
+                        "decode_ms": infer_stats.as_ref().map(|stats| stats.decode_ms),
+                        "generate_ms": infer_stats.as_ref().map(|stats| stats.generate_ms),
+                        "total_ms": infer_stats.as_ref().map(|stats| stats.total_ms).unwrap_or(infer_total_ms),
+                        "prompt_tokens": infer_stats.as_ref().map(|stats| stats.prompt_tokens),
+                        "output_tokens": infer_stats.as_ref().map(|stats| stats.output_tokens),
+                    }
+                }));
+
+                let db = state2.db.lock().unwrap();
+                let _ = db.update_job_result(
+                    job_id,
+                    &serde_json::json!({
+                        "source": "applied",
+                        "total": evaluated,
+                        "source_rows": total,
+                        "repeats": 1,
+                        "noise_level": 0.0,
+                        "correct": correct,
+                        "wrong": wrong,
+                        "blank": blank,
+                        "timeouts": timeouts,
+                        "asr_correct": asr_correct,
+                        "asr_accuracy": (asr_accuracy * 10.0).round() / 10.0,
+                        "post_accuracy": (post_accuracy * 10.0).round() / 10.0,
+                        "accuracy": (post_accuracy * 10.0).round() / 10.0,
+                        "word_accuracy": serde_json::Value::Null,
+                        "entries": entries,
+                    })
+                    .to_string(),
+                );
+                let _ = db.append_job_log(
+                    job_id,
+                    &format!(
+                        "[{}/{}] [{}] {} [{}]: \"{}\" → \"{}\" (expected \"{}\")",
+                        attempt_idx,
+                        total_attempts.max(1),
+                        category,
+                        item.term,
+                        item.source,
+                        item.corrupted_sentence,
+                        corrected_text.trim(),
+                        item.clean_sentence
+                    ),
+                );
+            }
+
+            let asr_accuracy = if evaluated > 0 {
+                asr_correct as f64 / evaluated as f64 * 100.0
+            } else {
+                0.0
+            };
+            let post_accuracy = if evaluated > 0 {
+                correct as f64 / evaluated as f64 * 100.0
+            } else {
+                0.0
+            };
+
+            let db = state2.db.lock().unwrap();
+            let _ = db.append_job_log(
+                job_id,
+                &format!(
+                    "\n=== RESULTS ({evaluated} held-out applied mistakes) ===\n\
+                 Corrupted baseline:           {asr_accuracy:.1}% ({asr_correct}/{evaluated})\n\
+                 Post-correction accuracy:     {post_accuracy:.1}% ({correct}/{evaluated})\n\
+                 \n\
+                 Correct: {correct} | Wrong: {wrong} | Blank: {blank} | Timeouts: {timeouts}"
+                ),
+            );
+            let _ = db.finish_job(
+                job_id,
+                "completed",
+                Some(
+                    &serde_json::json!({
+                        "source": "applied",
+                        "total": evaluated,
+                        "source_rows": total,
+                        "repeats": 1,
+                        "noise_level": 0.0,
+                        "correct": correct,
+                        "wrong": wrong,
+                        "blank": blank,
+                        "timeouts": timeouts,
+                        "asr_correct": asr_correct,
+                        "asr_accuracy": asr_accuracy,
+                        "post_accuracy": post_accuracy,
+                        "accuracy": post_accuracy,
+                        "word_accuracy": serde_json::Value::Null,
+                        "entries": entries,
+                    })
+                    .to_string(),
+                ),
+            );
+            return;
+        }
 
         if source == "synthetic" {
             let chain = MarkovChain::build(&all_texts);
@@ -5162,6 +5853,9 @@ pub struct PrototypeCorrectionBody {
     pub max_candidates_per_span: Option<usize>,
     pub use_model_reranker: Option<bool>,
     pub use_adapters: Option<bool>,
+    pub use_prototype_adapters: Option<bool>,
+    pub reranker_mode: Option<String>,
+    pub prototype_reranker_train_id: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -5171,6 +5865,8 @@ pub struct PrototypeBakeoffBody {
     pub use_model_reranker: Option<bool>,
     pub use_current_adapters: Option<bool>,
     pub use_prototype_adapters: Option<bool>,
+    pub reranker_mode: Option<String>,
+    pub prototype_reranker_train_id: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -5183,6 +5879,8 @@ pub struct PrototypeBakeoffDetailBody {
     pub prototype: String,
     pub use_model_reranker: Option<bool>,
     pub use_prototype_adapters: Option<bool>,
+    pub reranker_mode: Option<String>,
+    pub prototype_reranker_train_id: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -5336,8 +6034,16 @@ pub async fn api_correct_prototype(
         acoustic_context.as_ref(),
     );
 
-    let reranker =
-        if body.use_model_reranker.unwrap_or(true) && should_run_prototype_reranker(&result.sentence_candidates)
+    let use_model_reranker = body.use_model_reranker.unwrap_or(true);
+    let use_prototype_adapters = body.use_prototype_adapters.unwrap_or(false);
+    let prototype_reranker_train_id = body.prototype_reranker_train_id;
+    let reranker_mode = resolve_prototype_reranker_mode(
+        body.reranker_mode.as_deref(),
+        use_model_reranker,
+        use_prototype_adapters,
+    );
+    let reranker = if reranker_mode != PrototypeRerankerMode::Off
+        && should_run_prototype_reranker(&result.sentence_candidates)
     {
         let candidates = result
             .sentence_candidates
@@ -5349,7 +6055,21 @@ pub async fn api_correct_prototype(
         let state2 = state.clone();
         let rerank_value =
             tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
-                run_prototype_reranker(state2.as_ref(), &body.qwen, &reranker_candidates)
+                match reranker_mode {
+                    PrototypeRerankerMode::Off => Ok(serde_json::json!(null)),
+                    PrototypeRerankerMode::Trained => run_prototype_reranker(
+                        state2.as_ref(),
+                        &body.qwen,
+                        &reranker_candidates,
+                        true,
+                        prototype_reranker_train_id,
+                    ),
+                    PrototypeRerankerMode::OfficialQwen3 => run_official_qwen3_reranker(
+                        state2.as_ref(),
+                        &body.qwen,
+                        &reranker_candidates,
+                    ),
+                }
             })
             .await
             .map_err(err)?
@@ -5393,6 +6113,221 @@ pub async fn api_correct_prototype_bakeoff(
     let use_model_reranker = body.use_model_reranker.unwrap_or(true);
     let use_current_adapters = body.use_current_adapters.unwrap_or(true);
     let use_prototype_adapters = body.use_prototype_adapters.unwrap_or(false);
+    let prototype_reranker_train_id = body.prototype_reranker_train_id;
+    let reranker_mode = resolve_prototype_reranker_mode(
+        body.reranker_mode.as_deref(),
+        use_model_reranker,
+        use_prototype_adapters,
+    );
+    let prototype_only_eval = reranker_mode == PrototypeRerankerMode::OfficialQwen3;
+    if source == "applied" {
+        check_no_running_jobs(&state)?;
+        let job_id = {
+            let db = state.db.lock().unwrap();
+            db.create_job(
+                "prototype-bakeoff",
+                Some(
+                    &serde_json::json!({
+                        "source": source,
+                        "limit": limit,
+                        "reranker_mode": body.reranker_mode,
+                    })
+                    .to_string(),
+                ),
+            )
+            .map_err(err)?
+        };
+        let state2 = state.clone();
+        tokio::spawn(async move {
+            let state3 = state2.clone();
+            let outcome = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+                let (mut items, vocab, alt_spellings, confusion_forms) = {
+                    let db = state3.db.lock().unwrap();
+                    let vocab = db.list_reviewed_vocab()?;
+                    let alt_spellings = db.get_all_alt_spellings()?;
+                    let confusion_forms = db.get_all_qwen_confusions()?;
+                    let mut items = load_applied_eval_rows("training/applied-eval.jsonl")?;
+                    items.sort_by(|a, b| {
+                        a.term
+                            .cmp(&b.term)
+                            .then_with(|| a.corrupted_sentence.cmp(&b.corrupted_sentence))
+                    });
+                    let items = items
+                        .into_iter()
+                        .map(|item| PrototypeBakeoffItem {
+                            term: item.term.clone(),
+                            qwen: item.corrupted_sentence,
+                            expected: item.clean_sentence,
+                            hit_count: 1,
+                            recording_id: None,
+                            wav_path: None,
+                            template_sentence: None,
+                            qwen_fragment: Some(item.corruption_surface),
+                            expected_fragment: Some(item.term),
+                        })
+                        .collect::<Vec<_>>();
+                    (items, vocab, alt_spellings, confusion_forms)
+                };
+                items.truncate(limit);
+
+                let total = items.len();
+                let prototype_config = crate::prototype::PrototypeConfig::default();
+                let mut prototype_ok = 0usize;
+                let mut entries = Vec::with_capacity(total);
+
+                for (idx, item) in items.iter().enumerate() {
+                    if state3.job_cancel.load(Ordering::Relaxed) {
+                        let db = state3.db.lock().unwrap();
+                        let _ = db.append_job_log(job_id, "Stopped by user.");
+                        break;
+                    }
+
+                    let mut result = crate::prototype::prototype_correct_with_acoustics(
+                        &item.qwen,
+                        &vocab,
+                        &alt_spellings,
+                        &confusion_forms,
+                        prototype_config,
+                        None,
+                    );
+                    let mut reranker_summary = None;
+                    if reranker_mode != PrototypeRerankerMode::Off
+                        && should_run_prototype_reranker(&result.sentence_candidates)
+                    {
+                        let candidates = result
+                            .sentence_candidates
+                            .iter()
+                            .take(8)
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        let reranker = match reranker_mode {
+                            PrototypeRerankerMode::Off => serde_json::json!(null),
+                            PrototypeRerankerMode::Trained => {
+                                run_prototype_reranker(
+                                    state3.as_ref(),
+                                    &item.qwen,
+                                    &candidates,
+                                    true,
+                                    prototype_reranker_train_id,
+                                )?
+                            }
+                            PrototypeRerankerMode::OfficialQwen3 => {
+                                run_official_qwen3_reranker(state3.as_ref(), &item.qwen, &candidates)?
+                            }
+                        };
+                        if let Some(chosen) = reranker
+                            .get("chosen_index")
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as usize)
+                        {
+                            if let Some(candidate) = candidates.get(chosen) {
+                                result.corrected = candidate.text.clone();
+                                result.accepted = candidate.edits.clone();
+                            }
+                        }
+                        reranker_summary = Some(reranker);
+                    }
+
+                    let prototype_text = result.corrected.clone();
+                    let baseline_hit = normalized_compare_eq(&item.qwen, &item.expected);
+                    let prototype_hit = normalized_compare_eq(&prototype_text, &item.expected);
+                    prototype_ok += usize::from(prototype_hit);
+
+                    let (expected_fragment_preview, expected_fragment_phonemes) = item
+                        .expected_fragment
+                        .as_deref()
+                        .map(|fragment| vocab_preview(&vocab, fragment))
+                        .unwrap_or(("", None));
+                    entries.push(serde_json::json!({
+                        "term": item.term,
+                        "source": "applied",
+                        "expected": item.expected,
+                        "qwen": item.qwen,
+                        "recording_id": item.recording_id,
+                        "template_sentence": item.template_sentence,
+                        "expected_fragment": item.expected_fragment,
+                        "expected_fragment_preview": (!expected_fragment_preview.is_empty()).then_some(expected_fragment_preview),
+                        "expected_fragment_phonemes": expected_fragment_phonemes,
+                        "qwen_fragment": item.qwen_fragment,
+                        "qwen_fragment_phonemes": item.qwen_fragment.as_deref().and_then(crate::prototype::phonetic_preview),
+                        "hit_count": item.hit_count,
+                        "baseline_ok": baseline_hit,
+                        "current": item.qwen,
+                        "current_ok": baseline_hit,
+                        "prototype": prototype_text,
+                        "prototype_ok": prototype_hit,
+                        "prototype_accepted": result.accepted.iter().map(|edit| serde_json::json!({
+                            "from": edit.from,
+                            "to": edit.to,
+                            "score": edit.score,
+                            "via": edit.via,
+                            "acoustic_score": edit.acoustic_score,
+                            "acoustic_delta": edit.acoustic_delta,
+                            "from_phonemes": crate::prototype::phonetic_preview(&edit.from),
+                            "to_phonemes": vocab_preview(&vocab, &edit.to).1,
+                        })).collect::<Vec<_>>(),
+                        "prototype_trace_excerpt": prototype_trace_excerpt(&vocab, &result, reranker_summary.as_ref()),
+                    }));
+
+                    let snapshot = serde_json::json!({
+                        "source": "applied",
+                        "limit": limit,
+                        "prototype_only_eval": true,
+                        "processed": idx + 1,
+                        "summary": {
+                            "n": total,
+                            "prototype": prototype_ok,
+                            "prototype_wrong": (idx + 1).saturating_sub(prototype_ok),
+                        },
+                        "entries": entries,
+                    });
+                    let db = state3.db.lock().unwrap();
+                    let _ = db.update_job_result(job_id, &snapshot.to_string());
+                    let _ = db.append_job_log(
+                        job_id,
+                        &format!(
+                            "[{}/{}] {} {}",
+                            idx + 1,
+                            total,
+                            if prototype_hit { "ok" } else { "wrong" },
+                            snapshot["entries"][idx]["term"].as_str().unwrap_or("?")
+                        ),
+                    );
+                }
+
+                Ok(serde_json::json!({
+                    "source": "applied",
+                    "limit": limit,
+                    "prototype_only_eval": true,
+                    "processed": entries.len(),
+                    "summary": {
+                        "n": total,
+                        "prototype": prototype_ok,
+                        "prototype_wrong": total.saturating_sub(prototype_ok),
+                    },
+                    "entries": entries,
+                }))
+            })
+            .await;
+
+            let db = state2.db.lock().unwrap();
+            match outcome {
+                Ok(Ok(value)) => {
+                    let _ = db.finish_job(job_id, "completed", Some(&value.to_string()));
+                }
+                Ok(Err(e)) => {
+                    let _ = db.append_job_log(job_id, &format!("ERROR: {e}"));
+                    let _ = db.finish_job(job_id, "failed", None);
+                }
+                Err(e) => {
+                    let _ = db.append_job_log(job_id, &format!("ERROR: {e}"));
+                    let _ = db.finish_job(job_id, "failed", None);
+                }
+            }
+        });
+
+        return Ok(Json(serde_json::json!({"job_id": job_id})).into_response());
+    }
     let state2 = state.clone();
     let value = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
         let (mut items, vocab, alt_spellings, confusion_forms) = {
@@ -5421,6 +6356,27 @@ pub async fn api_correct_prototype_bakeoff(
                         template_sentence: Some(item.sentence),
                         qwen_fragment: Some(item.qwen),
                         expected_fragment: Some(item.original),
+                    })
+                    .collect::<Vec<_>>()
+            } else if source == "applied" {
+                let mut items = load_applied_eval_rows("training/applied-eval.jsonl")?;
+                items.sort_by(|a, b| {
+                    a.term
+                        .cmp(&b.term)
+                        .then_with(|| a.corrupted_sentence.cmp(&b.corrupted_sentence))
+                });
+                items
+                    .into_iter()
+                    .map(|item| PrototypeBakeoffItem {
+                        term: item.term.clone(),
+                        qwen: item.corrupted_sentence,
+                        expected: item.clean_sentence,
+                        hit_count: 1,
+                        recording_id: None,
+                        wav_path: None,
+                        template_sentence: None,
+                        qwen_fragment: Some(item.corruption_surface),
+                        expected_fragment: Some(item.term),
                     })
                     .collect::<Vec<_>>()
             } else {
@@ -5463,11 +6419,13 @@ pub async fn api_correct_prototype_bakeoff(
         };
         items.truncate(limit);
 
-        let current_config = synth_train::InferenceConfig {
-            attach_adapters: use_current_adapters,
-            ..Default::default()
-        };
-        let current_outputs = {
+        let current_outputs = if prototype_only_eval {
+            items.iter().map(|item| item.qwen.clone()).collect::<Vec<_>>()
+        } else {
+            let current_config = synth_train::InferenceConfig {
+                attach_adapters: use_current_adapters,
+                ..Default::default()
+            };
             let mut server_guard = state2.inference_server.lock().unwrap();
             if server_guard
                 .as_ref()
@@ -5491,24 +6449,7 @@ pub async fn api_correct_prototype_bakeoff(
 
         let prototype_config = crate::prototype::PrototypeConfig::default();
         let mut prototype_results = Vec::with_capacity(items.len());
-        if use_model_reranker {
-            let infer_config = synth_train::InferenceConfig {
-                attach_adapters: use_prototype_adapters,
-                max_tokens: 12,
-                ..Default::default()
-            };
-            let mut server_guard = state2.inference_server.lock().unwrap();
-            if server_guard
-                .as_ref()
-                .map(|server| !server.matches(&infer_config))
-                .unwrap_or(true)
-            {
-                if let Some(mut server) = server_guard.take() {
-                    server.kill();
-                }
-                *server_guard = Some(synth_train::InferenceServer::start(&infer_config)?);
-            }
-            let server = server_guard.as_mut().unwrap();
+        if reranker_mode != PrototypeRerankerMode::Off {
             for item in &items {
                 let acoustic_input = if source == "human" {
                     item.wav_path.as_deref().and_then(|wav_path| {
@@ -5542,6 +6483,7 @@ pub async fn api_correct_prototype_bakeoff(
                     prototype_config,
                     acoustic_context.as_ref(),
                 );
+                let mut reranker_summary = None;
                 if should_run_prototype_reranker(&result.sentence_candidates) {
                     let candidates = result
                         .sentence_candidates
@@ -5549,15 +6491,30 @@ pub async fn api_correct_prototype_bakeoff(
                         .take(8)
                         .cloned()
                         .collect::<Vec<_>>();
-                    let reranker = run_prototype_reranker(state2.as_ref(), &item.qwen, &candidates)?;
+                    let reranker = match reranker_mode {
+                        PrototypeRerankerMode::Off => serde_json::json!(null),
+                        PrototypeRerankerMode::Trained => run_prototype_reranker(
+                            state2.as_ref(),
+                            &item.qwen,
+                            &candidates,
+                            true,
+                            prototype_reranker_train_id,
+                        )?,
+                        PrototypeRerankerMode::OfficialQwen3 => run_official_qwen3_reranker(
+                            state2.as_ref(),
+                            &item.qwen,
+                            &candidates,
+                        )?,
+                    };
                     if let Some(idx) = reranker.get("chosen_index").and_then(|v| v.as_u64()).map(|v| v as usize) {
                         if let Some(candidate) = candidates.get(idx) {
                             result.corrected = candidate.text.clone();
                             result.accepted = candidate.edits.clone();
                         }
                     }
+                    reranker_summary = Some(reranker);
                 }
-                prototype_results.push(result);
+                prototype_results.push((result, reranker_summary));
             }
         } else {
             for item in &items {
@@ -5593,7 +6550,7 @@ pub async fn api_correct_prototype_bakeoff(
                     prototype_config,
                     acoustic_context.as_ref(),
                 );
-                prototype_results.push(result);
+                prototype_results.push((result, None));
             }
         }
 
@@ -5611,7 +6568,7 @@ pub async fn api_correct_prototype_bakeoff(
         let mut both_wrong_target = 0usize;
         let mut entries = Vec::with_capacity(items.len());
 
-        for ((item, current), prototype) in items
+        for ((item, current), (prototype, reranker_summary)) in items
             .into_iter()
             .zip(current_outputs.into_iter())
             .zip(prototype_results.into_iter())
@@ -5649,6 +6606,11 @@ pub async fn api_correct_prototype_bakeoff(
             prototype_only_target += usize::from(prototype_target_hit && !current_target_hit);
             current_only_target += usize::from(current_target_hit && !prototype_target_hit);
             both_wrong_target += usize::from(!current_target_hit && !prototype_target_hit);
+            let (expected_fragment_preview, expected_fragment_phonemes) = item
+                .expected_fragment
+                .as_deref()
+                .map(|fragment| vocab_preview(&vocab, fragment))
+                .unwrap_or(("", None));
             entries.push(serde_json::json!({
                 "term": item.term,
                 "source": source,
@@ -5657,7 +6619,8 @@ pub async fn api_correct_prototype_bakeoff(
                 "recording_id": item.recording_id,
                 "template_sentence": item.template_sentence,
                 "expected_fragment": item.expected_fragment,
-                "expected_fragment_phonemes": item.expected_fragment.as_deref().and_then(crate::prototype::phonetic_preview),
+                "expected_fragment_preview": (!expected_fragment_preview.is_empty()).then_some(expected_fragment_preview),
+                "expected_fragment_phonemes": expected_fragment_phonemes,
                 "qwen_fragment": item.qwen_fragment,
                 "qwen_fragment_phonemes": item.qwen_fragment.as_deref().and_then(crate::prototype::phonetic_preview),
                 "hit_count": item.hit_count,
@@ -5677,14 +6640,16 @@ pub async fn api_correct_prototype_bakeoff(
                     "acoustic_score": edit.acoustic_score,
                     "acoustic_delta": edit.acoustic_delta,
                     "from_phonemes": crate::prototype::phonetic_preview(&edit.from),
-                    "to_phonemes": crate::prototype::phonetic_preview(&edit.to),
+                    "to_phonemes": vocab_preview(&vocab, &edit.to).1,
                 })).collect::<Vec<_>>(),
+                "prototype_trace_excerpt": prototype_trace_excerpt(&vocab, &prototype, reranker_summary.as_ref()),
             }));
         }
 
         Ok(serde_json::json!({
             "source": source,
             "limit": limit,
+            "prototype_only_eval": prototype_only_eval,
             "summary": {
                 "n": entries.len(),
                 "baseline": baseline_ok,
@@ -5693,6 +6658,7 @@ pub async fn api_correct_prototype_bakeoff(
                 "prototype_only": prototype_only,
                 "current_only": current_only,
                 "both_wrong": both_wrong,
+                "prototype_wrong": entries.len().saturating_sub(prototype_ok),
             },
             "target_summary": {
                 "n": entries.len(),
@@ -5702,6 +6668,7 @@ pub async fn api_correct_prototype_bakeoff(
                 "prototype_only": prototype_only_target,
                 "current_only": current_only_target,
                 "both_wrong": both_wrong_target,
+                "prototype_wrong": entries.len().saturating_sub(prototype_target_ok),
             },
             "entries": entries,
         }))
@@ -5723,12 +6690,99 @@ pub async fn api_correct_prototype_bakeoff_detail(
         .unwrap_or("human")
         .trim()
         .to_ascii_lowercase();
+    let state2 = state.clone();
+    let expected = body.expected;
+    let qwen = body.qwen;
+    let current = body.current;
+    let prototype = body.prototype;
+    let use_model_reranker = body.use_model_reranker.unwrap_or(true);
+    let use_prototype_adapters = body.use_prototype_adapters.unwrap_or(false);
+    let prototype_reranker_train_id = body.prototype_reranker_train_id;
+    let reranker_mode = resolve_prototype_reranker_mode(
+        body.reranker_mode.as_deref(),
+        use_model_reranker,
+        use_prototype_adapters,
+    );
     if source != "human" {
-        return Ok(Json(serde_json::json!({
-            "ok": false,
-            "error": "Bakeoff details are only supported for human rows right now."
-        }))
-        .into_response());
+        let value = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+            let (vocab, alt_spellings, confusion_forms) = {
+                let db = state2.db.lock().unwrap();
+                (
+                    db.list_reviewed_vocab()?,
+                    db.get_all_alt_spellings()?,
+                    db.get_all_qwen_confusions()?,
+                )
+            };
+            let mut prototype_result = crate::prototype::prototype_correct_with_acoustics(
+                &qwen,
+                &vocab,
+                &alt_spellings,
+                &confusion_forms,
+                crate::prototype::PrototypeConfig::default(),
+                None,
+            );
+            let reranker = if reranker_mode != PrototypeRerankerMode::Off
+                && should_run_prototype_reranker(&prototype_result.sentence_candidates)
+            {
+                let candidates = prototype_result
+                    .sentence_candidates
+                    .iter()
+                    .take(8)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let rerank_value = match reranker_mode {
+                    PrototypeRerankerMode::Off => serde_json::json!(null),
+                    PrototypeRerankerMode::Trained => {
+                        run_prototype_reranker(
+                            state.as_ref(),
+                            &qwen,
+                            &candidates,
+                            true,
+                            prototype_reranker_train_id,
+                        )?
+                    }
+                    PrototypeRerankerMode::OfficialQwen3 => {
+                        run_official_qwen3_reranker(state.as_ref(), &qwen, &candidates)?
+                    }
+                };
+                if let Some(idx) = rerank_value
+                    .get("chosen_index")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize)
+                {
+                    if let Some(candidate) = candidates.get(idx) {
+                        prototype_result.corrected = candidate.text.clone();
+                        prototype_result.accepted = candidate.edits.clone();
+                    }
+                }
+                Some(rerank_value)
+            } else {
+                None
+            };
+            Ok(serde_json::json!({
+                "ok": true,
+                "alignments": {
+                    "expected": [],
+                    "qwen": [],
+                    "current": [],
+                    "prototype": [],
+                    "zipa": [],
+                    "zipa_qwen": [],
+                },
+                "prototype_trace": {
+                    "corrected": prototype_result.corrected,
+                    "accepted": prototype_result.accepted,
+                    "proposals": prototype_result.proposals,
+                    "sentence_candidates": prototype_result.sentence_candidates,
+                    "reranker": reranker,
+                },
+            }))
+        })
+        .await
+        .map_err(err)?
+        .map_err(err)?;
+
+        return Ok(Json(value).into_response());
     }
     let Some(recording_id) = body.recording_id else {
         return Ok(Json(serde_json::json!({
@@ -5738,13 +6792,6 @@ pub async fn api_correct_prototype_bakeoff_detail(
         .into_response());
     };
 
-    let state2 = state.clone();
-    let expected = body.expected;
-    let qwen = body.qwen;
-    let current = body.current;
-    let prototype = body.prototype;
-    let use_model_reranker = body.use_model_reranker.unwrap_or(true);
-    let use_prototype_adapters = body.use_prototype_adapters.unwrap_or(false);
     let value = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
         let (recording, vocab, alt_spellings, confusion_forms) = {
             let db = state2.db.lock().unwrap();
@@ -5781,15 +6828,30 @@ pub async fn api_correct_prototype_bakeoff_detail(
             crate::prototype::PrototypeConfig::default(),
             Some(&acoustic_context),
         );
-        let reranker =
-            if use_model_reranker && should_run_prototype_reranker(&prototype_result.sentence_candidates) {
+        let reranker = if reranker_mode != PrototypeRerankerMode::Off
+            && should_run_prototype_reranker(&prototype_result.sentence_candidates)
+        {
             let candidates = prototype_result
                 .sentence_candidates
                 .iter()
                 .take(8)
                 .cloned()
                 .collect::<Vec<_>>();
-            let rerank_value = run_prototype_reranker(state.as_ref(), &qwen, &candidates)?;
+            let rerank_value = match reranker_mode {
+                PrototypeRerankerMode::Off => serde_json::json!(null),
+                PrototypeRerankerMode::Trained => {
+                    run_prototype_reranker(
+                        state.as_ref(),
+                        &qwen,
+                        &candidates,
+                        true,
+                        prototype_reranker_train_id,
+                    )?
+                }
+                PrototypeRerankerMode::OfficialQwen3 => {
+                    run_official_qwen3_reranker(state.as_ref(), &qwen, &candidates)?
+                }
+            };
             let chosen_index = rerank_value.get("chosen_index").and_then(|v| v.as_u64()).map(|v| v as usize);
             if let Some(idx) = chosen_index {
                 if let Some(candidate) = candidates.get(idx) {
@@ -5833,8 +6895,198 @@ pub async fn api_correct_prototype_bakeoff_detail(
     Ok(Json(value).into_response())
 }
 
-const PROTOTYPE_RERANKER_MODEL: &str = "Qwen/Qwen3-Reranker-0.6B";
+const PROTOTYPE_RERANKER_DEFAULT_MODEL: &str = "Qwen/Qwen2.5-0.5B-Instruct";
+const PROTOTYPE_RERANKER_DEFAULT_ADAPTERS: &str = "training/prototype-reranker-adapters";
 const PROTOTYPE_RERANKER_PORT: u16 = 8901;
+const OFFICIAL_QWEN3_RERANKER_MODEL: &str = "Qwen/Qwen3-Reranker-0.6B";
+
+#[derive(Debug, Clone)]
+struct PrototypeRerankerTrainChoice {
+    job_id: i64,
+    model: String,
+    adapters: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrototypeRerankerMode {
+    Off,
+    Trained,
+    OfficialQwen3,
+}
+
+fn resolve_prototype_reranker_mode(
+    reranker_mode: Option<&str>,
+    use_model_reranker: bool,
+    use_prototype_adapters: bool,
+) -> PrototypeRerankerMode {
+    if !use_model_reranker {
+        return PrototypeRerankerMode::Off;
+    }
+    match reranker_mode
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "trained" => PrototypeRerankerMode::Trained,
+        "qwen3" | "official-qwen3" | "official" => PrototypeRerankerMode::OfficialQwen3,
+        "off" | "" => {
+            if use_prototype_adapters {
+                PrototypeRerankerMode::Trained
+            } else {
+                PrototypeRerankerMode::Off
+            }
+        }
+        _ => {
+            if use_prototype_adapters {
+                PrototypeRerankerMode::Trained
+            } else {
+                PrototypeRerankerMode::Off
+            }
+        }
+    }
+}
+
+pub struct Qwen3RerankerSidecar {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+}
+
+impl Qwen3RerankerSidecar {
+    pub fn start() -> anyhow::Result<Self> {
+        let mut child = Command::new("bash")
+            .arg("scripts/qwen3_reranker_sidecar.sh")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("qwen3 reranker sidecar missing stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("qwen3 reranker sidecar missing stdout"))?;
+        let mut sidecar = Self {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+        };
+        let ready = sidecar.read_json_line()?;
+        if ready.get("ready").and_then(|v| v.as_bool()) != Some(true) {
+            anyhow::bail!("qwen3 reranker sidecar failed to start: {ready}");
+        }
+        Ok(sidecar)
+    }
+
+    fn read_json_line(&mut self) -> anyhow::Result<serde_json::Value> {
+        let mut line = String::new();
+        let read = self.stdout.read_line(&mut line)?;
+        if read == 0 {
+            anyhow::bail!("qwen3 reranker sidecar closed stdout");
+        }
+        Ok(serde_json::from_str(line.trim())?)
+    }
+
+    pub fn score(
+        &mut self,
+        instruction: &str,
+        query: &str,
+        documents: &[String],
+    ) -> anyhow::Result<serde_json::Value> {
+        let req = serde_json::json!({
+            "instruction": instruction,
+            "query": query,
+            "documents": documents,
+        });
+        serde_json::to_writer(&mut self.stdin, &req)?;
+        self.stdin.write_all(b"\n")?;
+        self.stdin.flush()?;
+        let value = self.read_json_line()?;
+        if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
+            anyhow::bail!("qwen3 reranker sidecar error: {error}");
+        }
+        Ok(value)
+    }
+
+    pub fn kill(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+pub struct PrototypeRerankerSidecar {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    model: String,
+    adapters: Option<String>,
+}
+
+impl PrototypeRerankerSidecar {
+    pub fn start(model: &str, adapters: Option<&str>) -> anyhow::Result<Self> {
+        let mut child = Command::new("bash")
+            .arg("scripts/prototype_reranker_sidecar.sh")
+            .arg(model)
+            .arg(adapters.unwrap_or(""))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("prototype reranker sidecar missing stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("prototype reranker sidecar missing stdout"))?;
+        let mut sidecar = Self {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+            model: model.to_string(),
+            adapters: adapters.map(|v| v.to_string()),
+        };
+        let ready = sidecar.read_json_line()?;
+        if ready.get("ready").and_then(|v| v.as_bool()) != Some(true) {
+            anyhow::bail!("prototype reranker sidecar failed to start: {ready}");
+        }
+        Ok(sidecar)
+    }
+
+    pub fn matches(&self, model: &str, adapters: Option<&str>) -> bool {
+        self.model == model && self.adapters.as_deref() == adapters
+    }
+
+    fn read_json_line(&mut self) -> anyhow::Result<serde_json::Value> {
+        let mut line = String::new();
+        let read = self.stdout.read_line(&mut line)?;
+        if read == 0 {
+            anyhow::bail!("prototype reranker sidecar closed stdout");
+        }
+        Ok(serde_json::from_str(line.trim())?)
+    }
+
+    pub fn score(&mut self, prompts: &[String]) -> anyhow::Result<serde_json::Value> {
+        let req = serde_json::json!({ "prompts": prompts });
+        serde_json::to_writer(&mut self.stdin, &req)?;
+        self.stdin.write_all(b"\n")?;
+        self.stdin.flush()?;
+        let value = self.read_json_line()?;
+        if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
+            anyhow::bail!("prototype reranker sidecar error: {error}");
+        }
+        Ok(value)
+    }
+
+    pub fn kill(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
 
 fn format_prototype_reranker_edits(candidate: &crate::prototype::SentenceCandidate) -> String {
     if candidate.edits.is_empty() {
@@ -5862,29 +7114,76 @@ fn format_prototype_reranker_edits(candidate: &crate::prototype::SentenceCandida
         .join("; ")
 }
 
-fn build_qwen3_reranker_prompt(
-    asr_text: &str,
-    candidate: &crate::prototype::SentenceCandidate,
-) -> String {
-    let instruction = "Given an ASR sentence, determine whether the Document is the correct technical correction. Prefer reviewed technical-vocabulary repairs that preserve meaning. Reject candidates that invent terms, over-correct, or change unrelated words.";
-    let query = format!(
-        "ASR sentence: {}\nHeuristic sentence score: {:.2}\nEdits: {}",
-        asr_text.trim(),
-        candidate.score,
-        format_prototype_reranker_edits(candidate)
-    );
-    format!(
-        "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {document}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
-        document = candidate.text.trim(),
-    )
+fn recent_completed_prototype_reranker_trains(
+    db: &crate::db::Db,
+) -> Vec<PrototypeRerankerTrainChoice> {
+    let Ok(jobs) = db.list_jobs() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for job in jobs {
+        if job.job_type != "train" || job.status != "completed" {
+            continue;
+        }
+        let Some(config) = job.config.as_deref() else {
+            continue;
+        };
+        let Ok(config_json) = serde_json::from_str::<serde_json::Value>(config) else {
+            continue;
+        };
+        if config_json.get("data").and_then(|v| v.as_str()) != Some("training/prototype-reranker")
+        {
+            continue;
+        }
+        let model = config_json
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or(PROTOTYPE_RERANKER_DEFAULT_MODEL)
+            .to_string();
+        let adapters = config_json
+            .get("adapters")
+            .and_then(|v| v.as_str())
+            .unwrap_or(PROTOTYPE_RERANKER_DEFAULT_ADAPTERS)
+            .to_string();
+        out.push(PrototypeRerankerTrainChoice {
+            job_id: job.id,
+            model,
+            adapters,
+        });
+    }
+    out
 }
 
-fn prototype_reranker_config() -> synth_train::InferenceConfig {
+fn prototype_reranker_config(
+    state: &AppState,
+    use_adapters: bool,
+    selected_train_id: Option<i64>,
+) -> synth_train::InferenceConfig {
+    let (model, adapters) = if use_adapters {
+        let db = state.db.lock().unwrap();
+        let recent = recent_completed_prototype_reranker_trains(&db);
+        let selected = recent
+            .iter()
+            .find(|train| Some(train.job_id) == selected_train_id)
+            .cloned()
+            .or_else(|| recent.into_iter().next());
+        selected
+            .map(|train| (train.model, train.adapters))
+            .unwrap_or((
+                PROTOTYPE_RERANKER_DEFAULT_MODEL.to_string(),
+                PROTOTYPE_RERANKER_DEFAULT_ADAPTERS.to_string(),
+            ))
+    } else {
+        (
+            PROTOTYPE_RERANKER_DEFAULT_MODEL.to_string(),
+            String::new(),
+        )
+    };
     synth_train::InferenceConfig {
-        model: PROTOTYPE_RERANKER_MODEL.to_string(),
-        adapters: String::new(),
-        attach_adapters: false,
-        max_tokens: 1,
+        model,
+        adapters,
+        attach_adapters: use_adapters,
+        max_tokens: 6,
         port: PROTOTYPE_RERANKER_PORT,
     }
 }
@@ -5895,12 +7194,122 @@ fn should_run_prototype_reranker(
     candidates.len() > 1
 }
 
+fn build_official_qwen3_reranker_instruction() -> &'static str {
+    "Given an ASR sentence, judge whether the Document is the correct technical correction of the ASR sentence. Prefer reviewed vocabulary repairs. Reject candidates that change meaning, invent terms, or apply weak edits."
+}
+
+fn build_official_qwen3_reranker_document(
+    candidate: &crate::prototype::SentenceCandidate,
+) -> String {
+    let mut doc = format!("<Candidate>: {}", candidate.text.trim());
+    doc.push_str("\n<Edits>: ");
+    doc.push_str(&format_prototype_reranker_edits(candidate));
+    doc
+}
+
 fn run_prototype_reranker(
     state: &AppState,
     asr_text: &str,
     candidates: &[crate::prototype::SentenceCandidate],
+    use_adapters: bool,
+    selected_train_id: Option<i64>,
 ) -> anyhow::Result<serde_json::Value> {
-    let infer_config = prototype_reranker_config();
+    let infer_config = prototype_reranker_config(state, use_adapters, selected_train_id);
+    if use_adapters {
+        let adapters = (!infer_config.adapters.is_empty()).then_some(infer_config.adapters.as_str());
+        let mut server_guard = state.prototype_reranker_sidecar.lock().unwrap();
+        if server_guard
+            .as_ref()
+            .map(|server| !server.matches(&infer_config.model, adapters))
+            .unwrap_or(true)
+        {
+            if let Some(mut server) = server_guard.take() {
+                server.kill();
+            }
+            *server_guard = Some(PrototypeRerankerSidecar::start(&infer_config.model, adapters)?);
+        }
+        let server = server_guard.as_mut().unwrap();
+        let prompts = candidates
+            .iter()
+            .map(|candidate| build_prototype_reranker_prompt(asr_text, candidate))
+            .collect::<Vec<_>>();
+        let value = server.score(&prompts)?;
+        let results = value
+            .get("results")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let timing = value
+            .get("timing_ms")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let backend = value
+            .get("backend")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!("mlx-lm"));
+
+        let mut best_index = None;
+        let mut best_yes = f32::NEG_INFINITY;
+        let mut best_heuristic = f32::NEG_INFINITY;
+        let mut scored_candidates = Vec::new();
+
+        for (idx, candidate) in candidates.iter().enumerate() {
+            let result = results.get(idx);
+            let yes_prob = result
+                .and_then(|v| v.get("yes_prob"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as f32;
+            let no_prob = result
+                .and_then(|v| v.get("no_prob"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0) as f32;
+            let answer = result
+                .and_then(|v| v.get("answer"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(if yes_prob >= no_prob { "yes" } else { "no" })
+                .to_string();
+            let label_logprobs = result
+                .and_then(|v| v.get("label_logprobs"))
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+
+            if yes_prob > best_yes
+                || ((yes_prob - best_yes).abs() < 1e-6 && candidate.score > best_heuristic)
+            {
+                best_yes = yes_prob;
+                best_heuristic = candidate.score;
+                best_index = Some(idx);
+            }
+
+            scored_candidates.push(serde_json::json!({
+                "index": idx,
+                "label": candidate.label,
+                "text": candidate.text,
+                "heuristic_score": candidate.score,
+                "yes_prob": yes_prob,
+                "no_prob": no_prob,
+                "answer": answer,
+                "prompt": prompts[idx],
+                "label_logprobs": label_logprobs,
+            }));
+        }
+
+        return Ok(serde_json::json!({
+            "mode": "trained-prototype-reranker-mlx",
+            "train_job_id": selected_train_id,
+            "model": infer_config.model,
+            "adapters": if infer_config.attach_adapters { Some(infer_config.adapters.clone()) } else { None::<String> },
+            "use_adapters": infer_config.attach_adapters,
+            "backend": backend,
+            "candidate_count": candidates.len(),
+            "chosen_index": best_index,
+            "chosen_label": best_index.and_then(|idx| candidates.get(idx).map(|c| c.label.clone())),
+            "chosen_text": best_index.and_then(|idx| candidates.get(idx).map(|c| c.text.clone())),
+            "timing_ms": timing,
+            "candidates": scored_candidates,
+        }));
+    }
+
     let mut server_guard = state.prototype_reranker_server.lock().unwrap();
     if server_guard
         .as_ref()
@@ -5920,12 +7329,17 @@ fn run_prototype_reranker(
     let mut scored_candidates = Vec::new();
 
     for (idx, candidate) in candidates.iter().enumerate() {
-        let prompt = build_qwen3_reranker_prompt(asr_text, candidate);
-        let output = server.score_next_tokens_with_stats(&prompt, false, &["no", "yes"])?;
-        let no_prob = output.probs.first().copied().unwrap_or(0.0);
-        let yes_prob = output.probs.get(1).copied().unwrap_or(0.0);
-        let no_logit = output.logits.first().copied().unwrap_or(0.0);
-        let yes_logit = output.logits.get(1).copied().unwrap_or(0.0);
+        let prompt = build_prototype_reranker_prompt(asr_text, candidate);
+        let output = server.infer_with_stats(&prompt)?;
+        let answer = output.text.trim().to_ascii_lowercase();
+        let yes_prob = if answer.starts_with("yes") {
+            1.0
+        } else if answer.starts_with("no") {
+            0.0
+        } else {
+            0.5
+        };
+        let no_prob = 1.0 - yes_prob;
 
         if yes_prob > best_yes
             || ((yes_prob - best_yes).abs() < 1e-6 && candidate.score > best_heuristic)
@@ -5942,21 +7356,96 @@ fn run_prototype_reranker(
             "heuristic_score": candidate.score,
             "yes_prob": yes_prob,
             "no_prob": no_prob,
-            "yes_logit": yes_logit,
-            "no_logit": no_logit,
+            "answer": output.text,
+            "raw_output": output.raw_text,
             "prompt": prompt,
             "timing": output.stats,
         }));
     }
 
     Ok(serde_json::json!({
-        "mode": "qwen3-reranker-0.6b",
-        "model": PROTOTYPE_RERANKER_MODEL,
-        "use_adapters": false,
+        "mode": if use_adapters { "trained-prototype-reranker" } else { "prototype-reranker-base" },
+        "train_job_id": selected_train_id,
+        "model": infer_config.model,
+        "adapters": if infer_config.attach_adapters { Some(infer_config.adapters.clone()) } else { None::<String> },
+        "use_adapters": infer_config.attach_adapters,
         "candidate_count": candidates.len(),
         "chosen_index": best_index,
         "chosen_label": best_index.and_then(|idx| candidates.get(idx).map(|c| c.label.clone())),
         "chosen_text": best_index.and_then(|idx| candidates.get(idx).map(|c| c.text.clone())),
+        "candidates": scored_candidates,
+    }))
+}
+
+fn run_official_qwen3_reranker(
+    state: &AppState,
+    asr_text: &str,
+    candidates: &[crate::prototype::SentenceCandidate],
+) -> anyhow::Result<serde_json::Value> {
+    let mut server_guard = state.official_qwen3_reranker_server.lock().unwrap();
+    if server_guard.is_none() {
+        *server_guard = Some(Qwen3RerankerSidecar::start()?);
+    }
+    let server = server_guard.as_mut().unwrap();
+    let documents = candidates
+        .iter()
+        .map(build_official_qwen3_reranker_document)
+        .collect::<Vec<_>>();
+    let query = asr_text.trim();
+    let instruction = build_official_qwen3_reranker_instruction();
+    let value = server.score(instruction, query, &documents)?;
+    let scores = value
+        .get("scores")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let timing = value.get("timing_ms").cloned().unwrap_or_else(|| serde_json::json!({}));
+    let device = value.get("device").cloned().unwrap_or_else(|| serde_json::json!(null));
+    let model = value
+        .get("model")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!(OFFICIAL_QWEN3_RERANKER_MODEL));
+
+    let mut best_index = None;
+    let mut best_yes = f32::NEG_INFINITY;
+    let mut best_heuristic = f32::NEG_INFINITY;
+    let mut scored_candidates = Vec::new();
+
+    for (idx, candidate) in candidates.iter().enumerate() {
+        let yes_prob = scores
+            .get(idx)
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32;
+        let no_prob = 1.0 - yes_prob;
+        if yes_prob > best_yes
+            || ((yes_prob - best_yes).abs() < 1e-6 && candidate.score > best_heuristic)
+        {
+            best_yes = yes_prob;
+            best_heuristic = candidate.score;
+            best_index = Some(idx);
+        }
+        scored_candidates.push(serde_json::json!({
+            "index": idx,
+            "label": candidate.label,
+            "text": candidate.text,
+            "heuristic_score": candidate.score,
+            "yes_prob": yes_prob,
+            "no_prob": no_prob,
+            "document": documents[idx],
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "mode": "official-qwen3-reranker",
+        "model": model,
+        "device": device,
+        "candidate_count": candidates.len(),
+        "chosen_index": best_index,
+        "chosen_label": best_index.and_then(|idx| candidates.get(idx).map(|c| c.label.clone())),
+        "chosen_text": best_index.and_then(|idx| candidates.get(idx).map(|c| c.text.clone())),
+        "instruction": instruction,
+        "query": query,
+        "timing_ms": timing,
         "candidates": scored_candidates,
     }))
 }
@@ -6381,20 +7870,19 @@ pub async fn api_preview_training(
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
             let prompt = v["prompt"].as_str().unwrap_or("");
             let completion = v["completion"].as_str().unwrap_or("");
-            // An identity example has the same text in both <keet> and <qwen> slots
-            let is_identity = if let Some(rest) = prompt.strip_prefix("<keet> ") {
-                if let Some(idx) = rest.find("\n<qwen> ") {
-                    let keet_text = &rest[..idx];
-                    let qwen_text = rest[idx + 7..]
-                        .strip_suffix("\n<fixd>")
-                        .unwrap_or(&rest[idx + 7..]);
-                    keet_text == qwen_text
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
+            let prompt_qwen = prompt
+                .split_once("<qwen> ")
+                .map(|(_, rest)| rest)
+                .and_then(|rest| rest.split_once("\n<fixd>"))
+                .map(|(qwen_text, _)| normalize_prepare_text(qwen_text))
+                .unwrap_or_default();
+            let completion_text = normalize_prepare_text(
+                completion
+                    .trim()
+                    .trim_end_matches("<|endoftext|>")
+                    .trim(),
+            );
+            let is_identity = !prompt_qwen.is_empty() && prompt_qwen == completion_text;
             let entry = serde_json::json!({"prompt": prompt, "completion": completion});
             if is_identity {
                 identities.push(entry);
@@ -6430,6 +7918,7 @@ pub async fn api_reset_training(State(_state): State<Arc<AppState>>) -> Result<R
     let _ = std::fs::remove_file("training/data/train.jsonl");
     let _ = std::fs::remove_file("training/data/valid.jsonl");
     let _ = std::fs::remove_file("training/data/test.jsonl");
+    let _ = std::fs::remove_file("training/applied-eval.jsonl");
     Ok(Json(serde_json::json!({"ok": true})).into_response())
 }
 
@@ -6437,16 +7926,23 @@ pub async fn api_pipeline_status(State(state): State<Arc<AppState>>) -> Result<R
     let (
         approved_count,
         vocab_reviewed,
+        authored_sentences,
+        authored_counterexamples,
         human_recordings,
+        phone_traces,
         running_job,
         last_eval,
         last_train,
         vocab_scanned,
+        recent_prototype_reranker_trains,
     ) = {
         let db = state.db.lock().unwrap();
         let (approved, _, _) = db.sentence_count_by_status().map_err(err)?;
         let (reviewed, _, _) = db.vocab_review_counts().unwrap_or((0, 0, 0));
-        let human = db.sentences_with_human_recording_count().map_err(err)?;
+        let authored_sentences = db.authored_sentence_count().unwrap_or(0);
+        let authored_counterexamples = db.authored_counterexample_count().unwrap_or(0);
+        let human = db.authored_sentence_recordings_count().map_err(err)?;
+        let phone_traces = db.authored_recording_phone_trace_count().unwrap_or(0);
         let scanned = db.confusion_count().map_err(err)?;
         let jobs = db.list_jobs().map_err(err)?;
         let running = jobs.iter().find(|j| j.status == "running").cloned();
@@ -6458,11 +7954,75 @@ pub async fn api_pipeline_status(State(state): State<Arc<AppState>>) -> Result<R
             .and_then(|r| serde_json::from_str::<serde_json::Value>(r).ok());
         let train = jobs
             .iter()
-            .filter(|j| j.job_type == "train" && j.status == "completed")
+            .filter(|j| {
+                if j.job_type != "train" || j.status != "completed" {
+                    return false;
+                }
+                let Some(config) = j.config.as_deref() else {
+                    return false;
+                };
+                let Ok(config_json) = serde_json::from_str::<serde_json::Value>(config) else {
+                    return false;
+                };
+                config_json.get("data").and_then(|v| v.as_str()) == Some("training/prototype-reranker")
+            })
             .next()
             .and_then(|j| j.result.as_ref())
             .and_then(|r| serde_json::from_str::<serde_json::Value>(r).ok());
-        (approved, reviewed, human, running, eval, train, scanned)
+        let mut recent_trains = jobs
+            .iter()
+            .filter_map(|j| {
+                if j.job_type != "train" || j.status != "completed" {
+                    return None;
+                }
+                let config = j.config.as_deref()?;
+                let config_json = serde_json::from_str::<serde_json::Value>(config).ok()?;
+                if config_json.get("data").and_then(|v| v.as_str())
+                    != Some("training/prototype-reranker")
+                {
+                    return None;
+                }
+                let result_json = j
+                    .result
+                    .as_deref()
+                    .and_then(|r| serde_json::from_str::<serde_json::Value>(r).ok())
+                    .unwrap_or_else(|| serde_json::json!({}));
+                Some(serde_json::json!({
+                    "id": j.id,
+                    "created_at": j.created_at,
+                    "finished_at": j.finished_at,
+                    "model": config_json.get("model").and_then(|v| v.as_str()),
+                    "adapters": config_json.get("adapters").and_then(|v| v.as_str()),
+                    "data": config_json.get("data").and_then(|v| v.as_str()),
+                    "batch_size": config_json.get("batch_size").and_then(|v| v.as_i64()),
+                    "num_layers": config_json.get("num_layers").and_then(|v| v.as_i64()),
+                    "iters": config_json.get("iters").and_then(|v| v.as_i64()),
+                    "steps_per_eval": config_json.get("steps_per_eval").and_then(|v| v.as_i64()),
+                    "patience": config_json.get("patience").and_then(|v| v.as_i64()),
+                    "val_loss": result_json.get("val_loss").cloned().unwrap_or(serde_json::Value::Null),
+                    "adapter_mb": result_json.get("adapter_mb").cloned().unwrap_or(serde_json::Value::Null),
+                }))
+            })
+            .collect::<Vec<_>>();
+        recent_trains.sort_by(|a, b| {
+            b.get("id")
+                .and_then(|v| v.as_i64())
+                .cmp(&a.get("id").and_then(|v| v.as_i64()))
+        });
+        recent_trains.truncate(8);
+        (
+            approved,
+            reviewed,
+            authored_sentences,
+            authored_counterexamples,
+            human,
+            phone_traces,
+            running,
+            eval,
+            train,
+            scanned,
+            recent_trains,
+        )
     };
 
     // Check filesystem for corpus / training data / adapters
@@ -6485,10 +8045,16 @@ pub async fn api_pipeline_status(State(state): State<Arc<AppState>>) -> Result<R
         (0, 0)
     };
 
-    let adapters_exist = std::path::Path::new("training/adapters").exists()
-        && std::fs::read_dir("training/adapters")
-            .map(|mut d| d.next().is_some())
-            .unwrap_or(false);
+    let adapters_exist = !recent_prototype_reranker_trains.is_empty();
+    let applied_eval_exists = std::path::Path::new("training/applied-eval.jsonl").exists();
+    let applied_eval_count = if applied_eval_exists {
+        std::fs::read_to_string("training/applied-eval.jsonl")
+            .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let prepare_ready = authored_sentences > 0 && vocab_scanned > 0;
 
     let backends = state.tts.available_backends();
 
@@ -6503,18 +8069,25 @@ pub async fn api_pipeline_status(State(state): State<Arc<AppState>>) -> Result<R
     Ok(Json(serde_json::json!({
         "approved_count": approved_count,
         "vocab_reviewed": vocab_reviewed,
+        "authored_sentences": authored_sentences,
+        "authored_counterexamples": authored_counterexamples,
         "corpus_exists": corpus_exists,
         "corpus_lines": corpus_lines,
+        "prepare_ready": prepare_ready,
         "training_data_exists": training_data_exists,
         "train_count": train_count,
         "valid_count": valid_count,
+        "applied_eval_exists": applied_eval_exists,
+        "applied_eval_count": applied_eval_count,
         "adapters_exist": adapters_exist,
         "human_recordings": human_recordings,
+        "phone_traces": phone_traces,
         "vocab_scanned": vocab_scanned,
         "backends": backends,
         "running_job": running_json,
         "last_eval": last_eval,
         "last_train": last_train,
+        "recent_prototype_reranker_trains": recent_prototype_reranker_trains,
     }))
     .into_response())
 }
@@ -7059,5 +8632,37 @@ mod tests {
         let mut alt = HashMap::new();
         alt.insert("tokio".to_string(), vec!["tokyo".to_string()]);
         assert!(eval_fragment_matches(&alt, "tokio", "tokio", "while tokyo"));
+    }
+
+    #[test]
+    fn exact_fragment_finder_rejects_substrings_inside_larger_identifiers() {
+        assert!(find_exact_fragment_ascii_ci(
+            "If the schema changes, serde_json will fail.",
+            "serde"
+        )
+        .is_none());
+        assert!(find_exact_fragment_ascii_ci(
+            "The failure should be easier to reproduce.",
+            "repr"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn exact_fragment_finder_allows_identifier_adjacent_punctuation() {
+        assert_eq!(
+            find_exact_fragment_ascii_ci(
+                "The Dockerfile needs AArch64-compatible binaries.",
+                "AArch64"
+            ),
+            Some("The Dockerfile needs ".len())
+        );
+        assert_eq!(
+            find_exact_fragment_ascii_ci(
+                "That enum should be repr(u8) for the C ABI.",
+                "repr"
+            ),
+            Some("That enum should be ".len())
+        );
     }
 }
