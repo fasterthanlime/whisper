@@ -47,28 +47,29 @@ struct LanguageDetector {
             return nil
         }
 
-        // Use the last ~500 characters for detection (recent text is most relevant)
-        let sample = String(text.suffix(500))
-        guard sample.count >= 10 else {
-            // Not enough text for reliable detection
-            return nil
-        }
-
         let recognizer = NLLanguageRecognizer()
-        recognizer.processString(sample)
+        recognizer.processString(text)
 
         guard let dominant = recognizer.dominantLanguage else {
-            logger.info("No dominant language detected")
-            return nil
-        }
-
-        guard let qwen3Name = nlToQwen3[dominant] else {
-            logger.info("Detected \(dominant.rawValue, privacy: .public) — not in supported list")
+            logger.info("No dominant language detected from \(text.count) chars")
             return nil
         }
 
         let confidence = recognizer.languageHypotheses(withMaximum: 1)[dominant] ?? 0
-        logger.info("Detected \(qwen3Name, privacy: .public) (confidence: \(confidence, format: .fixed(precision: 2)))")
+
+        guard let qwen3Name = nlToQwen3[dominant] else {
+            logger.info("Detected \(dominant.rawValue, privacy: .public) (conf=\(confidence, format: .fixed(precision: 2))) — not supported")
+            return nil
+        }
+
+        // For non-English, require high confidence to avoid false locks
+        let threshold: Double = (dominant == .english) ? 0.5 : 0.8
+        guard confidence >= threshold else {
+            logger.info("Detected \(qwen3Name, privacy: .public) but confidence \(confidence, format: .fixed(precision: 2)) < \(threshold, format: .fixed(precision: 2))")
+            return nil
+        }
+
+        logger.info("Detected \(qwen3Name, privacy: .public) (conf=\(confidence, format: .fixed(precision: 2))) from \(text.count) chars")
         return qwen3Name
     }
 }
