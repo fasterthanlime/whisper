@@ -148,12 +148,11 @@ struct RecordingOverlayView: View {
     }
 
     private var waveformBlock: some View {
-        Group {
-            if appState.isFinishing {
-                ThinkingBarsView()
-            } else {
-                SpectrumBarsView(bands: appState.spectrumBands)
-            }
+        ZStack {
+            SpectrumBarsView(bands: appState.spectrumBands)
+                .opacity(appState.isFinishing ? 0 : 1)
+            ThinkingBarsView()
+                .opacity(appState.isFinishing ? 1 : 0)
         }
         .padding(.horizontal, 10)
         .frame(height: 28)
@@ -419,30 +418,31 @@ struct SpectrumBarsView: View {
 // MARK: - Thinking Bars (animated wave for finalizing)
 
 /// Animated wave bars that pulse to indicate processing.
+/// Uses TimelineView for reliable animation in NSHostingView contexts
+/// where SwiftUI's implicit animation system may not pump.
 struct ThinkingBarsView: View {
-    @State private var phase: CGFloat = 0
-
     private let barCount = 6
     private let barWidth: CGFloat = 2.5
     private let spacing: CGFloat = 2
     private let maxBarHeight: CGFloat = 18
+    private let startDate = Date()
 
     var body: some View {
-        HStack(alignment: .center, spacing: spacing) {
-            ForEach(0..<barCount, id: \.self) { index in
-                let offset = Double(index) / Double(barCount) * .pi * 2
-                let level = (sin(phase + offset) + 1) / 2
+        TimelineView(.animation) { context in
+            let elapsed = context.date.timeIntervalSince(startDate)
+            let phase = CGFloat(elapsed / 0.8 * .pi * 2)
 
-                Capsule()
-                    .fill(Color.white.opacity(0.3 + 0.4 * level))
-                    .frame(width: barWidth, height: 3 + (maxBarHeight - 3) * level)
+            HStack(alignment: .center, spacing: spacing) {
+                ForEach(0..<barCount, id: \.self) { index in
+                    let offset = Double(index) / Double(barCount) * .pi * 2
+                    let level = (sin(phase + offset) + 1) / 2
+
+                    Capsule()
+                        .fill(Color.white.opacity(0.3 + 0.4 * level))
+                        .frame(width: barWidth, height: 3 + (maxBarHeight - 3) * level)
+                }
             }
-        }
-        .frame(height: maxBarHeight)
-        .onAppear {
-            withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) {
-                phase = .pi * 2
-            }
+            .frame(height: maxBarHeight)
         }
     }
 }

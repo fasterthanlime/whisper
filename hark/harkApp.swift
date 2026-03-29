@@ -1682,6 +1682,7 @@ struct HarkApp: App {
 
     @MainActor
     private func stopRecordingAndTranscribe(cancelTimeoutTask: Bool = true, skipPaste: Bool = false, forceSubmit: Bool = false) {
+        Self.logger.error("[hark] stopRecordingAndTranscribe called, phase=\(String(describing: self.appState.phase), privacy: .public)")
         guard appState.phase == .recording else { return }
         let recordingDurationMs = Int(
             ((recordingStartedAt.map { Date().timeIntervalSince($0) } ?? 0) * 1000).rounded()
@@ -1695,6 +1696,7 @@ struct HarkApp: App {
         // Phase 1: Quick state changes on main (no blocking).
         _ = appState.transition(to: .transcribing)
         appState.isFinishing = true
+        Self.logger.error("[hark] isFinishing=TRUE phase=\(String(describing: self.appState.phase), privacy: .public)")
 
         if cancelTimeoutTask { cancelRecordingTimeout() }
         removeEscapeMonitor()
@@ -1801,6 +1803,7 @@ struct HarkApp: App {
                 self.appState.partialTranscriptCommittedUTF16 = (text as NSString).length
                 self.streamingSession = nil
                 self.appState.isFinishing = false
+                Self.logger.error("[hark] isFinishing=FALSE")
 
                 self.traceEvent("capture_stopped", [
                     "capture_stop_ms": String(finalizationResult.captureStopMs),
