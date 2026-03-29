@@ -1,3 +1,4 @@
+import Carbon
 import Cocoa
 import InputMethodKit
 import os
@@ -22,6 +23,11 @@ class HarkInputAppDelegate: NSObject, NSApplicationDelegate {
             Self.logger.error("Missing bundle identifier")
             return
         }
+
+        // Register this app as an input source with macOS.
+        let bundleURL = Bundle.main.bundleURL as CFURL
+        let registerStatus = TISRegisterInputSource(bundleURL)
+        Self.logger.warning("TISRegisterInputSource status=\(registerStatus, privacy: .public)")
 
         Self.logger.warning("Starting IMKServer name=\(connectionName, privacy: .public) bundle=\(bundleID, privacy: .public)")
         server = IMKServer(name: connectionName, bundleIdentifier: bundleID)
