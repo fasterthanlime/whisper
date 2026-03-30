@@ -19,8 +19,7 @@ struct BeeApp: App {
         MenuBarExtra {
             MenuBarView(appState: appState)
         } label: {
-            // TODO: use bee-bw.png as menu bar icon
-            Image(systemName: "waveform.circle")
+            Image("MenuBarIcon")
         }
     }
 }

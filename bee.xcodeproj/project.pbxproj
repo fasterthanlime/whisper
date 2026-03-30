@@ -8,13 +8,16 @@
 
 /* Begin PBXBuildFile section */
 		2B877E72AFA9A4D05B9FDC0B /* Session.swift in Sources */ = {isa = PBXBuildFile; fileRef = 676164F78A7A1315DBA4D712 /* Session.swift */; };
+		4012F4EB2852984F39E07383 /* beeTemplate.tiff in Resources */ = {isa = PBXBuildFile; fileRef = 6AEB22F163C305E4983946FF /* beeTemplate.tiff */; };
 		4A7942D230B46253EF1197E9 /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F7D08BD88D7C596EA782773 /* TranscriptionService.swift */; };
 		4D8C3959E90E687D47D2804F /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C26401964247ABA42B4ADCA3 /* main.swift */; };
 		557898E7F769A7D1AB009DE4 /* InputMethodKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 44D01D1FC50FBE993FD0716F /* InputMethodKit.framework */; };
 		599EE6A4E7B1CA2D6CE47107 /* AudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 221AD035A01421E2640E350E /* AudioEngine.swift */; };
 		66493E87798EF2D09BC1BC43 /* BeeInputClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AA018C194359C6E4CE7BA63 /* BeeInputClient.swift */; };
 		7FF09C8DD345E95C1033EA8D /* BeeInputAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F54E5F987731158C437D997 /* BeeInputAppDelegate.swift */; };
+		A5E5F67ADA2E617101E1D732 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2A7D3D2469CBFB9FF5D9FD91 /* Assets.xcassets */; };
 		CBC552C34946ED3854F55641 /* BeeXPCService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A48B33C812878B9AC55B8D /* BeeXPCService.swift */; };
+		DC35DFDBCF6C52FA6E0A690A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5A35BE9759CA9C8519D87363 /* Assets.xcassets */; };
 		DF83AB59DF1198FA8BE5248F /* BeeInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB5FE976B1CF01CA031AF66 /* BeeInputController.swift */; };
 		EAD815EAA627296BFA0C4EA3 /* BeeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7059CA841745C6E21DA830A3 /* BeeApp.swift */; };
 		FCE25FA72869D4A5885A40D0 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F2645E6EBE2D4D3E1BFA17C /* AppState.swift */; };
@@ -26,11 +29,14 @@
 		0F2645E6EBE2D4D3E1BFA17C /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		150E7F5961D4B0D13C2D78C8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		221AD035A01421E2640E350E /* AudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngine.swift; sourceTree = "<group>"; };
+		2A7D3D2469CBFB9FF5D9FD91 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		2F54E5F987731158C437D997 /* BeeInputAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeInputAppDelegate.swift; sourceTree = "<group>"; };
 		2F7D08BD88D7C596EA782773 /* TranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionService.swift; sourceTree = "<group>"; };
 		41126B678A8FDC75629B0B30 /* bee.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = bee.entitlements; sourceTree = "<group>"; };
 		44D01D1FC50FBE993FD0716F /* InputMethodKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = InputMethodKit.framework; path = System/Library/Frameworks/InputMethodKit.framework; sourceTree = SDKROOT; };
+		5A35BE9759CA9C8519D87363 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		676164F78A7A1315DBA4D712 /* Session.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Session.swift; sourceTree = "<group>"; };
+		6AEB22F163C305E4983946FF /* beeTemplate.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = beeTemplate.tiff; sourceTree = "<group>"; };
 		7059CA841745C6E21DA830A3 /* BeeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeApp.swift; sourceTree = "<group>"; };
 		89A48B33C812878B9AC55B8D /* BeeXPCService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeXPCService.swift; sourceTree = "<group>"; };
 		ACC2C13E80A8EB858DA92EC7 /* bee.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = bee.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -53,8 +59,10 @@
 		3C4755D7171C9A5834B9180D /* bee-input */ = {
 			isa = PBXGroup;
 			children = (
+				2A7D3D2469CBFB9FF5D9FD91 /* Assets.xcassets */,
 				2F54E5F987731158C437D997 /* BeeInputAppDelegate.swift */,
 				BBB5FE976B1CF01CA031AF66 /* BeeInputController.swift */,
+				6AEB22F163C305E4983946FF /* beeTemplate.tiff */,
 				89A48B33C812878B9AC55B8D /* BeeXPCService.swift */,
 				150E7F5961D4B0D13C2D78C8 /* Info.plist */,
 				C26401964247ABA42B4ADCA3 /* main.swift */,
@@ -83,6 +91,7 @@
 			isa = PBXGroup;
 			children = (
 				0F2645E6EBE2D4D3E1BFA17C /* AppState.swift */,
+				5A35BE9759CA9C8519D87363 /* Assets.xcassets */,
 				221AD035A01421E2640E350E /* AudioEngine.swift */,
 				41126B678A8FDC75629B0B30 /* bee.entitlements */,
 				7059CA841745C6E21DA830A3 /* BeeApp.swift */,
@@ -119,6 +128,7 @@
 			buildConfigurationList = C3B0E177EEA98B0940DD1A57 /* Build configuration list for PBXNativeTarget "bee" */;
 			buildPhases = (
 				198A194B415B1DC8B9969EE0 /* Sources */,
+				32B125BC2E0C12F049D06B2E /* Resources */,
 			);
 			buildRules = (
 			);
@@ -136,6 +146,7 @@
 			buildConfigurationList = E3BFAE6CAB077094A54F4E7B /* Build configuration list for PBXNativeTarget "bee-input" */;
 			buildPhases = (
 				924ECA497F2A9539B67EF7D8 /* Sources */,
+				15ABF56A40130AD5B9D75435 /* Resources */,
 				6AA6C42E6401C79066F9E222 /* Frameworks */,
 			);
 			buildRules = (
@@ -185,6 +196,26 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		15ABF56A40130AD5B9D75435 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5E5F67ADA2E617101E1D732 /* Assets.xcassets in Resources */,
+				4012F4EB2852984F39E07383 /* beeTemplate.tiff in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		32B125BC2E0C12F049D06B2E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DC35DFDBCF6C52FA6E0A690A /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		198A194B415B1DC8B9969EE0 /* Sources */ = {
