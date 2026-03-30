@@ -1,0 +1,503 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		2B877E72AFA9A4D05B9FDC0B /* Session.swift in Sources */ = {isa = PBXBuildFile; fileRef = 676164F78A7A1315DBA4D712 /* Session.swift */; };
+		4A7942D230B46253EF1197E9 /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F7D08BD88D7C596EA782773 /* TranscriptionService.swift */; };
+		4D8C3959E90E687D47D2804F /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C26401964247ABA42B4ADCA3 /* main.swift */; };
+		557898E7F769A7D1AB009DE4 /* InputMethodKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 44D01D1FC50FBE993FD0716F /* InputMethodKit.framework */; };
+		599EE6A4E7B1CA2D6CE47107 /* AudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 221AD035A01421E2640E350E /* AudioEngine.swift */; };
+		66493E87798EF2D09BC1BC43 /* BeeInputClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AA018C194359C6E4CE7BA63 /* BeeInputClient.swift */; };
+		7FF09C8DD345E95C1033EA8D /* BeeInputAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F54E5F987731158C437D997 /* BeeInputAppDelegate.swift */; };
+		CBC552C34946ED3854F55641 /* BeeXPCService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A48B33C812878B9AC55B8D /* BeeXPCService.swift */; };
+		DF83AB59DF1198FA8BE5248F /* BeeInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB5FE976B1CF01CA031AF66 /* BeeInputController.swift */; };
+		EAD815EAA627296BFA0C4EA3 /* BeeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7059CA841745C6E21DA830A3 /* BeeApp.swift */; };
+		FCE25FA72869D4A5885A40D0 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F2645E6EBE2D4D3E1BFA17C /* AppState.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		09031C184D877647B9786634 /* bee-input.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "bee-input.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		0AA018C194359C6E4CE7BA63 /* BeeInputClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeInputClient.swift; sourceTree = "<group>"; };
+		0F2645E6EBE2D4D3E1BFA17C /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		150E7F5961D4B0D13C2D78C8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		221AD035A01421E2640E350E /* AudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngine.swift; sourceTree = "<group>"; };
+		2F54E5F987731158C437D997 /* BeeInputAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeInputAppDelegate.swift; sourceTree = "<group>"; };
+		2F7D08BD88D7C596EA782773 /* TranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionService.swift; sourceTree = "<group>"; };
+		41126B678A8FDC75629B0B30 /* bee.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = bee.entitlements; sourceTree = "<group>"; };
+		44D01D1FC50FBE993FD0716F /* InputMethodKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = InputMethodKit.framework; path = System/Library/Frameworks/InputMethodKit.framework; sourceTree = SDKROOT; };
+		676164F78A7A1315DBA4D712 /* Session.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Session.swift; sourceTree = "<group>"; };
+		7059CA841745C6E21DA830A3 /* BeeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeApp.swift; sourceTree = "<group>"; };
+		89A48B33C812878B9AC55B8D /* BeeXPCService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeXPCService.swift; sourceTree = "<group>"; };
+		ACC2C13E80A8EB858DA92EC7 /* bee.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = bee.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BBB5FE976B1CF01CA031AF66 /* BeeInputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeInputController.swift; sourceTree = "<group>"; };
+		C26401964247ABA42B4ADCA3 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		6AA6C42E6401C79066F9E222 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				557898E7F769A7D1AB009DE4 /* InputMethodKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		3C4755D7171C9A5834B9180D /* bee-input */ = {
+			isa = PBXGroup;
+			children = (
+				2F54E5F987731158C437D997 /* BeeInputAppDelegate.swift */,
+				BBB5FE976B1CF01CA031AF66 /* BeeInputController.swift */,
+				89A48B33C812878B9AC55B8D /* BeeXPCService.swift */,
+				150E7F5961D4B0D13C2D78C8 /* Info.plist */,
+				C26401964247ABA42B4ADCA3 /* main.swift */,
+			);
+			path = "bee-input";
+			sourceTree = "<group>";
+		};
+		697DD1AAABC63BCBFAE29FDB /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				09031C184D877647B9786634 /* bee-input.app */,
+				ACC2C13E80A8EB858DA92EC7 /* bee.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		AC2E63CD19B3E255DCD31E1C /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				44D01D1FC50FBE993FD0716F /* InputMethodKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		B5B81CB48103AC5B7169DEE4 /* bee */ = {
+			isa = PBXGroup;
+			children = (
+				0F2645E6EBE2D4D3E1BFA17C /* AppState.swift */,
+				221AD035A01421E2640E350E /* AudioEngine.swift */,
+				41126B678A8FDC75629B0B30 /* bee.entitlements */,
+				7059CA841745C6E21DA830A3 /* BeeApp.swift */,
+				676164F78A7A1315DBA4D712 /* Session.swift */,
+				F2AD318CDACC7F7F4250B2E0 /* Services */,
+			);
+			path = bee;
+			sourceTree = "<group>";
+		};
+		CC665285516FF0C09607452E = {
+			isa = PBXGroup;
+			children = (
+				B5B81CB48103AC5B7169DEE4 /* bee */,
+				3C4755D7171C9A5834B9180D /* bee-input */,
+				AC2E63CD19B3E255DCD31E1C /* Frameworks */,
+				697DD1AAABC63BCBFAE29FDB /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		F2AD318CDACC7F7F4250B2E0 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				0AA018C194359C6E4CE7BA63 /* BeeInputClient.swift */,
+				2F7D08BD88D7C596EA782773 /* TranscriptionService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		01CB3F093F86D1C0EA056F5D /* bee */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C3B0E177EEA98B0940DD1A57 /* Build configuration list for PBXNativeTarget "bee" */;
+			buildPhases = (
+				198A194B415B1DC8B9969EE0 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = bee;
+			packageProductDependencies = (
+			);
+			productName = bee;
+			productReference = ACC2C13E80A8EB858DA92EC7 /* bee.app */;
+			productType = "com.apple.product-type.application";
+		};
+		68F126E17E78671E624F3C0E /* bee-input */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E3BFAE6CAB077094A54F4E7B /* Build configuration list for PBXNativeTarget "bee-input" */;
+			buildPhases = (
+				924ECA497F2A9539B67EF7D8 /* Sources */,
+				6AA6C42E6401C79066F9E222 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "bee-input";
+			packageProductDependencies = (
+			);
+			productName = "bee-input";
+			productReference = 09031C184D877647B9786634 /* bee-input.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		DA18FE9DB54A783047FBDEA6 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1630;
+				TargetAttributes = {
+					01CB3F093F86D1C0EA056F5D = {
+						DevelopmentTeam = B2N6FSRTPV;
+					};
+					68F126E17E78671E624F3C0E = {
+						DevelopmentTeam = B2N6FSRTPV;
+					};
+				};
+			};
+			buildConfigurationList = F6CAEEA1A727101382591196 /* Build configuration list for PBXProject "bee" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = CC665285516FF0C09607452E;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 697DD1AAABC63BCBFAE29FDB /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				01CB3F093F86D1C0EA056F5D /* bee */,
+				68F126E17E78671E624F3C0E /* bee-input */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		198A194B415B1DC8B9969EE0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FCE25FA72869D4A5885A40D0 /* AppState.swift in Sources */,
+				599EE6A4E7B1CA2D6CE47107 /* AudioEngine.swift in Sources */,
+				EAD815EAA627296BFA0C4EA3 /* BeeApp.swift in Sources */,
+				66493E87798EF2D09BC1BC43 /* BeeInputClient.swift in Sources */,
+				2B877E72AFA9A4D05B9FDC0B /* Session.swift in Sources */,
+				4A7942D230B46253EF1197E9 /* TranscriptionService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		924ECA497F2A9539B67EF7D8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7FF09C8DD345E95C1033EA8D /* BeeInputAppDelegate.swift in Sources */,
+				DF83AB59DF1198FA8BE5248F /* BeeInputController.swift in Sources */,
+				CBC552C34946ED3854F55641 /* BeeXPCService.swift in Sources */,
+				4D8C3959E90E687D47D2804F /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		22B7ADB9570659BC1759D0DC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = bee/bee.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/qwen3-asr-rs/qwen3-asr-ffi/include";
+				INFOPLIST_KEY_ATSApplicationFontsPath = Fonts;
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bee needs microphone access for voice-to-text dictation.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/qwen3-asr-rs/target/release";
+				OTHER_LDFLAGS = (
+					"-lqwen3_asr_ffi",
+					"-lc++",
+					"-framework",
+					Metal,
+					"-framework",
+					MetalPerformanceShaders,
+					"-framework",
+					Security,
+					"-framework",
+					SystemConfiguration,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = fasterthanlime.bee;
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_OBJC_BRIDGING_HEADER = "bee/bee-Bridging-Header.h";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		2C29A87EED29130F2F1B73AA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = "bee-input/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Bee Dictation";
+				INFOPLIST_KEY_CFBundleName = "Bee Dictation";
+				INFOPLIST_KEY_LSBackgroundOnly = YES;
+				INFOPLIST_KEY_NSPrincipalClass = "$(PRODUCT_MODULE_NAME).BeeInputApplication";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = fasterthanlime.inputmethod.bee;
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		5A3D880FA52A67238446C5FB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = B2N6FSRTPV;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		8492FF2F045F855040B9B9A4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = "bee-input/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Bee Dictation";
+				INFOPLIST_KEY_CFBundleName = "Bee Dictation";
+				INFOPLIST_KEY_LSBackgroundOnly = YES;
+				INFOPLIST_KEY_NSPrincipalClass = "$(PRODUCT_MODULE_NAME).BeeInputApplication";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = fasterthanlime.inputmethod.bee;
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		8A97E4337B542A88822D3522 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = bee/bee.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/qwen3-asr-rs/qwen3-asr-ffi/include";
+				INFOPLIST_KEY_ATSApplicationFontsPath = Fonts;
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bee needs microphone access for voice-to-text dictation.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/qwen3-asr-rs/target/release";
+				OTHER_LDFLAGS = (
+					"-lqwen3_asr_ffi",
+					"-lc++",
+					"-framework",
+					Metal,
+					"-framework",
+					MetalPerformanceShaders,
+					"-framework",
+					Security,
+					"-framework",
+					SystemConfiguration,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = fasterthanlime.bee;
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_OBJC_BRIDGING_HEADER = "bee/bee-Bridging-Header.h";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		B20FE4408CA2797ABB88A5EE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = B2N6FSRTPV;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		C3B0E177EEA98B0940DD1A57 /* Build configuration list for PBXNativeTarget "bee" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				22B7ADB9570659BC1759D0DC /* Debug */,
+				8A97E4337B542A88822D3522 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E3BFAE6CAB077094A54F4E7B /* Build configuration list for PBXNativeTarget "bee-input" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8492FF2F045F855040B9B9A4 /* Debug */,
+				2C29A87EED29130F2F1B73AA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F6CAEEA1A727101382591196 /* Build configuration list for PBXProject "bee" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5A3D880FA52A67238446C5FB /* Debug */,
+				B20FE4408CA2797ABB88A5EE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = DA18FE9DB54A783047FBDEA6 /* Project object */;
+}

@@ -6,6 +6,8 @@ specs (
             {
                 name app
                 include (
+                    bee/**/*.swift
+                    bee-input/**/*.swift
                     hark/**/*.swift
                     HarkInput/**/*.swift
                     qwen3-asr-rs/**/*.rs
