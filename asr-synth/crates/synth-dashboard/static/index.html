@@ -24,19 +24,79 @@
         }
 
         :root {
-            --bg: #0d1117;
-            --surface: #161b22;
-            --border: #30363d;
-            --text: #e6edf3;
-            --text-muted: #8b949e;
-            --accent: #58a6ff;
-            --accent-hover: #79c0ff;
-            --danger: #f85149;
-            --danger-bg: rgba(248, 81, 73, 0.15);
-            --success: #3fb950;
-            --success-bg: rgba(63, 185, 80, 0.15);
-            --warning: #d29922;
-            --warning-bg: rgba(210, 153, 34, 0.15);
+            color-scheme: light dark;
+            --bg: light-dark(#f6f8fa, #0d1117);
+            --surface: light-dark(#ffffff, #161b22);
+            --surface-2: light-dark(#f6f8fa, #1c2128);
+            --border: light-dark(#d0d7de, #30363d);
+            --border-strong: light-dark(#8c959f, #444c56);
+            --text: light-dark(#1f2328, #e6edf3);
+            --text-muted: light-dark(#57606a, #8b949e);
+            --accent: light-dark(#0969da, #58a6ff);
+            --accent-hover: light-dark(#0550ae, #79c0ff);
+            --danger: light-dark(#cf222e, #f85149);
+            --success: light-dark(#1a7f37, #3fb950);
+            --warning: light-dark(#9a6700, #d29922);
+            --error: var(--danger);
+            --on-accent: light-dark(#ffffff, #000000);
+            --on-dark: #ffffff;
+            --spoken: light-dark(#8250df, #d2a8ff);
+            --reranker: light-dark(#a371f7, #c297ff);
+            --attention: light-dark(#b08800, #e3b341);
+            --candidate: light-dark(#bf8700, #ffb86b);
+            --panel-subtle: light-dark(rgba(31, 35, 40, 0.03), rgba(255, 255, 255, 0.03));
+            --panel-subtle-04: light-dark(rgba(31, 35, 40, 0.04), rgba(255, 255, 255, 0.04));
+            --panel-subtle-05: light-dark(rgba(31, 35, 40, 0.05), rgba(255, 255, 255, 0.05));
+            --panel-subtle-2: light-dark(rgba(31, 35, 40, 0.06), rgba(255, 255, 255, 0.06));
+            --panel-subtle-3: light-dark(rgba(31, 35, 40, 0.08), rgba(255, 255, 255, 0.08));
+            --panel-subtle-4: light-dark(rgba(31, 35, 40, 0.12), rgba(255, 255, 255, 0.12));
+            --panel-subtle-5: light-dark(rgba(31, 35, 40, 0.15), rgba(255, 255, 255, 0.15));
+            --panel-subtle-6: light-dark(rgba(31, 35, 40, 0.2), rgba(255, 255, 255, 0.2));
+            --panel-subtle-7: light-dark(rgba(31, 35, 40, 0.25), rgba(255, 255, 255, 0.25));
+            --panel-subtle-8: light-dark(rgba(31, 35, 40, 0.3), rgba(255, 255, 255, 0.3));
+            --panel-subtle-9: light-dark(rgba(31, 35, 40, 0.4), rgba(255, 255, 255, 0.4));
+            --panel-subtle-12: light-dark(rgba(31, 35, 40, 0.12), rgba(255, 255, 255, 0.12));
+            --panel-subtle-22: light-dark(rgba(31, 35, 40, 0.22), rgba(255, 255, 255, 0.22));
+            --panel-subtle-25: light-dark(rgba(31, 35, 40, 0.25), rgba(255, 255, 255, 0.25));
+            --overlay: light-dark(rgba(31, 35, 40, 0.5), rgba(0, 0, 0, 0.5));
+            --overlay-soft: light-dark(rgba(31, 35, 40, 0.2), rgba(0, 0, 0, 0.2));
+            --overlay-strong: light-dark(rgba(31, 35, 40, 0.65), rgba(0, 0, 0, 0.65));
+            --shadow-strong: light-dark(rgba(31, 35, 40, 0.6), rgba(0, 0, 0, 0.6));
+            --shadow-soft: light-dark(rgba(31, 35, 40, 0.35), rgba(0, 0, 0, 0.35));
+            --accent-bg-08: color-mix(in srgb, var(--accent) 8%, transparent);
+            --accent-bg-10: color-mix(in srgb, var(--accent) 10%, transparent);
+            --accent-bg-12: color-mix(in srgb, var(--accent) 12%, transparent);
+            --accent-bg-14: color-mix(in srgb, var(--accent) 14%, transparent);
+            --accent-bg-15: color-mix(in srgb, var(--accent) 15%, transparent);
+            --accent-bg-16: color-mix(in srgb, var(--accent) 16%, transparent);
+            --accent-bg-20: color-mix(in srgb, var(--accent) 20%, transparent);
+            --accent-bg-25: color-mix(in srgb, var(--accent) 25%, transparent);
+            --accent-bg-30: color-mix(in srgb, var(--accent) 30%, transparent);
+            --accent-bg-40: color-mix(in srgb, var(--accent) 40%, transparent);
+            --accent-bg-60: color-mix(in srgb, var(--accent) 60%, transparent);
+            --accent-bg-70: color-mix(in srgb, var(--accent) 70%, transparent);
+            --accent-bg-80: color-mix(in srgb, var(--accent) 80%, transparent);
+            --accent-bg-85: color-mix(in srgb, var(--accent) 85%, transparent);
+            --accent-bg-95: color-mix(in srgb, var(--accent) 95%, transparent);
+            --success-bg-08: color-mix(in srgb, var(--success) 8%, transparent);
+            --success-bg-10: color-mix(in srgb, var(--success) 10%, transparent);
+            --success-bg-12: color-mix(in srgb, var(--success) 12%, transparent);
+            --success-bg-15: color-mix(in srgb, var(--success) 15%, transparent);
+            --success-bg-20: color-mix(in srgb, var(--success) 20%, transparent);
+            --danger-bg-05: color-mix(in srgb, var(--danger) 5%, transparent);
+            --danger-bg-08: color-mix(in srgb, var(--danger) 8%, transparent);
+            --danger-bg-10: color-mix(in srgb, var(--danger) 10%, transparent);
+            --danger-bg-12: color-mix(in srgb, var(--danger) 12%, transparent);
+            --danger-bg-15: color-mix(in srgb, var(--danger) 15%, transparent);
+            --danger-bg-18: color-mix(in srgb, var(--danger) 18%, transparent);
+            --danger-bg-20: color-mix(in srgb, var(--danger) 20%, transparent);
+            --danger-bg-40: color-mix(in srgb, var(--danger) 40%, transparent);
+            --danger-bg-60: color-mix(in srgb, var(--danger) 60%, transparent);
+            --warning-bg-10: color-mix(in srgb, var(--warning) 10%, transparent);
+            --warning-bg-12: color-mix(in srgb, var(--warning) 12%, transparent);
+            --warning-bg-15: color-mix(in srgb, var(--warning) 15%, transparent);
+            --warning-bg-18: color-mix(in srgb, var(--warning) 18%, transparent);
+            --text-on-dark: light-dark(#ffffff, #ffffff);
         }
 
         * {
@@ -163,7 +223,7 @@
 
         .btn-primary {
             background: var(--accent);
-            color: #000;
+            color: var(--on-accent);
             border-color: var(--accent);
             font-weight: 600;
         }
@@ -174,7 +234,7 @@
 
         .btn-success {
             background: var(--success);
-            color: #000;
+            color: var(--on-accent);
             border-color: var(--success);
             font-weight: 600;
         }
@@ -234,12 +294,12 @@
         }
 
         .badge-needs_resynth {
-            background: rgba(88, 166, 255, 0.15);
+            background: var(--accent-bg-15);
             color: var(--accent);
         }
 
         .badge-running {
-            background: rgba(88, 166, 255, 0.15);
+            background: var(--accent-bg-15);
             color: var(--accent);
         }
 
@@ -350,7 +410,7 @@
 
         .alt-spelling-input:focus {
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.12);
+            box-shadow: 0 0 0 3px var(--accent-bg-12);
         }
 
         .alt-spelling-add {
@@ -405,10 +465,10 @@
         }
 
         .sentence-display .word-active {
-            outline: 2px solid rgba(88, 166, 255, 0.6);
+            outline: 2px solid var(--accent-bg-60);
             outline-offset: 2px;
             border-radius: 3px;
-            color: #fff;
+            color: var(--text-on-dark);
         }
 
         .unknown-num-badge {
@@ -531,7 +591,7 @@
         }
 
         .review-action-btn.replay:hover {
-            background: rgba(88, 166, 255, 0.1);
+            background: var(--accent-bg-10);
         }
 
         .review-action-btn kbd {
@@ -591,7 +651,7 @@
 
         .play-btn:hover {
             border-color: var(--accent);
-            background: rgba(88, 166, 255, 0.1);
+            background: var(--accent-bg-10);
         }
 
         .play-btn:disabled {
@@ -622,7 +682,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            background: rgba(0, 0, 0, 0.5);
+            background: var(--overlay);
         }
 
         .vocab-editor {
@@ -632,7 +692,7 @@
             padding: 24px 32px;
             min-width: 400px;
             max-width: 500px;
-            box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+            box-shadow: 0 12px 48px var(--shadow-strong);
             text-align: center;
         }
 
@@ -710,7 +770,7 @@
 
         .record-btn.active {
             background: var(--danger);
-            color: #fff;
+            color: var(--text-on-dark);
             animation: pulse 1s infinite;
         }
 
@@ -778,12 +838,12 @@
             width: 2px;
             height: 100%;
             transform: translateX(-50%);
-            background: linear-gradient(to bottom, rgba(88, 166, 255, 0.4), rgba(88, 166, 255, 0.1));
+            background: linear-gradient(to bottom, var(--accent-bg-40), var(--accent-bg-10));
         }
 
         .pipeline-connector.active::before {
-            background: linear-gradient(to bottom, rgba(88, 166, 255, 0.8), rgba(88, 166, 255, 0.3));
-            box-shadow: 0 0 8px rgba(88, 166, 255, 0.3);
+            background: linear-gradient(to bottom, var(--accent-bg-80), var(--accent-bg-30));
+            box-shadow: 0 0 8px var(--accent-bg-30);
         }
 
         .stage-card {
@@ -809,12 +869,12 @@
 
         .stage-card.ready::before {
             background: linear-gradient(90deg, transparent, var(--accent), transparent);
-            box-shadow: 0 0 12px rgba(88, 166, 255, 0.2);
+            box-shadow: 0 0 12px var(--accent-bg-20);
         }
 
         .stage-card.complete::before {
             background: linear-gradient(90deg, transparent, var(--success), transparent);
-            box-shadow: 0 0 12px rgba(63, 185, 80, 0.2);
+            box-shadow: 0 0 12px var(--success-bg-20);
         }
 
         .stage-card.running::before {
@@ -835,7 +895,7 @@
 
             50% {
                 opacity: 1;
-                box-shadow: 0 0 20px rgba(88, 166, 255, 0.3);
+                box-shadow: 0 0 20px var(--accent-bg-30);
             }
         }
 
@@ -854,13 +914,13 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            background: rgba(88, 166, 255, 0.08);
-            border: 1px solid rgba(88, 166, 255, 0.15);
+            background: var(--accent-bg-08);
+            border: 1px solid var(--accent-bg-15);
         }
 
         .stage-card.complete .stage-icon {
-            background: rgba(63, 185, 80, 0.08);
-            border-color: rgba(63, 185, 80, 0.15);
+            background: var(--success-bg-08);
+            border-color: var(--success-bg-15);
         }
 
         .stage-icon svg {
@@ -895,26 +955,26 @@
         }
 
         .stage-status-badge.idle {
-            background: rgba(139, 148, 158, 0.1);
+            background: var(--panel-subtle-3);
             color: var(--text-muted);
         }
 
         .stage-status-badge.ready {
-            background: rgba(88, 166, 255, 0.1);
+            background: var(--accent-bg-10);
             color: var(--accent);
-            border: 1px solid rgba(88, 166, 255, 0.2);
+            border: 1px solid var(--accent-bg-20);
         }
 
         .stage-status-badge.done {
-            background: rgba(63, 185, 80, 0.1);
+            background: var(--success-bg-10);
             color: var(--success);
-            border: 1px solid rgba(63, 185, 80, 0.2);
+            border: 1px solid var(--success-bg-20);
         }
 
         .stage-status-badge.active {
-            background: rgba(88, 166, 255, 0.15);
+            background: var(--accent-bg-15);
             color: var(--accent);
-            border: 1px solid rgba(88, 166, 255, 0.3);
+            border: 1px solid var(--accent-bg-30);
             animation: pipeline-pulse 1.5s ease-in-out infinite;
         }
 
@@ -976,7 +1036,7 @@
             letter-spacing: 1px;
             text-transform: uppercase;
             border: 1px solid var(--accent);
-            background: rgba(88, 166, 255, 0.1);
+            background: var(--accent-bg-10);
             color: var(--accent);
             border-radius: 4px;
             cursor: pointer;
@@ -985,8 +1045,8 @@
         }
 
         .stage-launch-btn:hover:not(:disabled) {
-            background: rgba(88, 166, 255, 0.2);
-            box-shadow: 0 0 12px rgba(88, 166, 255, 0.15);
+            background: var(--accent-bg-20);
+            box-shadow: 0 0 12px var(--accent-bg-15);
         }
 
         .stage-launch-btn:disabled {
@@ -995,7 +1055,7 @@
         }
 
         dialog::backdrop {
-            background: rgba(0,0,0,0.65);
+            background: var(--overlay-strong);
             backdrop-filter: blur(6px);
         }
         dialog {
@@ -1004,7 +1064,7 @@
             left: 50%;
             transform: translate(-50%, -50%);
             margin: 0;
-            box-shadow: 0 12px 48px rgba(0,0,0,0.6);
+            box-shadow: 0 12px 48px var(--shadow-strong);
         }
         dialog[open] {
             display: flex;
@@ -1013,12 +1073,12 @@
         .corpus-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
         .corpus-table th { padding: 8px 10px; font-weight: 600; text-align: left; border-bottom: 2px solid var(--border); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
         .corpus-table td { padding: 6px 10px; }
-        .corpus-table .term-cell { font-weight: 600; vertical-align: top; border-right: 2px solid var(--border); background: rgba(255,255,255,0.02); white-space: nowrap; }
+        .corpus-table .term-cell { font-weight: 600; vertical-align: top; border-right: 2px solid var(--border); background: var(--panel-subtle-2); white-space: nowrap; }
         .corpus-table .group-row td { border-top: 1px solid var(--border); }
-        .corpus-table .sub-row td { border-top: 1px solid rgba(255,255,255,0.03); }
+        .corpus-table .sub-row td { border-top: 1px solid var(--panel-subtle); }
         .count-badge { display: inline-block; min-width: 18px; text-align: center; padding: 1px 5px; border-radius: 8px; font-size: 10px; font-weight: 600; margin-left: 4px; }
-        .count-badge.correct { background: rgba(63,185,80,0.15); color: var(--success); }
-        .count-badge.wrong { background: rgba(248,81,73,0.15); color: var(--error); }
+        .count-badge.correct { background: var(--success-bg-15); color: var(--success); }
+        .count-badge.wrong { background: var(--danger-bg-15); color: var(--error); }
         .corpus-total { padding: 8px 10px; font-size: 12px; color: var(--text-muted); border-top: 2px solid var(--border); }
         .stage-log {
             margin-top: 12px;
@@ -1027,18 +1087,18 @@
             font-size: 11px;
             font-family: 'SF Mono', 'Menlo', monospace;
             padding: 10px 12px;
-            background: rgba(0, 0, 0, 0.3);
-            border: 1px solid rgba(88, 166, 255, 0.1);
+            background: var(--panel-subtle-8);
+            border: 1px solid var(--accent-bg-10);
             border-radius: 4px;
             white-space: pre-wrap;
-            color: rgba(88, 166, 255, 0.7);
+            color: var(--accent-bg-70);
             line-height: 1.6;
         }
 
         .pipeline-error {
             padding: 10px 14px;
-            background: rgba(248, 81, 73, 0.08);
-            border: 1px solid rgba(248, 81, 73, 0.2);
+            background: var(--danger-bg-08);
+            border: 1px solid var(--danger-bg-20);
             border-radius: 6px;
             margin-bottom: 20px;
             font-size: 13px;
@@ -1078,6 +1138,21 @@
             return sec.toFixed(3);
         }
 
+        function cssVar(name) {
+            return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        }
+
+        function rgbaFromVar(name, alpha) {
+            const value = cssVar(name);
+            const match = value.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*[\d.]+)?\)$/);
+            if (!match) return value;
+            return `rgba(${match[1]}, ${match[2]}, ${match[3]}, ${alpha})`;
+        }
+
+        function themeColor(name) {
+            return cssVar(name);
+        }
+
         function GroupedPhoneLane({label, raw}) {
             const groups = useMemo(() => {
                 const parsed = parseJsonSafe(raw, []);
@@ -1091,7 +1166,7 @@
                     ) : (
                         <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
                             {groups.map((group, idx) => (
-                                <div key={`${label}-${idx}`} style={{display:'grid',gap:2,padding:'6px 8px',border:'1px solid var(--border)',borderRadius:8,background:'rgba(255,255,255,0.03)',minWidth:96}}>
+                                <div key={`${label}-${idx}`} style={{display:'grid',gap:2,padding:'6px 8px',border:'1px solid var(--border)',borderRadius:8,background:'var(--panel-subtle)',minWidth:96}}>
                                     <div style={{fontSize:11,color:'var(--text-muted)'}}>
                                         {group.word || group.t || `#${idx + 1}`}
                                     </div>
@@ -1450,7 +1525,7 @@
                                 style={{
                                     fontFamily: IPA_FONT_STACK,
                                     color:selected === token ? 'var(--bg)' : 'var(--accent)',
-                                    background:selected === token ? 'var(--accent)' : 'rgba(255,255,255,0.03)',
+                                    background:selected === token ? 'var(--accent)' : 'var(--panel-subtle)',
                                     borderColor:'var(--border)',
                                     fontSize: 20,
                                     lineHeight: 1.05,
@@ -1965,8 +2040,8 @@
                                 padding:12,
                                 border:'1px solid var(--border)',
                                 borderRadius:12,
-                                background:'rgba(20,24,32,0.98)',
-                                boxShadow:'0 18px 40px rgba(0,0,0,0.35)',
+                                background:'var(--surface)',
+            boxShadow:'0 18px 40px var(--shadow-soft)',
                                 backdropFilter:'blur(8px)',
                             }}>
                                 <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr)',gap:12,alignItems:'start'}}>
@@ -2284,7 +2359,7 @@
                             // Alternating subtle tint for word regions
                             const isActive = playbackPos != null && playbackPos >= a.start && playbackPos < a.end;
                             if (isActive) {
-                                ctx.fillStyle = 'rgba(88, 166, 255, 0.12)';
+                                ctx.fillStyle = rgbaFromVar('--accent', 0.12);
                                 ctx.fillRect(x0, 0, x1 - x0, h);
                             }
                         }
@@ -2305,16 +2380,16 @@
 
                         const samplePos = playbackPos != null ? (playbackPos / dur) * w : -1;
                         if (x < samplePos) {
-                            ctx.fillStyle = 'rgba(88, 166, 255, 0.7)';
+                            ctx.fillStyle = rgbaFromVar('--accent', 0.7);
                         } else {
-                            ctx.fillStyle = 'rgba(88, 166, 255, 0.25)';
+                            ctx.fillStyle = rgbaFromVar('--accent', 0.25);
                         }
                         ctx.fillRect(x, topY, 1, botY - topY || 1);
                     }
 
                     // Draw word boundary lines and labels
                     if (alignment && alignment.length > 0) {
-                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+                        ctx.strokeStyle = rgbaFromVar('--text-on-dark', 0.15);
                         ctx.lineWidth = 1;
                         for (const a of alignment) {
                             const bx = (a.start / dur) * w;
@@ -2327,7 +2402,7 @@
                         // Word labels at bottom
                         ctx.font = '12px Jost, sans-serif';
                         ctx.textAlign = 'center';
-                        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+                        ctx.fillStyle = rgbaFromVar('--text-on-dark', 0.6);
                         for (const a of alignment) {
                             const cx = ((a.start + a.end) / 2 / dur) * w;
                             const regionW = ((a.end - a.start) / dur) * w;
@@ -2340,7 +2415,7 @@
                     // Playback cursor
                     if (playbackPos != null && playbackPos >= 0) {
                         const cx = (playbackPos / dur) * w;
-                        ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+                        ctx.strokeStyle = rgbaFromVar('--text-on-dark', 0.8);
                         ctx.lineWidth = 1.5;
                         ctx.beginPath();
                         ctx.moveTo(cx, 0);
@@ -2694,9 +2769,10 @@
 
         function TranscriptGrid({original, asr, humanAsr, activeWordIndex, alignment, writtenAlignment, unknownWords, onWordClick}) {
             const scrollRef = useRef(null);
-            const qColor = '#58a6ff';
-            const pColor = '#7ee787';
-            const cColor = '#f78166';
+            const qColor = themeColor('--accent');
+            const pColor = themeColor('--success');
+            const cColor = themeColor('--danger');
+            const spokenColor = themeColor('--spoken');
             const dimStyle = {opacity: 0.2};
 
             // Unknown word set + left-to-right numbering
@@ -2821,7 +2897,7 @@
                 const spanEnd = s.colStart + s.colSpan;
                 return s.colStart < activeColRange.end && spanEnd > activeColRange.start;
             };
-            const activeBg = 'rgba(88,166,255,0.15)';
+            const activeBg = 'var(--accent-bg-15)';
 
             // Auto-scroll to active column
             useEffect(() => {
@@ -2836,7 +2912,7 @@
                 <div style={{fontFamily: 'Jost, sans-serif', fontSize: 17, display: 'flex', alignItems: 'center', flexDirection: 'column'}}>
                     {/* Legend on top */}
                     <div style={{display: 'flex', gap: 16, marginBottom: 4, fontSize: 11}}>
-                        <span style={{color: '#d2a8ff'}}>Spoken</span>
+                        <span style={{color: spokenColor}}>Spoken</span>
                         <span style={{color: 'var(--text-muted)'}}>Original</span>
                         <span style={{color: qColor}}>Qwen</span>
                         <span style={{color: pColor}}>Parakeet</span>
@@ -2861,8 +2937,8 @@
                                     const r = groups[c]?.ref;
                                     if (r && cleanWord(s.word) === cleanWord(r.word)) {sameAsRef = true; break;}
                                 }
-                                return <div key={`s${i}`} style={{gridRow: 1, gridColumn: `${s.colStart + 1} / span ${s.colSpan}`, lineHeight: '1.5em', padding: '0 4px', borderRight: !isLast ? '1px solid rgba(48,54,61,0.4)' : undefined, background: isSpanActive(s) ? activeBg : undefined, borderRadius: isSpanActive(s) ? 3 : undefined}}>
-                                    <span style={{color: '#d2a8ff', opacity: sameAsRef ? 0.2 : 1}}>{s.word}</span>
+                                return <div key={`s${i}`} style={{gridRow: 1, gridColumn: `${s.colStart + 1} / span ${s.colSpan}`, lineHeight: '1.5em', padding: '0 4px', borderRight: !isLast ? '1px solid var(--panel-subtle-4)' : undefined, background: isSpanActive(s) ? activeBg : undefined, borderRadius: isSpanActive(s) ? 3 : undefined}}>
+                                    <span style={{color: spokenColor, opacity: sameAsRef ? 0.2 : 1}}>{s.word}</span>
                                 </div>;
                             })}
                             {/* Row 2: Original (written text) */}
@@ -2883,11 +2959,11 @@
                                 }
                                 const outlineColor = hasOverride ? 'var(--success)' : 'var(--warning)';
                                 const style = {
-                                    ...(isActive ? {color: '#fff'} : {}),
+                                    ...(isActive ? {color: 'var(--text-on-dark)'} : {}),
                                     ...(isUnknown ? {outline: `1px solid ${outlineColor}`, outlineOffset: '1px', borderRadius: '3px', cursor: 'pointer'} : {}),
                                 };
                                 const isLast = s.colStart + s.colSpan >= groups.length;
-                                return <div key={`r${i}`} data-col={s.colStart} style={{gridRow: 2, gridColumn: `${s.colStart + 1} / span ${s.colSpan}`, lineHeight: '1.5em', padding: '0 4px', borderRight: !isLast ? '1px solid rgba(48,54,61,0.4)' : undefined, background: isActive ? activeBg : undefined, borderRadius: isActive ? 3 : undefined}}>
+                                return <div key={`r${i}`} data-col={s.colStart} style={{gridRow: 2, gridColumn: `${s.colStart + 1} / span ${s.colSpan}`, lineHeight: '1.5em', padding: '0 4px', borderRight: !isLast ? '1px solid var(--panel-subtle-4)' : undefined, background: isActive ? activeBg : undefined, borderRadius: isActive ? 3 : undefined}}>
                                     <span style={style} onClick={isUnknown && onWordClick ? () => onWordClick(s.word) : undefined}>
                                         {s.word}{num && num <= 9 ? <span className="unknown-num-badge" style={{marginLeft: 2, verticalAlign: 'super'}}>{num}</span> : null}
                                     </span>
@@ -2902,7 +2978,7 @@
                                     const r = groups[c]?.ref;
                                     if (r && cleanWord(s.word) === cleanWord(r.word)) {isMatch = true; break;}
                                 }
-                                return <div key={`q${i}`} style={{gridRow: 3, gridColumn: `${s.colStart + 1} / span ${s.colSpan}`, lineHeight: '1.5em', padding: '0 4px', borderRight: !isLast ? '1px solid rgba(48,54,61,0.4)' : undefined, background: isSpanActive(s) ? activeBg : undefined, borderRadius: isSpanActive(s) ? 3 : undefined}}>
+                                return <div key={`q${i}`} style={{gridRow: 3, gridColumn: `${s.colStart + 1} / span ${s.colSpan}`, lineHeight: '1.5em', padding: '0 4px', borderRight: !isLast ? '1px solid var(--panel-subtle-4)' : undefined, background: isSpanActive(s) ? activeBg : undefined, borderRadius: isSpanActive(s) ? 3 : undefined}}>
                                     <span style={{color: qColor, opacity: isMatch ? 0.2 : 1}}>{s.word}</span>
                                 </div>;
                             })}
@@ -2915,7 +2991,7 @@
                                     const r = groups[c]?.ref;
                                     if (r && cleanWord(s.word) === cleanWord(r.word)) {isMatch = true; break;}
                                 }
-                                return <div key={`p${i}`} style={{gridRow: 4, gridColumn: `${s.colStart + 1} / span ${s.colSpan}`, lineHeight: '1.5em', padding: '0 4px', borderRight: !isLast ? '1px solid rgba(48,54,61,0.4)' : undefined, background: isSpanActive(s) ? activeBg : undefined, borderRadius: isSpanActive(s) ? 3 : undefined}}>
+                                return <div key={`p${i}`} style={{gridRow: 4, gridColumn: `${s.colStart + 1} / span ${s.colSpan}`, lineHeight: '1.5em', padding: '0 4px', borderRight: !isLast ? '1px solid var(--panel-subtle-4)' : undefined, background: isSpanActive(s) ? activeBg : undefined, borderRadius: isSpanActive(s) ? 3 : undefined}}>
                                     <span style={{color: pColor, opacity: isMatch ? 0.2 : 1}}>{s.word}</span>
                                 </div>;
                             })}
@@ -2928,7 +3004,7 @@
                                     const r = groups[c]?.ref;
                                     if (r && cleanWord(s.word) === cleanWord(r.word)) {isMatch = true; break;}
                                 }
-                                return <div key={`c${i}`} style={{gridRow: 5, gridColumn: `${s.colStart + 1} / span ${s.colSpan}`, lineHeight: '1.5em', padding: '0 4px', borderRight: !isLast ? '1px solid rgba(48,54,61,0.4)' : undefined, background: isSpanActive(s) ? activeBg : undefined, borderRadius: isSpanActive(s) ? 3 : undefined}}>
+                                return <div key={`c${i}`} style={{gridRow: 5, gridColumn: `${s.colStart + 1} / span ${s.colSpan}`, lineHeight: '1.5em', padding: '0 4px', borderRight: !isLast ? '1px solid var(--panel-subtle-4)' : undefined, background: isSpanActive(s) ? activeBg : undefined, borderRadius: isSpanActive(s) ? 3 : undefined}}>
                                     <span style={{color: cColor, opacity: isMatch ? 0.2 : 1}}>{s.word}</span>
                                 </div>;
                             })}
@@ -4156,14 +4232,14 @@
                         <div style={{fontSize:12,color:'var(--text-muted)',lineHeight:1.5}}>
                             {originalIdx >= 0 ? (<>
                                 {fullSentence.slice(0, originalIdx)}
-                                <span style={{background:'rgba(248,81,73,0.18)',color:'var(--error)',textDecoration:'line-through',padding:'0 2px',borderRadius:3}}>{fullSentence.slice(originalIdx, originalIdx + issue.original.length)}</span>
+                                <span style={{background:rgbaFromVar('--danger', 0.18),color:'var(--error)',textDecoration:'line-through',padding:'0 2px',borderRadius:3}}>{fullSentence.slice(originalIdx, originalIdx + issue.original.length)}</span>
                                 {fullSentence.slice(originalIdx + issue.original.length)}
                             </>) : fullSentence}
                         </div>
                         <div style={{fontSize:12,color:'var(--text)',lineHeight:1.5}}>
                             {updatedIdx >= 0 ? (<>
                                 {updated.slice(0, updatedIdx)}
-                                <span style={{background:'rgba(63,185,80,0.18)',color:'var(--success)',fontWeight:600,padding:'0 2px',borderRadius:3}}>{updated.slice(updatedIdx, updatedIdx + issue.suggestion.length)}</span>
+                                <span style={{background:rgbaFromVar('--success', 0.18),color:'var(--success)',fontWeight:600,padding:'0 2px',borderRadius:3}}>{updated.slice(updatedIdx, updatedIdx + issue.suggestion.length)}</span>
                                 {updated.slice(updatedIdx + issue.suggestion.length)}
                             </>) : updated}
                         </div>
@@ -4768,7 +4844,7 @@
                             {spellIssueList.length === 0
                                 ? <div style={{color:'var(--success)',fontSize:13}}>No issues found!</div>
                                 : spellIssueList.map((issue, i) => (
-                                    <div key={`${issue.id}-${issue.original}-${issue.suggestion}-${i}`} style={{padding:'8px 0',borderBottom:'1px solid rgba(255,255,255,0.04)',fontSize:12}}>
+                                    <div key={`${issue.id}-${issue.original}-${issue.suggestion}-${i}`} style={{padding:'8px 0',borderBottom:'1px solid var(--panel-subtle-04)',fontSize:12}}>
                                         <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
                                             <span style={{color:'var(--text-muted)',minWidth:30}}>#{issue.id}</span>
                                             <span style={{color:'var(--error)',textDecoration:'line-through'}}>{issue.original}</span>
@@ -4971,7 +5047,7 @@
                                         Say any sentence where <span style={{fontFamily:'monospace',color:'var(--warning)'}}>{counterexampleReview.surface_form}</span> is actually correct and should stay unchanged.
                                     </div>
                                     {counterexampleSavedCount > 0 && (
-                                        <div style={{display:'flex',gap:8,alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',padding:'8px 10px',border:'1px solid var(--border)',borderRadius:8,background:'rgba(63,185,80,0.08)'}}>
+                                        <div style={{display:'flex',gap:8,alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',padding:'8px 10px',border:'1px solid var(--border)',borderRadius:8,background:rgbaFromVar('--success', 0.08)}}>
                                             <div style={{fontSize:13,color:'var(--success)'}}>
                                                 Saved {counterexampleSavedCount} counterexample{counterexampleSavedCount === 1 ? '' : 's'} for this surface.
                                             </div>
@@ -4994,7 +5070,7 @@
                                         </span>
                                     </div>
                                     {counterexampleDraft && (
-                                        <div style={{display:'grid',gap:8,padding:'10px 12px',border:'1px solid var(--border)',borderRadius:8,background:'rgba(255,255,255,0.02)'}}>
+                                        <div style={{display:'grid',gap:8,padding:'10px 12px',border:'1px solid var(--border)',borderRadius:8,background:'var(--panel-subtle-2)'}}>
                                             <div style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1}}>ASR heard</div>
                                             <div style={{fontSize:15,lineHeight:1.5}}>{counterexampleDraft.sentence || <span style={{color:'var(--text-muted)'}}>(empty)</span>}</div>
                                             <div style={{fontSize:12,color:counterexampleDraft.containsSurface ? 'var(--success)' : 'var(--warning)'}}>
@@ -5053,7 +5129,7 @@
                                         value={counterSurface
                                             ? `This sentence must contain "${counterSurface}" and must not contain "${term.term}".`
                                             : `Enter the ambiguous surface form first.`}
-                                        style={{padding:'8px 12px',background:'rgba(255,255,255,0.03)',border:'1px dashed var(--border)',borderRadius:6,color:'var(--text-muted)',fontFamily:'Jost,sans-serif',fontSize:13}}
+                                        style={{padding:'8px 12px',background:'var(--panel-subtle)',border:'1px dashed var(--border)',borderRadius:6,color:'var(--text-muted)',fontFamily:'Jost,sans-serif',fontSize:13}}
                                     />
                                 </div>
                             )}
@@ -5086,9 +5162,9 @@
                             <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
                                 {stats.terms.map(([term, count]) => (
                                     <span key={term} style={{fontSize:12,padding:'2px 8px',borderRadius:10,cursor:'pointer',
-                                        background: count >= 3 ? 'rgba(126,231,135,0.15)' : count >= 1 ? 'rgba(88,166,255,0.15)' : 'rgba(255,255,255,0.05)',
+                                        background: count >= 3 ? rgbaFromVar('--success', 0.15) : count >= 1 ? rgbaFromVar('--accent', 0.15) : rgbaFromVar('--text-on-dark', 0.05),
                                         color: count >= 3 ? 'var(--success)' : count >= 1 ? 'var(--accent)' : 'var(--text-muted)',
-                                        border: `1px solid ${count >= 3 ? 'rgba(126,231,135,0.3)' : count >= 1 ? 'rgba(88,166,255,0.3)' : 'var(--border)'}`,
+                                        border: `1px solid ${count >= 3 ? rgbaFromVar('--success', 0.3) : count >= 1 ? rgbaFromVar('--accent', 0.3) : 'var(--border)'}`,
                                     }} onClick={() => { setSentenceFilter(term); if (!sentences) api('/api/author/sentences').then(setSentences); }}>{term} <b>{count}</b></span>
                                 ))}
                             </div>
@@ -5111,7 +5187,7 @@
                             return (
                                 <div style={{maxHeight:400,overflow:'auto',border:'1px solid var(--border)',borderRadius:8,background:'var(--bg)'}}>
                                     {filtered.map(s => (
-                                        <div key={s.id} style={{padding:'6px 10px',borderBottom:'1px solid rgba(255,255,255,0.04)',fontSize:12,display:'flex',alignItems:'center',gap:8}}>
+                                        <div key={s.id} style={{padding:'6px 10px',borderBottom:'1px solid var(--panel-subtle-04)',fontSize:12,display:'flex',alignItems:'center',gap:8}}>
                                             <span style={{color:'var(--accent)',fontWeight:600,minWidth:80,fontFamily:'monospace'}}>{s.term}</span>
                                             <span style={{
                                                 fontSize:10,
@@ -5182,7 +5258,7 @@
                                     {recordings.length === 0 ? (
                                         <div style={{padding:16,textAlign:'center',color:'var(--text-muted)'}}>No takes yet.</div>
                                     ) : recordings.map(r => (
-                                        <div key={r.id} style={{padding:'8px 10px',borderBottom:'1px solid rgba(255,255,255,0.04)'}}>
+                                        <div key={r.id} style={{padding:'8px 10px',borderBottom:'1px solid var(--panel-subtle-04)'}}>
                                             <div style={{display:'flex',alignItems:'center',gap:8}}>
                                                 <span style={{minWidth:70,fontFamily:'monospace',color:'var(--accent)',fontWeight:600}}>Take {r.take_no}</span>
                                                 <span style={{flex:1,color:'var(--text-muted)',fontSize:12}}>{r.created_at}</span>
@@ -5201,7 +5277,7 @@
                                                 <button className="btn btn-sm" onClick={() => deleteRecording(r)} style={{color:'var(--danger)'}}>Delete</button>
                                             </div>
                                             {recordingPhonesOpen[r.id] && (
-                                                <div style={{marginTop:10,padding:10,border:'1px solid var(--border)',borderRadius:8,background:'rgba(255,255,255,0.02)',display:'grid',gap:10}}>
+                                                <div style={{marginTop:10,padding:10,border:'1px solid var(--border)',borderRadius:8,background:'var(--panel-subtle-2)',display:'grid',gap:10}}>
                                                     {recordingPhonesLoading[r.id] ? (
                                                         <div style={{fontSize:12,color:'var(--text-muted)'}}>Loading IPA trace…</div>
                                                     ) : recordingPhonesError[r.id] ? (
@@ -5343,22 +5419,22 @@
             const renderTimeline = (label, items, color, highlighted, trimmed) => items.length > 0 && (
                 <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3}}>
                     <span style={{fontSize:9,color:'var(--text-muted)',width:55,textAlign:'right',flexShrink:0,fontWeight:600}}>{label}</span>
-                    <div style={{position:'relative',flex:1,height:22,background:'rgba(255,255,255,0.03)',borderRadius:3,overflow:'hidden'}}>
+                    <div style={{position:'relative',flex:1,height:22,background:'var(--panel-subtle)',borderRadius:3,overflow:'hidden'}}>
                         {items.map((a, j) => {
                             const hl = highlighted.has(j);
                             const tr = trimmed.has(j);
                             const playing = playbackTime >= 0 && playbackTime >= a.s && playbackTime < a.e;
                             return (<div key={j} title={`${a.w} (${a.s}s\u2013${a.e}s)${tr ? ' [trimmed]' : ''}`} style={{
                                 position:'absolute', left:pct(a.s), width:pct(Math.max(a.e - a.s, 0.02)), top:2, bottom:2, borderRadius:2,
-                                background: playing ? '#fff3' : tr ? 'rgba(255,100,100,0.15)' : hl ? color : 'rgba(255,255,255,0.08)',
-                                border:`1px solid ${playing ? '#fff8' : tr ? 'rgba(255,100,100,0.4)' : hl ? color : 'rgba(255,255,255,0.12)'}`,
+                                background: playing ? 'var(--panel-subtle-3)' : tr ? 'var(--danger-bg-15)' : hl ? color : 'var(--panel-subtle-8)',
+                                border:`1px solid ${playing ? 'var(--panel-subtle-8)' : tr ? 'var(--danger-bg-40)' : hl ? color : 'var(--panel-subtle-12)'}`,
                                 display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden',
                                 transition: 'background 0.05s',
-                            }}><span style={{fontSize:8, color: playing ? '#fff' : tr ? 'rgba(255,100,100,0.6)' : hl ? '#fff' : 'var(--text-muted)', whiteSpace:'nowrap', padding:'0 2px',
+                            }}><span style={{fontSize:8, color: playing ? 'var(--text-on-dark)' : tr ? 'var(--danger-bg-60)' : hl ? 'var(--text-on-dark)' : 'var(--text-muted)', whiteSpace:'nowrap', padding:'0 2px',
                                 fontWeight: playing ? 700 : 400, textDecoration: tr ? 'line-through' : 'none'}}>{a.w}</span></div>);
                         })}
-                        {consRange && <div style={{position:'absolute',left:pct(consRange[0]),width:pct(consRange[1]-consRange[0]),top:0,bottom:0,border:'1px dashed rgba(255,255,255,0.3)',borderRadius:2,pointerEvents:'none'}} />}
-                        {playbackTime >= 0 && <div style={{position:'absolute',left:pct(playbackTime),top:0,bottom:0,width:1,background:'#fff',zIndex:10,pointerEvents:'none'}} />}
+                        {consRange && <div style={{position:'absolute',left:pct(consRange[0]),width:pct(consRange[1]-consRange[0]),top:0,bottom:0,border:'1px dashed var(--panel-subtle-9)',borderRadius:2,pointerEvents:'none'}} />}
+                        {playbackTime >= 0 && <div style={{position:'absolute',left:pct(playbackTime),top:0,bottom:0,width:1,background:'var(--text-on-dark)',zIndex:10,pointerEvents:'none'}} />}
                     </div>
                 </div>
             );
@@ -5391,8 +5467,8 @@
 
             return (
                 <div style={{fontSize:12,lineHeight:1.6}}>
-                    <div style={{display:'flex',gap:16,padding:'6px 10px',background:'rgba(0,0,0,0.2)',borderRadius:4,fontFamily:'monospace',fontSize:13,marginBottom:6,alignItems:'center'}}>
-                        <div><span style={{color:'rgba(88,166,255,0.7)',fontWeight:600}}>{ex.original||'—'}</span><span style={{color:'var(--text-muted)',fontSize:10,marginLeft:4}}>orig</span></div>
+                    <div style={{display:'flex',gap:16,padding:'6px 10px',background:'var(--overlay-soft)',borderRadius:4,fontFamily:'monospace',fontSize:13,marginBottom:6,alignItems:'center'}}>
+                        <div><span style={{color:rgbaFromVar('--accent', 0.7),fontWeight:600}}>{ex.original||'—'}</span><span style={{color:'var(--text-muted)',fontSize:10,marginLeft:4}}>orig</span></div>
                         <div style={{color:'var(--text-muted)'}}>&rarr;</div>
                         <div><span style={{color:qwenMatch?'var(--success)':'var(--error)',fontWeight:600}}>{ex.qwen||'—'}</span><span style={{color:'var(--text-muted)',fontSize:10,marginLeft:4}}>Q</span></div>
                         <div><span style={{color:paraMatch?'var(--success)':'var(--error)',fontWeight:600}}>{ex.parakeet||'—'}</span><span style={{color:'var(--text-muted)',fontSize:10,marginLeft:4}}>P</span></div>
@@ -5402,10 +5478,10 @@
                         {data.wav_b64 && <button onClick={playWav} style={{background:'none',border:'1px solid var(--border)',borderRadius:4,color:'var(--text)',cursor:'pointer',padding:'2px 10px',fontSize:11}}>&#9654;</button>}
                     </div>
                     <div style={{marginBottom:4}}>
-                        {renderTimeline('Spoken', spokenItems, 'rgba(126,231,135,0.5)', new Set(), new Set())}
-                        {renderTimeline('Original', origItems, 'rgba(88,166,255,0.6)', origIdx, origTrimmed)}
-                        {renderTimeline('Qwen', qwenItems, 'rgba(210,153,34,0.7)', qwenIdx, qwenTrimmed)}
-                        {renderTimeline('Parakeet', paraItems, 'rgba(163,113,247,0.7)', paraIdx, paraTrimmed)}
+                        {renderTimeline('Spoken', spokenItems, rgbaFromVar('--success', 0.5), new Set(), new Set())}
+                        {renderTimeline('Original', origItems, rgbaFromVar('--accent', 0.6), origIdx, origTrimmed)}
+                        {renderTimeline('Qwen', qwenItems, rgbaFromVar('--warning', 0.7), qwenIdx, qwenTrimmed)}
+                        {renderTimeline('Parakeet', paraItems, rgbaFromVar('--reranker', 0.7), paraIdx, paraTrimmed)}
                         <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:'var(--text-muted)',marginTop:1,paddingLeft:61}}>
                             <span>0s</span><span>{maxTime.toFixed(1)}s</span>
                         </div>
@@ -5713,7 +5789,7 @@
                 gap:16,
                 alignItems:'start',
                 padding:'12px 14px',
-                border:'1px solid rgba(255,255,255,0.06)',
+                border:'1px solid var(--panel-subtle-2)',
                 borderRadius:8,
             };
             const corpusQueueMetaStyle = {
@@ -6083,8 +6159,8 @@
                                                 justifyContent:'space-between',
                                                 textAlign:'left',
                                                 padding:'10px 12px',
-                                                background: active ? 'rgba(88,166,255,0.14)' : 'transparent',
-                                                borderColor: active ? 'rgba(88,166,255,0.5)' : 'var(--border)',
+                                                background: active ? rgbaFromVar('--accent', 0.14) : 'transparent',
+                                                borderColor: active ? rgbaFromVar('--accent', 0.5) : 'var(--border)',
                                             }}
                                         >
                                             <span style={{display:'grid',gap:2}}>
@@ -6119,7 +6195,7 @@
                         </div>
                         <div style={{display:'grid',gap:12}}>
                             {vocabNeedingIpa.length > 0 && (
-                                <div className="card" style={{padding:'12px 14px',background:'rgba(255,255,255,0.03)'}}>
+                                <div className="card" style={{padding:'12px 14px',background:'var(--panel-subtle)'}}>
                                     <div style={{fontSize:12,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.04em',marginBottom:8}}>
                                         Terms missing reviewed IPA
                                     </div>
@@ -6159,7 +6235,7 @@
                                 </div>
                             )}
                             {reviewedConfusionsNeedingIpa.length > 0 && (
-                                <div className="card" style={{padding:'12px 14px',background:'rgba(255,255,255,0.03)'}}>
+                                <div className="card" style={{padding:'12px 14px',background:'var(--panel-subtle)'}}>
                                     <div style={{fontSize:12,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.04em',marginBottom:8}}>
                                         Reviewed confusion surfaces missing IPA
                                     </div>
@@ -6167,7 +6243,7 @@
                                         {reviewedConfusionsNeedingIpa.map(row => {
                                             const key = `${row.term}::${row.surface_form}`;
                                             return (
-                                                <div key={`queue-reviewed-${key}`} style={{display:'grid',gridTemplateColumns:'180px 220px minmax(420px, 1.8fr) auto',gap:10,alignItems:'start',padding:'10px 12px',border:'1px solid rgba(255,255,255,0.06)',borderRadius:8}}>
+                                                <div key={`queue-reviewed-${key}`} style={{display:'grid',gridTemplateColumns:'180px 220px minmax(420px, 1.8fr) auto',gap:10,alignItems:'start',padding:'10px 12px',border:'1px solid var(--panel-subtle-2)',borderRadius:8}}>
                                                     <div style={{fontFamily:'monospace',fontWeight:700}}>{row.term}</div>
                                                     <div style={{fontFamily:'monospace',color:'var(--accent)'}}>{row.surface_form}</div>
                                                     <IpaWorkbench
@@ -6185,7 +6261,7 @@
                                 </div>
                             )}
                             {previewScanCandidates.length > 0 && (
-                                <div className="card" style={{padding:'12px 14px',background:'rgba(255,255,255,0.03)'}}>
+                                <div className="card" style={{padding:'12px 14px',background:'var(--panel-subtle)'}}>
                                     <div style={{fontSize:12,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.04em',marginBottom:8}}>
                                         Pending scan candidates
                                     </div>
@@ -6194,7 +6270,7 @@
                                             const key = `${row.term}::${row.surface_form}`;
                                             const termReviewedIpa = reviewedIpaForTerm(row.term);
                                             return (
-                                                <div key={`queue-scan-${key}`} style={{display:'grid',gap:10,padding:'10px 12px',border:'1px solid rgba(255,255,255,0.06)',borderRadius:8}}>
+                                                <div key={`queue-scan-${key}`} style={{display:'grid',gap:10,padding:'10px 12px',border:'1px solid var(--panel-subtle-2)',borderRadius:8}}>
                                                     <div style={{display:'flex',alignItems:'baseline',gap:16,flexWrap:'wrap'}}>
                                                         <div style={{fontFamily:'monospace',fontWeight:700}}>{row.term}</div>
                                                         <div style={{fontFamily:'monospace',color:'var(--text)'}}>{row.surface_form}</div>
@@ -6274,7 +6350,7 @@
                         </div>
                         <div className="stats-grid" style={{marginBottom:0}}>
                             {readiness.map(item => (
-                                <div key={item.title} className="card" style={{padding:'12px 14px',background:'rgba(255,255,255,0.03)'}}>
+                                <div key={item.title} className="card" style={{padding:'12px 14px',background:'var(--panel-subtle)'}}>
                                     <div style={{fontSize:12,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.04em',marginBottom:6}}>
                                         {item.title}
                                     </div>
@@ -6303,7 +6379,7 @@
                         </div>
                         <div className="stats-grid" style={{marginBottom:0}}>
                             {needsWork.map(item => (
-                                <div key={item.title} className="card" style={{padding:'12px 14px',background:'rgba(255,255,255,0.03)'}}>
+                                <div key={item.title} className="card" style={{padding:'12px 14px',background:'var(--panel-subtle)'}}>
                                     <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',gap:8,marginBottom:6}}>
                                         <div style={{fontSize:12,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.04em'}}>
                                             {item.title}
@@ -6414,7 +6490,7 @@
                                 <div className="stat-card"><div className="value">{new Set(cleanRows.map(row => row.term.toLowerCase())).size}</div><div className="label">Terms Covered</div></div>
                             </div>
                             <div style={{display:'grid',gap:12,marginBottom:12}}>
-                                <div style={{padding:'12px 12px',border:'1px solid rgba(255,255,255,0.06)',borderRadius:10}}>
+                                <div style={{padding:'12px 12px',border:'1px solid var(--panel-subtle-2)',borderRadius:10}}>
                                     <div style={{fontSize:12,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.04em',marginBottom:8}}>
                                         Add clean sentence
                                     </div>
@@ -6426,7 +6502,7 @@
                                         </button>
                                     </div>
                                 </div>
-                                <div style={{padding:'12px 12px',border:'1px solid rgba(255,255,255,0.06)',borderRadius:10}}>
+                                <div style={{padding:'12px 12px',border:'1px solid var(--panel-subtle-2)',borderRadius:10}}>
                                     <div style={{fontSize:12,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.04em',marginBottom:8}}>
                                         Add counterexample
                                     </div>
@@ -6449,7 +6525,7 @@
                             </div>
                             <div style={{display:'grid',gap:8}}>
                                 {previewSentences(cleanRows).map(row => (
-                                    <div key={`clean-${row.id}`} style={{padding:'8px 10px',border:'1px solid rgba(255,255,255,0.06)',borderRadius:8}}>
+                                    <div key={`clean-${row.id}`} style={{padding:'8px 10px',border:'1px solid var(--panel-subtle-2)',borderRadius:8}}>
                                         <div style={{display:'flex',gap:8,alignItems:'baseline',marginBottom:4,flexWrap:'wrap'}}>
                                             <span style={{fontFamily:'monospace',fontWeight:700,color:'var(--accent)'}}>{row.term}</span>
                                             <span style={{fontSize:11,color:'var(--text-muted)',border:'1px solid var(--border)',borderRadius:999,padding:'2px 6px'}}>clean</span>
@@ -6461,7 +6537,7 @@
                                     </div>
                                 ))}
                                 {previewSentences(counterexampleRows).map(row => (
-                                    <div key={`counter-${row.id}`} style={{padding:'8px 10px',border:'1px solid rgba(255,255,255,0.06)',borderRadius:8}}>
+                                    <div key={`counter-${row.id}`} style={{padding:'8px 10px',border:'1px solid var(--panel-subtle-2)',borderRadius:8}}>
                                         <div style={{display:'flex',gap:8,alignItems:'baseline',marginBottom:4,flexWrap:'wrap'}}>
                                             <span style={{fontFamily:'monospace',fontWeight:700,color:'var(--warning)'}}>{row.term}</span>
                                             <span style={{fontSize:11,color:'var(--warning)',border:'1px solid var(--border)',borderRadius:999,padding:'2px 6px'}}>
@@ -6493,7 +6569,7 @@
                             </div>
                             <div style={{display:'grid',gap:8}}>
                                 {recordingsNeedingAttention.map(row => (
-                                    <div key={`rec-${row.id}`} style={{padding:'8px 10px',border:'1px solid rgba(255,255,255,0.06)',borderRadius:8,display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+                                    <div key={`rec-${row.id}`} style={{padding:'8px 10px',border:'1px solid var(--panel-subtle-2)',borderRadius:8,display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
                                         <span style={{fontFamily:'monospace',fontWeight:700,color:'var(--accent)',minWidth:120}}>{row.term}</span>
                                         <span style={{flex:1,fontSize:13}}>{row.sentence}</span>
                                         <span style={{fontSize:11,color:'var(--text-muted)',border:'1px solid var(--border)',borderRadius:999,padding:'2px 6px'}}>
@@ -6524,7 +6600,7 @@
                                 <div className="stat-card"><div className="value">{scanConfusionCandidates.length}</div><div className="label">Scan Candidates</div></div>
                                 <div className="stat-card"><div className="value">{new Set(acceptedReviewedConfusions.map(row => row.term.toLowerCase())).size}</div><div className="label">Terms Covered</div></div>
                             </div>
-                            <div style={{padding:'12px 12px',border:'1px solid rgba(255,255,255,0.06)',borderRadius:10,marginBottom:12}}>
+                            <div style={{padding:'12px 12px',border:'1px solid var(--panel-subtle-2)',borderRadius:10,marginBottom:12}}>
                                 <div style={{fontSize:12,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.04em',marginBottom:8}}>
                                     Add reviewed confusion surface
                                 </div>
@@ -6546,7 +6622,7 @@
                                         {reviewedConfusionWorkQueue.slice(0, 20).map(row => {
                                             const key = `${row.term}::${row.surface_form}`;
                                             return (
-                                                <div key={key} style={{display:'grid',gridTemplateColumns:'180px 220px minmax(420px, 1.8fr) auto',gap:10,alignItems:'start',padding:'10px 12px',border:'1px solid rgba(255,255,255,0.06)',borderRadius:8}}>
+                                                <div key={key} style={{display:'grid',gridTemplateColumns:'180px 220px minmax(420px, 1.8fr) auto',gap:10,alignItems:'start',padding:'10px 12px',border:'1px solid var(--panel-subtle-2)',borderRadius:8}}>
                                                     <div style={{fontFamily:'monospace',fontWeight:700}}>{row.term}</div>
                                                     <div style={{fontFamily:'monospace',color:'var(--accent)'}}>{row.surface_form}</div>
                                                     <IpaWorkbench
@@ -6574,7 +6650,7 @@
                                             const key = `${row.term}::${row.surface_form}`;
                                             const termReviewedIpa = reviewedIpaForTerm(row.term);
                                             return (
-                                                <div key={key} style={{display:'grid',gap:10,padding:'10px 12px',border:'1px solid rgba(255,255,255,0.06)',borderRadius:8}}>
+                                                <div key={key} style={{display:'grid',gap:10,padding:'10px 12px',border:'1px solid var(--panel-subtle-2)',borderRadius:8}}>
                                                     <div style={{display:'flex',alignItems:'baseline',gap:16,flexWrap:'wrap'}}>
                                                         <div style={{fontFamily:'monospace',fontWeight:700}}>{row.term}</div>
                                                         <div style={{fontFamily:'monospace',color:'var(--text)'}}>{row.surface_form}</div>
@@ -6664,7 +6740,7 @@
                                     {recordings.length === 0 ? (
                                         <div style={{padding:16,textAlign:'center',color:'var(--text-muted)'}}>No takes yet.</div>
                                     ) : recordings.map(r => (
-                                        <div key={r.id} style={{padding:'8px 10px',borderBottom:'1px solid rgba(255,255,255,0.04)'}}>
+                                        <div key={r.id} style={{padding:'8px 10px',borderBottom:'1px solid var(--panel-subtle-04)'}}>
                                             <div style={{display:'flex',alignItems:'center',gap:8}}>
                                                 <span style={{minWidth:70,fontFamily:'monospace',color:'var(--accent)',fontWeight:600}}>Take {r.take_no}</span>
                                                 <span style={{flex:1,color:'var(--text-muted)',fontSize:12}}>{r.created_at}</span>
@@ -6682,7 +6758,7 @@
                                                 </button>
                                             </div>
                                             {recordingPhonesOpen[r.id] && (
-                                                <div style={{marginTop:10,padding:10,border:'1px solid var(--border)',borderRadius:8,background:'rgba(255,255,255,0.02)',display:'grid',gap:10}}>
+                                                <div style={{marginTop:10,padding:10,border:'1px solid var(--border)',borderRadius:8,background:'var(--panel-subtle-2)',display:'grid',gap:10}}>
                                                     {recordingPhonesLoading[r.id] ? (
                                                         <div style={{fontSize:12,color:'var(--text-muted)'}}>Loading IPA trace…</div>
                                                     ) : recordingPhonesError[r.id] ? (
@@ -6800,7 +6876,7 @@
             const helpStyle = {fontSize:11,color:'var(--text-muted)',lineHeight:1.4,marginTop:2};
             const paramRow = {display:'flex',gap:12,alignItems:'flex-start',marginBottom:12};
             const paramLabel = {fontSize:12,color:'var(--text-muted)',fontWeight:600,minWidth:90,paddingTop:6};
-            const subtleCard = {padding:'10px 12px',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:10};
+            const subtleCard = {padding:'10px 12px',background:'var(--panel-subtle)',border:'1px solid var(--panel-subtle-2)',borderRadius:10};
 
             const parseJobConfig = job => {
                 if (!job?.config) return null;
@@ -6933,7 +7009,7 @@
                                     cy={size / 2}
                                     r={radius}
                                     fill="none"
-                                    stroke="rgba(255,255,255,0.08)"
+                                    stroke="var(--panel-subtle-3)"
                                     strokeWidth={stroke}
                                 />
                                 <circle
@@ -6995,24 +7071,24 @@
                                 iter {trainMetrics.currentIter.toLocaleString()}{trainMetrics.totalIters ? ` / ${trainMetrics.totalIters.toLocaleString()}` : ''}
                             </span>
                         </div>
-                        <svg viewBox={`0 0 ${width} ${height}`} style={{width:'100%',height:'auto',display:'block',background:'rgba(255,255,255,0.02)',borderRadius:8,border:'1px solid var(--border)'}}>
+                        <svg viewBox={`0 0 ${width} ${height}`} style={{width:'100%',height:'auto',display:'block',background:'var(--panel-subtle-2)',borderRadius:8,border:'1px solid var(--border)'}}>
                             {grid.map((g, i) => (
                                 <g key={i}>
-                                    <line x1={pad} y1={g.yy} x2={width - pad} y2={g.yy} stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
+                                    <line x1={pad} y1={g.yy} x2={width - pad} y2={g.yy} stroke={rgbaFromVar('--text-on-dark', 0.08)} strokeWidth="1" />
                                     <text x={8} y={g.yy + 4} fill="var(--text-muted)" fontSize="10">{formatLossTick(g.loss)}</text>
                                 </g>
                             ))}
-                            <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
-                            <line x1={pad} y1={pad} x2={pad} y2={height - pad} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
-                            {trainMetrics.train.length > 1 && <polyline fill="none" stroke="rgba(88,166,255,0.95)" strokeWidth="2" points={pts(trainMetrics.train)} />}
-                            {trainMetrics.val.length > 0 && <polyline fill="none" stroke="rgba(126,231,135,0.95)" strokeWidth="2" points={pts(trainMetrics.val)} />}
+                            <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke={rgbaFromVar('--text-on-dark', 0.12)} strokeWidth="1" />
+                            <line x1={pad} y1={pad} x2={pad} y2={height - pad} stroke={rgbaFromVar('--text-on-dark', 0.12)} strokeWidth="1" />
+                            {trainMetrics.train.length > 1 && <polyline fill="none" stroke={rgbaFromVar('--accent', 0.95)} strokeWidth="2" points={pts(trainMetrics.train)} />}
+                            {trainMetrics.val.length > 0 && <polyline fill="none" stroke={rgbaFromVar('--success', 0.95)} strokeWidth="2" points={pts(trainMetrics.val)} />}
                             {trainMetrics.bestVal && (
-                                <circle cx={x(trainMetrics.bestVal.iter)} cy={y(trainMetrics.bestVal.loss)} r="3.5" fill="rgba(126,231,135,1)" />
+                                <circle cx={x(trainMetrics.bestVal.iter)} cy={y(trainMetrics.bestVal.loss)} r="3.5" fill={rgbaFromVar('--success', 1)} />
                             )}
                         </svg>
                         <div style={{display:'flex',gap:14,marginTop:8,flexWrap:'wrap',fontSize:12,color:'var(--text-muted)'}}>
-                            <span><span style={{display:'inline-block',width:10,height:10,background:'rgba(88,166,255,0.95)',borderRadius:2,marginRight:6,verticalAlign:'middle'}} />Train loss</span>
-                            <span><span style={{display:'inline-block',width:10,height:10,background:'rgba(126,231,135,0.95)',borderRadius:2,marginRight:6,verticalAlign:'middle'}} />Val loss</span>
+                            <span><span style={{display:'inline-block',width:10,height:10,background:rgbaFromVar('--accent', 0.95),borderRadius:2,marginRight:6,verticalAlign:'middle'}} />Train loss</span>
+                            <span><span style={{display:'inline-block',width:10,height:10,background:rgbaFromVar('--success', 0.95),borderRadius:2,marginRight:6,verticalAlign:'middle'}} />Val loss</span>
                             <span>Log scale</span>
                             {trainMetrics.bestVal && <span>Best val at iter {trainMetrics.bestVal.iter.toLocaleString()}</span>}
                         </div>
@@ -7059,7 +7135,7 @@
                             </div>
                             <div style={{flex:1,display:'flex',alignItems:'flex-end',justifyContent:'flex-end',paddingTop:16}}>
                                 {prepareRunning
-                                    ? <button className="btn btn-sm" style={{borderColor:'var(--warning)',color:'var(--warning)',background:'rgba(210,153,34,0.1)'}} onClick={stopJob} disabled={stopping}>{stopping ? 'Stopping...' : 'Stop'}</button>
+                                    ? <button className="btn btn-sm" style={{borderColor:'var(--warning)',color:'var(--warning)',background:'var(--warning-bg-10)'}} onClick={stopJob} disabled={stopping}>{stopping ? 'Stopping...' : 'Stop'}</button>
                                     : <button className="btn btn-primary btn-sm" disabled={isRunning || !status.prepare_ready} onClick={() => startJob('prepare', {total_examples: totalExamples, error_rate: errorRate / 100})}>Prepare</button>
                                 }
                             </div>
@@ -7081,13 +7157,13 @@
                                     {(templateCoverage.terms || []).slice(0, 24).map((row, i) => {
                                         const ratio = Math.max(0, Math.min(1, row.coverage_ratio || 0));
                                         return (
-                                            <div key={row.term} style={{display:'grid',gridTemplateColumns:'160px 1fr auto auto',gap:10,alignItems:'center',fontSize:12,padding:'4px 0',borderTop:i?'1px solid rgba(255,255,255,0.04)':'none'}}>
+                                            <div key={row.term} style={{display:'grid',gridTemplateColumns:'160px 1fr auto auto',gap:10,alignItems:'center',fontSize:12,padding:'4px 0',borderTop:i?'1px solid var(--panel-subtle-04)':'none'}}>
                                                 <div>
                                                     <div style={{fontWeight:600}}>{row.term}</div>
                                                     {row.description && <div style={{fontSize:10,color:'var(--text-muted)',marginTop:2}}>{row.description}</div>}
                                                 </div>
                                                 <div>
-                                                    <div style={{height:8,borderRadius:999,background:'rgba(255,255,255,0.08)',overflow:'hidden'}}>
+                                                    <div style={{height:8,borderRadius:999,background:'var(--panel-subtle-3)',overflow:'hidden'}}>
                                                         <div style={{width:`${(ratio*100).toFixed(1)}%`,height:'100%',background: ratio >= 1 ? 'var(--success)' : 'var(--accent)'}} />
                                                     </div>
                                                     <div style={{display:'flex',gap:10,marginTop:4,fontSize:10,color:'var(--text-muted)'}}>
@@ -7141,7 +7217,7 @@
                                                 <div style={{fontSize:11,fontWeight:600,color:'var(--accent)',marginBottom:4}}>Authored</div>
                                                 <div style={{maxHeight:220,overflow:'auto',fontSize:11}}>
                                                     {(templateDetail.authored || []).map((s, i) => (
-                                                        <div key={i} style={{padding:'4px 8px',background:i%2?'transparent':'rgba(255,255,255,0.02)',lineHeight:1.5}}>{s}</div>
+                                                        <div key={i} style={{padding:'4px 8px',background:i%2?'transparent':'var(--panel-subtle-2)',lineHeight:1.5}}>{s}</div>
                                                     ))}
                                                     {(!templateDetail.authored || templateDetail.authored.length === 0) && <div style={{color:'var(--text-muted)'}}>No authored sentences.</div>}
                                                 </div>
@@ -7150,7 +7226,7 @@
                                                 <div style={{fontSize:11,fontWeight:600,color:'var(--success)',marginBottom:4}}>Cached Templates</div>
                                                 <div style={{maxHeight:220,overflow:'auto',fontSize:11}}>
                                                     {(templateDetail.cached || []).map((s, i) => (
-                                                        <div key={i} style={{padding:'4px 8px',background:i%2?'transparent':'rgba(255,255,255,0.02)',lineHeight:1.5}}>{s}</div>
+                                                        <div key={i} style={{padding:'4px 8px',background:i%2?'transparent':'var(--panel-subtle-2)',lineHeight:1.5}}>{s}</div>
                                                     ))}
                                                     {(!templateDetail.cached || templateDetail.cached.length === 0) && <div style={{color:'var(--text-muted)'}}>No cached templates yet.</div>}
                                                 </div>
@@ -7174,7 +7250,7 @@
                                     <div style={{fontSize:11,fontWeight:600,color:'var(--success)',marginBottom:4}}>Error examples:</div>
                                     <div style={{maxHeight:200,overflow:'auto',marginBottom:12}}>
                                         {previewData.correction_samples.map((s, i) => (
-                                            <div key={i} style={{fontSize:11,fontFamily:'monospace',padding:'4px 8px',background:i%2?'transparent':'rgba(255,255,255,0.02)',lineHeight:1.6,whiteSpace:'pre-wrap'}}>
+                                            <div key={i} style={{fontSize:11,fontFamily:'monospace',padding:'4px 8px',background:i%2?'transparent':'var(--panel-subtle-2)',lineHeight:1.6,whiteSpace:'pre-wrap'}}>
                                                 {s.prompt}{'\n'}<span style={{color:'var(--success)'}}>{s.completion}</span>
                                             </div>
                                         ))}
@@ -7184,7 +7260,7 @@
                                     <div style={{fontSize:11,fontWeight:600,color:'var(--accent)',marginBottom:4}}>Identity examples:</div>
                                     <div style={{maxHeight:200,overflow:'auto'}}>
                                         {previewData.identity_samples.map((s, i) => (
-                                            <div key={i} style={{fontSize:11,fontFamily:'monospace',padding:'4px 8px',background:i%2?'transparent':'rgba(255,255,255,0.02)',lineHeight:1.6,whiteSpace:'pre-wrap'}}>
+                                            <div key={i} style={{fontSize:11,fontFamily:'monospace',padding:'4px 8px',background:i%2?'transparent':'var(--panel-subtle-2)',lineHeight:1.6,whiteSpace:'pre-wrap'}}>
                                                 {s.prompt}{'\n'}<span style={{color:'var(--accent)'}}>{s.completion}</span>
                                             </div>
                                         ))}
@@ -7254,7 +7330,7 @@
                                     ratio: pressureMetrics.gpuAllocRatio,
                                     value: formatGb(pressureMetrics.gpuAllocGb),
                                     subtitle: `${Math.round(pressureMetrics.gpuAllocRatio * 100)}% of RAM`,
-                                    color: 'rgba(126,231,135,0.95)',
+                                    color: rgbaFromVar('--success', 0.95),
                                 })}
                             </div>
                             <div style={{display:'flex',gap:14,flexWrap:'wrap',fontSize:12,color:'var(--text-muted)'}}>
@@ -7279,8 +7355,8 @@
                     {renderLossChart()}
 
                     {trainExamples > 0 && (
-                        <div className="card" style={{marginBottom:16,padding:'10px 14px',background:'rgba(255,255,255,0.03)'}}>
-                            <span style={{fontSize:13}}>
+                        <div className="card" style={{marginBottom:16,padding:'10px 14px',background:'var(--panel-subtle)'}}>
+                                <span style={{fontSize:13}}>
                                 Training data: <b>{trainExamples.toLocaleString()}</b> examples.
                                 {' '}At batch={batch}, 1 epoch = <b>{epochSteps.toLocaleString()}</b> steps.
                                 {' '}{iters} iters = <b>{epochs} epochs</b>.
@@ -7363,7 +7439,7 @@
                             <div style={{flex:1}} />
                             {!trainDatasetReady && <span style={{fontSize:12,color:'var(--text-muted)'}}>Prepare training data first (see above).</span>}
                             {isRunning
-                                ? <button className="btn" style={{borderColor:'var(--warning)',color:'var(--warning)',background:'rgba(210,153,34,0.1)'}} onClick={stopJob}>Stop</button>
+                                ? <button className="btn" style={{borderColor:'var(--warning)',color:'var(--warning)',background:'var(--warning-bg-10)'}} onClick={stopJob}>Stop</button>
                                 : <button className="btn btn-primary" disabled={!trainDatasetReady}
                                     onClick={() => startJob('train', {data: trainDataDir, adapters: trainAdaptersDir, model, iters, batch_size: batch, num_layers: layers, patience, steps_per_eval: stepsPerEval})}>Train</button>
                             }
@@ -7502,7 +7578,7 @@
                                 textDecorationLine: 'underline',
                                 textDecorationThickness: '2px',
                                 textUnderlineOffset: '0.18em',
-                                textDecorationColor: 'rgba(126,231,135,0.8)',
+                                textDecorationColor: rgbaFromVar('--success', 0.8),
                             }}>{seg.written}</span>{' '}
                         </React.Fragment>
                     );
@@ -7531,7 +7607,7 @@
                 return (
                     <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
                         <span style={{fontSize:10,color:'var(--text-muted)',width:72,textAlign:'right',flexShrink:0,fontWeight:600}}>{label}</span>
-                        <div style={{position:'relative',height:24,width:timelineWidth,background:'rgba(255,255,255,0.03)',borderRadius:4,overflow:'hidden',flexShrink:0}}>
+                        <div style={{position:'relative',height:24,width:timelineWidth,background:'var(--panel-subtle)',borderRadius:4,overflow:'hidden',flexShrink:0}}>
                             {highlightedRange && (
                                 <div style={{
                                     position:'absolute',
@@ -7539,9 +7615,9 @@
                                     width:px(Math.max((highlightedRange[1] - highlightedRange[0]) || 0, 0.03)),
                                     top:0,
                                     bottom:0,
-                                    border:'1px dashed rgba(255,255,255,0.45)',
+                                    border:'1px dashed var(--panel-subtle-9)',
                                     borderRadius:4,
-                                    background:'rgba(255,255,255,0.03)',
+                                    background:'var(--panel-subtle)',
                                     pointerEvents:'none',
                                     zIndex:2,
                                 }} />
@@ -7566,11 +7642,11 @@
                                             alignItems:'center',
                                             justifyContent:'center',
                                             overflow:'hidden',
-                                            boxShadow: isHighlighted ? `0 0 0 1px rgba(255,255,255,0.22), 0 0 0 2px ${color.replace(/[\d.]+\)$/,'0.35)')}` : 'none',
+                                            boxShadow: isHighlighted ? `0 0 0 1px ${rgbaFromVar('--text-on-dark', 0.22)}, 0 0 0 2px ${color.replace(/[\d.]+\)$/,'0.35)')}` : 'none',
                                             zIndex:isHighlighted ? 3 : 1,
                                         }}
                                     >
-                                        <span style={{fontSize:10,color:'#fff',whiteSpace:'nowrap',padding:'0 4px'}}>{a.w}</span>
+                                        <span style={{fontSize:10,color:'var(--text-on-dark)',whiteSpace:'nowrap',padding:'0 4px'}}>{a.w}</span>
                                     </div>
                                 );
                             })}
@@ -7637,7 +7713,7 @@
                 const zoomLevels = [160, 260, 380, 540];
                 const timelineWidth = Math.max(720, Math.ceil(windowDuration * pxPerSec));
                 return (
-                    <div style={{marginTop:8, padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)', overflowX:'auto'}}>
+                    <div style={{marginTop:8, padding:'8px 10px', borderRadius:6, background:'var(--panel-subtle-2)', border:'1px solid var(--panel-subtle-5)', overflowX:'auto'}}>
                         <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom:8, flexWrap:'wrap'}}>
                             <div style={{fontSize:10, color:'var(--text-muted)'}}>
                                 timing source: <span style={{color:'var(--accent)'}}>{timingSource}</span>
@@ -7652,9 +7728,9 @@
                                         style={{
                                             padding:'2px 8px',
                                             borderRadius:999,
-                                            border:'1px solid rgba(255,255,255,0.12)',
-                                            background: pxPerSec === level ? 'rgba(88,166,255,0.16)' : 'rgba(255,255,255,0.03)',
-                                            color: pxPerSec === level ? '#58a6ff' : 'var(--text-muted)',
+                                            border:'1px solid var(--panel-subtle-4)',
+                                            background: pxPerSec === level ? 'var(--accent-bg-16)' : 'var(--panel-subtle)',
+                                            color: pxPerSec === level ? 'var(--accent)' : 'var(--text-muted)',
                                             fontSize:11,
                                         }}
                                     >
@@ -7664,11 +7740,11 @@
                             </div>
                         </div>
                         <div style={{width:'100%', minWidth:0, overflowX:'auto', overflowY:'hidden', paddingBottom:4}}>
-                            {renderBakeoffTL('Qwen', qwenLane, 'rgba(210,153,34,0.70)', windowDuration, pxPerSec, null)}
-                            {renderBakeoffTL('Parakeet', parakeetLane, 'rgba(126,231,135,0.72)', windowDuration, pxPerSec, null)}
-                            {renderBakeoffTL('ZIPA@Par', zipaParakeetLane, 'rgba(78,201,176,0.72)', windowDuration, pxPerSec, null)}
-                            {renderBakeoffTL(timingSource === 'parakeet_words' ? 'ZIPA@Map' : 'ZIPA/Q', zipaQwenLane, 'rgba(126,231,135,0.65)', windowDuration, pxPerSec, null)}
-                            {renderBakeoffTL('ZIPA', zipaLane, 'rgba(88,166,255,0.60)', windowDuration, pxPerSec, null)}
+                            {renderBakeoffTL('Qwen', qwenLane, rgbaFromVar('--warning', 0.70), windowDuration, pxPerSec, null)}
+                            {renderBakeoffTL('Parakeet', parakeetLane, rgbaFromVar('--success', 0.72), windowDuration, pxPerSec, null)}
+                            {renderBakeoffTL('ZIPA@Par', zipaParakeetLane, rgbaFromVar('--reranker', 0.72), windowDuration, pxPerSec, null)}
+                            {renderBakeoffTL(timingSource === 'parakeet_words' ? 'ZIPA@Map' : 'ZIPA/Q', zipaQwenLane, rgbaFromVar('--success', 0.65), windowDuration, pxPerSec, null)}
+                            {renderBakeoffTL('ZIPA', zipaLane, rgbaFromVar('--accent', 0.60), windowDuration, pxPerSec, null)}
                             <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'var(--text-muted)',marginTop:3,paddingLeft:71,width:timelineWidth}}>
                                 <span>{windowStart.toFixed(2)}s</span><span>{windowEnd.toFixed(2)}s</span>
                             </div>
@@ -7709,6 +7785,176 @@
                         {renderTiming(reranker?.result?.timing || reranker?.timing || reranker?.timing_ms)}
                     </div>
                 );
+            };
+
+            const renderAsrRows = (result, extraRows = []) => (
+                <>
+                    {[
+                        {key:'parakeet', label:'Parakeet raw', color:'var(--success)', value: result?.parakeet},
+                        {key:'qwen', label:'Qwen raw', color:'var(--accent)', value: result?.qwen},
+                        {key:'cohere', label:'Cohere raw', color:'var(--danger)', value: result?.cohere},
+                        ...extraRows,
+                    ].map(row => (
+                        <div key={row.key} style={demoRowStyle}>
+                            <span style={{...demoRowLabelStyle, color: row.color}}>{row.label}</span>
+                            <div style={{flex: 1}}>
+                                {row.render ? row.render() : (row.value || <span style={{color:'var(--text-muted)'}}>—</span>)}
+                                {row.key === 'parakeet' && (() => {
+                                    const summary = summarizeParakeetConfidence(result?.parakeet_alignment || []);
+                                    if (!summary) return null;
+                                    return (
+                                        <div style={{marginTop:4, fontSize:11, color:'var(--text-muted)'}}>
+                                            avg conf {summary.avg.toFixed(2)}
+                                            {!!summary.low.length && (
+                                                <span>
+                                                    {' '}· weak words {summary.low.map(item => `${item.word} ${item.conf.toFixed(2)}`).join(', ')}
+                                                </span>
+                                            )}
+                                        </div>
+                                    );
+                                })()}
+                                {!!result?.asrErrors?.[row.key] && (
+                                    <div style={{marginTop:4, fontSize:11, color:'var(--danger)'}}>
+                                        {result.asrErrors[row.key]}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    ))}
+                </>
+            );
+
+            const renderAcceptedEdits = result => (
+                result?.prototype?.accepted?.length > 0 && (
+                    <div style={demoRowStyle}>
+                        <span style={{...demoRowLabelStyle, color: 'var(--attention)'}}>Accepted</span>
+                        <div style={{flex:1, display:'flex', flexWrap:'wrap', gap:8}}>
+                            {result.prototype.accepted.map((edit, idx) => (
+                                <span key={idx} style={{padding:'2px 8px', borderRadius:999, background:'var(--accent-bg-12)', border:'1px solid var(--accent-bg-25)'}}>
+                                    {edit.from} → {edit.to}
+                                    {edit.acoustic_score != null && (
+                                        <span style={{marginLeft:6, color:'var(--success)'}}>a {edit.acoustic_score.toFixed(2)}</span>
+                                    )}
+                                    {edit.acoustic_delta != null && (
+                                        <span style={{marginLeft:6, color: edit.acoustic_delta >= 0 ? 'var(--success)' : 'var(--danger)'}}>
+                                            Δ {edit.acoustic_delta.toFixed(2)}
+                                        </span>
+                                    )}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                )
+            );
+
+            const renderTopProposals = result => (
+                result?.prototype?.proposals?.length > 0 && (
+                    <div style={demoRowStyle}>
+                        <span style={{...demoRowLabelStyle, color: 'var(--accent)'}}>Top proposals</span>
+                        <div style={{flex:1, display:'grid', gap:6, minWidth:0, overflowX:'auto'}}>
+                            {result.prototype.proposals.slice(0, 5).map((proposal, idx) => (
+                                <div key={idx} style={{padding:'8px 10px', borderRadius:6, background:'var(--panel-subtle)', border:'1px solid var(--panel-subtle-2)', overflowX:'auto'}}>
+                                    <div><strong>{proposal.raw_text}</strong></div>
+                                    {proposal.parakeet_confidence != null && (
+                                        <div style={{fontSize:12, color: proposal.parakeet_confidence < 0.93 ? 'var(--candidate)' : 'var(--text-muted)', marginTop:2}}>
+                                            Parakeet conf {Number(proposal.parakeet_confidence).toFixed(2)}
+                                            {proposal.parakeet_confidence < 0.93 && ' · phone-led bias active'}
+                                        </div>
+                                    )}
+                                    {proposal.phonemes && (
+                                        <div style={{fontSize:12, color:'var(--reranker)', marginTop:2}}>
+                                            observed / {proposal.phonemes} /
+                                        </div>
+                                    )}
+                                    <div style={{fontSize:12, color:'var(--text-muted)'}}>
+                                        {proposal.candidates.slice(0, 3).map((candidate, cidx) => (
+                                            <span key={cidx} style={{display:'inline-block', marginRight:12, marginTop:4}}>
+                                                <span>{candidate.term} ({candidate.via}, {candidate.score.toFixed(2)})</span>
+                                                {candidate.phonetic_score != null && (
+                                                    <span style={{marginLeft:6, color:'var(--reranker)'}}>IPA {candidate.phonetic_score.toFixed(2)}</span>
+                                                )}
+                                                {candidate.acoustic_score != null && Math.abs(Number(candidate.acoustic_score) - Number(candidate.phonetic_score ?? candidate.acoustic_score)) > 0.02 && (
+                                                    <span style={{marginLeft:6, color:'var(--success)'}}>rescue {candidate.acoustic_score.toFixed(2)}</span>
+                                                )}
+                                                {candidate.acoustic_delta != null && (
+                                                    <span style={{marginLeft:6, color: candidate.acoustic_delta >= 0 ? 'var(--success)' : 'var(--danger)'}}>
+                                                        Δ {candidate.acoustic_delta.toFixed(2)}
+                                                    </span>
+                                                )}
+                                                {candidate.phonemes && (
+                                                    <span style={{display:'block', color:'var(--reranker)'}}>/ {candidate.phonemes} /</span>
+                                                )}
+                                            </span>
+                                        ))}
+                                    </div>
+                                    {renderLiveProposalLanes(result, proposal)}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )
+            );
+
+            const renderRerankerDebug = result => (
+                result?.prototype?.reranker && (
+                    <div style={demoRowStyle}>
+                        <span style={{...demoRowLabelStyle, color: 'var(--reranker)'}}>Reranker</span>
+                        <div style={{flex:1}}>
+                            chose {result.prototype.reranker.chosen_index != null ? String.fromCharCode(65 + result.prototype.reranker.chosen_index) : '(unparsed)'}
+                            {result.prototype.reranker?.chosen_label && (
+                                <span style={{marginLeft:8, color:'var(--text-muted)'}}>
+                                    {result.prototype.reranker.chosen_label}
+                                </span>
+                            )}
+                            {result.prototype.reranker?.chosen_text && (
+                                <div style={{fontSize:12, marginTop:4}}>
+                                    {result.prototype.reranker.chosen_text}
+                                </div>
+                            )}
+                            {Array.isArray(result.prototype.reranker?.candidates) && (
+                                <div style={{fontSize:12, color:'var(--text-muted)', marginTop:4}}>
+                                    {result.prototype.reranker.candidates.map(c => (
+                                        <div key={c.index}>
+                                            {String.fromCharCode(65 + c.index)} yes {Number(c.yes_prob ?? 0).toFixed(3)} no {Number(c.no_prob ?? 0).toFixed(3)}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )
+            );
+
+            const renderCorrectionInspector = (result, extraRows = []) => (
+                <div style={{marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--accent-bg-10)', display:'grid', gap:10}}>
+                    {renderAsrRows(result, extraRows)}
+                    <div style={demoRowStyle}>
+                        <span style={{...demoRowLabelStyle, color: 'var(--attention)'}}>Reranker</span>
+                        <div style={{flex: 1}}>
+                            {renderRerankerSummary(result)}
+                        </div>
+                    </div>
+                    {renderAcceptedEdits(result)}
+                    {renderTopProposals(result)}
+                    {renderRerankerDebug(result)}
+                </div>
+            );
+
+            const summarizeParakeetConfidence = items => {
+                if (!Array.isArray(items) || !items.length) return null;
+                const scored = items
+                    .map(item => ({
+                        word: item.w,
+                        conf: item.c == null ? null : Number(item.c),
+                    }))
+                    .filter(item => item.conf != null && Number.isFinite(item.conf));
+                if (!scored.length) return null;
+                const avg = scored.reduce((sum, item) => sum + item.conf, 0) / scored.length;
+                const low = scored
+                    .filter(item => item.conf < 0.93)
+                    .sort((a, b) => a.conf - b.conf)
+                    .slice(0, 5);
+                return {avg, low};
             };
 
             const formatMs = ms => {
@@ -7765,7 +8011,7 @@
                 return (
                     <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
                         <span style={{fontSize:10,color:'var(--text-muted)',width:65,textAlign:'right',flexShrink:0,fontWeight:600}}>{label}</span>
-                        <div style={{position:'relative',height:28,width:timelineWidth,background:'rgba(255,255,255,0.03)',borderRadius:4,overflow:'hidden',flexShrink:0}}>
+                        <div style={{position:'relative',height:28,width:timelineWidth,background:'var(--panel-subtle)',borderRadius:4,overflow:'hidden',flexShrink:0}}>
                             {playheadLeft != null && (
                                 <div style={{
                                     position:'absolute',
@@ -7773,8 +8019,8 @@
                                     top:0,
                                     bottom:0,
                                     width:2,
-                                    background:'rgba(255,255,255,0.9)',
-                                    boxShadow:'0 0 0 1px rgba(0,0,0,0.35), 0 0 8px rgba(255,255,255,0.25)',
+                                    background:rgbaFromVar('--text-on-dark', 0.9),
+                                    boxShadow:`0 0 0 1px ${rgbaFromVar('--text-on-dark', 0.35)}, 0 0 8px ${rgbaFromVar('--text-on-dark', 0.25)}`,
                                     zIndex:3,
                                     pointerEvents:'none',
                                 }} />
@@ -7800,12 +8046,12 @@
                                             alignItems:'center',
                                             justifyContent:'center',
                                             overflow:'hidden',
-                                            boxShadow: isActive ? `0 0 0 2px ${color.replace(/[\d.]+\)$/, '0.55)')}, inset 0 0 0 1px rgba(255,255,255,0.25)` : 'none',
+                                            boxShadow: isActive ? `0 0 0 2px ${color.replace(/[\d.]+\)$/, '0.55)')}, inset 0 0 0 1px ${rgbaFromVar('--text-on-dark', 0.25)}` : 'none',
                                             opacity,
                                             zIndex: isActive ? 2 : 1,
                                         }}
                                     >
-                                        <span style={{fontSize:10,color:'#fff',whiteSpace:'nowrap',padding:'0 4px'}}>{a.w}</span>
+                                        <span style={{fontSize:10,color:'var(--text-on-dark)',whiteSpace:'nowrap',padding:'0 4px'}}>{a.w}</span>
                                     </div>
                                 );
                             })}
@@ -8074,7 +8320,7 @@
                     <div className="stage-controls" style={{flexDirection: 'column', alignItems: 'stretch', gap: 12}}>
                         <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
                             <button className="stage-launch-btn" onClick={recording ? stopRec : startRec}
-                                style={recording ? {borderColor: 'var(--danger)', color: 'var(--danger)', background: 'rgba(248,81,73,0.1)'} : {}}>
+                                style={recording ? {borderColor: 'var(--danger)', color: 'var(--danger)', background: rgbaFromVar('--danger', 0.1)} : {}}>
                                 {recording ? 'Stop' : transcribing ? 'Transcribing\u2026' : correcting ? 'Correcting\u2026' : 'Record'}
                             </button>
                                 <span style={{color: 'var(--text-muted)', fontSize: 11}}>or</span>
@@ -8116,128 +8362,18 @@
                             </div>
                         )}
                         {result && (
-                            <div style={{padding: '14px 16px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: '1px solid rgba(88,166,255,0.1)', fontSize: 13, lineHeight: 1.8, overflowX:'auto'}}>
-                                {[
-                                    {key:'parakeet', label:'Parakeet raw', color:'#7ee787', value: result.parakeet},
-                                    {key:'qwen', label:'Qwen raw', color:'#58a6ff', value: result.qwen},
-                                    {key:'cohere', label:'Cohere raw', color:'#f78166', value: result.cohere},
-                                ].map(row => (
-                                    <div key={row.key} style={demoRowStyle}>
-                                        <span style={{...demoRowLabelStyle, color: row.color}}>{row.label}</span>
-                                        <div style={{flex: 1}}>
-                                            {row.value || <span style={{color:'var(--text-muted)'}}>—</span>}
-                                            {!!result.asrErrors?.[row.key] && (
-                                                <div style={{marginTop:4, fontSize:11, color:'var(--danger)'}}>
-                                                    {result.asrErrors[row.key]}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
+                            <div style={{padding: '14px 16px', background: 'var(--panel-subtle-8)', borderRadius: 6, border: '1px solid var(--accent-bg-10)', fontSize: 13, lineHeight: 1.8, overflowX:'auto'}}>
                                 {result.error ? (
-                                    <div style={{marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(88,166,255,0.1)', color: 'var(--danger)'}}>
+                                    <div style={{marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--accent-bg-10)', color: 'var(--danger)'}}>
                                         {result.error}
                                     </div>
                                 ) : (
-                                    <div style={{marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(88,166,255,0.1)', display:'grid', gap:10}}>
-                                        <div style={demoRowStyle}>
-                                            <span style={{...demoRowLabelStyle, color: '#e3b341'}}>Reranker</span>
-                                            <div style={{flex: 1}}>
-                                                {renderRerankerSummary(result)}
-                                            </div>
-                                        </div>
-                                        {result.prototype?.accepted?.length > 0 && (
-                                            <div style={demoRowStyle}>
-                                                <span style={{...demoRowLabelStyle, color: '#e3b341'}}>Accepted</span>
-                                                <div style={{flex:1, display:'flex', flexWrap:'wrap', gap:8}}>
-                                                    {result.prototype.accepted.map((edit, idx) => (
-                                                        <span key={idx} style={{padding:'2px 8px', borderRadius:999, background:'rgba(227,179,65,0.12)', border:'1px solid rgba(227,179,65,0.25)'}}>
-                                                            {edit.from} → {edit.to}
-                                                            {edit.acoustic_score != null && (
-                                                                <span style={{marginLeft:6, color:'#7ee787'}}>a {edit.acoustic_score.toFixed(2)}</span>
-                                                            )}
-                                                            {edit.acoustic_delta != null && (
-                                                                <span style={{marginLeft:6, color: edit.acoustic_delta >= 0 ? '#7ee787' : '#ff7b72'}}>
-                                                                    Δ {edit.acoustic_delta.toFixed(2)}
-                                                                </span>
-                                                            )}
-                                                        </span>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                        {result.prototype?.proposals?.length > 0 && (
-                                            <div style={demoRowStyle}>
-                                                <span style={{...demoRowLabelStyle, color: '#58a6ff'}}>Top proposals</span>
-                                                <div style={{flex:1, display:'grid', gap:6, minWidth:0, overflowX:'auto'}}>
-                                                    {result.prototype.proposals.slice(0, 5).map((proposal, idx) => (
-                                                        <div key={idx} style={{padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.06)', overflowX:'auto'}}>
-                                                            <div><strong>{proposal.raw_text}</strong></div>
-                                                            {proposal.phonemes && (
-                                                                <div style={{fontSize:12, color:'#c297ff', marginTop:2}}>
-                                                                    observed / {proposal.phonemes} /
-                                                                </div>
-                                                            )}
-                                                            <div style={{fontSize:12, color:'var(--text-muted)'}}>
-                                                                {proposal.candidates.slice(0, 3).map((candidate, cidx) => (
-                                                                    <span key={cidx} style={{display:'inline-block', marginRight:12, marginTop:4}}>
-                                                                        <span>{candidate.term} ({candidate.via}, {candidate.score.toFixed(2)})</span>
-                                                                        {candidate.phonetic_score != null && (
-                                                                            <span style={{marginLeft:6, color:'#c297ff'}}>IPA {candidate.phonetic_score.toFixed(2)}</span>
-                                                                        )}
-                                                                        {candidate.acoustic_score != null && Math.abs(Number(candidate.acoustic_score) - Number(candidate.phonetic_score ?? candidate.acoustic_score)) > 0.02 && (
-                                                                            <span style={{marginLeft:6, color:'#7ee787'}}>rescue {candidate.acoustic_score.toFixed(2)}</span>
-                                                                        )}
-                                                                        {candidate.acoustic_delta != null && (
-                                                                            <span style={{marginLeft:6, color: candidate.acoustic_delta >= 0 ? '#7ee787' : '#ff7b72'}}>
-                                                                                Δ {candidate.acoustic_delta.toFixed(2)}
-                                                                            </span>
-                                                                        )}
-                                                                        {candidate.phonemes && (
-                                                                            <span style={{display:'block', color:'#c297ff'}}>/ {candidate.phonemes} /</span>
-                                                                        )}
-                                                                    </span>
-                                                                ))}
-                                                            </div>
-                                                            {renderLiveProposalLanes(result, proposal)}
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                        {result.prototype?.reranker && (
-                                            <div style={demoRowStyle}>
-                                                <span style={{...demoRowLabelStyle, color: '#c297ff'}}>Reranker</span>
-                                                <div style={{flex:1}}>
-                                                    chose {result.prototype.reranker.chosen_index != null ? String.fromCharCode(65 + result.prototype.reranker.chosen_index) : '(unparsed)'}
-                                                    {result.prototype.reranker?.chosen_label && (
-                                                        <span style={{marginLeft:8, color:'var(--text-muted)'}}>
-                                                            {result.prototype.reranker.chosen_label}
-                                                        </span>
-                                                    )}
-                                                    {result.prototype.reranker?.chosen_text && (
-                                                        <div style={{fontSize:12, marginTop:4}}>
-                                                            {result.prototype.reranker.chosen_text}
-                                                        </div>
-                                                    )}
-                                                    {Array.isArray(result.prototype.reranker?.candidates) && (
-                                                        <div style={{fontSize:12, color:'var(--text-muted)', marginTop:4}}>
-                                                            {result.prototype.reranker.candidates.map(c => (
-                                                                <div key={c.index}>
-                                                                    {String.fromCharCode(65 + c.index)} yes {Number(c.yes_prob ?? 0).toFixed(3)} no {Number(c.no_prob ?? 0).toFixed(3)}
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
+                                    renderCorrectionInspector(result)
                                 )}
                             </div>
                         )}
                         {bakeoff && (
-                            <div style={{padding: '14px 16px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: '1px solid rgba(88,166,255,0.1)', fontSize: 13, lineHeight: 1.6, width:'100%', maxWidth:'100%', overflowX:'hidden', boxSizing:'border-box'}}>
+                            <div style={{padding: '14px 16px', background: 'var(--panel-subtle-8)', borderRadius: 6, border: '1px solid var(--accent-bg-10)', fontSize: 13, lineHeight: 1.6, width:'100%', maxWidth:'100%', overflowX:'hidden', boxSizing:'border-box'}}>
                                 <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom:12}}>
                                     <div>
                                         <div style={{fontSize:12, textTransform:'uppercase', letterSpacing:'0.5px', color:'var(--text-muted)'}}>
@@ -8263,11 +8399,11 @@
                                     <>
                                         <div style={{display:'grid', gridTemplateColumns:'repeat(3, minmax(0, 1fr))', gap:10, marginBottom:14}}>
                                             {[
-                                                ['Total', bakeoff.summary?.n, '#8b949e'],
-                                                ['Correct', bakeoff.summary?.prototype, '#e3b341'],
+                                                ['Total', bakeoff.summary?.n, 'var(--text-muted)'],
+                                                ['Correct', bakeoff.summary?.prototype, 'var(--attention)'],
                                                 ['Wrong', bakeoff.summary?.prototype_wrong, 'var(--danger)'],
                                             ].map(([label, value, color]) => (
-                                                <div key={label} style={{padding:'10px 12px', borderRadius:8, background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.06)'}}>
+                                                <div key={label} style={{padding:'10px 12px', borderRadius:8, background:'var(--panel-subtle)', border:'1px solid var(--panel-subtle-2)'}}>
                                                     <div style={{fontSize:11, textTransform:'uppercase', letterSpacing:'0.5px', color:'var(--text-muted)'}}>{label}</div>
                                                     <div style={{fontSize:28, fontWeight:800, color, lineHeight:1.1, marginTop:4}}>{value ?? 0}</div>
                                                 </div>
@@ -8277,14 +8413,34 @@
                                             {bakeoff.entries?.map((entry, idx) => {
                                                 const entryKey = `${bakeoff.source || bakeoffSource}:${entry.recording_id || `${entry.term}:${idx}`}`;
                                                 const detail = bakeoffDetails[entryKey];
+                                                const detailInspectorResult = detail ? {
+                                                    qwen: detail.qwen || entry.qwen || '',
+                                                    parakeet: detail.parakeet || '',
+                                                    cohere: detail.cohere || '',
+                                                    parakeet_alignment: detail.parakeet_alignment || [],
+                                                    correctionInput: detail.correction_input || 'qwen',
+                                                    asrErrors: {
+                                                        qwen: detail.qwen_error || null,
+                                                        parakeet: detail.parakeet_error || null,
+                                                        cohere: detail.cohere_error || null,
+                                                    },
+                                                    prototype: {
+                                                        corrected: detail.prototype_trace?.corrected || entry.prototype || '',
+                                                        accepted: detail.prototype_trace?.accepted || [],
+                                                        proposals: detail.prototype_trace?.proposals || [],
+                                                        sentence_candidates: detail.prototype_trace?.sentence_candidates || [],
+                                                        reranker: detail.prototype_trace?.reranker || null,
+                                                        alignments: detail.alignments || {},
+                                                    },
+                                                } : null;
                                                 const sentenceVerdict = entry.prototype_ok
-                                                    ? {label:'full ok', color:'#58a6ff'}
+                                                    ? {label:'full ok', color:'var(--accent)'}
                                                     : {label:'full wrong', color:'var(--danger)'};
                                                 const playbackLabel = bakeoffPlayback?.entryKey === entryKey
                                                     ? (bakeoffPlayback.playing ? 'Pause' : 'Resume')
                                                     : 'Play';
                                                 return (
-                                                    <div key={idx} style={{padding:'10px 12px', borderRadius:8, background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.06)', width:'100%', maxWidth:'100%', minWidth:0, overflowX:'hidden', boxSizing:'border-box'}}>
+                                                    <div key={idx} style={{padding:'10px 12px', borderRadius:8, background:'var(--panel-subtle)', border:'1px solid var(--panel-subtle-2)', width:'100%', maxWidth:'100%', minWidth:0, overflowX:'hidden', boxSizing:'border-box'}}>
                                                         <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom:6}}>
                                                             <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
                                                                 <div style={{fontWeight:700}}>{entry.term} <span style={{fontWeight:400, color:'var(--text-muted)'}}>({entry.hit_count} hits)</span></div>
@@ -8313,10 +8469,10 @@
                                                                 <div><span style={{color:'var(--text-muted)', width:80, display:'inline-block'}}>Template</span>{entry.template_sentence}</div>
                                                             )}
                                                             {entry.qwen_fragment && (
-                                                                <div style={{padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)'}}>
+                                                                <div style={{padding:'8px 10px', borderRadius:6, background:'var(--panel-subtle-2)', border:'1px solid var(--panel-subtle-5)'}}>
                                                                     <div><span style={{color:'var(--text-muted)', width:80, display:'inline-block'}}>Fragment</span>{entry.qwen_fragment} → {entry.expected_fragment}</div>
                                                                     {(entry.qwen_fragment_phonemes || entry.expected_fragment_phonemes) && (
-                                                                        <div style={{fontSize:12, color:'#c297ff', marginTop:4, paddingLeft:80}}>
+                                                                        <div style={{fontSize:12, color:'var(--reranker)', marginTop:4, paddingLeft:80}}>
                                                                             {entry.qwen_fragment_phonemes && <div>{entry.qwen_fragment} / {entry.qwen_fragment_phonemes} /</div>}
                                                                             {entry.expected_fragment_phonemes && (
                                                                                 <div>
@@ -8331,154 +8487,36 @@
                                                                     )}
                                                                 </div>
                                                             )}
-                                                            <div>
-                                                                <div style={{color:'var(--text-muted)', marginBottom:2}}>Qwen</div>
-                                                                <div>{entry.qwen}</div>
-                                                            </div>
-                                                            <div>
-                                                                <div style={{color:'var(--text-muted)', marginBottom:2}}>Expected</div>
-                                                                <div>{renderCorrectedDiff(entry.qwen, entry.expected)}</div>
-                                                            </div>
-                                                            <div>
-                                                                <div style={{color:'#e3b341', marginBottom:2}}>Reranker</div>
-                                                                <div>{renderCorrectedDiff(entry.qwen, entry.prototype)}</div>
-                                                            </div>
-                                                            {entry.prototype_accepted?.length > 0 && (
-                                                                <div style={{padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)'}}>
-                                                                    <div style={{color:'#e3b341', marginBottom:6}}>Prototype accepted edits</div>
-                                                                    <div style={{display:'grid', gap:6}}>
-                                                                        {entry.prototype_accepted.map((edit, eidx) => (
-                                                                            <div key={eidx}>
-                                                                                <div>
-                                                                                    {edit.from} → {edit.to} <span style={{color:'var(--text-muted)'}}>({edit.via}, {Number(edit.score).toFixed(2)})</span>
-                                                                                    {edit.acoustic_score != null && <span style={{marginLeft:6, color:'#7ee787'}}>a {Number(edit.acoustic_score).toFixed(2)}</span>}
-                                                                                    {edit.acoustic_delta != null && (
-                                                                                        <span style={{marginLeft:6, color: edit.acoustic_delta >= 0 ? '#7ee787' : '#ff7b72'}}>
-                                                                                            Δ {Number(edit.acoustic_delta).toFixed(2)}
-                                                                                        </span>
-                                                                                    )}
-                                                                                </div>
-                                                                                {(edit.from_phonemes || edit.to_phonemes) && (
-                                                                                    <div style={{fontSize:12, color:'#c297ff', marginTop:2}}>
-                                                                                        {edit.from_phonemes && <div>{edit.from} / {edit.from_phonemes} /</div>}
-                                                                                        {edit.to_phonemes && <div>{edit.to} / {edit.to_phonemes} /</div>}
-                                                                                    </div>
-                                                                                )}
-                                                                            </div>
-                                                                        ))}
+                                                            {!detail && (
+                                                                <>
+                                                                    <div>
+                                                                        <div style={{color:'var(--text-muted)', marginBottom:2}}>Qwen</div>
+                                                                        <div>{entry.qwen}</div>
                                                                     </div>
-                                                                </div>
-                                                            )}
-                                                            {entry.prototype_trace_excerpt && (
-                                                                <div style={{padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)'}}>
-                                                                    <div style={{color:'#e3b341', marginBottom:6}}>Decision trace</div>
-                                                                    <div style={{display:'flex', gap:12, flexWrap:'wrap', fontSize:12, color:'var(--text-muted)', marginBottom:8}}>
-                                                                        <span>{entry.prototype_trace_excerpt.proposal_count || 0} span proposals</span>
-                                                                        <span>{entry.prototype_trace_excerpt.sentence_candidate_count || 0} sentence candidates</span>
-                                                                        <span>{entry.prototype_trace_excerpt.accepted_count || 0} accepted edits</span>
+                                                                    <div>
+                                                                        <div style={{color:'var(--text-muted)', marginBottom:2}}>Expected</div>
+                                                                        <div>{renderCorrectedDiff(entry.qwen, entry.expected)}</div>
                                                                     </div>
-                                                                    {entry.prototype_trace_excerpt.accepted?.length > 0 && (
-                                                                        <div style={{display:'grid', gap:6, marginBottom:8}}>
-                                                                            {entry.prototype_trace_excerpt.accepted.slice(0, 3).map((edit, eidx) => (
-                                                                                <div key={eidx} style={{fontSize:12}}>
-                                                                                    <div>
-                                                                                        {edit.from} → {edit.to}
-                                                                                        <span style={{marginLeft:6, color:'var(--text-muted)'}}>via {edit.via}, score {Number(edit.score).toFixed(2)}</span>
-                                                                                        {edit.acoustic_score != null && <span style={{marginLeft:6, color:'#7ee787'}}>a {Number(edit.acoustic_score).toFixed(2)}</span>}
-                                                                                        {edit.acoustic_delta != null && <span style={{marginLeft:6, color: edit.acoustic_delta >= 0 ? '#7ee787' : '#ff7b72'}}>Δ {Number(edit.acoustic_delta).toFixed(2)}</span>}
-                                                                                    </div>
-                                                                                    {(edit.from_phonemes || edit.to_preview_phonemes) && (
-                                                                                        <div style={{color:'#c297ff', marginTop:2}}>
-                                                                                            {edit.from_phonemes && <div>from / {edit.from_phonemes} /</div>}
-                                                                                            {edit.to_preview_phonemes && <div>to {edit.to_preview && edit.to_preview !== edit.to ? `${edit.to} (${edit.to_preview})` : edit.to} / {edit.to_preview_phonemes} /</div>}
-                                                                                        </div>
-                                                                                    )}
-                                                                                </div>
-                                                                            ))}
+                                                                    <div>
+                                                                        <div style={{color:'var(--attention)', marginBottom:2}}>Reranker</div>
+                                                                        <div>{renderCorrectedDiff(entry.qwen, entry.prototype)}</div>
+                                                                    </div>
+                                                                    {entry.prototype_trace_excerpt && (
+                                                                        <div style={{display:'flex', gap:12, flexWrap:'wrap', fontSize:12, color:'var(--text-muted)'}}>
+                                                                            <span>{entry.prototype_trace_excerpt.proposal_count || 0} span proposals</span>
+                                                                            <span>{entry.prototype_trace_excerpt.sentence_candidate_count || 0} sentence candidates</span>
+                                                                            <span>{entry.prototype_trace_excerpt.accepted_count || 0} accepted edits</span>
                                                                         </div>
                                                                     )}
-                                                                    {entry.prototype_trace_excerpt.proposals?.length > 0 ? (
-                                                                        <div style={{display:'grid', gap:8}}>
-                                                                            {entry.prototype_trace_excerpt.proposals.slice(0, 2).map((proposal, pidx) => (
-                                                                                <div key={pidx} style={{padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.05)'}}>
-                                                                                    <div><strong>{proposal.raw_text}</strong> <span style={{color:'var(--text-muted)'}}>({proposal.normalized})</span></div>
-                                                                                    <div style={{display:'flex', gap:12, flexWrap:'wrap', fontSize:12, color:'var(--text-muted)', marginTop:4}}>
-                                                                                        {proposal.phonemes && <span>span / {proposal.phonemes} /</span>}
-                                                                                        {proposal.acoustic_phonemes && <span>ZIPA / {proposal.acoustic_phonemes} /</span>}
-                                                                                        {proposal.observed_acoustic_score != null && <span>obs a {Number(proposal.observed_acoustic_score).toFixed(2)}</span>}
-                                                                                        <span>{proposal.acoustic_trustworthy ? 'trusted acoustic slice' : 'untrusted acoustic slice'}</span>
-                                                                                    </div>
-                                                                                    <div style={{display:'grid', gap:4, marginTop:6, fontSize:12}}>
-                                                                                        {proposal.candidates?.map((candidate, cidx) => (
-                                                                                            <div key={cidx}>
-                                                                                                <div>
-                                                                                                    <strong>{candidate.matched_form}</strong> → {candidate.term}
-                                                                                                    <span style={{marginLeft:6, color:'var(--text-muted)'}}>via {candidate.via}, score {Number(candidate.score).toFixed(2)}</span>
-                                                                                                </div>
-                                                                                                <div style={{display:'flex', gap:10, flexWrap:'wrap', color:'var(--text-muted)', marginTop:2}}>
-                                                                                                    {candidate.lexical_score != null && <span>lex {Number(candidate.lexical_score).toFixed(2)}</span>}
-                                                                                                    {candidate.dice != null && <span>dice {Number(candidate.dice).toFixed(2)}</span>}
-                                                                                                    {candidate.prefix_ratio != null && <span>prefix {Number(candidate.prefix_ratio).toFixed(2)}</span>}
-                                                                                                    {candidate.length_ratio != null && <span>len {Number(candidate.length_ratio).toFixed(2)}</span>}
-                                                                                                    {candidate.phonetic_score != null && <span style={{color:'#c297ff'}}>phon {Number(candidate.phonetic_score).toFixed(2)}</span>}
-                                                                                                    {candidate.observed_acoustic_score != null && <span>obs a {Number(candidate.observed_acoustic_score).toFixed(2)}</span>}
-                                                                                                    {candidate.acoustic_score != null && <span style={{color:'#7ee787'}}>a {Number(candidate.acoustic_score).toFixed(2)}</span>}
-                                                                                                    {candidate.acoustic_delta != null && <span style={{color: candidate.acoustic_delta >= 0 ? '#7ee787' : '#ff7b72'}}>Δ {Number(candidate.acoustic_delta).toFixed(2)}</span>}
-                                                                                                </div>
-                                                                                                {(candidate.matched_form_phonemes || candidate.term_preview_phonemes) && (
-                                                                                                    <div style={{color:'#c297ff', marginTop:2}}>
-                                                                                                        {candidate.matched_form_phonemes && <div>matched form / {candidate.matched_form_phonemes} /</div>}
-                                                                                                        {candidate.term_preview_phonemes && <div>target {candidate.term_preview && candidate.term_preview !== candidate.term ? `${candidate.term} (${candidate.term_preview})` : candidate.term} / {candidate.term_preview_phonemes} /</div>}
-                                                                                                    </div>
-                                                                                                )}
-                                                                                            </div>
-                                                                                        ))}
-                                                                                    </div>
-                                                                                </div>
-                                                                            ))}
-                                                                        </div>
-                                                                    ) : (
-                                                                        <div style={{fontSize:12, color:'var(--text-muted)'}}>No span proposal survived candidate generation.</div>
-                                                                    )}
-                                                                    {entry.prototype_trace_excerpt.sentence_candidates?.length > 0 && (
-                                                                        <div style={{display:'grid', gap:4, marginTop:8, fontSize:12}}>
-                                                                            <div style={{color:'var(--text-muted)'}}>Sentence ranking</div>
-                                                                            {entry.prototype_trace_excerpt.sentence_candidates.slice(0, 4).map((candidate, cidx) => (
-                                                                                <div key={cidx}>
-                                                                                    <strong>{String.fromCharCode(65 + cidx)}.</strong> {candidate.label}
-                                                                                    <span style={{marginLeft:6, color:'#e3b341'}}>score {Number(candidate.score).toFixed(2)}</span>
-                                                                                </div>
-                                                                            ))}
-                                                                        </div>
-                                                                    )}
-                                                                    {entry.prototype_trace_excerpt.reranker && (
-                                                                        <div style={{marginTop:8, fontSize:12}}>
-                                                                            <div style={{color:'var(--text-muted)', marginBottom:4}}>Reranker</div>
-                                                                            <div>
-                                                                                chose {entry.prototype_trace_excerpt.reranker.chosen_index != null ? String.fromCharCode(65 + entry.prototype_trace_excerpt.reranker.chosen_index) : '(unparsed)'}
-                                                                                {entry.prototype_trace_excerpt.reranker.chosen_label ? <span style={{marginLeft:6, color:'var(--text-muted)'}}>{entry.prototype_trace_excerpt.reranker.chosen_label}</span> : null}
-                                                                            </div>
-                                                                            {Array.isArray(entry.prototype_trace_excerpt.reranker.candidates) && (
-                                                                                <div style={{display:'grid', gap:2, marginTop:4}}>
-                                                                                    {entry.prototype_trace_excerpt.reranker.candidates.slice(0, 4).map(candidate => (
-                                                                                        <div key={candidate.index} style={{color:'var(--text-muted)'}}>
-                                                                                            {String.fromCharCode(65 + candidate.index)} yes {Number(candidate.yes_prob ?? 0).toFixed(3)} no {Number(candidate.no_prob ?? 0).toFixed(3)} <span style={{marginLeft:6}}>heur {Number(candidate.heuristic_score ?? 0).toFixed(2)}</span>
-                                                                                        </div>
-                                                                                    ))}
-                                                                                </div>
-                                                                            )}
-                                                                        </div>
-                                                                    )}
-                                                                </div>
+                                                                </>
                                                             )}
                                                             {detail && (
-                                                                <div style={{padding:'10px 12px', borderRadius:6, background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)', width:'100%', maxWidth:'100%', minWidth:0, overflowX:'hidden', boxSizing:'border-box'}}>
+                                                                <div style={{padding:'10px 12px', borderRadius:6, background:'var(--panel-subtle-2)', border:'1px solid var(--panel-subtle-5)', width:'100%', maxWidth:'100%', minWidth:0, overflowX:'hidden', boxSizing:'border-box'}}>
                                                                     {detail.error ? (
                                                                         <div style={{color:'var(--danger)'}}>{detail.error}</div>
                                                                     ) : (
                                                                         (() => {
                                                                             const al = detail.alignments || {};
-                                                                            const pt = detail.prototype_trace || {};
                                                                             const zoom = bakeoffTimelineZoom[entryKey] || 220;
                                                                             const zipaByQwen = al.zipa_qwen?.length ? al.zipa_qwen : buildGroupedPhoneLane(al.zipa, al.qwen, 'Qwen');
                                                                             const allItems = [
@@ -8492,111 +8530,12 @@
                                                                             const timelineWidth = Math.max(720, Math.ceil(Math.max(maxTime || 1, 0.001) * zoom));
                                                                             return (
                                                                                 <>
-                                                                                    {pt.proposals?.length > 0 && (
-                                                                                        <div style={{display:'grid', gap:8, marginBottom:10}}>
-                                                                                            <div style={{fontSize:12, textTransform:'uppercase', letterSpacing:'0.5px', color:'var(--text-muted)'}}>Reranker trace</div>
-                                                                                            <div style={{display:'grid', gap:6}}>
-                                                                                                {pt.proposals.slice(0, 5).map((proposal, pidx) => (
-                                                                                                    <div key={pidx} style={{padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.05)'}}>
-                                                                                                        <div><strong>{proposal.raw_text}</strong></div>
-                                                                                                        <div style={{fontSize:12, color:'var(--text-muted)', marginTop:2}}>
-                                                                                                            Qwen span
-                                                                                                            {proposal.acoustic_window_start_sec != null && proposal.acoustic_window_end_sec != null && (
-                                                                                                                <span style={{marginLeft:8}}>
-                                                                                                                    {proposal.acoustic_window_start_sec.toFixed(2)}s–{proposal.acoustic_window_end_sec.toFixed(2)}s
-                                                                                                                </span>
-                                                                                                            )}
-                                                                                                        </div>
-                                                                                                        <div style={{display:'grid', gap:2, fontSize:12, marginTop:4}}>
-                                                                                                            {proposal.phonemes && (
-                                                                                                                <div>
-                                                                                                                    <span style={{color:'var(--text-muted)', display:'inline-block', width:140}}>Qwen span G2P</span>
-                                                                                                                    <span style={{color:'#c297ff'}}>/ {proposal.phonemes} /</span>
-                                                                                                                </div>
-                                                                                                            )}
-                                                                                                            {proposal.acoustic_phonemes && (
-                                                                                                                <div>
-                                                                                                                    <span style={{color:'var(--text-muted)', display:'inline-block', width:140}}>ZIPA grouped slice</span>
-                                                                                                                    <span style={{color:'#c297ff'}}>/ {proposal.acoustic_phonemes} /</span>
-                                                                                                                </div>
-                                                                                                            )}
-                                                                                                            {proposal.observed_acoustic_score != null && (
-                                                                                                                <div>
-                                                                                                                    <span style={{color:'var(--text-muted)', display:'inline-block', width:140}}>slice vs span G2P</span>
-                                                                                                                    <span>{Number(proposal.observed_acoustic_score).toFixed(2)} {proposal.acoustic_trustworthy ? '(trusted)' : '(untrusted)'}</span>
-                                                                                                                </div>
-                                                                                                            )}
-                                                                                                        </div>
-                                                                                                        <div style={{fontSize:12, color:'var(--text-muted)', marginTop:4}}>
-                                                                                                            {proposal.candidates.slice(0, 3).map((candidate, cidx) => (
-                                                                                                                <div key={cidx} style={{marginTop:6}}>
-                                                                                                                    <div>
-                                                                                                                        <span><strong>{candidate.matched_form}</strong> → {candidate.term} ({candidate.via}, {Number(candidate.score).toFixed(2)})</span>
-                                                                                                                    </div>
-                                                                                                                    {candidate.matched_form_phonemes && (
-                                                                                                                        <div style={{marginTop:2}}>
-                                                                                                                            <span style={{color:'var(--text-muted)', display:'inline-block', width:140}}>matched form G2P</span>
-                                                                                                                            <span style={{color:'#c297ff'}}>/ {candidate.matched_form_phonemes} /</span>
-                                                                                                                        </div>
-                                                                                                                    )}
-                                                                                                                    {candidate.term_preview_phonemes && (
-                                                                                                                        <div style={{marginTop:2}}>
-                                                                                                                            <span style={{color:'var(--text-muted)', display:'inline-block', width:140}}>target spoken G2P</span>
-                                                                                                                            <span style={{color:'#c297ff'}}>{candidate.term_preview && candidate.term_preview !== candidate.term ? `${candidate.term} (${candidate.term_preview})` : candidate.term} / {candidate.term_preview_phonemes} /</span>
-                                                                                                                        </div>
-                                                                                                                    )}
-                                                                                                                    <div style={{display:'flex', gap:8, flexWrap:'wrap', marginTop:2}}>
-                                                                                                                        {candidate.lexical_score != null && <span>lex {Number(candidate.lexical_score).toFixed(2)}</span>}
-                                                                                                                        {candidate.dice != null && <span>dice {Number(candidate.dice).toFixed(2)}</span>}
-                                                                                                                        {candidate.prefix_ratio != null && <span>prefix {Number(candidate.prefix_ratio).toFixed(2)}</span>}
-                                                                                                                        {candidate.length_ratio != null && <span>len {Number(candidate.length_ratio).toFixed(2)}</span>}
-                                                                                                                        {candidate.phonetic_score != null && <span style={{color:'#c297ff'}}>phon {Number(candidate.phonetic_score).toFixed(2)}</span>}
-                                                                                                                        {candidate.observed_acoustic_score != null && <span>obs a {Number(candidate.observed_acoustic_score).toFixed(2)}</span>}
-                                                                                                                        {candidate.acoustic_score != null && <span style={{color:'#7ee787'}}>a {Number(candidate.acoustic_score).toFixed(2)}</span>}
-                                                                                                                        {candidate.acoustic_delta != null && (
-                                                                                                                            <span style={{color: candidate.acoustic_delta >= 0 ? '#7ee787' : '#ff7b72'}}>
-                                                                                                                                Δ {Number(candidate.acoustic_delta).toFixed(2)}
-                                                                                                                            </span>
-                                                                                                                        )}
-                                                                                                                    </div>
-                                                                                                                </div>
-                                                                                                            ))}
-                                                                                                        </div>
-                                                                                                    </div>
-                                                                                                ))}
-                                                                                            </div>
-                                                                                            {pt.sentence_candidates?.length > 0 && (
-                                                                                                <div style={{padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.05)'}}>
-                                                                                                    <div style={{color:'var(--text-muted)', marginBottom:6}}>Sentence candidates</div>
-                                                                                                    <div style={{display:'grid', gap:6, fontSize:12}}>
-                                                                                                        {pt.sentence_candidates.slice(0, 8).map((candidate, cidx) => (
-                                                                                                            <div key={cidx}>
-                                                                                                                <div><strong>{String.fromCharCode(65 + cidx)}.</strong> <span style={{color:'var(--text-muted)'}}>{candidate.label}</span> <span style={{marginLeft:6, color:'#e3b341'}}>score {Number(candidate.score).toFixed(2)}</span></div>
-                                                                                                                <div>{candidate.text}</div>
-                                                                                                            </div>
-                                                                                                        ))}
-                                                                                                    </div>
-                                                                                                </div>
-                                                                                            )}
-                                                                                            {pt.reranker && (
-                                                                                                <div style={{padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.05)', fontSize:12}}>
-                                                                                                    <div style={{color:'var(--text-muted)', marginBottom:6}}>Reranker</div>
-                                                                                                    <div>chose {pt.reranker.chosen_index != null ? String.fromCharCode(65 + pt.reranker.chosen_index) : '(unparsed)'}{pt.reranker.chosen_label ? <span style={{marginLeft:8, color:'var(--text-muted)'}}>{pt.reranker.chosen_label}</span> : null}</div>
-                                                                                                    {pt.reranker.chosen_text && <div style={{marginTop:4}}>{pt.reranker.chosen_text}</div>}
-                                                                                                    {Array.isArray(pt.reranker.candidates) && (
-                                                                                                        <div style={{display:'grid', gap:4, marginTop:6}}>
-                                                                                                            {pt.reranker.candidates.map(candidate => (
-                                                                                                                <div key={candidate.index} style={{color:'var(--text-muted)'}}>
-                                                                                                                    {String.fromCharCode(65 + candidate.index)} yes {Number(candidate.yes_prob ?? 0).toFixed(3)} no {Number(candidate.no_prob ?? 0).toFixed(3)} <span style={{marginLeft:6}}>heur {Number(candidate.heuristic_score ?? 0).toFixed(2)}</span>
-                                                                                                                    {candidate.answer ? <span style={{marginLeft:6}}>ans {String(candidate.answer).trim()}</span> : null}
-                                                                                                                </div>
-                                                                                                            ))}
-                                                                                                        </div>
-                                                                                                    )}
-                                                                                                </div>
-                                                                                            )}
-                                                                                        </div>
-                                                                                    )}
+                                                                                    {renderCorrectionInspector(detailInspectorResult, [{
+                                                                                        key:'expected',
+                                                                                        label:'Expected',
+                                                                                        color:'var(--text-muted)',
+                                                                                        render: () => renderCorrectedDiff(detailInspectorResult.qwen || '', entry.expected || ''),
+                                                                                    }])}
                                                                                     <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom:8, flexWrap:'wrap'}}>
                                                                                         <div style={{display:'flex', alignItems:'center', gap:6, flexShrink:0, flexWrap:'wrap', justifyContent:'flex-start'}}>
                                                                                             {entry.recording_id && (
@@ -8626,9 +8565,9 @@
                                                                                                     style={{
                                                                                                         padding:'2px 8px',
                                                                                                         borderRadius:999,
-                                                                                                        border:'1px solid rgba(255,255,255,0.12)',
-                                                                                                        background: zoom === level ? 'rgba(88,166,255,0.16)' : 'rgba(255,255,255,0.03)',
-                                                                                                        color: zoom === level ? '#58a6ff' : 'var(--text-muted)',
+                                                                                                        border:'1px solid var(--panel-subtle-4)',
+                                                                                                        background: zoom === level ? 'var(--accent-bg-16)' : 'var(--panel-subtle)',
+                                                                                                        color: zoom === level ? 'var(--accent)' : 'var(--text-muted)',
                                                                                                         fontSize:11,
                                                                                                     }}
                                                                                                 >
@@ -8646,11 +8585,11 @@
                                                                                         ) : <div style={{flex:'1 1 320px'}} />}
                                                                                     </div>
                                                                                     <div style={{width:'100%', maxWidth:'100%', minWidth:0, overflowX:'auto', overflowY:'hidden', paddingBottom:4}}>
-                                                                                        {renderBakeoffTL('ZIPA', al.zipa, 'rgba(194,151,255,0.72)', maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
-                                                                                        {renderBakeoffTL('ZIPA@Qwen', zipaByQwen, 'rgba(171,132,245,0.72)', maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
-                                                                                        {renderBakeoffTL('Expected', al.expected, 'rgba(88,166,255,0.6)', maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
-                                                                                        {renderBakeoffTL('Qwen', al.qwen, 'rgba(210,153,34,0.7)', maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
-                                                                                        {renderBakeoffTL('Reranker', al.prototype, 'rgba(227,179,65,0.78)', maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
+                                                                                        {renderBakeoffTL('ZIPA', al.zipa, rgbaFromVar('--reranker', 0.72), maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
+                                                                                        {renderBakeoffTL('ZIPA@Qwen', zipaByQwen, rgbaFromVar('--spoken', 0.72), maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
+                                                                                        {renderBakeoffTL('Expected', al.expected, rgbaFromVar('--accent', 0.6), maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
+                                                                                        {renderBakeoffTL('Qwen', al.qwen, rgbaFromVar('--warning', 0.7), maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
+                                                                                        {renderBakeoffTL('Reranker', al.prototype, rgbaFromVar('--attention', 0.78), maxTime, zoom, bakeoffPlayback?.entryKey === entryKey ? bakeoffPlayback.time : null)}
                                                                                         <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'var(--text-muted)',marginTop:3,paddingLeft:71,width:timelineWidth}}>
                                                                                             <span>0s</span><span>{maxTime.toFixed(1)}s</span>
                                                                                         </div>
@@ -8828,7 +8767,7 @@
                     <div key={label} className="stat-card" style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'12px 10px',gap:8}}>
                         <div style={{position:'relative',width:size,height:size}}>
                             <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{display:'block'}}>
-                                <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={stroke} />
+                                <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="var(--panel-subtle-3)" strokeWidth={stroke} />
                                 <circle
                                     cx={size / 2}
                                     cy={size / 2}
@@ -8897,18 +8836,18 @@
                                 </span>
                             )}
                         </div>
-                        <svg viewBox={`0 0 ${width} ${height}`} style={{width:'100%',height:'auto',display:'block',background:'rgba(255,255,255,0.02)',borderRadius:8,border:'1px solid var(--border)'}}>
+                        <svg viewBox={`0 0 ${width} ${height}`} style={{width:'100%',height:'auto',display:'block',background:'var(--panel-subtle-2)',borderRadius:8,border:'1px solid var(--border)'}}>
                             {grid.map((g, i) => (
                                 <g key={i}>
-                                    <line x1={pad} y1={g.yy} x2={width - pad} y2={g.yy} stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
+                                    <line x1={pad} y1={g.yy} x2={width - pad} y2={g.yy} stroke="var(--panel-subtle-3)" strokeWidth="1" />
                                     <text x={8} y={g.yy + 4} fill="var(--text-muted)" fontSize="10">{formatLossTick(g.loss)}</text>
                                 </g>
                             ))}
-                            <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
-                            <line x1={pad} y1={pad} x2={pad} y2={height - pad} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
-                            {trainMetrics.train.length > 1 && <polyline fill="none" stroke="rgba(88,166,255,0.95)" strokeWidth="2" points={pts(trainMetrics.train)} />}
-                            {trainMetrics.val.length > 0 && <polyline fill="none" stroke="rgba(126,231,135,0.95)" strokeWidth="2" points={pts(trainMetrics.val)} />}
-                            {trainMetrics.bestVal && <circle cx={x(trainMetrics.bestVal.iter)} cy={y(trainMetrics.bestVal.loss)} r="3.5" fill="rgba(126,231,135,1)" />}
+                            <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="var(--panel-subtle-12)" strokeWidth="1" />
+                            <line x1={pad} y1={pad} x2={pad} y2={height - pad} stroke="var(--panel-subtle-12)" strokeWidth="1" />
+                            {trainMetrics.train.length > 1 && <polyline fill="none" stroke={rgbaFromVar('--accent', 0.95)} strokeWidth="2" points={pts(trainMetrics.train)} />}
+                            {trainMetrics.val.length > 0 && <polyline fill="none" stroke={rgbaFromVar('--success', 0.95)} strokeWidth="2" points={pts(trainMetrics.val)} />}
+                            {trainMetrics.bestVal && <circle cx={x(trainMetrics.bestVal.iter)} cy={y(trainMetrics.bestVal.loss)} r="3.5" fill={rgbaFromVar('--success', 1)} />}
                         </svg>
                     </div>
                 );
@@ -8973,7 +8912,7 @@
                     {error && <div className="pipeline-error">{error}</div>}
                     {isRunning && (
                         <div style={{textAlign: 'right', marginBottom: 8}}>
-                            <button className="stage-launch-btn" style={{borderColor: 'var(--warning)', color: 'var(--warning)', background: 'rgba(210,153,34,0.1)'}} onClick={stopJob}>Stop</button>
+                            <button className="stage-launch-btn" style={{borderColor: 'var(--warning)', color: 'var(--warning)', background: 'var(--warning-bg-10)'}} onClick={stopJob}>Stop</button>
                         </div>
                     )}
 
@@ -9098,8 +9037,8 @@
                                             style={{
                                                 padding:'6px 10px',
                                                 background: trainDataDir === preset.data && trainAdaptersDir === preset.adapters && trainModel === preset.model && trainIters === preset.iters && trainBatch === preset.batch && trainLayers === preset.layers
-                                                    ? 'rgba(88,166,255,0.14)'
-                                                    : 'rgba(255,255,255,0.02)',
+                                                    ? 'var(--accent-bg-14)'
+                                                    : 'var(--panel-subtle-2)',
                                             }}
                                             onClick={() => applyTrainPreset(preset)}
                                             disabled={isRunning}
@@ -9161,8 +9100,8 @@
                             <table>
                                 <thead><tr>
                                     <th>Term</th>
-                                    <th style={{color: '#58a6ff'}}>Qwen heard</th>
-                                    <th style={{color: '#7ee787'}}>Parakeet heard</th>
+                                    <th style={{color: 'var(--accent)'}}>Qwen heard</th>
+                                    <th style={{color: 'var(--success)'}}>Parakeet heard</th>
                                 </tr></thead>
                                 <tbody>{results.map(r => {
                                     const hasErrors = r.qwen_errors > 0 || r.parakeet_errors > 0;
@@ -9173,11 +9112,11 @@
                                         <tr key={r.term}>
                                             <td style={{fontWeight: 600}}>{r.term}</td>
                                             <td>{qHeard.length > 0
-                                                ? qHeard.map((h, i) => <span key={i} style={{color: '#58a6ff', marginRight: 8}}>{h}</span>)
+                                                ? qHeard.map((h, i) => <span key={i} style={{color: 'var(--accent)', marginRight: 8}}>{h}</span>)
                                                 : <span style={{color: 'var(--text-muted)'}}>—</span>}
                                             </td>
                                             <td>{pHeard.length > 0
-                                                ? pHeard.map((h, i) => <span key={i} style={{color: '#7ee787', marginRight: 8}}>{h}</span>)
+                                                ? pHeard.map((h, i) => <span key={i} style={{color: 'var(--success)', marginRight: 8}}>{h}</span>)
                                                 : <span style={{color: 'var(--text-muted)'}}>—</span>}
                                             </td>
                                         </tr>
@@ -9264,20 +9203,20 @@
                             return (
                             <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3}}>
                                 <span style={{fontSize:9,color:'var(--text-muted)',width:55,textAlign:'right',flexShrink:0,fontWeight:600}}>{label}</span>
-                                <div style={{position:'relative',flex:1,height:22,background:'rgba(255,255,255,0.03)',borderRadius:3,overflow:'hidden'}}>
+                                <div style={{position:'relative',flex:1,height:22,background:'var(--panel-subtle)',borderRadius:3,overflow:'hidden'}}>
                                     {items.map((a,j) => {
                                         const isKept = kept.has(j);
                                         const isTrimmed = trimmed.has(j);
                                         return (<div key={j} title={`${a.w} (${a.s.toFixed(3)}s\u2013${a.e.toFixed(3)}s)${isTrimmed?' [trimmed]':''}`} style={{
                                             position:'absolute',left:pct(a.s),width:pct(Math.max(a.e-a.s,0.02)),top:2,bottom:2,borderRadius:2,
-                                            background: isKept ? color : isTrimmed ? color.replace(/[\d.]+\)$/,'0.2)') : 'rgba(255,255,255,0.08)',
-                                            border:`1px solid ${isKept ? color : isTrimmed ? color.replace(/[\d.]+\)$/,'0.3)') : 'rgba(255,255,255,0.12)'}`,
+                                            background: isKept ? color : isTrimmed ? color.replace(/[\d.]+\)$/,'0.2)') : rgbaFromVar('--text-on-dark', 0.08),
+                                            border:`1px solid ${isKept ? color : isTrimmed ? color.replace(/[\d.]+\)$/,'0.3)') : rgbaFromVar('--text-on-dark', 0.12)}`,
                                             display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden',
-                                        }}><span style={{fontSize:8,color: isKept?'#fff':isTrimmed?'rgba(255,255,255,0.4)':'var(--text-muted)',whiteSpace:'nowrap',padding:'0 2px',
+                                        }}><span style={{fontSize:8,color: isKept?'var(--text-on-dark)':isTrimmed?rgbaFromVar('--text-on-dark', 0.4):'var(--text-muted)',whiteSpace:'nowrap',padding:'0 2px',
                                             textDecoration:isTrimmed?'line-through':'none'}}>{a.w}</span></div>);
                                     })}
                                     {/* Term range indicator */}
-                                    {t.term_range && <div style={{position:'absolute',left:pct(t.term_range[0]),width:pct(t.term_range[1]-t.term_range[0]),top:0,bottom:0,border:'1px dashed rgba(255,255,255,0.3)',borderRadius:2,pointerEvents:'none'}} />}
+                                    {t.term_range && <div style={{position:'absolute',left:pct(t.term_range[0]),width:pct(t.term_range[1]-t.term_range[0]),top:0,bottom:0,border:'1px dashed var(--panel-subtle-9)',borderRadius:2,pointerEvents:'none'}} />}
                                 </div>
                             </div>);
                         };
@@ -9290,9 +9229,9 @@
                                     <span style={{fontWeight:600,fontSize:13}}>{t.name}</span>
                                     <span style={{color:'var(--text-muted)',fontSize:11,flex:1}}>{t.desc}</span>
                                     <span style={{fontFamily:'monospace',fontSize:12}}>
-                                        <span style={{color:'rgba(88,166,255,0.8)'}}>{ex.original || '\u2014'}</span>
-                                        {' \u2192 '}
-                                        <span style={{color:'rgba(210,153,34,0.9)'}}>{ex.qwen || '\u2014'}</span>
+                                    <span style={{color:rgbaFromVar('--accent', 0.8)}}>{ex.original || '\u2014'}</span>
+                                    {' \u2192 '}
+                                    <span style={{color:rgbaFromVar('--warning', 0.9)}}>{ex.qwen || '\u2014'}</span>
                                     </span>
                                     <span style={{fontSize:11,color: ex.clean ? 'var(--success)' : 'var(--warning)'}}>{ex.clean ? 'clean' : 'noisy'}</span>
                                 </div>
@@ -9303,15 +9242,15 @@
                                             {' | '}<b>Cons:</b> {consRange[0].toFixed(3)}s \u2013 {consRange[1].toFixed(3)}s
                                         </div>
                                         <div style={{marginTop:6}}>
-                                            {renderTL('Original', al.original, 'rgba(88,166,255,0.6)')}
-                                            {renderTL('Qwen', al.qwen, 'rgba(210,153,34,0.7)')}
-                                            {renderTL('Parakeet', al.parakeet, 'rgba(163,113,247,0.7)')}
+                                            {renderTL('Original', al.original, rgbaFromVar('--accent', 0.6))}
+                                            {renderTL('Qwen', al.qwen, rgbaFromVar('--warning', 0.7))}
+                                            {renderTL('Parakeet', al.parakeet, rgbaFromVar('--reranker', 0.7))}
                                             <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:'var(--text-muted)',marginTop:1,paddingLeft:61}}>
                                                 <span>0s</span><span>{maxTime.toFixed(1)}s</span>
                                             </div>
                                         </div>
                                         {!t.pass && (
-                                            <div style={{marginTop:8,padding:6,background:'rgba(255,50,50,0.1)',borderRadius:4,fontSize:11}}>
+                                            <div style={{marginTop:8,padding:6,background:rgbaFromVar('--danger', 0.1),borderRadius:4,fontSize:11}}>
                                                 <b>Expected:</b> orig="{t.expected.original}" qwen="{t.expected.qwen}" clean={t.expected.clean ? 'true' : 'false'}
                                                 <br/><b>Got:</b> orig="{ex.original}" qwen="{ex.qwen}" clean={ex.clean ? 'true' : 'false'}
                                             </div>
@@ -9477,9 +9416,9 @@
                                     <span style={{marginLeft:12,fontSize:11,color:'var(--text-muted)'}}>({'\u00d7'}{item.hit_count})</span>
                                 </div>
                                 <div style={{fontSize:24,fontFamily:'monospace',marginBottom:4}}>
-                                    <span style={{color:'rgba(88,166,255,0.9)'}}>{item.original}</span>
+                                    <span style={{color:rgbaFromVar('--accent', 0.9)}}>{item.original}</span>
                                     <span style={{color:'var(--text-muted)',margin:'0 12px'}}>{'\u2192'}</span>
-                                    <span style={{color:'rgba(210,153,34,0.9)'}}>{item.qwen}</span>
+                                    <span style={{color:rgbaFromVar('--warning', 0.9)}}>{item.qwen}</span>
                                 </div>
                                 <div style={{fontSize:12,color:'var(--text-muted)',marginTop:8}}>{item.sentence}</div>
                             </div>
@@ -9495,13 +9434,13 @@
                         </div>}
                     </div>
                     {item && !loading && <div className="review-actions">
-                        <button onClick={() => act('reject')} style={{background:'rgba(255,100,100,0.15)',border:'1px solid rgba(255,100,100,0.4)',borderRadius:8,color:'rgba(255,100,100,0.9)',cursor:'pointer',padding:'12px 32px',fontSize:16,fontWeight:600}}>
+                        <button onClick={() => act('reject')} style={{background:'var(--danger-bg-15)',border:'1px solid var(--danger-bg-40)',borderRadius:8,color:'var(--danger)',cursor:'pointer',padding:'12px 32px',fontSize:16,fontWeight:600}}>
                             {'\u2715'} Reject <span style={{fontSize:11,fontWeight:400,opacity:0.6}}>(N)</span>
                         </button>
-                        {data?.can_mark_alt && <button onClick={() => act('alt')} style={{background:'rgba(100,200,255,0.1)',border:'1px solid rgba(100,200,255,0.3)',borderRadius:8,color:'rgba(100,200,255,0.9)',cursor:'pointer',padding:'12px 24px',fontSize:16,fontWeight:600}}>
+                        {data?.can_mark_alt && <button onClick={() => act('alt')} style={{background:'var(--accent-bg-10)',border:'1px solid var(--accent-bg-30)',borderRadius:8,color:'var(--accent)',cursor:'pointer',padding:'12px 24px',fontSize:16,fontWeight:600}}>
                             Alt <span style={{fontSize:11,fontWeight:400,opacity:0.6}}>(A)</span>
                         </button>}
-                        <button onClick={() => act('approve')} style={{background:'rgba(100,200,100,0.15)',border:'1px solid rgba(100,200,100,0.4)',borderRadius:8,color:'rgba(100,200,100,0.9)',cursor:'pointer',padding:'12px 32px',fontSize:16,fontWeight:600}}>
+                        <button onClick={() => act('approve')} style={{background:'var(--success-bg-15)',border:'1px solid var(--success-bg-20)',borderRadius:8,color:'var(--success)',cursor:'pointer',padding:'12px 32px',fontSize:16,fontWeight:600}}>
                             {'\u2713'} Approve <span style={{fontSize:11,fontWeight:400,opacity:0.6}}>(O)</span>
                         </button>
                     </div>}
