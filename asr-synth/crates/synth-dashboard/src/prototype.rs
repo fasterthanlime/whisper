@@ -36,6 +36,7 @@ pub struct PrototypeSpanProposal {
     pub normalized: String,
     pub phonemes: Option<String>,
     pub acoustic_phonemes: Option<String>,
+    pub parakeet_confidence: Option<f32>,
     pub observed_acoustic_score: Option<f32>,
     pub acoustic_trustworthy: bool,
     pub acoustic_window_start_sec: Option<f64>,
@@ -165,8 +166,38 @@ pub struct AcousticSegment {
 
 pub struct AcousticContext<'a> {
     pub qwen_alignment: &'a [qwen3_asr::ForcedAlignItem],
+    pub qwen_word_confidence: &'a [Option<f32>],
     pub zipa_segments: &'a [AcousticSegment],
     pub zipa_by_qwen: &'a [Vec<String>],
+}
+
+fn span_parakeet_confidence(
+    ctx: &AcousticContext<'_>,
+    token_start: usize,
+    token_end: usize,
+) -> Option<f32> {
+    let mut total = 0.0f32;
+    let mut count = 0usize;
+    for idx in token_start..token_end.min(ctx.qwen_word_confidence.len()) {
+        if let Some(conf) = ctx.qwen_word_confidence[idx] {
+            total += conf;
+            count += 1;
+        }
+    }
+    (count > 0).then_some(total / count as f32)
+}
+
+fn phone_led_bias_from_confidence(confidence: Option<f32>) -> f32 {
+    let Some(confidence) = confidence else {
+        return 0.0;
+    };
+    if confidence >= 0.96 {
+        0.0
+    } else if confidence <= 0.72 {
+        0.12
+    } else {
+        ((0.96 - confidence) / 0.24 * 0.12).clamp(0.0, 0.12)
+    }
 }
 
 pub fn phonetic_preview(text: &str) -> Option<String> {
@@ -363,6 +394,8 @@ fn enumerate_span_proposals(
             let acoustic_window = acoustic.and_then(|ctx| acoustic_window_for_span(ctx, start, end));
             let acoustic_phones = acoustic.and_then(|ctx| acoustic_phones_for_span(ctx, start, end));
             let acoustic_phone_count = acoustic_phones.as_ref().map(|phones| phones.len()).unwrap_or(0);
+            let parakeet_confidence = acoustic.and_then(|ctx| span_parakeet_confidence(ctx, start, end));
+            let phone_led_bias = phone_led_bias_from_confidence(parakeet_confidence);
             let span_observed = observed_phonemes_for_span(&raw_text, acoustic_phones.clone());
             if span_compact.len() < 2 && acoustic_phone_count < 2 {
                 continue;
@@ -392,16 +425,26 @@ fn enumerate_span_proposals(
                 })
                 .collect::<Vec<_>>();
             if let Some(phones) = acoustic_phones.as_deref().filter(|phones| !phones.is_empty()) {
-                candidates.extend(phone_led_candidates_for_span(phones, lexicon));
+                candidates.extend(phone_led_candidates_for_span(phones, lexicon, phone_led_bias));
             }
-            if candidates.is_empty() {
-                if let Some(ctx) = acoustic {
+            let best_existing_score = candidates
+                .iter()
+                .map(|candidate| candidate.score)
+                .fold(0.0f32, f32::max);
+            if let Some(ctx) = acoustic {
+                if candidates.is_empty() || (phone_led_bias > 0.0 && best_existing_score < 0.88) {
                     if let Some(rescue) =
-                        phone_led_rescue_proposal(input, tokens, lexicon, ctx, start, end, config)
+                        phone_led_rescue_proposal(input, tokens, lexicon, ctx, start, end, config, phone_led_bias)
                     {
+                        if candidates.is_empty() {
+                            proposals.push(rescue);
+                            continue;
+                        }
                         proposals.push(rescue);
                     }
                 }
+            }
+            if candidates.is_empty() {
                 continue;
             }
             let mut by_form: HashMap<(String, &'static str, String), ScoredCandidate> = HashMap::new();
@@ -431,6 +474,7 @@ fn enumerate_span_proposals(
                 normalized,
                 phonemes: phoneme_string(&span_observed.phones),
                 acoustic_phonemes: acoustic_phones.as_ref().and_then(|phones| phoneme_string(phones)),
+                parakeet_confidence,
                 observed_acoustic_score,
                 acoustic_trustworthy,
                 acoustic_window_start_sec: acoustic_window.map(|(start, _)| start),
@@ -480,6 +524,7 @@ fn phone_led_rescue_proposal(
     seed_start: usize,
     seed_end: usize,
     config: PrototypeConfig,
+    phone_led_bias: f32,
 ) -> Option<PrototypeSpanProposal> {
     let neighborhood_start = seed_start.saturating_sub(2);
     let neighborhood_end = (seed_end + 2).min(tokens.len());
@@ -507,12 +552,13 @@ fn phone_led_rescue_proposal(
             else {
                 continue;
             };
-            let min_score = match form.via {
+            let min_score = (match form.via {
                 "spoken" | "confusion" | "alt" => 0.74,
                 "canonical" if has_noncanonical_forms => 0.86,
                 "canonical" => 0.80,
                 _ => 0.82,
-            };
+            } - phone_led_bias)
+                .max(0.60);
             if phon < min_score {
                 continue;
             }
@@ -525,6 +571,7 @@ fn phone_led_rescue_proposal(
             if matches!(form.via, "spoken" | "confusion" | "alt") {
                 score += 0.04;
             }
+            score += 0.10 * phone_led_bias;
             let candidate = ScoredCandidate {
                 term: term.term.clone(),
                 via: form.via,
@@ -596,6 +643,7 @@ fn phone_led_rescue_proposal(
         normalized,
         phonemes: phoneme_string(&span_observed.phones),
         acoustic_phonemes: phoneme_string(&acoustic_phones),
+        parakeet_confidence: span_parakeet_confidence(ctx, token_start, token_end),
         observed_acoustic_score: Some(1.0),
         acoustic_trustworthy: true,
         acoustic_window_start_sec: acoustic_window.map(|(start, _)| start),
@@ -695,6 +743,7 @@ fn token_span_for_time_window(
 fn phone_led_candidates_for_span(
     acoustic_phones: &[String],
     lexicon: &[LexiconTerm],
+    phone_led_bias: f32,
 ) -> Vec<ScoredCandidate> {
     let observed = normalize_house_ipa_tokens(acoustic_phones);
     if observed.is_empty() {
@@ -710,12 +759,13 @@ fn phone_led_candidates_for_span(
             }
             let phonetic_score = phoneme_similarity(&observed, &form.phonemes);
             let phon = phonetic_score.unwrap_or(0.0);
-            let min_score = match form.via {
+            let min_score = (match form.via {
                 "spoken" | "confusion" | "alt" => 0.72,
                 "canonical" if has_noncanonical_forms => 0.84,
                 "canonical" => 0.78,
                 _ => 0.80,
-            };
+            } - phone_led_bias)
+                .max(0.58);
             if phon < min_score {
                 continue;
             }
@@ -726,6 +776,7 @@ fn phone_led_candidates_for_span(
             if phon >= 0.90 {
                 score += 0.04;
             }
+            score += 0.10 * phone_led_bias;
             let candidate = ScoredCandidate {
                 term: term.term.clone(),
                 via: form.via,
@@ -2331,6 +2382,7 @@ mod tests {
             normalized: "serdejson".to_string(),
             phonemes: Some("S EH R D EH JH S AO N".to_string()),
             acoustic_phonemes: None,
+            parakeet_confidence: None,
             observed_acoustic_score: None,
             acoustic_trustworthy: false,
             acoustic_window_start_sec: None,
@@ -2372,6 +2424,7 @@ mod tests {
             normalized: "right".to_string(),
             phonemes: Some("R AY T".to_string()),
             acoustic_phonemes: None,
+            parakeet_confidence: None,
             observed_acoustic_score: None,
             acoustic_trustworthy: false,
             acoustic_window_start_sec: None,
@@ -2436,6 +2489,7 @@ mod tests {
             normalized: "a arch sixtyfourcompatible".to_string(),
             phonemes: Some("AH AA R CH S IH K S T Y F AO AH R K AO M P AE T IH B L EH".to_string()),
             acoustic_phonemes: None,
+            parakeet_confidence: None,
             observed_acoustic_score: None,
             acoustic_trustworthy: false,
             acoustic_window_start_sec: None,
@@ -2486,7 +2540,8 @@ mod tests {
     fn phone_led_candidates_nominate_term_without_lexical_help() {
         let vocab = vec![row_with_reviewed_ipa("DWARF", "dworf", "d w ɔ ɹ f")];
         let lexicon = build_lexicon(&vocab, &HashMap::new(), &HashMap::new());
-        let candidates = phone_led_candidates_for_span(&parse_reviewed_ipa("d w ɔ ɹ f"), &lexicon);
+        let candidates =
+            phone_led_candidates_for_span(&parse_reviewed_ipa("d w ɔ ɹ f"), &lexicon, 0.0);
         assert_eq!(candidates.len(), 1, "{candidates:#?}");
         assert_eq!(candidates[0].term, "DWARF");
         assert_eq!(candidates[0].via, "spoken");
@@ -2551,8 +2606,10 @@ mod tests {
             vec!["k".to_string(), "o".to_string(), "ʊ".to_string(), "v".to_string()],
             vec!["k".to_string(), "ə".to_string(), "m".to_string()],
         ];
+        let qwen_word_confidence = vec![Some(0.99); qwen_alignment.len()];
         let acoustic = AcousticContext {
             qwen_alignment: &qwen_alignment,
+            qwen_word_confidence: &qwen_word_confidence,
             zipa_segments: &zipa_segments,
             zipa_by_qwen: &zipa_by_qwen,
         };
@@ -2565,6 +2622,7 @@ mod tests {
             2,
             4,
             PrototypeConfig::default(),
+            0.0,
         )
         .expect("rescue proposal");
 
@@ -2605,6 +2663,40 @@ mod tests {
     fn observed_phonemes_do_not_fall_back_to_text_guessing_without_acoustics() {
         let observed = observed_phonemes_for_span("mere", None);
         assert!(observed.phones.is_empty(), "{observed:#?}");
+    }
+
+    #[test]
+    fn span_parakeet_confidence_averages_mapped_words() {
+        let qwen_alignment = vec![
+            qwen3_asr::ForcedAlignItem {
+                word: "bear".to_string(),
+                start_time: 0.0,
+                end_time: 0.2,
+            },
+            qwen3_asr::ForcedAlignItem {
+                word: "cove".to_string(),
+                start_time: 0.2,
+                end_time: 0.5,
+            },
+        ];
+        let qwen_word_confidence = vec![Some(0.80), Some(0.60)];
+        let zipa_segments: Vec<AcousticSegment> = Vec::new();
+        let zipa_by_qwen: Vec<Vec<String>> = Vec::new();
+        let acoustic = AcousticContext {
+            qwen_alignment: &qwen_alignment,
+            qwen_word_confidence: &qwen_word_confidence,
+            zipa_segments: &zipa_segments,
+            zipa_by_qwen: &zipa_by_qwen,
+        };
+        let conf = span_parakeet_confidence(&acoustic, 0, 2).expect("span confidence");
+        assert!((conf - 0.70).abs() < 1e-6, "{conf}");
+    }
+
+    #[test]
+    fn low_parakeet_confidence_increases_phone_led_bias() {
+        assert_eq!(phone_led_bias_from_confidence(Some(0.98)), 0.0);
+        assert!(phone_led_bias_from_confidence(Some(0.88)) > 0.0);
+        assert!(phone_led_bias_from_confidence(Some(0.72)) >= 0.11);
     }
 
     #[test]

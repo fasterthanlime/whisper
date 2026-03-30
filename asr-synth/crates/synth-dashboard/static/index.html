@@ -8320,7 +8320,7 @@
                     <div className="stage-controls" style={{flexDirection: 'column', alignItems: 'stretch', gap: 12}}>
                         <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
                             <button className="stage-launch-btn" onClick={recording ? stopRec : startRec}
-                                style={recording ? {borderColor: 'var(--danger)', color: 'var(--danger)', background: rgbaFromVar('--danger', 0.1)} : {}}>
+                                style={recording ? {borderColor: 'var(--danger)', color: 'var(--text-on-dark)', background: 'var(--danger)'} : {}}>
                                 {recording ? 'Stop' : transcribing ? 'Transcribing\u2026' : correcting ? 'Correcting\u2026' : 'Record'}
                             </button>
                                 <span style={{color: 'var(--text-muted)', fontSize: 11}}>or</span>
