@@ -258,10 +258,12 @@ final class AppState {
         case .aborted:
             break // no trace
         case .cancelled(_, let text):
+            SoundEffects.shared.playCancel()
             if !text.isEmpty {
                 addHistoryEntry(text: text)
             }
         case .committed(_, let text, _):
+            SoundEffects.shared.playCommit()
             if !text.isEmpty {
                 addHistoryEntry(text: text)
             }
@@ -284,6 +286,7 @@ final class AppState {
     func loadModelAtStartup() {
         let model = Self.defaultModel
         modelStatus = .loading
+        SoundEffects.shared.warmUp()
 
         Task {
             // Request mic permission
@@ -322,7 +325,7 @@ final class AppState {
     }
 
     private func playRecordingStartedSound() {
-        // TODO: play tink sound
+        SoundEffects.shared.playRecordingStarted()
     }
 
     private func pasteLastHistoryEntry() {
