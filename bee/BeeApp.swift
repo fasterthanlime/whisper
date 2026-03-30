@@ -23,6 +23,7 @@ struct BeeApp: App {
                     hotkeyMonitor.appState = appState
                     hotkeyMonitor.start()
                     BeeInputClient.ensureIMERegistered()
+                    appState.loadModelAtStartup()
                 }
         } label: {
             Image("MenuBarIcon")

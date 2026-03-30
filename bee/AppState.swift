@@ -243,6 +243,32 @@ final class AppState {
         )
     }
 
+    // MARK: - Model Loading
+
+    static let defaultModel = STTModelDefinition.allModels.first(where: { $0.id == "qwen3-1.7b-q8" })
+        ?? STTModelDefinition.default
+
+    func loadModelAtStartup() {
+        let model = Self.defaultModel
+        modelStatus = .loading
+
+        Task {
+            do {
+                try await transcriptionService.loadModel(
+                    model: model,
+                    cacheDir: STTModelDefinition.cacheDirectory
+                )
+                await MainActor.run {
+                    self.modelStatus = .loaded
+                }
+            } catch {
+                await MainActor.run {
+                    self.modelStatus = .error(error.localizedDescription)
+                }
+            }
+        }
+    }
+
     // MARK: - Stubs
 
     private func detectLanguage() -> String? {
