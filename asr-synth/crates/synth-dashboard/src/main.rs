@@ -1239,29 +1239,15 @@ async fn api_asr_dual(
         };
         let samples_16k = tts::resample_to_16k(&mono, spec.sample_rate)?;
 
-        let qwen_result = state2
-            .asr
-            .transcribe_samples(
-                &samples_16k,
-                qwen3_asr::TranscribeOptions::default().with_language("english"),
-            );
         let parakeet_result = state2.parakeet.transcribe_samples(
             samples_16k.to_vec(),
             16000,
             1,
             Some(parakeet_rs::TimestampMode::Words),
         );
-        let cohere_result = jobs::transcribe_cohere_from_16k_warm(&state2, &samples_16k);
-
-        let qwen = qwen_result.as_ref().map(|r| r.text.clone()).unwrap_or_default();
         let parakeet = parakeet_result
             .as_ref()
             .map(|r| r.text.clone())
-            .unwrap_or_default();
-        let cohere = cohere_result
-            .as_ref()
-            .ok()
-            .and_then(|value| value.get("text").and_then(|v| v.as_str()).map(str::to_string))
             .unwrap_or_default();
         let parakeet_alignment = parakeet_result
             .as_ref()
@@ -1280,31 +1266,21 @@ async fn api_asr_dual(
             })
             .unwrap_or_default();
 
-        let qwen_error = qwen_result.err().map(|e| e.to_string());
         let parakeet_error = parakeet_result.err().map(|e| e.to_string());
-        let cohere_error = match cohere_result {
-            Ok(_) => None,
-            Err(e) => Some(e.to_string()),
-        };
-
-        let correction_input = if !qwen.trim().is_empty() {
-            "qwen"
-        } else if !cohere.trim().is_empty() {
-            "cohere"
-        } else if !parakeet.trim().is_empty() {
+        let correction_input = if !parakeet.trim().is_empty() {
             "parakeet"
         } else {
             ""
         };
 
         Ok(serde_json::json!({
-            "qwen": qwen,
+            "qwen": "",
             "parakeet": parakeet,
-            "cohere": cohere,
+            "cohere": "",
             "parakeet_alignment": parakeet_alignment,
-            "qwen_error": qwen_error,
+            "qwen_error": serde_json::Value::Null,
             "parakeet_error": parakeet_error,
-            "cohere_error": cohere_error,
+            "cohere_error": serde_json::Value::Null,
             "correction_input": correction_input,
         }))
     })

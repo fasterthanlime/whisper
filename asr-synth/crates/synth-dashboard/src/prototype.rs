@@ -513,7 +513,24 @@ fn enumerate_span_proposals(
             .total_cmp(&a_score)
             .then_with(|| (b.token_end - b.token_start).cmp(&(a.token_end - a.token_start)))
     });
+    dedupe_span_proposals(&mut proposals);
     proposals
+}
+
+fn dedupe_span_proposals(proposals: &mut Vec<PrototypeSpanProposal>) {
+    let mut seen = HashSet::new();
+    proposals.retain(|proposal| {
+        let top = proposal.candidates.first();
+        let key = (
+            proposal.token_start,
+            proposal.token_end,
+            proposal.normalized.clone(),
+            top.map(|candidate| candidate.term.clone()).unwrap_or_default(),
+            top.map(|candidate| candidate.via.clone()).unwrap_or_default(),
+            top.map(|candidate| candidate.matched_form.clone()).unwrap_or_default(),
+        );
+        seen.insert(key)
+    });
 }
 
 fn phone_led_rescue_proposal(

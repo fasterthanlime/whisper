@@ -645,48 +645,65 @@ fn select_prototype_reranker_candidates(
 }
 
 fn load_human_prototype_items(
+    state: &Arc<AppState>,
     db: &crate::db::Db,
-    qwen_model_key: &str,
     alt_spellings: &HashMap<String, Vec<String>>,
     limit: usize,
+    randomize: bool,
+    sample_seed: u64,
 ) -> anyhow::Result<Vec<PrototypeBakeoffItem>> {
-    let mut items = db
-        .authored_sentence_recordings_for_eval()?
-        .into_iter()
-        .filter_map(|rec| {
-            let qwen = rec.qwen_clean?;
-            if rec.qwen_clean_model.as_deref() != Some(qwen_model_key) {
-                return None;
-            }
-            let expected_fragment = rec
-                .surface_form
-                .as_deref()
-                .filter(|_| rec.kind == "counterexample")
-                .unwrap_or(&rec.term)
-                .to_string();
-            if !eval_fragment_matches(
-                alt_spellings,
-                &rec.term,
-                &expected_fragment,
-                &rec.sentence,
-            ) {
-                return None;
-            }
-            Some(PrototypeBakeoffItem {
-                case_id: format!("hum-{}", rec.id),
-                term: rec.term,
-                qwen,
-                expected: rec.sentence,
-                hit_count: 1,
-                recording_id: Some(rec.id),
-                wav_path: Some(rec.wav_path),
-                template_sentence: None,
-                qwen_fragment: None,
-                expected_fragment: Some(expected_fragment),
-            })
-        })
-        .collect::<Vec<_>>();
-    items.truncate(limit);
+    use rand::seq::SliceRandom;
+    use rand::SeedableRng;
+
+    let mut selected = Vec::new();
+    for rec in db.authored_sentence_recordings_for_eval()? {
+        let expected_fragment = rec
+            .surface_form
+            .as_deref()
+            .filter(|_| rec.kind == "counterexample")
+            .unwrap_or(&rec.term)
+            .to_string();
+        if !eval_fragment_matches(
+            alt_spellings,
+            &rec.term,
+            &expected_fragment,
+            &rec.sentence,
+        ) {
+            continue;
+        }
+        selected.push((rec, expected_fragment));
+    }
+    if randomize {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(sample_seed);
+        selected.shuffle(&mut rng);
+    }
+    selected.truncate(limit);
+
+    let mut items = Vec::with_capacity(selected.len());
+    for (rec, expected_fragment) in selected {
+        let samples_16k = load_authored_recording_16k(&rec.wav_path)?;
+        let parakeet = state
+            .parakeet
+            .transcribe_samples(
+                samples_16k,
+                16000,
+                1,
+                Some(parakeet_rs::TimestampMode::Words),
+            )?
+            .text;
+        items.push(PrototypeBakeoffItem {
+            case_id: format!("hum-{}", rec.id),
+            term: rec.term,
+            qwen: parakeet,
+            expected: rec.sentence,
+            hit_count: 1,
+            recording_id: Some(rec.id),
+            wav_path: Some(rec.wav_path),
+            template_sentence: None,
+            qwen_fragment: None,
+            expected_fragment: Some(expected_fragment),
+        });
+    }
     Ok(items)
 }
 
@@ -7565,7 +7582,7 @@ pub async fn api_correct_prototype_bakeoff(
         use_prototype_adapters,
     );
     let prototype_only_eval = true;
-    if source == "applied" {
+    if matches!(source.as_str(), "applied" | "human") {
         check_no_running_jobs(&state)?;
         let job_id = {
             let db = state.db.lock().unwrap();
@@ -7593,39 +7610,64 @@ pub async fn api_correct_prototype_bakeoff(
                     let vocab = db.list_reviewed_vocab()?;
                     let alt_spellings = db.get_all_alt_spellings()?;
                     let confusion_forms = db.get_all_reviewed_confusion_surfaces()?;
-                    let mut items = load_applied_eval_rows("training/applied-eval.jsonl")?;
-                    items.sort_by(|a, b| {
-                        a.term
-                            .cmp(&b.term)
-                            .then_with(|| a.corrupted_sentence.cmp(&b.corrupted_sentence))
-                    });
-                    let items = items
+                    let items = if source == "applied" {
+                        let mut items = load_applied_eval_rows("training/applied-eval.jsonl")?;
+                        items.sort_by(|a, b| {
+                            a.term
+                                .cmp(&b.term)
+                                .then_with(|| a.corrupted_sentence.cmp(&b.corrupted_sentence))
+                        });
+                        items
+                            .into_iter()
+                            .map(|item| PrototypeBakeoffItem {
+                                case_id: prototype_bakeoff_case_id(
+                                    "applied",
+                                    None,
+                                    &item.term,
+                                    &item.corrupted_sentence,
+                                    &item.clean_sentence,
+                                ),
+                                term: item.term.clone(),
+                                qwen: item.corrupted_sentence,
+                                expected: item.clean_sentence,
+                                hit_count: 1,
+                                recording_id: None,
+                                wav_path: None,
+                                template_sentence: None,
+                                qwen_fragment: Some(item.corruption_surface),
+                                expected_fragment: Some(item.term),
+                            })
+                            .collect::<Vec<_>>()
+                    } else {
+                        load_human_prototype_items(
+                            &state3,
+                            &db,
+                            &alt_spellings,
+                            limit,
+                            randomize,
+                            sample_seed,
+                        )?
                         .into_iter()
-                        .map(|item| PrototypeBakeoffItem {
-                            case_id: prototype_bakeoff_case_id(
-                                "applied",
-                                None,
+                        .map(|mut item| {
+                            item.case_id = prototype_bakeoff_case_id(
+                                "human",
+                                item.recording_id,
                                 &item.term,
-                                &item.corrupted_sentence,
-                                &item.clean_sentence,
-                            ),
-                            term: item.term.clone(),
-                            qwen: item.corrupted_sentence,
-                            expected: item.clean_sentence,
-                            hit_count: 1,
-                            recording_id: None,
-                            wav_path: None,
-                            template_sentence: None,
-                            qwen_fragment: Some(item.corruption_surface),
-                            expected_fragment: Some(item.term),
+                                &item.qwen,
+                                &item.expected,
+                            );
+                            item
                         })
-                        .collect::<Vec<_>>();
+                        .collect::<Vec<_>>()
+                    };
                     (items, vocab, alt_spellings, confusion_forms)
                 };
                 items.truncate(limit);
 
                 let total = items.len();
                 let prototype_config = crate::prototype::PrototypeConfig::default();
+                let mut baseline_ok = 0usize;
+                let mut baseline_target_ok = 0usize;
                 let mut prototype_ok = 0usize;
                 let mut failure_buckets = PrototypeEvalFailureBuckets::default();
                 let mut entries = Vec::with_capacity(total);
@@ -7637,13 +7679,32 @@ pub async fn api_correct_prototype_bakeoff(
                         break;
                     }
 
+                    let acoustic_input = if source == "human" {
+                        item.wav_path.as_deref().and_then(|wav_path| {
+                            let samples_16k = load_authored_recording_16k(wav_path).ok()?;
+                            build_acoustic_input_from_samples_16k(
+                                &state3,
+                                &state3.aligner,
+                                &samples_16k,
+                                &item.qwen,
+                            )
+                        })
+                    } else {
+                        None
+                    };
+                    let acoustic_context = acoustic_input.as_ref().map(|input| crate::prototype::AcousticContext {
+                        qwen_alignment: &input.qwen_alignment,
+                        qwen_word_confidence: &input.qwen_word_confidence,
+                        zipa_segments: &input.zipa_segments,
+                        zipa_by_qwen: &input.zipa_by_qwen,
+                    });
                     let mut result = crate::prototype::prototype_correct_with_acoustics(
                         &item.qwen,
                         &vocab,
                         &alt_spellings,
                         &confusion_forms,
                         prototype_config,
-                        None,
+                        acoustic_context.as_ref(),
                     );
                     let mut reranker_summary = None;
                     if reranker_mode != PrototypeRerankerMode::Off
@@ -7685,6 +7746,11 @@ pub async fn api_correct_prototype_bakeoff(
 
                     let prototype_text = result.corrected.clone();
                     let baseline_hit = normalized_compare_eq(&item.qwen, &item.expected);
+                    let baseline_target_hit = item
+                        .expected_fragment
+                        .as_deref()
+                        .map(|fragment| eval_fragment_matches(&alt_spellings, &item.term, fragment, &item.qwen))
+                        .unwrap_or(false);
                     let prototype_hit = normalized_compare_eq(&prototype_text, &item.expected);
                     let analysis = analyze_prototype_eval_row(
                         &result,
@@ -7693,6 +7759,8 @@ pub async fn api_correct_prototype_bakeoff(
                         &item.expected,
                         &alt_spellings,
                     );
+                    baseline_ok += usize::from(baseline_hit);
+                    baseline_target_ok += usize::from(baseline_target_hit);
                     prototype_ok += usize::from(prototype_hit);
                     failure_buckets.record(analysis.failure_reason);
 
@@ -7704,7 +7772,7 @@ pub async fn api_correct_prototype_bakeoff(
                     entries.push(serde_json::json!({
                         "term": item.term,
                         "case_id": item.case_id,
-                        "source": "applied",
+                        "source": source,
                         "expected": item.expected,
                         "qwen": item.qwen,
                         "recording_id": item.recording_id,
@@ -7716,8 +7784,10 @@ pub async fn api_correct_prototype_bakeoff(
                         "qwen_fragment_phonemes": item.qwen_fragment.as_deref().and_then(crate::prototype::phonetic_preview),
                         "hit_count": item.hit_count,
                         "baseline_ok": baseline_hit,
+                        "baseline_target_ok": baseline_target_hit,
                         "current": item.qwen,
                         "current_ok": baseline_hit,
+                        "current_target_ok": baseline_target_hit,
                         "prototype": prototype_text,
                         "prototype_ok": prototype_hit,
                         "prototype_target_ok": analysis.target_ok,
@@ -7743,18 +7813,27 @@ pub async fn api_correct_prototype_bakeoff(
                     }));
 
                     let snapshot = serde_json::json!({
-                        "source": "applied",
+                        "source": source,
                         "limit": limit,
-                        "randomize": false,
+                        "randomize": source == "human" && randomize,
                         "sample_seed": sample_seed,
                         "prototype_only_eval": true,
                         "processed": idx + 1,
                         "summary": {
                             "n": total,
+                            "baseline": baseline_ok,
+                            "current": baseline_ok,
                             "prototype": prototype_ok,
                             "prototype_wrong": (idx + 1).saturating_sub(prototype_ok),
                         },
                         "failure_buckets": failure_buckets.to_json(),
+                        "target_summary": {
+                            "n": total,
+                            "baseline": baseline_target_ok,
+                            "current": baseline_target_ok,
+                            "prototype": entries.iter().filter(|entry| entry["prototype_target_ok"].as_bool().unwrap_or(false)).count(),
+                            "prototype_wrong": (idx + 1).saturating_sub(entries.iter().filter(|entry| entry["prototype_target_ok"].as_bool().unwrap_or(false)).count()),
+                        },
                         "entries": entries,
                     });
                     let db = state3.db.lock().unwrap();
@@ -7772,18 +7851,27 @@ pub async fn api_correct_prototype_bakeoff(
                 }
 
                 Ok(serde_json::json!({
-                    "source": "applied",
+                    "source": source,
                     "limit": limit,
-                    "randomize": false,
+                    "randomize": source == "human" && randomize,
                     "sample_seed": sample_seed,
                     "prototype_only_eval": true,
                     "processed": entries.len(),
                     "summary": {
                         "n": total,
+                        "baseline": baseline_ok,
+                        "current": baseline_ok,
                         "prototype": prototype_ok,
                         "prototype_wrong": total.saturating_sub(prototype_ok),
                     },
                     "failure_buckets": failure_buckets.to_json(),
+                    "target_summary": {
+                        "n": total,
+                        "baseline": baseline_target_ok,
+                        "current": baseline_target_ok,
+                        "prototype": entries.iter().filter(|entry| entry["prototype_target_ok"].as_bool().unwrap_or(false)).count(),
+                        "prototype_wrong": entries.len().saturating_sub(entries.iter().filter(|entry| entry["prototype_target_ok"].as_bool().unwrap_or(false)).count()),
+                    },
                     "entries": entries,
                 }))
             })
@@ -7873,51 +7961,27 @@ pub async fn api_correct_prototype_bakeoff(
                     })
                     .collect::<Vec<_>>()
             } else {
-                db.authored_sentence_recordings_for_eval()?
+                load_human_prototype_items(
+                    &state2,
+                    &db,
+                    &alt_spellings,
+                    limit,
+                    randomize,
+                    sample_seed,
+                )?
                     .into_iter()
-                    .filter_map(|rec| {
-                        let qwen = rec.qwen_clean?;
-                        if rec.qwen_clean_model.as_deref() != Some(&state2.qwen_model_key) {
-                            return None;
-                        }
-                        let expected_fragment = rec
-                            .surface_form
-                            .as_deref()
-                            .filter(|_| rec.kind == "counterexample")
-                            .unwrap_or(&rec.term)
-                            .to_string();
-                        if !eval_fragment_matches(
-                            &alt_spellings,
-                            &rec.term,
-                            &expected_fragment,
-                            &rec.sentence,
-                        ) {
-                            return None;
-                        }
-                        Some(PrototypeBakeoffItem {
-                            case_id: prototype_bakeoff_case_id(
-                                "human",
-                                Some(rec.id),
-                                &rec.term,
-                                &qwen,
-                                &rec.sentence,
-                            ),
-                            term: rec.term,
-                            qwen,
-                            expected: rec.sentence,
-                            hit_count: 1,
-                            recording_id: Some(rec.id),
-                            wav_path: Some(rec.wav_path),
-                            template_sentence: None,
-                            qwen_fragment: None,
-                            expected_fragment: Some(expected_fragment),
-                        })
+                    .map(|mut item| {
+                        item.case_id = prototype_bakeoff_case_id(
+                            "human",
+                            item.recording_id,
+                            &item.term,
+                            &item.qwen,
+                            &item.expected,
+                        );
+                        item
                     })
                     .collect::<Vec<_>>()
             };
-            if source == "human" && randomize {
-                shuffle_human_bakeoff_items(&mut items, sample_seed);
-            }
             (items, vocab, alt_spellings, confusion_forms)
         };
         items.truncate(limit);
@@ -8324,15 +8388,9 @@ pub async fn api_correct_prototype_bakeoff_detail(
             1,
             Some(parakeet_rs::TimestampMode::Words),
         );
-        let cohere_result = transcribe_cohere_from_16k_warm(&state2, &samples_16k);
         let parakeet = parakeet_result
             .as_ref()
             .map(|r| r.text.clone())
-            .unwrap_or_default();
-        let cohere = cohere_result
-            .as_ref()
-            .ok()
-            .and_then(|value| value.get("text").and_then(|v| v.as_str()).map(str::to_string))
             .unwrap_or_default();
         let parakeet_alignment_words = parakeet_result
             .as_ref()
@@ -8351,17 +8409,31 @@ pub async fn api_correct_prototype_bakeoff_detail(
             })
             .unwrap_or_default();
         let expected_alignment = state2.aligner.align(&samples_16k, &expected)?;
-        let qwen_alignment = state2.aligner.align(&samples_16k, &qwen)?;
+        let acoustic_input = build_acoustic_input_from_samples_16k(
+            &state2,
+            &state2.aligner,
+            &samples_16k,
+            &parakeet,
+        );
+        let qwen_alignment = acoustic_input
+            .as_ref()
+            .map(|input| input.qwen_alignment.clone())
+            .unwrap_or_else(|| state2.aligner.align(&samples_16k, &parakeet).unwrap_or_default());
         let current_alignment = state2.aligner.align(&samples_16k, &current)?;
         let prototype_alignment = state2.aligner.align(&samples_16k, &prototype)?;
-        let zipa_trace = decode_zipa_trace_from_16k(&samples_16k).ok();
-        let zipa_segments = zipa_trace
+        let zipa_trace = acoustic_input.as_ref().map(|input| input.zipa_trace.clone());
+        let zipa_segments = acoustic_input
             .as_ref()
-            .map(zipa_segments_from_trace)
+            .map(|input| input.zipa_segments.clone())
             .unwrap_or_default();
-        let zipa_by_qwen =
-            crate::prototype::zipa_grouped_arpabet_by_alignment(&qwen_alignment, &zipa_segments);
-        let qwen_word_confidence = vec![None; qwen_alignment.len()];
+        let zipa_by_qwen = acoustic_input
+            .as_ref()
+            .map(|input| input.zipa_by_qwen.clone())
+            .unwrap_or_else(|| crate::prototype::zipa_grouped_arpabet_by_alignment(&qwen_alignment, &zipa_segments));
+        let qwen_word_confidence = acoustic_input
+            .as_ref()
+            .map(|input| input.qwen_word_confidence.clone())
+            .unwrap_or_else(|| vec![None; qwen_alignment.len()]);
         let acoustic_context = crate::prototype::AcousticContext {
             qwen_alignment: &qwen_alignment,
             qwen_word_confidence: &qwen_word_confidence,
@@ -8369,7 +8441,7 @@ pub async fn api_correct_prototype_bakeoff_detail(
             zipa_by_qwen: &zipa_by_qwen,
         };
         let mut prototype_result = crate::prototype::prototype_correct_with_acoustics(
-            &qwen,
+            &parakeet,
             &vocab,
             &alt_spellings,
             &confusion_forms,
@@ -8390,14 +8462,14 @@ pub async fn api_correct_prototype_bakeoff_detail(
                 PrototypeRerankerMode::Trained => {
                     run_prototype_reranker(
                         state.as_ref(),
-                        &qwen,
+                        &parakeet,
                         &candidates,
                         true,
                         prototype_reranker_train_id,
                     )?
                 }
                 PrototypeRerankerMode::OfficialQwen3 => {
-                    run_official_qwen3_reranker(state.as_ref(), &qwen, &candidates)?
+                    run_official_qwen3_reranker(state.as_ref(), &parakeet, &candidates)?
                 }
             };
             let chosen_index = rerank_value.get("chosen_index").and_then(|v| v.as_u64()).map(|v| v as usize);
@@ -8418,18 +8490,19 @@ pub async fn api_correct_prototype_bakeoff_detail(
         Ok(serde_json::json!({
             "ok": true,
             "recording_id": recording_id,
-            "qwen": qwen,
+            "qwen": parakeet,
             "parakeet": parakeet,
-            "cohere": cohere,
+            "cohere": "",
             "parakeet_alignment": parakeet_alignment_words,
             "qwen_error": serde_json::Value::Null,
             "parakeet_error": parakeet_result.err().map(|e| e.to_string()),
-            "cohere_error": match cohere_result {
-                Ok(_) => None,
-                Err(e) => Some(e.to_string()),
-            },
-            "correction_input": "qwen",
+            "cohere_error": serde_json::Value::Null,
+            "correction_input": "parakeet",
             "alignments": {
+                "timing_source": acoustic_input
+                    .as_ref()
+                    .map(|input| input.timing_source.clone())
+                    .unwrap_or_else(|| "unknown".to_string()),
                 "expected": fmt_alignment_json(&expected_alignment),
                 "qwen": fmt_alignment_json(&qwen_alignment),
                 "current": fmt_alignment_json(&current_alignment),

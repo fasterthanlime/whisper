@@ -475,7 +475,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = "/Users/amos/bearcove/qwen3-asr-rs/qwen3-asr-ffi/include";
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/qwen3-asr-rs/qwen3-asr-ffi/include";
 				INFOPLIST_KEY_ATSApplicationFontsPath = Fonts;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -484,7 +484,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "/Users/amos/bearcove/qwen3-asr-rs/target/release";
+				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/qwen3-asr-rs/target/release";
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
 					"-lqwen3_asr_ffi",
@@ -525,7 +525,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = "/Users/amos/bearcove/qwen3-asr-rs/qwen3-asr-ffi/include";
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/qwen3-asr-rs/qwen3-asr-ffi/include";
 				INFOPLIST_KEY_ATSApplicationFontsPath = Fonts;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -534,7 +534,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "/Users/amos/bearcove/qwen3-asr-rs/target/release";
+				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/qwen3-asr-rs/target/release";
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
 					"-lqwen3_asr_ffi",
@@ -651,7 +651,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = B2N6FSRTPV;
 				ENABLE_APP_SANDBOX = NO;
-				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -688,7 +688,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = B2N6FSRTPV;
 				ENABLE_APP_SANDBOX = NO;
-				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
