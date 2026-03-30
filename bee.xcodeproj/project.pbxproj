@@ -8,11 +8,13 @@
 
 /* Begin PBXBuildFile section */
 		2B877E72AFA9A4D05B9FDC0B /* Session.swift in Sources */ = {isa = PBXBuildFile; fileRef = 676164F78A7A1315DBA4D712 /* Session.swift */; };
+		3C5C473887772CFDAA7535EE /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F154B4296E76BCBEDD666C34 /* MenuBarView.swift */; };
 		4012F4EB2852984F39E07383 /* beeTemplate.tiff in Resources */ = {isa = PBXBuildFile; fileRef = 6AEB22F163C305E4983946FF /* beeTemplate.tiff */; };
 		4A7942D230B46253EF1197E9 /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F7D08BD88D7C596EA782773 /* TranscriptionService.swift */; };
 		4D8C3959E90E687D47D2804F /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C26401964247ABA42B4ADCA3 /* main.swift */; };
 		557898E7F769A7D1AB009DE4 /* InputMethodKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 44D01D1FC50FBE993FD0716F /* InputMethodKit.framework */; };
 		599EE6A4E7B1CA2D6CE47107 /* AudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 221AD035A01421E2640E350E /* AudioEngine.swift */; };
+		59A3A4BE607D2198DDD3609D /* TranscriptionHistoryItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC8AFB3851834181E8F4EF77 /* TranscriptionHistoryItem.swift */; };
 		66493E87798EF2D09BC1BC43 /* BeeInputClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AA018C194359C6E4CE7BA63 /* BeeInputClient.swift */; };
 		7FF09C8DD345E95C1033EA8D /* BeeInputAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F54E5F987731158C437D997 /* BeeInputAppDelegate.swift */; };
 		A5E5F67ADA2E617101E1D732 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2A7D3D2469CBFB9FF5D9FD91 /* Assets.xcassets */; };
@@ -20,6 +22,7 @@
 		DC35DFDBCF6C52FA6E0A690A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5A35BE9759CA9C8519D87363 /* Assets.xcassets */; };
 		DF83AB59DF1198FA8BE5248F /* BeeInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB5FE976B1CF01CA031AF66 /* BeeInputController.swift */; };
 		EAD815EAA627296BFA0C4EA3 /* BeeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7059CA841745C6E21DA830A3 /* BeeApp.swift */; };
+		F93A846E10BB3E70003F07C6 /* STTModelDefinition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5639654E7D993F82C6C5ED91 /* STTModelDefinition.swift */; };
 		FCE25FA72869D4A5885A40D0 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F2645E6EBE2D4D3E1BFA17C /* AppState.swift */; };
 /* End PBXBuildFile section */
 
@@ -34,6 +37,7 @@
 		2F7D08BD88D7C596EA782773 /* TranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionService.swift; sourceTree = "<group>"; };
 		41126B678A8FDC75629B0B30 /* bee.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = bee.entitlements; sourceTree = "<group>"; };
 		44D01D1FC50FBE993FD0716F /* InputMethodKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = InputMethodKit.framework; path = System/Library/Frameworks/InputMethodKit.framework; sourceTree = SDKROOT; };
+		5639654E7D993F82C6C5ED91 /* STTModelDefinition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = STTModelDefinition.swift; sourceTree = "<group>"; };
 		5A35BE9759CA9C8519D87363 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		676164F78A7A1315DBA4D712 /* Session.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Session.swift; sourceTree = "<group>"; };
 		6AEB22F163C305E4983946FF /* beeTemplate.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = beeTemplate.tiff; sourceTree = "<group>"; };
@@ -42,6 +46,8 @@
 		ACC2C13E80A8EB858DA92EC7 /* bee.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = bee.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BBB5FE976B1CF01CA031AF66 /* BeeInputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeInputController.swift; sourceTree = "<group>"; };
 		C26401964247ABA42B4ADCA3 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		F154B4296E76BCBEDD666C34 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
+		FC8AFB3851834181E8F4EF77 /* TranscriptionHistoryItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionHistoryItem.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -56,6 +62,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		1A0961E2FC894633F169BD7D /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				F154B4296E76BCBEDD666C34 /* MenuBarView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
 		3C4755D7171C9A5834B9180D /* bee-input */ = {
 			isa = PBXGroup;
 			children = (
@@ -68,6 +82,15 @@
 				C26401964247ABA42B4ADCA3 /* main.swift */,
 			);
 			path = "bee-input";
+			sourceTree = "<group>";
+		};
+		44E81B4665D7850010F15D72 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				5639654E7D993F82C6C5ED91 /* STTModelDefinition.swift */,
+				FC8AFB3851834181E8F4EF77 /* TranscriptionHistoryItem.swift */,
+			);
+			path = Models;
 			sourceTree = "<group>";
 		};
 		697DD1AAABC63BCBFAE29FDB /* Products */ = {
@@ -96,7 +119,9 @@
 				41126B678A8FDC75629B0B30 /* bee.entitlements */,
 				7059CA841745C6E21DA830A3 /* BeeApp.swift */,
 				676164F78A7A1315DBA4D712 /* Session.swift */,
+				44E81B4665D7850010F15D72 /* Models */,
 				F2AD318CDACC7F7F4250B2E0 /* Services */,
+				1A0961E2FC894633F169BD7D /* Views */,
 			);
 			path = bee;
 			sourceTree = "<group>";
@@ -226,7 +251,10 @@
 				599EE6A4E7B1CA2D6CE47107 /* AudioEngine.swift in Sources */,
 				EAD815EAA627296BFA0C4EA3 /* BeeApp.swift in Sources */,
 				66493E87798EF2D09BC1BC43 /* BeeInputClient.swift in Sources */,
+				3C5C473887772CFDAA7535EE /* MenuBarView.swift in Sources */,
+				F93A846E10BB3E70003F07C6 /* STTModelDefinition.swift in Sources */,
 				2B877E72AFA9A4D05B9FDC0B /* Session.swift in Sources */,
+				59A3A4BE607D2198DDD3609D /* TranscriptionHistoryItem.swift in Sources */,
 				4A7942D230B46253EF1197E9 /* TranscriptionService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

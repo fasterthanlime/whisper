@@ -20,9 +20,39 @@ final class AppState {
     let transcriptionService: TranscriptionService
     let inputClient: BeeInputClient
 
-    // Menu bar state
+    // Model
     var modelStatus: ModelStatus = .notLoaded
-    var selectedModelID: String = ""
+
+    // Input devices
+    var availableInputDevices: [InputDeviceInfo] = []
+    var activeInputDeviceUID: String?
+    var activeInputDeviceName: String?
+    var activeInputDeviceKeepWarm: Bool = false
+
+    // History
+    var transcriptionHistory: [TranscriptionHistoryItem] = []
+
+    struct InputDeviceInfo: Sendable {
+        let uid: String
+        let name: String
+        let isBuiltIn: Bool
+        let isDefault: Bool
+    }
+
+    func selectInputDevice(uid: String) {
+        activeInputDeviceUID = uid
+        if let device = availableInputDevices.first(where: { $0.uid == uid }) {
+            activeInputDeviceName = device.name
+        }
+        audioEngine.selectDevice(uid: uid)
+    }
+
+    func toggleActiveInputDeviceKeepWarm() {
+        activeInputDeviceKeepWarm.toggle()
+        if let uid = activeInputDeviceUID {
+            audioEngine.deviceWarmPolicy[uid] = activeInputDeviceKeepWarm
+        }
+    }
 
     init(
         audioEngine: AudioEngine,
