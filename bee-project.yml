@@ -54,7 +54,7 @@ targets:
       properties:
         com.apple.security.device.audio-input: true
 
-  bee-input:
+  beeInput:
     type: application
     platform: macOS
     sources:
@@ -62,6 +62,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: fasterthanlime.inputmethod.bee
+        PRODUCT_NAME: beeInput
         INFOPLIST_FILE: bee-input/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         SWIFT_VERSION: "5.0"

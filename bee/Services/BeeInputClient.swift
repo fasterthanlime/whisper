@@ -81,7 +81,7 @@ final class BeeInputClient: Sendable {
 
         // Look for ~/Library/Input Methods/bee-input.app
         let inputMethodsDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Input Methods/bee-input.app")
+            .appendingPathComponent("Library/Input Methods/beeInput.app")
         guard FileManager.default.fileExists(atPath: inputMethodsDir.path) else {
             return false
         }

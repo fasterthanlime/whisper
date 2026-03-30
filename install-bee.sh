@@ -11,15 +11,15 @@ echo "Building bee (Release)..."
 xcodebuild -project bee.xcodeproj -scheme bee -configuration Release \
     CONFIGURATION_BUILD_DIR="$BUILD_DIR" build 2>&1 | tail -3
 
-echo "Building bee-input (Release)..."
-xcodebuild -project bee.xcodeproj -scheme bee-input -configuration Release \
+echo "Building beeInput (Release)..."
+xcodebuild -project bee.xcodeproj -scheme beeInput -configuration Release \
     CONFIGURATION_BUILD_DIR="$BUILD_DIR" build 2>&1 | tail -3
 
 echo "Installing bee to /Applications/bee.app..."
 rsync -a --delete "$BUILD_DIR/bee.app/" /Applications/bee.app/
 
-echo "Installing bee-input to $INPUT_METHOD_DIR/bee-input.app..."
+echo "Installing beeInput to $INPUT_METHOD_DIR/beeInput.app..."
 mkdir -p "$INPUT_METHOD_DIR"
-rsync -a --delete "$BUILD_DIR/bee-input.app/" "$INPUT_METHOD_DIR/bee-input.app/"
+rsync -a --delete "$BUILD_DIR/beeInput.app/" "$INPUT_METHOD_DIR/beeInput.app/"
 
 echo "Done. Launch bee from /Applications/bee.app"

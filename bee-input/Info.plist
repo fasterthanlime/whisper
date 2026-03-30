@@ -6,7 +6,7 @@
     <key>CFBundleDisplayName</key>
     <string>Bee Dictation</string>
     <key>CFBundleName</key>
-    <string>bee-input</string>
+    <string>beeInput</string>
     <key>CFBundleIdentifier</key>
     <string>fasterthanlime.inputmethod.bee</string>
     <key>CFBundleVersion</key>
@@ -16,11 +16,11 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
-    <string>bee-input</string>
+    <string>beeInput</string>
     <key>LSBackgroundOnly</key>
     <true/>
     <key>NSPrincipalClass</key>
-    <string>bee_input.BeeInputApplication</string>
+    <string>beeInput.BeeInputApplication</string>
     <key>InputMethodConnectionName</key>
     <string>fasterthanlime.inputmethod.bee_Connection</string>
     <key>InputMethodServerControllerClass</key>
