@@ -7781,10 +7781,12 @@
                             )}
                             {items.map((a, j) => {
                                 const isActive = activeTime != null && Number(activeTime) >= Number(a.s || 0) && Number(activeTime) < Number(a.e || 0);
+                                const conf = a.c == null ? null : Number(a.c);
+                                const opacity = conf == null ? 1 : Math.max(0.28, Math.min(1, conf));
                                 return (
                                     <div
                                         key={j}
-                                        title={a.t || `${a.w} (${Number(a.s).toFixed(3)}s–${Number(a.e).toFixed(3)}s)${a.avg_logprob != null ? ` lp=${Number(a.avg_logprob).toFixed(2)}` : ''}`}
+                                        title={a.t || `${a.w} (${Number(a.s).toFixed(3)}s–${Number(a.e).toFixed(3)}s)${a.avg_logprob != null ? ` lp=${Number(a.avg_logprob).toFixed(2)}` : ''}${conf == null ? '' : ` conf=${conf.toFixed(2)}`}`}
                                         style={{
                                             position:'absolute',
                                             left:px(a.s),
@@ -7799,6 +7801,7 @@
                                             justifyContent:'center',
                                             overflow:'hidden',
                                             boxShadow: isActive ? `0 0 0 2px ${color.replace(/[\d.]+\)$/, '0.55)')}, inset 0 0 0 1px rgba(255,255,255,0.25)` : 'none',
+                                            opacity,
                                             zIndex: isActive ? 2 : 1,
                                         }}
                                     >

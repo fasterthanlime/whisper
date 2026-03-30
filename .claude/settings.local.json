@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(xcodebuild:*)"
+      "Bash(xcodebuild:*)",
+      "Bash(./install.sh 2>&1)",
+      "Bash(git add:*)"
     ]
   }
 }

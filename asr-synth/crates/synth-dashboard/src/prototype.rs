@@ -395,6 +395,13 @@ fn enumerate_span_proposals(
                 candidates.extend(phone_led_candidates_for_span(phones, lexicon));
             }
             if candidates.is_empty() {
+                if let Some(ctx) = acoustic {
+                    if let Some(rescue) =
+                        phone_led_rescue_proposal(input, tokens, lexicon, ctx, start, end, config)
+                    {
+                        proposals.push(rescue);
+                    }
+                }
                 continue;
             }
             let mut by_form: HashMap<(String, &'static str, String), ScoredCandidate> = HashMap::new();
@@ -463,6 +470,226 @@ fn enumerate_span_proposals(
             .then_with(|| (b.token_end - b.token_start).cmp(&(a.token_end - a.token_start)))
     });
     proposals
+}
+
+fn phone_led_rescue_proposal(
+    input: &str,
+    tokens: &[SpanToken],
+    lexicon: &[LexiconTerm],
+    ctx: &AcousticContext<'_>,
+    seed_start: usize,
+    seed_end: usize,
+    config: PrototypeConfig,
+) -> Option<PrototypeSpanProposal> {
+    let neighborhood_start = seed_start.saturating_sub(2);
+    let neighborhood_end = (seed_end + 2).min(tokens.len());
+    let (search_start_sec, search_end_sec) =
+        acoustic_window_for_span(ctx, neighborhood_start, neighborhood_end)?;
+    let neighborhood_segments = ctx
+        .zipa_segments
+        .iter()
+        .filter(|seg| seg.end_sec > search_start_sec && seg.start_sec < search_end_sec)
+        .cloned()
+        .collect::<Vec<_>>();
+    if neighborhood_segments.is_empty() {
+        return None;
+    }
+
+    let mut grouped: HashMap<(usize, usize), Vec<ScoredCandidate>> = HashMap::new();
+    for term in lexicon {
+        let has_noncanonical_forms = term.forms.iter().any(|form| form.via != "canonical");
+        for form in &term.forms {
+            if !matches!(form.phoneme_kind, PhonemeKind::Ipa) || form.phonemes.is_empty() {
+                continue;
+            }
+            let Some((observed, start_sec, end_sec, phon)) =
+                best_local_phone_window_match(&neighborhood_segments, &form.phonemes)
+            else {
+                continue;
+            };
+            let min_score = match form.via {
+                "spoken" | "confusion" | "alt" => 0.74,
+                "canonical" if has_noncanonical_forms => 0.86,
+                "canonical" => 0.80,
+                _ => 0.82,
+            };
+            if phon < min_score {
+                continue;
+            }
+            let Some((token_start, token_end)) =
+                token_span_for_time_window(ctx, tokens, start_sec, end_sec)
+            else {
+                continue;
+            };
+            let mut score = 0.44 + 0.56 * phon + via_bonus(form.via);
+            if matches!(form.via, "spoken" | "confusion" | "alt") {
+                score += 0.04;
+            }
+            let candidate = ScoredCandidate {
+                term: term.term.clone(),
+                via: form.via,
+                matched_form: form.raw.clone(),
+                matched_form_phonemes: form.phonemes.clone(),
+                term_preview: term.term_preview.clone(),
+                term_preview_phonemes: term.term_preview_phonemes.clone(),
+                score,
+                lexical_score: None,
+                dice: None,
+                prefix_ratio: None,
+                length_ratio: None,
+                phonetic_score: Some(phon),
+                observed_acoustic_score: Some(1.0),
+                acoustic_score: Some(phon),
+                acoustic_delta: Some(phon - 1.0),
+                phonemes: form.phonemes.clone(),
+                exact_words: false,
+                exact_compact: false,
+            };
+            grouped
+                .entry((token_start, token_end))
+                .or_default()
+                .push(candidate);
+            let _ = observed;
+        }
+    }
+
+    let ((token_start, token_end), mut candidates) = grouped
+        .into_iter()
+        .max_by(|a, b| {
+            let a_score = a.1.iter().map(|c| c.score).fold(0.0f32, f32::max);
+            let b_score = b.1.iter().map(|c| c.score).fold(0.0f32, f32::max);
+            a_score.total_cmp(&b_score)
+        })?;
+    let raw_text = input[tokens[token_start].start..tokens[token_end - 1].end].to_string();
+    let normalized = tokens[token_start..token_end]
+        .iter()
+        .map(|t| t.normalized.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let acoustic_phones = acoustic_phones_for_span(ctx, token_start, token_end)?;
+    let span_observed = observed_phonemes_for_span(&raw_text, Some(acoustic_phones.clone()));
+    let mut by_form: HashMap<(String, &'static str, String), ScoredCandidate> = HashMap::new();
+    for candidate in candidates.drain(..) {
+        let key = (
+            candidate.term.clone(),
+            candidate.via,
+            candidate.matched_form.clone(),
+        );
+        if by_form
+            .get(&key)
+            .map(|existing| candidate.score > existing.score)
+            .unwrap_or(true)
+        {
+            by_form.insert(key, candidate);
+        }
+    }
+    let mut candidates = by_form.into_values().collect::<Vec<_>>();
+    candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
+    candidates.truncate(config.max_candidates_per_span.max(1));
+    let acoustic_window = acoustic_window_for_span(ctx, token_start, token_end);
+    Some(PrototypeSpanProposal {
+        token_start,
+        token_end,
+        char_start: tokens[token_start].start,
+        char_end: tokens[token_end - 1].end,
+        raw_text,
+        normalized,
+        phonemes: phoneme_string(&span_observed.phones),
+        acoustic_phonemes: phoneme_string(&acoustic_phones),
+        observed_acoustic_score: Some(1.0),
+        acoustic_trustworthy: true,
+        acoustic_window_start_sec: acoustic_window.map(|(start, _)| start),
+        acoustic_window_end_sec: acoustic_window.map(|(_, end)| end),
+        candidates: candidates
+            .into_iter()
+            .map(|candidate| PrototypeCandidate {
+                term: candidate.term,
+                via: candidate.via.to_string(),
+                matched_form: candidate.matched_form,
+                matched_form_phonemes: phoneme_string(&candidate.matched_form_phonemes),
+                term_preview: (!candidate.term_preview.trim().is_empty())
+                    .then_some(candidate.term_preview),
+                term_preview_phonemes: phoneme_string(&candidate.term_preview_phonemes),
+                score: candidate.score,
+                lexical_score: candidate.lexical_score,
+                dice: candidate.dice,
+                prefix_ratio: candidate.prefix_ratio,
+                length_ratio: candidate.length_ratio,
+                phonetic_score: candidate.phonetic_score,
+                observed_acoustic_score: candidate.observed_acoustic_score,
+                acoustic_score: candidate.acoustic_score,
+                acoustic_delta: candidate.acoustic_delta,
+                phonemes: phoneme_string(&candidate.phonemes),
+                exact_words: candidate.exact_words,
+                exact_compact: candidate.exact_compact,
+            })
+            .collect(),
+    })
+}
+
+fn best_local_phone_window_match(
+    segments: &[AcousticSegment],
+    target_phones: &[String],
+) -> Option<(Vec<String>, f64, f64, f32)> {
+    if segments.is_empty() || target_phones.is_empty() {
+        return None;
+    }
+    let target_len = target_phones.len();
+    let mut best: Option<(Vec<String>, f64, f64, f32)> = None;
+    for start in 0..segments.len() {
+        let mut observed = Vec::new();
+        for end in start..segments.len() {
+            observed.extend(zipa_phone_to_ipa(segments[end].phone.as_str()));
+            if observed.len() > target_len + 3 {
+                break;
+            }
+            if observed.len() + 2 < target_len {
+                continue;
+            }
+            let Some(score) = phoneme_similarity(&observed, target_phones) else {
+                continue;
+            };
+            let candidate = (
+                observed.clone(),
+                segments[start].start_sec,
+                segments[end].end_sec,
+                score,
+            );
+            if best
+                .as_ref()
+                .map(|existing| candidate.3 > existing.3)
+                .unwrap_or(true)
+            {
+                best = Some(candidate);
+            }
+        }
+    }
+    best
+}
+
+fn token_span_for_time_window(
+    ctx: &AcousticContext<'_>,
+    tokens: &[SpanToken],
+    start_sec: f64,
+    end_sec: f64,
+) -> Option<(usize, usize)> {
+    if ctx.qwen_alignment.is_empty() || tokens.is_empty() || start_sec >= end_sec {
+        return None;
+    }
+    let mut first = None;
+    let mut last = None;
+    for (idx, item) in ctx.qwen_alignment.iter().enumerate() {
+        if item.end_time > start_sec && item.start_time < end_sec {
+            first.get_or_insert(idx);
+            last = Some(idx);
+        }
+    }
+    let first = first?;
+    let last = last?;
+    if first >= tokens.len() || last >= tokens.len() {
+        return None;
+    }
+    Some((first, last + 1))
 }
 
 fn phone_led_candidates_for_span(
@@ -2264,6 +2491,88 @@ mod tests {
         assert_eq!(candidates[0].term, "DWARF");
         assert_eq!(candidates[0].via, "spoken");
         assert!(candidates[0].score >= 0.84, "{:#?}", candidates[0]);
+    }
+
+    #[test]
+    fn phone_led_rescue_projects_best_local_zipa_window_back_to_tokens() {
+        let input = "from the bare clove company";
+        let tokens = tokenize_with_offsets(input);
+        let vocab = vec![row_with_reviewed_ipa("bearcove", "bear cove", "b eə k əʊ v")];
+        let lexicon = build_lexicon(&vocab, &HashMap::new(), &HashMap::new());
+        let qwen_alignment = vec![
+            qwen3_asr::ForcedAlignItem {
+                word: "from".to_string(),
+                start_time: 0.00,
+                end_time: 0.20,
+            },
+            qwen3_asr::ForcedAlignItem {
+                word: "the".to_string(),
+                start_time: 0.20,
+                end_time: 0.35,
+            },
+            qwen3_asr::ForcedAlignItem {
+                word: "bare".to_string(),
+                start_time: 0.35,
+                end_time: 0.60,
+            },
+            qwen3_asr::ForcedAlignItem {
+                word: "clove".to_string(),
+                start_time: 0.60,
+                end_time: 0.88,
+            },
+            qwen3_asr::ForcedAlignItem {
+                word: "company".to_string(),
+                start_time: 0.88,
+                end_time: 1.20,
+            },
+        ];
+        let zipa_segments = vec![
+            AcousticSegment { phone: "f".to_string(), start_sec: 0.02, end_sec: 0.08 },
+            AcousticSegment { phone: "ɹ".to_string(), start_sec: 0.08, end_sec: 0.14 },
+            AcousticSegment { phone: "ə".to_string(), start_sec: 0.14, end_sec: 0.20 },
+            AcousticSegment { phone: "m".to_string(), start_sec: 0.24, end_sec: 0.30 },
+            AcousticSegment { phone: "ð".to_string(), start_sec: 0.30, end_sec: 0.36 },
+            AcousticSegment { phone: "ə".to_string(), start_sec: 0.36, end_sec: 0.40 },
+            AcousticSegment { phone: "b".to_string(), start_sec: 0.42, end_sec: 0.48 },
+            AcousticSegment { phone: "ɛ".to_string(), start_sec: 0.48, end_sec: 0.56 },
+            AcousticSegment { phone: "ɹ".to_string(), start_sec: 0.56, end_sec: 0.62 },
+            AcousticSegment { phone: "k".to_string(), start_sec: 0.62, end_sec: 0.69 },
+            AcousticSegment { phone: "o".to_string(), start_sec: 0.69, end_sec: 0.76 },
+            AcousticSegment { phone: "ʊ".to_string(), start_sec: 0.76, end_sec: 0.82 },
+            AcousticSegment { phone: "v".to_string(), start_sec: 0.82, end_sec: 0.88 },
+            AcousticSegment { phone: "k".to_string(), start_sec: 0.90, end_sec: 0.96 },
+            AcousticSegment { phone: "ə".to_string(), start_sec: 0.96, end_sec: 1.04 },
+            AcousticSegment { phone: "m".to_string(), start_sec: 1.04, end_sec: 1.12 },
+        ];
+        let zipa_by_qwen = vec![
+            vec!["f".to_string(), "ɹ".to_string(), "ə".to_string(), "m".to_string()],
+            vec!["ð".to_string(), "ə".to_string()],
+            vec!["b".to_string(), "ɛ".to_string(), "ɹ".to_string()],
+            vec!["k".to_string(), "o".to_string(), "ʊ".to_string(), "v".to_string()],
+            vec!["k".to_string(), "ə".to_string(), "m".to_string()],
+        ];
+        let acoustic = AcousticContext {
+            qwen_alignment: &qwen_alignment,
+            zipa_segments: &zipa_segments,
+            zipa_by_qwen: &zipa_by_qwen,
+        };
+
+        let proposal = phone_led_rescue_proposal(
+            input,
+            &tokens,
+            &lexicon,
+            &acoustic,
+            2,
+            4,
+            PrototypeConfig::default(),
+        )
+        .expect("rescue proposal");
+
+        assert_eq!(proposal.token_start, 2, "{proposal:#?}");
+        assert_eq!(proposal.token_end, 4, "{proposal:#?}");
+        assert_eq!(proposal.raw_text, "bare clove");
+        assert_eq!(proposal.candidates[0].term, "bearcove");
+        assert!(proposal.candidates[0].phonetic_score.unwrap_or(0.0) >= 0.80, "{proposal:#?}");
     }
 
     #[test]

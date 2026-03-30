@@ -1273,6 +1273,7 @@ async fn api_asr_dual(
                             "w": token.text,
                             "s": token.start,
                             "e": token.end,
+                            "c": token.confidence,
                         })
                     })
                     .collect::<Vec<_>>()
