@@ -20,7 +20,6 @@ final class AudioEngine: @unchecked Sendable {
     private let lock = NSLock()
 
     private var engine: AVAudioEngine?
-    private var converter: AVAudioConverter?
     private var nativeSampleRate: Double = 0
     private let targetSampleRate: Double = 16_000
 
@@ -55,26 +54,16 @@ final class AudioEngine: @unchecked Sendable {
 
         let nativeRate = nativeFormat.sampleRate
 
-        // Set up resampler (native → 16kHz mono)
-        let targetFormat = AVAudioFormat(
+        // Install tap with 16kHz mono format — AVAudioEngine resamples for us
+        let tapFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: targetSampleRate,
             channels: 1,
             interleaved: false
         )!
 
-        let srcFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: nativeRate,
-            channels: 1,
-            interleaved: false
-        )!
-
-        let conv = AVAudioConverter(from: srcFormat, to: targetFormat)
-
         lock.lock()
         self.nativeSampleRate = nativeRate
-        self.converter = conv
         // Pre-buffer at 16kHz
         preBufferCapacity = Int(targetSampleRate * preBufferDuration)
         preBuffer = [Float](repeating: 0, count: preBufferCapacity)
@@ -82,7 +71,7 @@ final class AudioEngine: @unchecked Sendable {
         state = .warm
         lock.unlock()
 
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: nativeFormat) {
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) {
             [weak self] buffer, _ in
             self?.handleAudioBuffer(buffer)
         }
@@ -98,7 +87,6 @@ final class AudioEngine: @unchecked Sendable {
         preBuffer.removeAll()
         preBufferCapacity = 0
         preBufferWriteIndex = 0
-        converter = nil
         lock.unlock()
 
         engine?.inputNode.removeTap(onBus: 0)
@@ -167,64 +155,28 @@ final class AudioEngine: @unchecked Sendable {
         let count = Int(buffer.frameLength)
         guard count > 0 else { return }
 
-        // Resample to 16kHz
-        let resampled: [Float]
-        if nativeSampleRate == targetSampleRate {
-            resampled = Array(UnsafeBufferPointer(start: channelData[0], count: count))
-        } else {
-            resampled = resampleBuffer(buffer)
-        }
-
-        guard !resampled.isEmpty else { return }
+        // Buffer is already at 16kHz mono (AVAudioEngine resamples via tap format)
+        let samples = UnsafeBufferPointer(start: channelData[0], count: count)
 
         lock.lock()
 
         // Append to all active captures
         for (id, var handle) in activeCaptures {
             if handle.isCapturing {
-                handle.samples.append(contentsOf: resampled)
+                handle.samples.append(contentsOf: samples)
                 activeCaptures[id] = handle
             }
         }
 
         // Fill circular pre-buffer (always, when warm)
         if state == .warm && preBufferCapacity > 0 {
-            for sample in resampled {
+            for sample in samples {
                 preBuffer[preBufferWriteIndex % preBufferCapacity] = sample
                 preBufferWriteIndex += 1
             }
         }
 
         lock.unlock()
-    }
-
-    /// Resample a native-rate buffer to 16kHz using the pre-created converter.
-    private func resampleBuffer(_ buffer: AVAudioPCMBuffer) -> [Float] {
-        guard let converter else { return [] }
-
-        let srcCount = buffer.frameLength
-        let ratio = targetSampleRate / nativeSampleRate
-        let dstCount = AVAudioFrameCount(Double(srcCount) * ratio) + 1
-
-        guard let dstFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: targetSampleRate,
-            channels: 1,
-            interleaved: false
-        ), let dstBuffer = AVAudioPCMBuffer(pcmFormat: dstFormat, frameCapacity: dstCount) else {
-            return []
-        }
-
-        var consumed = false
-        _ = converter.convert(to: dstBuffer, error: nil) { _, outStatus in
-            if consumed { outStatus.pointee = .endOfStream; return nil }
-            consumed = true
-            outStatus.pointee = .haveData
-            return buffer
-        }
-
-        guard let cd = dstBuffer.floatChannelData else { return [] }
-        return Array(UnsafeBufferPointer(start: cd[0], count: Int(dstBuffer.frameLength)))
     }
 
     // MARK: - Mic Permission
