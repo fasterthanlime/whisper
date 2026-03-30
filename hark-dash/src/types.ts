@@ -10,6 +10,7 @@ export type EvalTranscriptSource = "parakeet" | "transcript" | "unknown";
 
 export type PrototypeAlignments = {
   timingSource: string;
+  transcript?: TimedToken[];
   expected?: TimedToken[];
   espeak?: TimedToken[];
   current?: TimedToken[];
@@ -42,12 +43,48 @@ export type AcceptedEdit = {
   delta: number;
 };
 
+export type CandidateEdit = {
+  tokenStart: number;
+  tokenEnd: number;
+  charStart: number;
+  charEnd: number;
+  from: string;
+  matchedForm: string;
+  to: string;
+  via: string;
+  score: number;
+  acousticScore?: number | null;
+  acousticDelta?: number | null;
+};
+
+export type SentenceCandidate = {
+  label: string;
+  text: string;
+  edits: CandidateEdit[];
+  score: number;
+};
+
+export type Reranker = {
+  mode: string;
+  chosenIndex?: number | null;
+  chosenText?: string | null;
+  candidateCount: number;
+  candidates?: {
+    index: number;
+    text: string;
+    heuristicScore: number;
+    yesProb: number;
+    noProb: number;
+    answer: string;
+  }[];
+};
+
 export type PrototypeTrace = {
   corrected: string;
   accepted: AcceptedEdit[];
   proposals: Proposal[];
-  sentenceCandidates: unknown[];
-  reranker?: unknown;
+  sentenceCandidates: SentenceCandidate[];
+  reranker?: Reranker | null;
 };
 
 /** Canonical inspector data — normalized from any backend response */

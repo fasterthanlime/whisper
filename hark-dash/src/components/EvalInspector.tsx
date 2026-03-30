@@ -11,35 +11,93 @@ export function EvalInspector({
   data: EvalInspectorData;
   audioUrl?: string;
 }) {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const ctxRef = useRef<AudioContext | null>(null);
+  const bufferRef = useRef<AudioBuffer | null>(null);
+  const sourceRef = useRef<AudioBufferSourceNode | null>(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(3);
   const rafRef = useRef<number>(0);
+  // Track when playback started (AudioContext.currentTime) and from what offset
+  const playStartRef = useRef<{ ctxTime: number; offset: number } | null>(null);
+  const rangeEndRef = useRef<number | null>(null);
 
-  // Set up audio element
+  // Decode audio into an AudioBuffer
   useEffect(() => {
     if (!audioUrl) return;
-    const audio = new Audio(audioUrl);
-    audioRef.current = audio;
+    const ctx = new AudioContext();
+    ctxRef.current = ctx;
 
-    audio.addEventListener("loadedmetadata", () => setDuration(audio.duration));
-    audio.addEventListener("ended", () => setPlaying(false));
+    fetch(audioUrl)
+      .then((r) => r.arrayBuffer())
+      .then((ab) => ctx.decodeAudioData(ab))
+      .then((buf) => {
+        bufferRef.current = buf;
+        setDuration(buf.duration);
+      });
 
     return () => {
-      audio.pause();
-      audio.src = "";
-      audioRef.current = null;
+      sourceRef.current?.stop();
+      sourceRef.current = null;
+      ctx.close();
+      ctxRef.current = null;
+      bufferRef.current = null;
     };
   }, [audioUrl]);
 
-  // Animation frame loop for time updates
+  const stopSource = useCallback(() => {
+    if (sourceRef.current) {
+      sourceRef.current.onended = null;
+      sourceRef.current.stop();
+      sourceRef.current = null;
+    }
+    playStartRef.current = null;
+    rangeEndRef.current = null;
+  }, []);
+
+  // Play from a given offset, optionally stopping at `end`
+  const playFrom = useCallback(
+    (offset: number, end?: number) => {
+      const ctx = ctxRef.current;
+      const buf = bufferRef.current;
+      if (!ctx || !buf) return;
+
+      stopSource();
+
+      const source = ctx.createBufferSource();
+      source.buffer = buf;
+      source.connect(ctx.destination);
+
+      const dur = end != null ? end - offset : undefined;
+      source.start(0, offset, dur);
+      sourceRef.current = source;
+      playStartRef.current = { ctxTime: ctx.currentTime, offset };
+      rangeEndRef.current = end ?? null;
+
+      source.onended = () => {
+        sourceRef.current = null;
+        playStartRef.current = null;
+        rangeEndRef.current = null;
+        setPlaying(false);
+      };
+
+      setPlaying(true);
+      setCurrentTime(offset);
+    },
+    [stopSource],
+  );
+
+  // Animation frame loop to update currentTime from AudioContext clock
   useEffect(() => {
     if (!playing) return;
     const tick = () => {
-      const audio = audioRef.current;
-      if (audio) setCurrentTime(audio.currentTime);
+      const ctx = ctxRef.current;
+      const ps = playStartRef.current;
+      if (ctx && ps) {
+        const t = ps.offset + (ctx.currentTime - ps.ctxTime);
+        setCurrentTime(t);
+      }
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
@@ -47,22 +105,33 @@ export function EvalInspector({
   }, [playing]);
 
   const handlePlayPause = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    if (audio.paused) {
-      audio.play();
-      setPlaying(true);
-    } else {
-      audio.pause();
+    if (playing) {
+      stopSource();
       setPlaying(false);
+    } else {
+      // If at the end, restart from beginning
+      const startFrom = currentTime >= duration - 0.05 ? 0 : currentTime;
+      playFrom(startFrom);
     }
-  }, []);
+  }, [playing, currentTime, duration, playFrom, stopSource]);
 
-  const handleSeek = useCallback((time: number) => {
-    const audio = audioRef.current;
-    if (audio) audio.currentTime = time;
-    setCurrentTime(time);
-  }, []);
+  const handleSeek = useCallback(
+    (time: number) => {
+      setCurrentTime(time);
+      if (playing) {
+        // Restart playback from new position
+        playFrom(time);
+      }
+    },
+    [playing, playFrom],
+  );
+
+  const handlePlayRange = useCallback(
+    (start: number, end: number) => {
+      playFrom(start, end);
+    },
+    [playFrom],
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
@@ -73,6 +142,7 @@ export function EvalInspector({
           currentTime={currentTime}
           duration={duration}
           zoom={zoom}
+          tokens={data.alignments.espeak ?? data.parakeetAlignment}
           onPlayPause={handlePlayPause}
           onSeek={handleSeek}
           onZoomChange={setZoom}
@@ -83,9 +153,12 @@ export function EvalInspector({
       <EvalTimeline
         alignments={data.alignments}
         parakeetAlignment={data.parakeetAlignment}
+        sentenceCandidates={data.prototype.sentenceCandidates}
+        reranker={data.prototype.reranker}
         currentTime={currentTime}
         duration={duration}
         onSeek={handleSeek}
+        onPlayRange={handlePlayRange}
         zoom={zoom}
       />
 

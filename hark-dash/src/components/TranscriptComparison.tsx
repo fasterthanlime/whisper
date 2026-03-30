@@ -63,12 +63,16 @@ export function TranscriptComparison({
                 <span style={{ textDecoration: "line-through", opacity: 0.6 }}>{edit.original}</span>
                 <span>→</span>
                 <span style={{ fontWeight: 600 }}>{edit.replacement}</span>
-                <span style={{ fontSize: "0.7rem", color: "var(--text-dim)" }}>
-                  {edit.score.toFixed(2)}
-                </span>
-                <span style={{ fontSize: "0.7rem", color: edit.delta < 0 ? "var(--danger)" : "var(--success)" }}>
-                  Δ {edit.delta > 0 ? "+" : ""}{edit.delta.toFixed(2)}
-                </span>
+                {edit.score != null && (
+                  <span style={{ fontSize: "0.7rem", color: "var(--text-dim)" }}>
+                    {edit.score.toFixed(2)}
+                  </span>
+                )}
+                {edit.delta != null && (
+                  <span style={{ fontSize: "0.7rem", color: edit.delta < 0 ? "var(--danger)" : "var(--success)" }}>
+                    Δ {edit.delta > 0 ? "+" : ""}{edit.delta.toFixed(2)}
+                  </span>
+                )}
               </span>
             ))}
           </div>

@@ -6,6 +6,19 @@ import { EvalInspector } from "./EvalInspector";
 
 const DEFAULT_TRAIN_ID = 262;
 
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      // strip the data:...;base64, prefix
+      const result = reader.result as string;
+      resolve(result.split(",", 2)[1]);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
 export function LiveEvalPanel() {
   const recorder = useAudioRecorder();
   const [trainId] = useState(DEFAULT_TRAIN_ID);
@@ -27,16 +40,23 @@ export function LiveEvalPanel() {
         setStatus("Running ASR...");
         setError(null);
         const asr = await asrDual(blob);
+        console.log("parakeet_alignment raw:", JSON.stringify(asr.parakeet_alignment, null, 2));
 
         setStatus("Running correction...");
+        // Send audio as base64 so the server can run ZIPA alignment
+        const wavBase64 = await blobToBase64(blob);
         const data = await correctPrototype({
           transcript: asr.parakeet,
+          audioWavBase64: wavBase64,
           trainId,
         });
 
         // Patch in the parakeet alignment from ASR
         data.parakeetAlignment = asr.parakeet_alignment;
         data.transcriptLabel = "Parakeet";
+        console.log("reranker:", data.prototype.reranker);
+        console.log("sentenceCandidates:", data.prototype.sentenceCandidates);
+        console.log("alignments.transcript:", data.alignments.transcript);
 
         setInspectorData(data);
         setStatus(null);

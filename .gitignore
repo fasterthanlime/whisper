@@ -44,3 +44,4 @@ asr-synth/training/adapters/
 .claude/settings.local.json
 asr-synth/scripts/__pycache__/
 build-release/
+build-bee-release/

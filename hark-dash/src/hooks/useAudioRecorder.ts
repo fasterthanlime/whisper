@@ -2,38 +2,130 @@ import { useState, useRef, useCallback } from "react";
 
 type RecorderState = "idle" | "recording" | "processing";
 
+const micConstraints: MediaTrackConstraints = {
+  channelCount: 1,
+  sampleRate: 48000,
+  sampleSize: 16,
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+};
+
+/** Encode mono Float32 samples into a 16-bit PCM WAV ArrayBuffer. */
+function monoSamplesToWav(samples: Float32Array, sampleRate: number): ArrayBuffer {
+  const dataLen = samples.length * 2;
+  const buf = new ArrayBuffer(44 + dataLen);
+  const v = new DataView(buf);
+  const ws = (o: number, s: string) => {
+    for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i));
+  };
+  ws(0, "RIFF");
+  v.setUint32(4, 36 + dataLen, true);
+  ws(8, "WAVE");
+  ws(12, "fmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);
+  v.setUint32(24, sampleRate, true);
+  v.setUint32(28, sampleRate * 2, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  ws(36, "data");
+  v.setUint32(40, dataLen, true);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return buf;
+}
+
 export function useAudioRecorder() {
   const [state, setState] = useState<RecorderState>("idle");
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
+  const ctxRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const sinkRef = useRef<GainNode | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Float32Array[]>([]);
 
   const start = useCallback(async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints });
+    const [track] = stream.getAudioTracks();
+    if (track?.applyConstraints) {
+      try { await track.applyConstraints(micConstraints); } catch { /* ok */ }
+    }
+
+    const ctx = new AudioContext();
+    await ctx.resume();
+    const source = ctx.createMediaStreamSource(stream);
+    const processor = ctx.createScriptProcessor(4096, source.channelCount || 1, 1);
+    const sink = ctx.createGain();
+    sink.gain.value = 0;
+
     chunksRef.current = [];
-    mr.ondataavailable = (e) => {
-      if (e.data.size > 0) chunksRef.current.push(e.data);
+
+    processor.onaudioprocess = (event) => {
+      const input = event.inputBuffer;
+      const len = input.length;
+      const channels = input.numberOfChannels || 1;
+      const mono = new Float32Array(len);
+      for (let ch = 0; ch < channels; ch++) {
+        const data = input.getChannelData(ch);
+        for (let i = 0; i < len; i++) mono[i] += data[i];
+      }
+      const scale = 1 / channels;
+      for (let i = 0; i < len; i++) mono[i] *= scale;
+      chunksRef.current.push(mono);
     };
-    mr.start();
-    mediaRecorderRef.current = mr;
+
+    source.connect(processor);
+    processor.connect(sink);
+    sink.connect(ctx.destination);
+
+    ctxRef.current = ctx;
+    processorRef.current = processor;
+    sourceRef.current = source;
+    sinkRef.current = sink;
+    streamRef.current = stream;
     setState("recording");
   }, []);
 
   const stop = useCallback((): Promise<Blob> => {
-    return new Promise((resolve) => {
-      const mr = mediaRecorderRef.current;
-      if (!mr) {
-        resolve(new Blob());
-        return;
-      }
-      mr.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: "audio/wav" });
-        mr.stream.getTracks().forEach((t) => t.stop());
-        setState("idle");
-        resolve(blob);
-      };
-      mr.stop();
+    return new Promise(async (resolve) => {
       setState("processing");
+
+      // Tear down audio graph
+      processorRef.current?.disconnect();
+      sourceRef.current?.disconnect();
+      sinkRef.current?.disconnect();
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+
+      const sampleRate = ctxRef.current?.sampleRate ?? 48000;
+      if (ctxRef.current) {
+        await ctxRef.current.close();
+      }
+
+      // Merge chunks into a single Float32Array
+      const chunks = chunksRef.current;
+      const total = chunks.reduce((sum, c) => sum + c.length, 0);
+      const mono = new Float32Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        mono.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      // Encode as proper WAV
+      const wavBuf = monoSamplesToWav(mono, sampleRate);
+      const blob = new Blob([wavBuf], { type: "audio/wav" });
+
+      ctxRef.current = null;
+      processorRef.current = null;
+      sourceRef.current = null;
+      sinkRef.current = null;
+      streamRef.current = null;
+      setState("idle");
+      resolve(blob);
     });
   }, []);
 

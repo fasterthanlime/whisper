@@ -9,7 +9,7 @@ from pathlib import Path
 import onnxruntime as ort
 from huggingface_hub import hf_hub_download
 
-from phone_decode_zipa import compute_features, greedy_segments, load_tokens
+from phone_decode_zipa import compute_features_timed, greedy_segments, load_tokens
 
 
 REPO_ID = os.environ.get("ZIPA_REPO_ID", "anyspeech/zipa-small-crctc-300k")
@@ -37,7 +37,7 @@ class ZipaSidecar:
     def decode(self, audio_path: str) -> dict:
         path = Path(audio_path)
         feature_start = time.perf_counter()
-        feat, duration_s = compute_features(path)
+        feat, duration_s, feature_timing = compute_features_timed(path)
         feature_end = time.perf_counter()
         x = feat[None, :, :]
         import numpy as np
@@ -48,7 +48,9 @@ class ZipaSidecar:
         infer_end = time.perf_counter()
         used_frames = int(log_probs_len[0])
         used = log_probs[0, :used_frames, :]
+        greedy_start = time.perf_counter()
         segments = greedy_segments(used, self.tokens, duration_s)
+        greedy_end = time.perf_counter()
         phones = " ".join(seg["phone"] for seg in segments)
         return {
             "file": str(path),
@@ -60,8 +62,9 @@ class ZipaSidecar:
             "output_frames": used_frames,
             "frame_seconds": round(duration_s / used_frames, 6) if used_frames else None,
             "timing_ms": {
-                "feature_extract": round((feature_end - feature_start) * 1000, 1),
+                **feature_timing,
                 "infer": round((infer_end - infer_start) * 1000, 1),
+                "greedy_segments": round((greedy_end - greedy_start) * 1000, 1),
                 "total": round((infer_end - feature_start) * 1000, 1),
             },
             "segments": segments,

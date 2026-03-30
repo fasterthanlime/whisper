@@ -25,6 +25,8 @@
   --lane-zipa-espeak-bg: light-dark(#ede8fc, #252040);
   --lane-zipa: light-dark(#5577cc, #93c5fd);
   --lane-zipa-bg: light-dark(#dce8f8, #1a2540);
+  --lane-reranker: light-dark(#cc8800, #f59e0b);
+  --lane-reranker-bg: light-dark(#fef3c7, #3a2a10);
 }
 
 *,
@@ -98,4 +100,11 @@ input:focus,
 select:focus {
   outline: 2px solid var(--border-focus);
   outline-offset: -1px;
+}
+
+.hide-scrollbar {
+  scrollbar-width: none;
+}
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
 }

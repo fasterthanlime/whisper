@@ -78,6 +78,17 @@ pub struct PrototypeCorrectionResult {
     pub sentence_candidates: Vec<SentenceCandidate>,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PrototypeTiming {
+    pub lexicon_ms: u64,
+    pub tokenize_ms: u64,
+    pub span_proposals_ms: u64,
+    pub edit_pool_ms: u64,
+    pub sentence_candidates_ms: u64,
+    pub best_pick_ms: u64,
+    pub total_ms: u64,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct PrototypeConfig {
     pub max_span_tokens: usize,
@@ -223,11 +234,40 @@ pub fn prototype_correct_with_acoustics(
     config: PrototypeConfig,
     acoustic: Option<&AcousticContext<'_>>,
 ) -> PrototypeCorrectionResult {
+    prototype_correct_with_acoustics_timed(input, vocab, alt_spellings, confusion_forms, config, acoustic).0
+}
+
+pub fn prototype_correct_with_acoustics_timed(
+    input: &str,
+    vocab: &[VocabRow],
+    alt_spellings: &HashMap<String, Vec<String>>,
+    confusion_forms: &HashMap<String, Vec<ReviewedConfusionSurfaceRow>>,
+    config: PrototypeConfig,
+    acoustic: Option<&AcousticContext<'_>>,
+) -> (PrototypeCorrectionResult, PrototypeTiming) {
+    let total_started = std::time::Instant::now();
+
+    let lexicon_started = std::time::Instant::now();
     let lexicon = build_lexicon(vocab, alt_spellings, confusion_forms);
+    let lexicon_ms = lexicon_started.elapsed().as_millis() as u64;
+
+    let tokenize_started = std::time::Instant::now();
     let tokens = tokenize_with_offsets(input);
+    let tokenize_ms = tokenize_started.elapsed().as_millis() as u64;
+
+    let span_started = std::time::Instant::now();
     let mut span_proposals = enumerate_span_proposals(input, &tokens, &lexicon, config, acoustic);
+    let span_proposals_ms = span_started.elapsed().as_millis() as u64;
+
+    let edit_pool_started = std::time::Instant::now();
     let edit_pool = build_edit_pool(&span_proposals);
+    let edit_pool_ms = edit_pool_started.elapsed().as_millis() as u64;
+
+    let sentence_candidates_started = std::time::Instant::now();
     let sentence_candidates = build_sentence_candidates(input, &edit_pool);
+    let sentence_candidates_ms = sentence_candidates_started.elapsed().as_millis() as u64;
+
+    let best_pick_started = std::time::Instant::now();
     let best = sentence_candidates
         .iter()
         .max_by(|a, b| a.score.total_cmp(&b.score))
@@ -238,14 +278,27 @@ pub fn prototype_correct_with_acoustics(
             edits: Vec::new(),
             score: 0.0,
         });
+    let best_pick_ms = best_pick_started.elapsed().as_millis() as u64;
+
     span_proposals.truncate(config.max_span_proposals);
-    PrototypeCorrectionResult {
-        original: input.to_string(),
-        corrected: best.text.clone(),
-        accepted: best.edits.clone(),
-        proposals: span_proposals,
-        sentence_candidates,
-    }
+    (
+        PrototypeCorrectionResult {
+            original: input.to_string(),
+            corrected: best.text.clone(),
+            accepted: best.edits.clone(),
+            proposals: span_proposals,
+            sentence_candidates,
+        },
+        PrototypeTiming {
+            lexicon_ms,
+            tokenize_ms,
+            span_proposals_ms,
+            edit_pool_ms,
+            sentence_candidates_ms,
+            best_pick_ms,
+            total_ms: total_started.elapsed().as_millis() as u64,
+        },
+    )
 }
 
 fn build_lexicon(

@@ -67,6 +67,16 @@ struct LazyTtsManager {
 }
 
 impl LazyTtsManager {
+    fn unloaded(voice_path: String, kokoro_voice: String, tts_workers: usize) -> Self {
+        Self {
+            inner: Mutex::new(None),
+            backend_names: Vec::new(),
+            voice_path,
+            kokoro_voice,
+            tts_workers,
+        }
+    }
+
     fn loaded(
         initial: tts::TtsManager,
         voice_path: String,
@@ -120,6 +130,13 @@ struct LazyAsr {
 }
 
 impl LazyAsr {
+    fn unloaded(model_dir: String) -> Self {
+        Self {
+            inner: Mutex::new(None),
+            model_dir,
+        }
+    }
+
     fn loaded(initial: qwen3_asr::AsrInference, model_dir: String) -> Self {
         Self {
             inner: Mutex::new(Some(Arc::new(initial))),
@@ -163,6 +180,13 @@ struct LazyParakeet {
 }
 
 impl LazyParakeet {
+    fn unloaded(model_path: String) -> Self {
+        Self {
+            inner: Mutex::new(None),
+            model_path,
+        }
+    }
+
     fn loaded(initial: parakeet_rs::ParakeetTDT, model_path: String) -> Self {
         Self {
             inner: Mutex::new(Some(Arc::new(Mutex::new(initial)))),
@@ -215,6 +239,14 @@ struct LazyAligner {
 }
 
 impl LazyAligner {
+    fn unloaded(model_id: String, hf_cache: String) -> Self {
+        Self {
+            inner: Mutex::new(None),
+            model_id,
+            hf_cache,
+        }
+    }
+
     fn loaded(initial: qwen3_asr::ForcedAligner, model_id: String, hf_cache: String) -> Self {
         Self {
             inner: Mutex::new(Some(Arc::new(initial))),
@@ -270,12 +302,6 @@ impl AppState {
             server.kill();
         }
         if let Some(mut server) = self.official_qwen3_reranker_server.lock().unwrap().take() {
-            server.kill();
-        }
-        if let Some(mut server) = self.zipa_sidecar.lock().unwrap().take() {
-            server.kill();
-        }
-        if let Some(mut server) = self.zipa_ns700k_sidecar.lock().unwrap().take() {
             server.kill();
         }
         if let Some(mut server) = self.allophant_sidecar.lock().unwrap().take() {
@@ -1504,6 +1530,10 @@ struct Cli {
     /// Cache directory for HuggingFace Hub downloads
     #[arg(long, default_value = "~/Library/Caches/qwen3-asr")]
     hf_cache: String,
+
+    /// Start with only the correction stack hot: Parakeet + ZIPA + eSpeak.
+    #[arg(long, default_value_t = false)]
+    lean_startup: bool,
 }
 
 #[tokio::main]
@@ -1549,33 +1579,60 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Load all available TTS backends
-    let tts_manager = tts::init(&cli.voice, &cli.kokoro_voice, cli.tts_workers);
-    eprintln!("TTS backends: {:?}", tts_manager.available_backends());
-
-    // Load Parakeet TDT
-    eprintln!("Loading Parakeet TDT...");
-    let parakeet = parakeet_rs::ParakeetTDT::from_pretrained(&cli.parakeet_model, None)?;
-    eprintln!("Parakeet ready");
-
-    // Load Qwen3 ASR model
     let qwen_model_dir = shellexpand::tilde(&cli.qwen_model).to_string();
-    eprintln!("Loading Qwen3 ASR from {qwen_model_dir}...");
-    let asr = qwen3_asr::AsrInference::load(
-        std::path::Path::new(&qwen_model_dir),
-        qwen3_asr::best_device(),
-    )?;
-    eprintln!("Qwen3 ASR ready");
-
-    // Load ForcedAligner (downloads from HF Hub if needed)
     let hf_cache = shellexpand::tilde(&cli.hf_cache).to_string();
-    eprintln!("Loading ForcedAligner ({})...", cli.aligner_model);
-    let aligner = qwen3_asr::ForcedAligner::from_pretrained(
-        &cli.aligner_model,
-        std::path::Path::new(&hf_cache),
-        qwen3_asr::best_device(),
-    )?;
-    eprintln!("ForcedAligner ready");
+    let tts = if cli.lean_startup {
+        eprintln!("Lean startup: TTS backends lazy");
+        LazyTtsManager::unloaded(cli.voice.clone(), cli.kokoro_voice.clone(), cli.tts_workers)
+    } else {
+        let tts_manager = tts::init(&cli.voice, &cli.kokoro_voice, cli.tts_workers);
+        eprintln!("TTS backends: {:?}", tts_manager.available_backends());
+        LazyTtsManager::loaded(
+            tts_manager,
+            cli.voice.clone(),
+            cli.kokoro_voice.clone(),
+            cli.tts_workers,
+        )
+    };
+
+    let parakeet = if cli.lean_startup {
+        eprintln!("Lean startup: loading Parakeet TDT...");
+        let parakeet = parakeet_rs::ParakeetTDT::from_pretrained(&cli.parakeet_model, None)?;
+        eprintln!("Parakeet ready");
+        LazyParakeet::loaded(parakeet, cli.parakeet_model.clone())
+    } else {
+        eprintln!("Loading Parakeet TDT...");
+        let parakeet = parakeet_rs::ParakeetTDT::from_pretrained(&cli.parakeet_model, None)?;
+        eprintln!("Parakeet ready");
+        LazyParakeet::loaded(parakeet, cli.parakeet_model.clone())
+    };
+
+    let asr = if cli.lean_startup {
+        eprintln!("Lean startup: Qwen3 ASR lazy");
+        LazyAsr::unloaded(qwen_model_dir.clone())
+    } else {
+        eprintln!("Loading Qwen3 ASR from {qwen_model_dir}...");
+        let asr = qwen3_asr::AsrInference::load(
+            std::path::Path::new(&qwen_model_dir),
+            qwen3_asr::best_device(),
+        )?;
+        eprintln!("Qwen3 ASR ready");
+        LazyAsr::loaded(asr, qwen_model_dir.clone())
+    };
+
+    let aligner = if cli.lean_startup {
+        eprintln!("Lean startup: ForcedAligner lazy");
+        LazyAligner::unloaded(cli.aligner_model.clone(), hf_cache.clone())
+    } else {
+        eprintln!("Loading ForcedAligner ({})...", cli.aligner_model);
+        let aligner = qwen3_asr::ForcedAligner::from_pretrained(
+            &cli.aligner_model,
+            std::path::Path::new(&hf_cache),
+            qwen3_asr::best_device(),
+        )?;
+        eprintln!("ForcedAligner ready");
+        LazyAligner::loaded(aligner, cli.aligner_model.clone(), hf_cache.clone())
+    };
 
     let precompute_notify = std::sync::Arc::new(tokio::sync::Notify::new());
     let vocab_precompute_notify = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -1588,15 +1645,10 @@ async fn main() -> anyhow::Result<()> {
         db: Mutex::new(db),
         log_path,
         docs_root,
-        tts: LazyTtsManager::loaded(
-            tts_manager,
-            cli.voice.clone(),
-            cli.kokoro_voice.clone(),
-            cli.tts_workers,
-        ),
-        asr: LazyAsr::loaded(asr, qwen_model_dir.clone()),
-        parakeet: LazyParakeet::loaded(parakeet, cli.parakeet_model.clone()),
-        aligner: LazyAligner::loaded(aligner, cli.aligner_model.clone(), hf_cache.clone()),
+        tts,
+        asr,
+        parakeet,
+        aligner,
         review: Mutex::new(review::ReviewSession::new()),
         precompute_notify: precompute_notify.clone(),
         vocab_precompute_notify: vocab_precompute_notify.clone(),
@@ -1615,6 +1667,12 @@ async fn main() -> anyhow::Result<()> {
         allophant_sidecar: std::sync::Mutex::new(None),
         cohere_sidecar: std::sync::Mutex::new(None),
     });
+
+    if let Err(e) = jobs::prewarm_zipa_sidecars(state.as_ref()) {
+        eprintln!("ZIPA prewarm failed: {e}");
+    } else {
+        eprintln!("ZIPA sidecars prewarmed");
+    }
 
     // Start background pre-computation loop
     review::spawn_precompute_loop(state.clone(), precompute_notify, audio_dir.clone());
@@ -2618,6 +2676,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pipeline/scan-results", get(jobs::api_scan_results))
         .route("/api/correct", post(jobs::api_correct))
         .route("/api/correct-prototype", post(jobs::api_correct_prototype))
+        .route("/api/zipa/timing-debug", post(jobs::api_zipa_timing_debug))
+        .route(
+            "/api/correct-prototype/alignment-debug",
+            post(jobs::api_correct_prototype_alignment_debug),
+        )
+        .route(
+            "/api/correct-prototype/alignment-benchmark",
+            post(jobs::api_correct_prototype_alignment_benchmark),
+        )
         .route(
             "/api/correct-prototype/bakeoff",
             post(jobs::api_correct_prototype_bakeoff),

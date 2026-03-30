@@ -11,7 +11,7 @@ use axum::{
     Json,
 };
 use rand::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::tts;
 use crate::{err, AppError, AppState};
@@ -1561,6 +1561,13 @@ fn load_authored_recording_16k(path: &str) -> anyhow::Result<Vec<f32>> {
     tts::resample_to_16k(&mono, sample_rate)
 }
 
+fn load_inline_audio_16k(audio_b64: &str) -> anyhow::Result<Vec<f32>> {
+    use base64::Engine as _;
+    let wav = base64::engine::general_purpose::STANDARD.decode(audio_b64)?;
+    let (mono, sample_rate) = decode_wav_mono(&wav)?;
+    tts::resample_to_16k(&mono, sample_rate)
+}
+
 fn write_temp_wav_16k(samples: &[f32], stem: &str) -> anyhow::Result<std::path::PathBuf> {
     let mut path = std::env::temp_dir();
     let unique = format!(
@@ -1708,6 +1715,42 @@ impl ZipaSidecar {
     }
 }
 
+fn prime_zipa_sidecar(sidecar: &mut ZipaSidecar, stem: &str) -> anyhow::Result<()> {
+    let silence_16k = vec![0.0_f32; 4096];
+    let temp_wav = write_temp_wav_16k(&silence_16k, stem)?;
+    let result = sidecar.decode_wav_path(&temp_wav);
+    let _ = std::fs::remove_file(&temp_wav);
+    result.map(|_| ())
+}
+
+pub fn prewarm_zipa_sidecars(state: &AppState) -> anyhow::Result<()> {
+    {
+        let mut guard = state.zipa_sidecar.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(ZipaSidecar::start(
+                "anyspeech/zipa-small-crctc-300k",
+                "model.int8.onnx",
+            )?);
+        }
+        if let Some(sidecar) = guard.as_mut() {
+            prime_zipa_sidecar(sidecar, "zipa_prewarm_300k")?;
+        }
+    }
+    {
+        let mut guard = state.zipa_ns700k_sidecar.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(ZipaSidecar::start(
+                "anyspeech/zipa-small-crctc-ns-700k",
+                "model.int8.onnx",
+            )?);
+        }
+        if let Some(sidecar) = guard.as_mut() {
+            prime_zipa_sidecar(sidecar, "zipa_prewarm_ns700k")?;
+        }
+    }
+    Ok(())
+}
+
 fn decode_zipa_trace_from_16k_warm(
     state: &AppState,
     samples_16k: &[f32],
@@ -1748,15 +1791,36 @@ fn decode_zipa_trace_from_16k_warm_with_sidecar(
     repo_id: &str,
     model_name: &str,
 ) -> anyhow::Result<serde_json::Value> {
+    let total_started = std::time::Instant::now();
+    let wav_started = std::time::Instant::now();
     let temp_wav = write_temp_wav_16k(samples_16k, stem)?;
+    let temp_wav_write_ms = wav_started.elapsed().as_millis() as u64;
     let result = (|| -> anyhow::Result<serde_json::Value> {
         let mut guard = sidecar_slot.lock().unwrap();
+        let mut sidecar_start_ms = 0u64;
         if guard.is_none() {
+            let started = std::time::Instant::now();
             *guard = Some(ZipaSidecar::start(repo_id, model_name)?);
+            sidecar_start_ms = started.elapsed().as_millis() as u64;
         }
         let sidecar = guard.as_mut().unwrap();
+        let roundtrip_started = std::time::Instant::now();
         match sidecar.decode_wav_path(&temp_wav) {
-            Ok(value) => Ok(value),
+            Ok(mut value) => {
+                if let serde_json::Value::Object(obj) = &mut value {
+                    obj.insert(
+                        "host_timing_ms".to_string(),
+                        serde_json::to_value(ZipaHostTiming {
+                            temp_wav_write_ms,
+                            sidecar_start_ms,
+                            sidecar_roundtrip_ms: roundtrip_started.elapsed().as_millis() as u64,
+                            total_ms: total_started.elapsed().as_millis() as u64,
+                        })
+                        .unwrap_or(serde_json::json!({})),
+                    );
+                }
+                Ok(value)
+            }
             Err(error) => {
                 if let Some(mut server) = guard.take() {
                     server.kill();
@@ -6802,6 +6866,28 @@ pub struct PrototypeBakeoffBody {
 }
 
 #[derive(Deserialize)]
+pub struct PrototypeAlignmentDebugBody {
+    pub transcript: Option<String>,
+    pub qwen: Option<String>,
+    pub recording_id: Option<i64>,
+    pub audio_wav_base64: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ZipaTimingDebugBody {
+    pub recording_id: Option<i64>,
+    pub audio_wav_base64: Option<String>,
+    pub repeats: Option<usize>,
+}
+
+#[derive(Deserialize)]
+pub struct PrototypeAlignmentBenchmarkBody {
+    pub recording_ids: Option<Vec<i64>>,
+    pub terms: Option<Vec<String>>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
 pub struct PrototypeBakeoffDetailBody {
     pub source: Option<String>,
     pub recording_id: Option<i64>,
@@ -6838,6 +6924,27 @@ struct AcousticInput {
     zipa_trace: serde_json::Value,
     zipa_segments: Vec<crate::prototype::AcousticSegment>,
     zipa_by_transcript: Vec<Vec<String>>,
+    timing: AcousticTiming,
+}
+
+#[derive(Clone, Default, Serialize)]
+struct AcousticTiming {
+    zipa_decode_ms: u64,
+    zipa_segment_extract_ms: u64,
+    espeak_align_ms: u64,
+    parakeet_transcribe_ms: u64,
+    parakeet_map_ms: u64,
+    fallback_align_ms: u64,
+    zipa_group_ms: u64,
+    total_ms: u64,
+}
+
+#[derive(Clone, Default, Serialize)]
+struct ZipaHostTiming {
+    temp_wav_write_ms: u64,
+    sidecar_start_ms: u64,
+    sidecar_roundtrip_ms: u64,
+    total_ms: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -7333,51 +7440,69 @@ fn build_acoustic_input_from_samples_16k(
     samples_16k: &[f32],
     transcript_text: &str,
 ) -> Option<AcousticInput> {
+    let total_started = std::time::Instant::now();
+    let zipa_started = std::time::Instant::now();
     let zipa_trace = decode_zipa_trace_from_16k_warm(state, samples_16k).ok()?;
+    let zipa_decode_ms = zipa_started.elapsed().as_millis() as u64;
+
+    let zipa_segments_started = std::time::Instant::now();
     let zipa_segments = zipa_segments_from_trace(&zipa_trace);
+    let zipa_segment_extract_ms = zipa_segments_started.elapsed().as_millis() as u64;
+
+    let espeak_started = std::time::Instant::now();
     let transcript_alignment_from_espeak =
         espeak_words_to_transcript_zipa_timing(transcript_text, &zipa_segments);
-    let parakeet_alignment = state
-        .parakeet
-        .transcribe_samples(
-            samples_16k.to_vec(),
-            16000,
-            1,
-            Some(parakeet_rs::TimestampMode::Words),
-        )
-        .ok()
-        .and_then(|result| {
-            let words = result
-                .tokens
-                .into_iter()
-                .map(|token| TimedWord {
-                    text: token.text,
-                    start: token.start as f64,
-                    end: token.end as f64,
-                    confidence: token.confidence,
-                })
-                .collect::<Vec<_>>();
-            parakeet_words_to_transcript_timing(transcript_text, &words)
-        });
+    let espeak_align_ms = espeak_started.elapsed().as_millis() as u64;
+
+    let parakeet_started = std::time::Instant::now();
+    let parakeet_result = state.parakeet.transcribe_samples(
+        samples_16k.to_vec(),
+        16000,
+        1,
+        Some(parakeet_rs::TimestampMode::Words),
+    );
+    let parakeet_transcribe_ms = parakeet_started.elapsed().as_millis() as u64;
+    let parakeet_map_started = std::time::Instant::now();
+    let parakeet_alignment = parakeet_result.ok().and_then(|result| {
+        let words = result
+            .tokens
+            .into_iter()
+            .map(|token| TimedWord {
+                text: token.text,
+                start: token.start as f64,
+                end: token.end as f64,
+                confidence: token.confidence,
+            })
+            .collect::<Vec<_>>();
+        parakeet_words_to_transcript_timing(transcript_text, &words)
+    });
+    let parakeet_map_ms = parakeet_map_started.elapsed().as_millis() as u64;
+
     let transcript_word_confidence = parakeet_alignment
         .as_ref()
         .map(|(_, confidence)| confidence.clone())
         .unwrap_or_default();
-    let (transcript_alignment, timing_source) =
+
+    let fallback_started = std::time::Instant::now();
+    let (transcript_alignment, timing_source, fallback_align_ms) =
         if let Some(alignment) = transcript_alignment_from_espeak {
-        (alignment, "espeak_zipa_dp".to_string())
+        (alignment, "espeak_zipa_dp".to_string(), 0)
     } else if let Some((alignment, _)) = parakeet_alignment {
-        (alignment, "parakeet_words".to_string())
+        (alignment, "parakeet_words".to_string(), 0)
     } else {
         (
             aligner.align(samples_16k, transcript_text).ok()?,
             "forced_aligner_fallback".to_string(),
+            fallback_started.elapsed().as_millis() as u64,
         )
     };
+
+    let zipa_group_started = std::time::Instant::now();
     let zipa_by_transcript = crate::prototype::zipa_grouped_arpabet_by_alignment(
         &transcript_alignment,
         &zipa_segments,
     );
+    let zipa_group_ms = zipa_group_started.elapsed().as_millis() as u64;
     Some(AcousticInput {
         transcript_alignment,
         transcript_word_confidence,
@@ -7385,7 +7510,171 @@ fn build_acoustic_input_from_samples_16k(
         zipa_trace,
         zipa_segments,
         zipa_by_transcript,
+        timing: AcousticTiming {
+            zipa_decode_ms,
+            zipa_segment_extract_ms,
+            espeak_align_ms,
+            parakeet_transcribe_ms,
+            parakeet_map_ms,
+            fallback_align_ms,
+            zipa_group_ms,
+            total_ms: total_started.elapsed().as_millis() as u64,
+        },
     })
+}
+
+fn zipa_phone_is_placeholder(phone: &str) -> bool {
+    let trimmed = phone.trim();
+    trimmed.is_empty()
+        || matches!(trimmed, "▁" | "_" | "__" | "∅" | "blank" | "sil" | "silence")
+}
+
+fn first_voiced_zipa_start_sec(segments: &[crate::prototype::AcousticSegment]) -> Option<f64> {
+    segments
+        .iter()
+        .find(|seg| !zipa_phone_is_placeholder(&seg.phone))
+        .map(|seg| seg.start_sec)
+}
+
+fn acoustic_alignments_json(input: &AcousticInput) -> serde_json::Value {
+    serde_json::json!({
+        "timing_source": input.timing_source.clone(),
+        "transcript": fmt_alignment_json(&input.transcript_alignment),
+        "espeak": fmt_alignment_json(&input.transcript_alignment),
+        "qwen": fmt_alignment_json(&input.transcript_alignment),
+        "zipa": phone_segments_to_alignment(&input.zipa_trace),
+        "zipa_transcript": crate::prototype::zipa_grouped_by_alignment_json(&input.transcript_alignment, &input.zipa_segments),
+        "zipa_espeak": crate::prototype::zipa_grouped_by_alignment_json(&input.transcript_alignment, &input.zipa_segments),
+        "zipa_qwen": crate::prototype::zipa_grouped_by_alignment_json(&input.transcript_alignment, &input.zipa_segments),
+    })
+}
+
+fn transcript_word_debug_json(
+    transcript_alignment: &[qwen3_asr::ForcedAlignItem],
+    transcript_word_confidence: &[Option<f32>],
+    zipa_by_transcript: &[Vec<String>],
+) -> serde_json::Value {
+    let espeak = ensure_espeak_bundled_data_dir()
+        .ok()
+        .and_then(|data_dir| espeak_ng::EspeakNg::with_data_dir("en", &data_dir).ok());
+    serde_json::Value::Array(
+        transcript_alignment
+            .iter()
+            .enumerate()
+            .map(|(idx, item)| {
+                let espeak_ipa = espeak
+                    .as_ref()
+                    .and_then(|engine| engine.text_to_phonemes(&item.word).ok())
+                    .unwrap_or_default();
+                let grouped = zipa_by_transcript.get(idx).cloned().unwrap_or_default();
+                serde_json::json!({
+                    "i": idx,
+                    "word": item.word,
+                    "s": item.start_time,
+                    "e": item.end_time,
+                    "c": transcript_word_confidence.get(idx).copied().flatten(),
+                    "espeak_ipa": espeak_ipa,
+                    "zipa_grouped": grouped,
+                })
+            })
+            .collect(),
+    )
+}
+
+const DEFAULT_ALIGNMENT_BENCHMARK_TERMS: &[&str] = &[
+    "bearcove",
+    "fasterthanlime",
+    "ripgrep",
+    "serde_json",
+    "mir",
+    "u8",
+    "aarch64",
+    "macho",
+    "regalloc",
+    "tokio",
+];
+
+fn find_term_span_in_tokenized_words(words: &[String], term: &str) -> Option<(usize, usize)> {
+    let target = compact_timing_word(term);
+    if target.is_empty() {
+        return None;
+    }
+    for start in 0..words.len() {
+        let mut joined = String::new();
+        for end in start..words.len() {
+            joined.push_str(&compact_timing_word(&words[end]));
+            if joined == target {
+                return Some((start, end + 1));
+            }
+            if !target.starts_with(&joined) && joined.len() >= target.len() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+fn select_alignment_benchmark_recordings(
+    mut recordings: Vec<crate::db::AuthoredSentenceRecordingRow>,
+    body: &PrototypeAlignmentBenchmarkBody,
+) -> Vec<crate::db::AuthoredSentenceRecordingRow> {
+    let limit = body.limit.unwrap_or(10).clamp(1, 50);
+    recordings.sort_by_key(|rec| rec.id);
+
+    if let Some(recording_ids) = &body.recording_ids {
+        let wanted = recording_ids.iter().copied().collect::<HashSet<_>>();
+        return recordings
+            .into_iter()
+            .filter(|rec| wanted.contains(&rec.id))
+            .take(limit)
+            .collect();
+    }
+
+    let wanted_terms = body
+        .terms
+        .as_ref()
+        .map(|terms| {
+            terms.iter()
+                .map(|term| term.to_ascii_lowercase())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| {
+            DEFAULT_ALIGNMENT_BENCHMARK_TERMS
+                .iter()
+                .map(|term| term.to_string())
+                .collect::<Vec<_>>()
+        });
+
+    let mut wanted_by_id = HashMap::<i64, usize>::new();
+    for (idx, wanted) in wanted_terms.iter().enumerate() {
+        if let Some(rec) = recordings
+            .iter()
+            .find(|rec| rec.term.eq_ignore_ascii_case(wanted))
+        {
+            wanted_by_id.entry(rec.id).or_insert(idx);
+        }
+    }
+
+    let mut chosen = Vec::new();
+    let mut fallback = Vec::new();
+    for rec in recordings.into_iter() {
+        if let Some(rank) = wanted_by_id.get(&rec.id).copied() {
+            chosen.push((rank, rec));
+        } else {
+            fallback.push(rec);
+        }
+    }
+    chosen.sort_by_key(|(rank, rec)| (*rank, rec.id));
+
+    let mut out = chosen
+        .into_iter()
+        .map(|(_, rec)| rec)
+        .take(limit)
+        .collect::<Vec<_>>();
+    if out.len() < limit {
+        out.extend(fallback.into_iter().take(limit - out.len()));
+    }
+    out
 }
 
 fn zipa_segments_from_trace(trace: &serde_json::Value) -> Vec<crate::prototype::AcousticSegment> {
@@ -7452,6 +7741,8 @@ pub async fn api_correct_prototype(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PrototypeCorrectionBody>,
 ) -> Result<Response, AppError> {
+    let total_started = std::time::Instant::now();
+    let db_started = std::time::Instant::now();
     let transcript = body
         .transcript
         .clone()
@@ -7465,11 +7756,13 @@ pub async fn api_correct_prototype(
             db.get_all_reviewed_confusion_surfaces().map_err(err)?,
         )
     };
+    let db_ms = db_started.elapsed().as_millis() as u64;
     let config = crate::prototype::PrototypeConfig {
         max_span_tokens: body.max_span_tokens.unwrap_or(4).clamp(1, 6),
         max_span_proposals: body.max_span_proposals.unwrap_or(24).clamp(1, 64),
         max_candidates_per_span: body.max_candidates_per_span.unwrap_or(3).clamp(1, 8),
     };
+    let audio_prepare_started = std::time::Instant::now();
     let acoustic_input = if let Some(audio_b64) = body.audio_wav_base64.clone() {
         let state2 = state.clone();
         let qwen_text = transcript.clone();
@@ -7487,13 +7780,15 @@ pub async fn api_correct_prototype(
     } else {
         None
     };
+    let audio_prepare_ms = audio_prepare_started.elapsed().as_millis() as u64;
     let acoustic_context = acoustic_input.as_ref().map(|input| crate::prototype::AcousticContext {
         transcript_alignment: &input.transcript_alignment,
         transcript_word_confidence: &input.transcript_word_confidence,
         zipa_segments: &input.zipa_segments,
         zipa_by_transcript: &input.zipa_by_transcript,
     });
-    let mut result = crate::prototype::prototype_correct_with_acoustics(
+    let prototype_started = std::time::Instant::now();
+    let (mut result, prototype_timing) = crate::prototype::prototype_correct_with_acoustics_timed(
         &transcript,
         &vocab,
         &alt_spellings,
@@ -7501,6 +7796,7 @@ pub async fn api_correct_prototype(
         config,
         acoustic_context.as_ref(),
     );
+    let prototype_ms = prototype_started.elapsed().as_millis() as u64;
 
     let use_model_reranker = body.use_model_reranker.unwrap_or(true);
     let use_prototype_adapters = body.use_prototype_adapters.unwrap_or(false);
@@ -7510,6 +7806,7 @@ pub async fn api_correct_prototype(
         use_model_reranker,
         use_prototype_adapters,
     );
+    let reranker_started = std::time::Instant::now();
     let reranker = if reranker_mode != PrototypeRerankerMode::Off
         && should_run_prototype_reranker(&result.sentence_candidates)
     {
@@ -7554,6 +7851,7 @@ pub async fn api_correct_prototype(
     } else {
         None
     };
+    let reranker_ms = reranker_started.elapsed().as_millis() as u64;
 
     Ok(Json(serde_json::json!({
         "original": result.original,
@@ -7561,20 +7859,338 @@ pub async fn api_correct_prototype(
         "accepted": result.accepted,
         "proposals": result.proposals,
         "sentence_candidates": result.sentence_candidates,
-        "alignments": acoustic_input.as_ref().map(|input| serde_json::json!({
-            "timing_source": input.timing_source,
-            "transcript": fmt_alignment_json(&input.transcript_alignment),
-            "espeak": fmt_alignment_json(&input.transcript_alignment),
-            "qwen": fmt_alignment_json(&input.transcript_alignment),
-            "zipa": phone_segments_to_alignment(&input.zipa_trace),
-            "zipa_transcript": crate::prototype::zipa_grouped_by_alignment_json(&input.transcript_alignment, &input.zipa_segments),
-            "zipa_espeak": crate::prototype::zipa_grouped_by_alignment_json(&input.transcript_alignment, &input.zipa_segments),
-            "zipa_qwen": crate::prototype::zipa_grouped_by_alignment_json(&input.transcript_alignment, &input.zipa_segments),
-        })),
+        "alignments": acoustic_input.as_ref().map(acoustic_alignments_json),
         "zipa_trace": acoustic_input.as_ref().map(|input| input.zipa_trace.clone()),
         "reranker": reranker,
+        "timing": {
+            "db_ms": db_ms,
+            "audio_prepare_ms": audio_prepare_ms,
+            "prototype_ms": prototype_ms,
+            "prototype": serde_json::to_value(&prototype_timing).unwrap_or(serde_json::json!({})),
+            "reranker_ms": reranker_ms,
+            "total_ms": total_started.elapsed().as_millis() as u64,
+            "acoustic": acoustic_input.as_ref().map(|input| serde_json::to_value(&input.timing).unwrap_or(serde_json::json!({}))),
+            "proposal_count": result.proposals.len(),
+            "sentence_candidate_count": result.sentence_candidates.len(),
+            "accepted_count": result.accepted.len(),
+        },
     }))
     .into_response())
+}
+
+pub async fn api_correct_prototype_alignment_debug(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PrototypeAlignmentDebugBody>,
+) -> Result<Response, AppError> {
+    let state2 = state.clone();
+    let value = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+        let total_started = std::time::Instant::now();
+        let mut transcript = body.transcript.or(body.qwen).unwrap_or_default();
+        let mut transcript_label = if transcript.trim().is_empty() {
+            "Parakeet".to_string()
+        } else {
+            "Provided transcript".to_string()
+        };
+        let audio_prepare_started = std::time::Instant::now();
+        let samples_16k = if let Some(recording_id) = body.recording_id {
+            let recording = {
+                let db = state2.db.lock().unwrap();
+                db.get_authored_sentence_recording(recording_id)?
+                    .ok_or_else(|| anyhow::anyhow!("recording not found"))?
+            };
+            load_authored_recording_16k(&recording.wav_path)?
+        } else if let Some(audio_b64) = body.audio_wav_base64 {
+            use base64::Engine as _;
+            let wav = base64::engine::general_purpose::STANDARD.decode(audio_b64)?;
+            let (mono, sample_rate) = decode_wav_mono(&wav)?;
+            tts::resample_to_16k(&mono, sample_rate)?
+        } else {
+            anyhow::bail!("missing recording_id or audio_wav_base64");
+        };
+
+        let parakeet_result = state2.parakeet.transcribe_samples(
+            samples_16k.clone(),
+            16000,
+            1,
+            Some(parakeet_rs::TimestampMode::Words),
+        );
+        let parakeet_alignment = parakeet_result
+            .as_ref()
+            .map(|r| {
+                r.tokens
+                    .iter()
+                    .map(|token| {
+                        serde_json::json!({
+                            "w": token.text,
+                            "s": token.start,
+                            "e": token.end,
+                            "c": token.confidence,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let parakeet_text = parakeet_result
+            .as_ref()
+            .map(|r| r.text.clone())
+            .unwrap_or_default();
+        if transcript.trim().is_empty() {
+            transcript = parakeet_text.clone();
+            transcript_label = "Parakeet".to_string();
+        }
+
+        let audio_prepare_ms = audio_prepare_started.elapsed().as_millis() as u64;
+        let acoustic_input = build_acoustic_input_from_samples_16k(
+            &state2,
+            &state2.aligner,
+            &samples_16k,
+            &transcript,
+        )
+        .ok_or_else(|| anyhow::anyhow!("failed to build acoustic input"))?;
+
+        let transcript_first_start = acoustic_input
+            .transcript_alignment
+            .first()
+            .map(|item| item.start_time);
+        let zipa_first_start = acoustic_input.zipa_segments.first().map(|seg| seg.start_sec);
+        let zipa_first_voiced_start = first_voiced_zipa_start_sec(&acoustic_input.zipa_segments);
+        let auto_offset_ms = match (transcript_first_start, zipa_first_voiced_start) {
+            (Some(transcript_start), Some(zipa_start)) => {
+                Some(((transcript_start - zipa_start) * 1000.0).round() as i64)
+            }
+            _ => None,
+        };
+
+        Ok(serde_json::json!({
+            "ok": true,
+            "transcript": transcript,
+            "transcript_label": transcript_label,
+            "parakeet_transcript": parakeet_text,
+            "parakeet_error": parakeet_result.as_ref().err().map(|e| e.to_string()),
+            "parakeet_alignment": parakeet_alignment,
+            "alignments": acoustic_alignments_json(&acoustic_input),
+            "word_debug": transcript_word_debug_json(
+                &acoustic_input.transcript_alignment,
+                &acoustic_input.transcript_word_confidence,
+                &acoustic_input.zipa_by_transcript,
+            ),
+            "zipa_trace": acoustic_input.zipa_trace.clone(),
+            "debug": {
+                "timing_source": acoustic_input.timing_source.clone(),
+                "transcript_first_start_sec": transcript_first_start,
+                "zipa_first_phone_start_sec": zipa_first_start,
+                "zipa_first_voiced_start_sec": zipa_first_voiced_start,
+                "zipa_auto_offset_ms": auto_offset_ms,
+            },
+            "timing": {
+                "audio_prepare_ms": audio_prepare_ms,
+                "total_ms": total_started.elapsed().as_millis() as u64,
+                "acoustic": serde_json::to_value(&acoustic_input.timing).unwrap_or(serde_json::json!({})),
+            },
+        }))
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)?;
+
+    Ok(Json(value).into_response())
+}
+
+pub async fn api_zipa_timing_debug(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ZipaTimingDebugBody>,
+) -> Result<Response, AppError> {
+    let state2 = state.clone();
+    let value = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+        let total_started = std::time::Instant::now();
+        let samples_16k = if let Some(recording_id) = body.recording_id {
+            let recording = {
+                let db = state2.db.lock().unwrap();
+                db.get_authored_sentence_recording(recording_id)?
+                    .ok_or_else(|| anyhow::anyhow!("recording not found"))?
+            };
+            load_authored_recording_16k(&recording.wav_path)?
+        } else if let Some(audio_b64) = body.audio_wav_base64.as_deref() {
+            load_inline_audio_16k(audio_b64)?
+        } else {
+            anyhow::bail!("missing recording_id or audio_wav_base64");
+        };
+
+        let repeats = body.repeats.unwrap_or(1).clamp(1, 8);
+        let mut runs = Vec::with_capacity(repeats);
+        for idx in 0..repeats {
+            let run_started = std::time::Instant::now();
+            let trace = decode_zipa_trace_from_16k_warm(&state2, &samples_16k)?;
+            runs.push(serde_json::json!({
+                "run": idx + 1,
+                "elapsed_ms": run_started.elapsed().as_millis() as u64,
+                "trace": trace,
+            }));
+        }
+
+        Ok(serde_json::json!({
+            "ok": true,
+            "kind": "zipa_timing_debug",
+            "repeats": repeats,
+            "elapsed_ms": total_started.elapsed().as_millis() as u64,
+            "runs": runs,
+        }))
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)?;
+
+    Ok(Json(value).into_response())
+}
+
+pub async fn api_correct_prototype_alignment_benchmark(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PrototypeAlignmentBenchmarkBody>,
+) -> Result<Response, AppError> {
+    let state2 = state.clone();
+    let value = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+        let recordings = {
+            let db = state2.db.lock().unwrap();
+            db.authored_sentence_recordings_for_eval()?
+        };
+        let selected = select_alignment_benchmark_recordings(recordings, &body);
+        let mut cases = Vec::new();
+        let mut words_total = 0usize;
+        let mut words_with_grouped = 0usize;
+        let mut target_words_total = 0usize;
+        let mut target_words_with_grouped = 0usize;
+        let mut cases_all_target_grouped = 0usize;
+        let mut cases_missing_target_grouping = 0usize;
+        let mut timing_sources = HashMap::<String, usize>::new();
+
+        for rec in selected {
+            let case_started = std::time::Instant::now();
+            let samples_16k = load_authored_recording_16k(&rec.wav_path)?;
+            let acoustic_input = build_acoustic_input_from_samples_16k(
+                &state2,
+                &state2.aligner,
+                &samples_16k,
+                &rec.sentence,
+            )
+            .ok_or_else(|| anyhow::anyhow!("failed to build acoustic input for recording {}", rec.id))?;
+            let parakeet_result = state2.parakeet.transcribe_samples(
+                samples_16k.clone(),
+                16000,
+                1,
+                Some(parakeet_rs::TimestampMode::Words),
+            );
+            let transcript_words = tokenize_timing_words(&rec.sentence);
+            let target_span = find_term_span_in_tokenized_words(&transcript_words, &rec.term);
+            let grouped_counts = acoustic_input
+                .zipa_by_transcript
+                .iter()
+                .map(|phones| !phones.is_empty())
+                .collect::<Vec<_>>();
+            let case_words_total = grouped_counts.len();
+            let case_words_with_grouped = grouped_counts.iter().filter(|&&v| v).count();
+            words_total += case_words_total;
+            words_with_grouped += case_words_with_grouped;
+
+            let (case_target_words_total, case_target_words_with_grouped, target_word_debug) =
+                if let Some((start, end)) = target_span {
+                    let total = end - start;
+                    let with_grouped = grouped_counts[start..end]
+                        .iter()
+                        .filter(|&&v| v)
+                        .count();
+                    let debug_rows = transcript_word_debug_json(
+                        &acoustic_input.transcript_alignment,
+                        &acoustic_input.transcript_word_confidence,
+                        &acoustic_input.zipa_by_transcript,
+                    )
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .skip(start)
+                    .take(total)
+                    .collect::<Vec<_>>();
+                    (total, with_grouped, serde_json::Value::Array(debug_rows))
+                } else {
+                    (0usize, 0usize, serde_json::Value::Array(Vec::new()))
+                };
+            target_words_total += case_target_words_total;
+            target_words_with_grouped += case_target_words_with_grouped;
+            if case_target_words_total > 0 {
+                if case_target_words_total == case_target_words_with_grouped {
+                    cases_all_target_grouped += 1;
+                } else {
+                    cases_missing_target_grouping += 1;
+                }
+            }
+
+            *timing_sources
+                .entry(acoustic_input.timing_source.clone())
+                .or_default() += 1;
+
+            let transcript_first_start = acoustic_input
+                .transcript_alignment
+                .first()
+                .map(|item| item.start_time);
+            let zipa_first_start = acoustic_input.zipa_segments.first().map(|seg| seg.start_sec);
+            let zipa_first_voiced_start = first_voiced_zipa_start_sec(&acoustic_input.zipa_segments);
+
+            cases.push(serde_json::json!({
+                "case_id": format!("hum-{}", rec.id),
+                "recording_id": rec.id,
+                "term": rec.term,
+                "sentence": rec.sentence,
+                "transcript_label": "Expected sentence",
+                "transcript": rec.sentence,
+                "parakeet_transcript": parakeet_result.as_ref().map(|r| r.text.clone()).unwrap_or_default(),
+                "parakeet_error": parakeet_result.as_ref().err().map(|e| e.to_string()),
+                "timing_source": acoustic_input.timing_source,
+                "elapsed_ms": case_started.elapsed().as_millis() as u64,
+                "words_total": case_words_total,
+                "words_with_grouped": case_words_with_grouped,
+                "target_span": target_span.map(|(s, e)| serde_json::json!({"start": s, "end": e})),
+                "target_words_total": case_target_words_total,
+                "target_words_with_grouped": case_target_words_with_grouped,
+                "all_target_words_grouped": case_target_words_total > 0 && case_target_words_total == case_target_words_with_grouped,
+                "alignments": acoustic_alignments_json(&acoustic_input),
+                "target_word_debug": target_word_debug,
+                "debug": {
+                    "transcript_first_start_sec": transcript_first_start,
+                    "zipa_first_phone_start_sec": zipa_first_start,
+                    "zipa_first_voiced_start_sec": zipa_first_voiced_start,
+                    "zipa_auto_offset_ms": match (transcript_first_start, zipa_first_voiced_start) {
+                        (Some(transcript_start), Some(zipa_start)) => Some(((transcript_start - zipa_start) * 1000.0).round() as i64),
+                        _ => None,
+                    },
+                }
+            }));
+        }
+
+        let selected_count = cases.len();
+        Ok(serde_json::json!({
+            "ok": true,
+            "kind": "alignment_benchmark",
+            "selected_cases": selected_count,
+            "summary": {
+                "cases": selected_count,
+                "words_total": words_total,
+                "words_with_grouped": words_with_grouped,
+                "word_group_coverage": if words_total > 0 { words_with_grouped as f64 / words_total as f64 } else { 0.0 },
+                "target_words_total": target_words_total,
+                "target_words_with_grouped": target_words_with_grouped,
+                "target_group_coverage": if target_words_total > 0 { target_words_with_grouped as f64 / target_words_total as f64 } else { 0.0 },
+                "cases_all_target_grouped": cases_all_target_grouped,
+                "cases_missing_target_grouping": cases_missing_target_grouping,
+                "timing_sources": timing_sources,
+            },
+            "cases": cases,
+        }))
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)?;
+
+    Ok(Json(value).into_response())
 }
 
 pub async fn api_correct_prototype_bakeoff(
@@ -8365,11 +8981,13 @@ pub async fn api_correct_prototype_bakeoff_detail(
                 "ok": true,
                 "alignments": {
                     "expected": [],
+                    "transcript": [],
                     "espeak": [],
                     "qwen": [],
                     "current": [],
                     "prototype": [],
                     "zipa": [],
+                    "zipa_transcript": [],
                     "zipa_espeak": [],
                     "zipa_qwen": [],
                 },
@@ -8398,6 +9016,7 @@ pub async fn api_correct_prototype_bakeoff_detail(
 
     let value = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
         let detail_started = std::time::Instant::now();
+        let db_started = std::time::Instant::now();
         let (recording, vocab, alt_spellings, confusion_forms) = {
             let db = state2.db.lock().unwrap();
             let recording = db
@@ -8408,6 +9027,8 @@ pub async fn api_correct_prototype_bakeoff_detail(
             let confusion_forms = db.get_all_reviewed_confusion_surfaces()?;
             (recording, vocab, alt_spellings, confusion_forms)
         };
+        let db_ms = db_started.elapsed().as_millis() as u64;
+        let audio_prepare_started = std::time::Instant::now();
         let samples_16k = load_authored_recording_16k(&recording.wav_path)?;
         let parakeet_result = state2.parakeet.transcribe_samples(
             samples_16k.clone(),
@@ -8442,9 +9063,9 @@ pub async fn api_correct_prototype_bakeoff_detail(
             &samples_16k,
             &parakeet,
         );
-        let qwen_alignment = acoustic_input
+        let transcript_alignment = acoustic_input
             .as_ref()
-            .map(|input| input.qwen_alignment.clone())
+            .map(|input| input.transcript_alignment.clone())
             .unwrap_or_else(|| state2.aligner.align(&samples_16k, &parakeet).unwrap_or_default());
         let current_alignment = state2.aligner.align(&samples_16k, &current)?;
         let prototype_alignment = state2.aligner.align(&samples_16k, &prototype)?;
@@ -8453,21 +9074,24 @@ pub async fn api_correct_prototype_bakeoff_detail(
             .as_ref()
             .map(|input| input.zipa_segments.clone())
             .unwrap_or_default();
-        let zipa_by_qwen = acoustic_input
+        let zipa_by_transcript = acoustic_input
             .as_ref()
-            .map(|input| input.zipa_by_qwen.clone())
-            .unwrap_or_else(|| crate::prototype::zipa_grouped_arpabet_by_alignment(&qwen_alignment, &zipa_segments));
-        let qwen_word_confidence = acoustic_input
+            .map(|input| input.zipa_by_transcript.clone())
+            .unwrap_or_else(|| crate::prototype::zipa_grouped_arpabet_by_alignment(&transcript_alignment, &zipa_segments));
+        let transcript_word_confidence = acoustic_input
             .as_ref()
-            .map(|input| input.qwen_word_confidence.clone())
-            .unwrap_or_else(|| vec![None; qwen_alignment.len()]);
+            .map(|input| input.transcript_word_confidence.clone())
+            .unwrap_or_else(|| vec![None; transcript_alignment.len()]);
+        let audio_prepare_ms = audio_prepare_started.elapsed().as_millis() as u64;
         let acoustic_context = crate::prototype::AcousticContext {
-            qwen_alignment: &qwen_alignment,
-            qwen_word_confidence: &qwen_word_confidence,
+            transcript_alignment: &transcript_alignment,
+            transcript_word_confidence: &transcript_word_confidence,
             zipa_segments: &zipa_segments,
-            zipa_by_qwen: &zipa_by_qwen,
+            zipa_by_transcript: &zipa_by_transcript,
         };
-        let mut prototype_result = crate::prototype::prototype_correct_with_acoustics(
+        let prototype_started = std::time::Instant::now();
+        let (mut prototype_result, prototype_timing) =
+            crate::prototype::prototype_correct_with_acoustics_timed(
             &parakeet,
             &vocab,
             &alt_spellings,
@@ -8475,6 +9099,8 @@ pub async fn api_correct_prototype_bakeoff_detail(
             crate::prototype::PrototypeConfig::default(),
             Some(&acoustic_context),
         );
+        let prototype_ms = prototype_started.elapsed().as_millis() as u64;
+        let reranker_started = std::time::Instant::now();
         let reranker = if reranker_mode != PrototypeRerankerMode::Off
             && should_run_prototype_reranker(&prototype_result.sentence_candidates)
         {
@@ -8510,6 +9136,7 @@ pub async fn api_correct_prototype_bakeoff_detail(
         } else {
             None
         };
+        let reranker_ms = reranker_started.elapsed().as_millis() as u64;
         let zipa_alignment = zipa_trace
             .as_ref()
             .map(phone_segments_to_alignment)
@@ -8531,6 +9158,18 @@ pub async fn api_correct_prototype_bakeoff_detail(
             "cohere_error": serde_json::Value::Null,
             "correction_input": "parakeet",
             "elapsed_ms": detail_started.elapsed().as_millis() as u64,
+            "timing": {
+                "db_ms": db_ms,
+                "audio_prepare_ms": audio_prepare_ms,
+                "prototype_ms": prototype_ms,
+                "prototype": serde_json::to_value(&prototype_timing).unwrap_or(serde_json::json!({})),
+                "reranker_ms": reranker_ms,
+                "total_ms": detail_started.elapsed().as_millis() as u64,
+                "acoustic": acoustic_input.as_ref().map(|input| serde_json::to_value(&input.timing).unwrap_or(serde_json::json!({}))),
+                "proposal_count": prototype_result.proposals.len(),
+                "sentence_candidate_count": prototype_result.sentence_candidates.len(),
+                "accepted_count": prototype_result.accepted.len(),
+            },
             "alignments": {
                 "timing_source": acoustic_input
                     .as_ref()
@@ -8543,13 +9182,15 @@ pub async fn api_correct_prototype_bakeoff_detail(
                         }
                     }),
                 "expected": fmt_alignment_json(&expected_alignment),
-                "espeak": fmt_alignment_json(&qwen_alignment),
-                "qwen": fmt_alignment_json(&qwen_alignment),
+                "transcript": fmt_alignment_json(&transcript_alignment),
+                "espeak": fmt_alignment_json(&transcript_alignment),
+                "qwen": fmt_alignment_json(&transcript_alignment),
                 "current": fmt_alignment_json(&current_alignment),
                 "prototype": fmt_alignment_json(&prototype_alignment),
                 "zipa": zipa_alignment,
-                "zipa_espeak": crate::prototype::zipa_grouped_by_alignment_json(&qwen_alignment, &zipa_segments),
-                "zipa_qwen": crate::prototype::zipa_grouped_by_alignment_json(&qwen_alignment, &zipa_segments),
+                "zipa_transcript": crate::prototype::zipa_grouped_by_alignment_json(&transcript_alignment, &zipa_segments),
+                "zipa_espeak": crate::prototype::zipa_grouped_by_alignment_json(&transcript_alignment, &zipa_segments),
+                "zipa_qwen": crate::prototype::zipa_grouped_by_alignment_json(&transcript_alignment, &zipa_segments),
             },
             "zipa_trace": zipa_trace,
             "prototype_trace": {
@@ -10335,8 +10976,36 @@ mod tests {
     }
 
     #[test]
+    fn first_voiced_zipa_start_ignores_placeholder_segments() {
+        let segments = vec![
+            seg("__", 0.00, 0.08),
+            seg("▁", 0.08, 0.11),
+            seg("blank", 0.11, 0.15),
+            seg("w", 0.15, 0.22),
+        ];
+
+        let start = first_voiced_zipa_start_sec(&segments).expect("voiced segment start");
+        assert!((start - 0.15).abs() < 1e-9, "{start}");
+    }
+
+    #[test]
+    fn find_term_span_matches_split_term_words() {
+        let words = vec!["bear".to_string(), "cove".to_string(), "company".to_string()];
+        assert_eq!(find_term_span_in_tokenized_words(&words, "bearcove"), Some((0, 2)));
+    }
+
+    #[test]
+    fn find_term_span_matches_compacted_alphanumeric_term() {
+        let words = vec!["we".to_string(), "can".to_string(), "pack".to_string(), "u8".to_string()];
+        assert_eq!(find_term_span_in_tokenized_words(&words, "u8"), Some((3, 4)));
+
+        let words = vec!["a".to_string(), "arch".to_string(), "64".to_string()];
+        assert_eq!(find_term_span_in_tokenized_words(&words, "AArch64"), Some((0, 3)));
+    }
+
+    #[test]
     fn parakeet_timing_maps_one_to_one_words() {
-        let (mapped, confidence) = parakeet_words_to_qwen_timing(
+        let (mapped, confidence) = parakeet_words_to_transcript_timing(
             "bear cove",
             &[timed("bear", 1.00, 1.24), timed("cove", 1.24, 1.52)],
         )
@@ -10354,7 +11023,7 @@ mod tests {
 
     #[test]
     fn parakeet_timing_merges_two_words_into_one_qwen_token() {
-        let (mapped, confidence) = parakeet_words_to_qwen_timing(
+        let (mapped, confidence) = parakeet_words_to_transcript_timing(
             "bearcove",
             &[timed("bear", 1.00, 1.22), timed("cove", 1.22, 1.54)],
         )
@@ -10370,7 +11039,7 @@ mod tests {
     #[test]
     fn parakeet_timing_splits_one_word_across_two_qwen_tokens() {
         let (mapped, confidence) =
-            parakeet_words_to_qwen_timing("bear cove", &[timed("bearcove", 2.00, 2.64)])
+            parakeet_words_to_transcript_timing("bear cove", &[timed("bearcove", 2.00, 2.64)])
             .expect("expected timing map");
 
         assert_eq!(mapped.len(), 2);
@@ -10385,7 +11054,7 @@ mod tests {
 
     #[test]
     fn parakeet_timing_preserves_confidence_on_direct_matches() {
-        let (_, confidence) = parakeet_words_to_qwen_timing(
+        let (_, confidence) = parakeet_words_to_transcript_timing(
             "bear cove",
             &[
                 timed_conf("bear", 1.00, 1.24, 0.91),
@@ -10399,7 +11068,7 @@ mod tests {
 
     #[test]
     fn parakeet_timing_averages_confidence_when_merging_words() {
-        let (_, confidence) = parakeet_words_to_qwen_timing(
+        let (_, confidence) = parakeet_words_to_transcript_timing(
             "bearcove",
             &[
                 timed_conf("bear", 1.00, 1.22, 0.80),
@@ -10429,7 +11098,7 @@ mod tests {
             seg("v", 1.42, 1.48),
         ];
 
-        let mapped = qwen_ipa_words_to_zipa_timing(&qwen_words, &qwen_ipa, &zipa_segments)
+        let mapped = transcript_ipa_words_to_zipa_timing(&qwen_words, &qwen_ipa, &zipa_segments)
             .expect("expected eSpeak/ZIPA timing map");
 
         assert_eq!(mapped.len(), 2);
@@ -10456,7 +11125,7 @@ mod tests {
             seg("ɪ", 0.81, 0.90),
         ];
 
-        let mapped = qwen_ipa_words_to_zipa_timing(&qwen_words, &qwen_ipa, &zipa_segments)
+        let mapped = transcript_ipa_words_to_zipa_timing(&qwen_words, &qwen_ipa, &zipa_segments)
             .expect("expected fuzzy eSpeak/ZIPA timing map");
 
         assert_eq!(mapped.len(), 2);

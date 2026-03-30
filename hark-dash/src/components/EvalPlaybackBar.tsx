@@ -1,9 +1,17 @@
 import { useEffect, useCallback } from "react";
+import type { TimedToken } from "../types";
 
 function formatTime(s: number): string {
   const m = Math.floor(s / 60);
   const sec = (s % 60).toFixed(1);
   return `${m}:${sec.padStart(4, "0")}`;
+}
+
+function currentWord(tokens: TimedToken[], time: number): string {
+  for (const t of tokens) {
+    if (time >= t.s && time < t.e) return t.w;
+  }
+  return "";
 }
 
 const ZOOM_LEVELS = [0.25, 0.5, 1, 1.6, 2.6, 3.8, 5.4] as const;
@@ -13,6 +21,7 @@ export function EvalPlaybackBar({
   currentTime,
   duration,
   zoom,
+  tokens,
   onPlayPause,
   onSeek,
   onZoomChange,
@@ -21,6 +30,7 @@ export function EvalPlaybackBar({
   currentTime: number;
   duration: number;
   zoom: number;
+  tokens: TimedToken[];
   onPlayPause: () => void;
   onSeek: (time: number) => void;
   onZoomChange: (z: number) => void;
@@ -63,6 +73,8 @@ export function EvalPlaybackBar({
     return () => window.removeEventListener("keydown", handler);
   }, [onPlayPause, step, onSeek, duration]);
 
+  const word = currentWord(tokens, currentTime);
+
   return (
     <div
       style={{
@@ -81,15 +93,18 @@ export function EvalPlaybackBar({
       <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-muted)" }}>
         {formatTime(currentTime)} / {formatTime(duration)}
       </span>
-      <input
-        type="range"
-        min={0}
-        max={duration || 1}
-        step={0.01}
-        value={currentTime}
-        onChange={(e) => onSeek(parseFloat(e.target.value))}
-        style={{ flex: 1, minWidth: 100 }}
-      />
+      <span
+        style={{
+          flex: 1,
+          textAlign: "center",
+          fontSize: "1.4rem",
+          fontWeight: 700,
+          color: word ? "var(--text)" : "transparent",
+          letterSpacing: "0.02em",
+        }}
+      >
+        {word || "\u00A0"}
+      </span>
       <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>zoom</span>
       {ZOOM_LEVELS.map((z) => (
         <button

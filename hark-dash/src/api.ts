@@ -4,6 +4,8 @@ import type {
   BakeoffEntry,
   Job,
   TimedToken,
+  SentenceCandidate,
+  Reranker,
 } from "./types";
 
 // --- Raw backend shapes (private, normalized immediately) ---
@@ -25,6 +27,7 @@ type RawCorrectResponse = {
   sentence_candidates: unknown[];
   alignments: {
     timing_source: string;
+    transcript?: TimedToken[];
     espeak?: TimedToken[];
     qwen?: TimedToken[];
     zipa?: TimedToken[];
@@ -98,15 +101,60 @@ type RawBakeoffResult = {
 
 // --- Normalization ---
 
-function normalizeAlignments(raw: RawCorrectResponse["alignments"]) {
+function normalizeAlignments(raw: RawCorrectResponse["alignments"] | null | undefined) {
+  if (!raw) {
+    return { timingSource: "", transcript: [], expected: [], espeak: [], current: [], prototype: [], zipa: [], zipaEspeak: [] };
+  }
   return {
     timingSource: raw.timing_source,
+    transcript: raw.transcript,
     expected: raw.expected,
     espeak: raw.espeak ?? raw.qwen ?? [],
     current: raw.current,
     prototype: raw.prototype,
     zipa: raw.zipa,
     zipaEspeak: raw.zipa_espeak ?? raw.zipa_qwen ?? [],
+  };
+}
+
+function normalizeSentenceCandidates(raw: unknown[]): SentenceCandidate[] {
+  if (!raw) return [];
+  return raw.map((c: any) => ({
+    label: c.label ?? "",
+    text: c.text ?? "",
+    edits: (c.edits ?? []).map((e: any) => ({
+      tokenStart: e.token_start,
+      tokenEnd: e.token_end,
+      charStart: e.char_start,
+      charEnd: e.char_end,
+      from: e.from,
+      matchedForm: e.matched_form,
+      to: e.to,
+      via: e.via,
+      score: e.score,
+      acousticScore: e.acoustic_score,
+      acousticDelta: e.acoustic_delta,
+    })),
+    score: c.score ?? 0,
+  }));
+}
+
+function normalizeReranker(raw: unknown): Reranker | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as any;
+  return {
+    mode: r.mode ?? "",
+    chosenIndex: r.chosen_index,
+    chosenText: r.chosen_text,
+    candidateCount: r.candidate_count ?? 0,
+    candidates: r.candidates?.map((c: any) => ({
+      index: c.index,
+      text: c.text,
+      heuristicScore: c.heuristic_score,
+      yesProb: c.yes_prob,
+      noProb: c.no_prob,
+      answer: c.answer,
+    })),
   };
 }
 
@@ -129,8 +177,8 @@ function normalizeCorrectResponse(
       corrected: raw.corrected,
       accepted: raw.accepted as EvalInspectorData["prototype"]["accepted"],
       proposals: raw.proposals as EvalInspectorData["prototype"]["proposals"],
-      sentenceCandidates: raw.sentence_candidates,
-      reranker: raw.reranker,
+      sentenceCandidates: normalizeSentenceCandidates(raw.sentence_candidates),
+      reranker: normalizeReranker(raw.reranker),
     },
   };
 }
@@ -154,8 +202,8 @@ function normalizeDetailResponse(raw: RawDetailResponse): EvalInspectorData {
           corrected: pt.corrected,
           accepted: pt.accepted as EvalInspectorData["prototype"]["accepted"],
           proposals: pt.proposals as EvalInspectorData["prototype"]["proposals"],
-          sentenceCandidates: pt.sentence_candidates,
-          reranker: pt.reranker,
+          sentenceCandidates: normalizeSentenceCandidates(pt.sentence_candidates),
+          reranker: normalizeReranker(pt.reranker),
         }
       : { corrected: "", accepted: [], proposals: [], sentenceCandidates: [] },
   };

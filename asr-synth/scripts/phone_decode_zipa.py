@@ -38,6 +38,32 @@ def compute_features(path: Path) -> tuple[np.ndarray, float]:
     return feat, duration_s
 
 
+def compute_features_timed(path: Path) -> tuple[np.ndarray, float, dict]:
+    load_start = time.perf_counter()
+    y, _sr = librosa.load(path, sr=16000, mono=True)
+    load_end = time.perf_counter()
+    mel = librosa.feature.melspectrogram(
+        y=y,
+        sr=16000,
+        n_fft=400,
+        hop_length=160,
+        win_length=400,
+        n_mels=80,
+        power=1.0,
+        center=True,
+    )
+    mel_end = time.perf_counter()
+    feat = np.log(np.maximum(mel, 1e-5)).T.astype(np.float32)
+    feat_end = time.perf_counter()
+    duration_s = len(y) / 16000.0
+    return feat, duration_s, {
+        "load_audio": round((load_end - load_start) * 1000, 1),
+        "mel_spectrogram": round((mel_end - load_end) * 1000, 1),
+        "log_features": round((feat_end - mel_end) * 1000, 1),
+        "feature_extract": round((feat_end - load_start) * 1000, 1),
+    }
+
+
 def greedy_segments(
     log_probs: np.ndarray, tokens: dict[int, str], duration_s: float
 ) -> list[dict]:
@@ -99,7 +125,7 @@ def main() -> None:
 
     for audio_path in args.audio:
         feature_start = time.perf_counter()
-        feat, duration_s = compute_features(Path(audio_path))
+        feat, duration_s, feature_timing = compute_features_timed(Path(audio_path))
         feature_end = time.perf_counter()
 
         x = feat[None, :, :]
@@ -110,7 +136,9 @@ def main() -> None:
 
         used_frames = int(log_probs_len[0])
         used = log_probs[0, :used_frames, :]
+        greedy_start = time.perf_counter()
         segments = greedy_segments(used, tokens, duration_s)
+        greedy_end = time.perf_counter()
         phones = " ".join(seg["phone"] for seg in segments)
 
         payload = {
@@ -125,8 +153,9 @@ def main() -> None:
             "timing_ms": {
                 "download_model": round((dl_end - dl_start) * 1000, 1),
                 "build_session": round((build_end - build_start) * 1000, 1),
-                "feature_extract": round((feature_end - feature_start) * 1000, 1),
+                **feature_timing,
                 "infer": round((infer_end - infer_start) * 1000, 1),
+                "greedy_segments": round((greedy_end - greedy_start) * 1000, 1),
                 "total": round((infer_end - total_start) * 1000, 1),
             },
             "segments": segments,
