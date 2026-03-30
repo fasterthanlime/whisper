@@ -656,6 +656,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = harkInput/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Hark Dictation";
 				INFOPLIST_KEY_LSBackgroundOnly = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSPrincipalClass = "$(PRODUCT_MODULE_NAME).HarkInputApplication";
@@ -692,6 +693,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = harkInput/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Hark Dictation";
 				INFOPLIST_KEY_LSBackgroundOnly = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSPrincipalClass = "$(PRODUCT_MODULE_NAME).HarkInputApplication";

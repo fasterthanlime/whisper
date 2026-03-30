@@ -11,6 +11,6 @@
 		<string>Latn</string>
 	</array>
 	<key>tsInputMethodIconFileKey</key>
-	<string>harkTemplate.tiff</string>
+	<string>hark.icns</string>
 </dict>
 </plist>
