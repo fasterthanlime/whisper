@@ -118,6 +118,10 @@ struct DiagnosticsView: View {
             row("fed", "\(diag.fedSamples) @16k")
             row("total", "\(diag.totalSamples) @16k (\(diag.totalAudioDurationMs) ms)")
 
+            if diag.drainBuffers > 0 {
+                row("drain", "\(diag.drainBuffers) bufs (\(diag.drainSamples) @16k)")
+            }
+
             Divider().padding(.vertical, 1)
 
             row("finalize", "\(diag.finalizeUs / 1000) ms")

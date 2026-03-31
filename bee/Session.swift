@@ -38,6 +38,9 @@ actor Session {
     private var ch1: AudioPipeline?
     private var ch2: TranscriptPipeline?
 
+    // Drain signal — set by Session, read by capture task
+    private let drainSignal = DrainSignal()
+
     // Tasks
     private var captureTask: Task<Void, Never>?
     private var asrTask: Task<Void, Never>?
@@ -105,25 +108,89 @@ actor Session {
         asr = asrSession != nil ? .streaming : .idle
 
         // --- Capture Task ---
-        // Reads Channel 0, forwards to Channel 1, does VAD during drain.
+        // Reads Channel 0, forwards to Channel 1.
+        // When drain is signaled: does VAD, then sends .end(mode) on Channel 1
+        // and stops Channel 0. The capture task owns Channel 0's lifecycle.
         let sessionID = self.id
         let engine = self.audioEngine
         let diagRef = self.diag
+        let drain = self.drainSignal
+
+        // VAD parameters (at 16kHz)
+        let vadSilenceThreshold: Float = 0.008
+        let vadRequiredSilenceSamples = Int(AudioEngine.targetSampleRate * 0.15)
+        let vadDrainTimeoutSamples = Int(AudioEngine.targetSampleRate * 0.5)
 
         captureTask = Task.detached {
-            var allSamples: [Float] = []  // for debug WAV
+            var allSamples: [Float] = []
+            var silenceSamples = 0
+            var drainSamplesRemaining = 0
+            var drainMode: EndMode?
+            var drainBufferCount = 0
+            var drainSampleCount = 0
 
             for await _ in ch0.stream {
                 let buffers = ch0.drain()
                 for buf in buffers {
                     allSamples.append(contentsOf: buf)
                     ch1.send(.samples(buf))
+
+                    // Check if drain was requested
+                    if drainMode == nil, let mode = drain.get() {
+                        drainMode = mode
+                        drainSamplesRemaining = vadDrainTimeoutSamples
+                    }
+
+                    // If draining, do VAD
+                    if drainMode != nil {
+                        drainBufferCount += 1
+                        drainSampleCount += buf.count
+
+                        let rms = Self.computeRMS(buf)
+                        if rms < vadSilenceThreshold {
+                            silenceSamples += buf.count
+                        } else {
+                            silenceSamples = 0
+                        }
+                        drainSamplesRemaining -= buf.count
+
+                        let reachedSilence = silenceSamples >= vadRequiredSilenceSamples
+                        let reachedTimeout = drainSamplesRemaining <= 0
+
+                        if reachedSilence || reachedTimeout {
+                            diagRef.update {
+                                $0.drainBuffers = drainBufferCount
+                                $0.drainSamples = drainSampleCount
+                            }
+                            break
+                        }
+                    }
                 }
-                diagRef.update { $0.capturedSamples = allSamples.count }
+
+                // If we broke out of the inner loop, we're done draining
+                if let mode = drainMode, (silenceSamples >= vadRequiredSilenceSamples || drainSamplesRemaining <= 0) {
+                    diagRef.update {
+                        $0.capturedSamples = allSamples.count
+                        $0.totalSamples = allSamples.count
+                    }
+
+                    // Save debug WAV
+                    let debugDir = FileManager.default.temporaryDirectory.appendingPathComponent("bee-debug")
+                    try? FileManager.default.createDirectory(at: debugDir, withIntermediateDirectories: true)
+                    let wavURL = debugDir.appendingPathComponent("\(sessionID.uuidString.prefix(8)).wav")
+                    try? WavWriter.write(samples: allSamples, to: wavURL)
+                    diagRef.update { $0.audioWavPath = wavURL.path }
+
+                    // Send end on Channel 1, stop Channel 0
+                    ch1.send(.end(mode))
+                    ch1.finish()
+                    engine.stopCapture(for: sessionID)
+                    return
+                }
             }
 
-            // Channel 0 finished — either abort (no end mode) or drain complete (end mode set)
-            // Drain any remaining
+            // Channel 0 ended without drain completing — abort path
+            // Drain any remaining buffers
             let remaining = ch0.drain()
             for buf in remaining {
                 allSamples.append(contentsOf: buf)
@@ -134,14 +201,12 @@ actor Session {
                 $0.totalSamples = allSamples.count
             }
 
-            // Save debug WAV
+            // Save debug WAV even on abort
             let debugDir = FileManager.default.temporaryDirectory.appendingPathComponent("bee-debug")
             try? FileManager.default.createDirectory(at: debugDir, withIntermediateDirectories: true)
             let wavURL = debugDir.appendingPathComponent("\(sessionID.uuidString.prefix(8)).wav")
             try? WavWriter.write(samples: allSamples, to: wavURL)
             diagRef.update { $0.audioWavPath = wavURL.path }
-
-            // ch1 end is sent by the drain mechanism (see beginDrain)
         }
 
         // --- ASR Task ---
@@ -259,9 +324,9 @@ actor Session {
     func abort() async {
         logger.info("[\(self.id)] Aborting")
 
-        // Stop audio flow — Channel 0 ends
+        // Stop Channel 0 — capture task will exit and won't send .end
         audioEngine.stopCapture(for: self.id)
-        // Close channels — tasks exit
+        // Close downstream channels — ASR and consumer tasks exit
         ch1?.finish()
         ch2?.finish()
         capture = .discarded
@@ -320,29 +385,22 @@ actor Session {
         asr = .done
     }
 
-    // MARK: - Drain (runs in capture task context)
+    // MARK: - Drain
 
-    /// Signals the capture task to start VAD monitoring and eventually
-    /// send .end(mode) on Channel 1.
-    ///
-    /// Implementation: we stop Channel 0 (AudioEngine stops forwarding),
-    /// which causes the capture task to exit its loop. Then the capture
-    /// task sends .end(mode) on Channel 1.
-    ///
-    /// TODO: real VAD with silence monitoring. For now, just stop immediately.
+    /// Signals the capture task to start VAD monitoring.
+    /// The capture task will send .end(mode) on Channel 1 and stop
+    /// Channel 0 when silence is detected or timeout is reached.
     private func beginDrain(mode: EndMode) {
-        // Stop audio from AudioEngine → Channel 0 finishes
-        audioEngine.stopCapture(for: self.id)
-        // The capture task will exit its for-await loop, then we need
-        // to send .end on Channel 1. We do this by scheduling it after
-        // the capture task completes.
-        let ch1 = self.ch1
-        let captureTask = self.captureTask
-        Task.detached {
-            await captureTask?.value
-            ch1?.send(.end(mode))
-            ch1?.finish()
-        }
+        drainSignal.set(mode)
+    }
+
+    // MARK: - Helpers
+
+    static func computeRMS(_ samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        var sum: Float = 0
+        for s in samples { sum += s * s }
+        return sqrtf(sum / Float(samples.count))
     }
 
     // MARK: - IME Finalization
@@ -441,6 +499,9 @@ final class SessionDiag: @unchecked Sendable {
         var lastFeedUs: Int = 0
         var totalFeedUs: Int = 0
 
+        var drainBuffers: Int = 0
+        var drainSamples: Int = 0
+
         var finalizeUs: Int = 0
         var finalText: String = ""
         var audioWavPath: String = ""
@@ -465,6 +526,21 @@ final class SessionDiag: @unchecked Sendable {
 
     func update(_ body: (inout Snapshot) -> Void) {
         lock.withLock { body(&_snapshot) }
+    }
+}
+
+/// Thread-safe signal from Session to the capture task.
+/// Session sets the end mode; capture task polls it on each buffer.
+final class DrainSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var mode: EndMode?
+
+    func set(_ mode: EndMode) {
+        lock.withLock { self.mode = mode }
+    }
+
+    func get() -> EndMode? {
+        lock.withLock { mode }
     }
 }
 
