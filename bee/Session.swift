@@ -99,8 +99,9 @@ actor Session {
         audioEngine.startCapture(for: self.id, pipeline: ch0)
         capture = .buffering
 
-        // IME: activate
+        // IME: activate and show bee cursor
         await MainActor.run { inputClient.activate() }
+        inputClient.setMarkedText("🐝")
         ime = .active
 
         // ASR: create session
@@ -309,38 +310,54 @@ actor Session {
 
                         if displayedText == targetText { break }
 
-                        // Compute shortest edit script (character-level LCS diff)
-                        let ops = Self.shortestEdit(from: displayedText, to: targetText)
-                        let editCount = ops.filter { if case .keep = $0 { return false }; return true }.count
-                        imeLog.write("MORPH \(displayedText.count)→\(targetText.count) chars, \(editCount) edits")
-
-                        // Apply edits one at a time, updating the IME at each step
+                        // Matrix-style morph: randomly alternate between
+                        // appending the next char and fixing a wrong char in-place
                         var chars = Array(displayedText)
-                        var cursor = 0 // position in chars array
+                        let target = Array(targetText)
 
-                        for op in ops {
-                            // If a new partial arrived, abort this animation
+                        var steps = 0
+                        while chars != target {
                             if !ch2.isEmpty { break }
+                            if Task.isCancelled { return }
 
-                            switch op {
-                            case .keep:
-                                cursor += 1
-                            case .delete:
-                                chars.remove(at: cursor)
-                                displayedText = String(chars)
-                                ic.setMarkedText(Self.addCursor(displayedText))
-                                let delayMs = editCount > 30 ? 10 : (editCount > 12 ? 20 : 35)
-                                try? await Task.sleep(for: .milliseconds(delayMs))
-                                if Task.isCancelled { return }
-                            case .insert(let ch):
-                                chars.insert(ch, at: cursor)
-                                cursor += 1
-                                displayedText = String(chars)
-                                ic.setMarkedText(Self.addCursor(displayedText))
-                                let delayMs = editCount > 30 ? 10 : (editCount > 12 ? 20 : 35)
-                                try? await Task.sleep(for: .milliseconds(delayMs))
-                                if Task.isCancelled { return }
+                            // Collect available actions
+                            let canAppend = chars.count < target.count
+                            let canTrim = chars.count > target.count
+                            let wrongIndices: [Int] = (0..<min(chars.count, target.count))
+                                .filter { chars[$0] != target[$0] }
+
+                            if wrongIndices.isEmpty && !canAppend && !canTrim { break }
+
+                            // Randomly pick action: morph a wrong char, append, or trim
+                            let morphWeight = wrongIndices.count
+                            let appendWeight = canAppend ? max(1, wrongIndices.count / 2) : 0
+                            let trimWeight = canTrim ? max(1, wrongIndices.count / 2) : 0
+                            let total = morphWeight + appendWeight + trimWeight
+                            let roll = Int.random(in: 0..<max(total, 1))
+
+                            if roll < morphWeight && !wrongIndices.isEmpty {
+                                // Fix a random wrong character in-place
+                                let idx = wrongIndices.randomElement()!
+                                chars[idx] = target[idx]
+                            } else if roll < morphWeight + appendWeight && canAppend {
+                                // Append next correct character
+                                chars.append(target[chars.count])
+                            } else if canTrim {
+                                // Remove last character
+                                chars.removeLast()
+                            } else if canAppend {
+                                chars.append(target[chars.count])
+                            } else if !wrongIndices.isEmpty {
+                                let idx = wrongIndices.randomElement()!
+                                chars[idx] = target[idx]
                             }
+
+                            displayedText = String(chars)
+                            ic.setMarkedText(Self.addCursor(displayedText))
+
+                            steps += 1
+                            let delayMs = steps > 20 ? 8 : (steps > 10 ? 15 : 25)
+                            try? await Task.sleep(for: .milliseconds(delayMs))
                         }
 
                         // Snap to target in case animation was interrupted
@@ -442,10 +459,11 @@ actor Session {
     // MARK: - Helpers
 
     static func addCursor(_ text: String) -> String {
-        if text.hasSuffix(".") || text.hasSuffix("。") {
-            return String(text.dropLast())
+        var t = text
+        if t.hasSuffix(".") || t.hasSuffix("。") {
+            t = String(t.dropLast())
         }
-        return text
+        return t.isEmpty ? "🐝" : "\(t) 🐝"
     }
 
     // MARK: - Shortest Edit Script (LCS-based)
@@ -588,6 +606,8 @@ struct StreamingUpdate: Sendable {
     let text: String
     let committedUTF16Count: Int
     let detectedLanguage: String?
+    let alignmentsJSON: String?
+    let debugJSON: String?
 }
 
 /// Thread-safe diagnostics container. Written by pipeline tasks,

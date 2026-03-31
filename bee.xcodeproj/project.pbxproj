@@ -12,6 +12,7 @@
 		267F48ED7025F3C068F6D04A /* DebugOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CCEE7C20F26099D82D42387 /* DebugOverlay.swift */; };
 		2B877E72AFA9A4D05B9FDC0B /* Session.swift in Sources */ = {isa = PBXBuildFile; fileRef = 676164F78A7A1315DBA4D712 /* Session.swift */; };
 		36887C99C4A72623E8C07753 /* WavWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6951E22DA75EDA0015EF0D08 /* WavWriter.swift */; };
+		38E7D30C43C23FB59D340DD8 /* bee.tiff in Resources */ = {isa = PBXBuildFile; fileRef = DCCA3D090BBD0D5701645658 /* bee.tiff */; };
 		3C5A7E5CCBEA4AC62E33D88B /* DebugPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8597D72025F09D1E04C3B095 /* DebugPanel.swift */; };
 		3C5C473887772CFDAA7535EE /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F154B4296E76BCBEDD666C34 /* MenuBarView.swift */; };
 		4335D0C20A8824861A2AAA67 /* beeTemplate.tiff in Resources */ = {isa = PBXBuildFile; fileRef = 6AEB22F163C305E4983946FF /* beeTemplate.tiff */; };
@@ -56,6 +57,7 @@
 		ACC2C13E80A8EB858DA92EC7 /* bee.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = bee.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BBB5FE976B1CF01CA031AF66 /* BeeInputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeInputController.swift; sourceTree = "<group>"; };
 		C26401964247ABA42B4ADCA3 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		DCCA3D090BBD0D5701645658 /* bee.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = bee.tiff; sourceTree = "<group>"; };
 		E27C82D82C5DDA273AC36889 /* beeInput.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = beeInput.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F0BF06C76650D4E68E461F7C /* AudioPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPipeline.swift; sourceTree = "<group>"; };
 		F154B4296E76BCBEDD666C34 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
@@ -88,6 +90,7 @@
 			isa = PBXGroup;
 			children = (
 				2A7D3D2469CBFB9FF5D9FD91 /* Assets.xcassets */,
+				DCCA3D090BBD0D5701645658 /* bee.tiff */,
 				2F54E5F987731158C437D997 /* BeeInputAppDelegate.swift */,
 				BBB5FE976B1CF01CA031AF66 /* BeeInputController.swift */,
 				6AEB22F163C305E4983946FF /* beeTemplate.tiff */,
@@ -246,6 +249,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5BAC477D9108D6517E32E7DF /* Assets.xcassets in Resources */,
+				38E7D30C43C23FB59D340DD8 /* bee.tiff in Resources */,
 				4335D0C20A8824861A2AAA67 /* beeTemplate.tiff in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

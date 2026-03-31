@@ -330,13 +330,32 @@ pub extern "C" fn asr_session_create(
     }))
 }
 
+#[repr(C)]
+pub struct AsrFeedResult {
+    pub text: *mut c_char,
+    pub committed_utf16_len: usize,
+    pub alignments_json: *mut c_char,
+    pub debug_json: *mut c_char,
+}
+
+impl AsrFeedResult {
+    fn empty() -> Self {
+        Self {
+            text: std::ptr::null_mut(),
+            committed_utf16_len: 0,
+            alignments_json: std::ptr::null_mut(),
+            debug_json: std::ptr::null_mut(),
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn asr_session_feed(
     session: *mut AsrSession,
     samples: *const c_float,
     num_samples: usize,
     out_err: *mut *mut c_char,
-) -> *mut c_char {
+) -> AsrFeedResult {
     feed_impl(session, samples, num_samples, out_err, false)
 }
 
@@ -346,7 +365,7 @@ pub extern "C" fn asr_session_feed_finalizing(
     samples: *const c_float,
     num_samples: usize,
     out_err: *mut *mut c_char,
-) -> *mut c_char {
+) -> AsrFeedResult {
     feed_impl(session, samples, num_samples, out_err, true)
 }
 
@@ -356,9 +375,9 @@ fn feed_impl(
     num_samples: usize,
     out_err: *mut *mut c_char,
     finalizing: bool,
-) -> *mut c_char {
+) -> AsrFeedResult {
     if session.is_null() || samples.is_null() {
-        return std::ptr::null_mut();
+        return AsrFeedResult::empty();
     }
 
     let session = unsafe { &mut *session };
@@ -372,24 +391,74 @@ fn feed_impl(
     };
     drop(guard);
 
+    // Drain debug events regardless of result
+    let debug_events = std::mem::take(&mut session.state.debug_events);
+    let debug_json = if debug_events.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        to_c_string(&format!("[{}]", debug_events.join(",")))
+    };
+
     match result {
         Ok(Some(text)) => {
             if text != session.last_text {
                 ffi_log(&format!("FEED text changed:\n  was: {:?}\n  now: {:?}", session.last_text, text));
             }
             session.last_text = text.clone();
-            to_c_string(&text)
+
+            // Compute committed UTF-16 length
+            let committed_utf16_len = session.state.committed_text
+                .encode_utf16().count();
+
+            // Serialize alignments if any
+            let alignments_json = if session.state.committed_alignments.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                let json = serde_json::to_string(&session.state.committed_alignments
+                    .iter()
+                    .map(|a| serde_json::json!({
+                        "word": a.word,
+                        "start": (a.start_time * 1000.0).round() / 1000.0,
+                        "end": (a.end_time * 1000.0).round() / 1000.0,
+                    }))
+                    .collect::<Vec<_>>()
+                ).unwrap_or_else(|_| "[]".to_string());
+                to_c_string(&json)
+            };
+
+            AsrFeedResult {
+                text: to_c_string(&text),
+                committed_utf16_len,
+                alignments_json,
+                debug_json,
+            }
         }
         Ok(None) => {
-            ffi_log("FEED => None (buffering)");
-            std::ptr::null_mut()
+            AsrFeedResult {
+                text: std::ptr::null_mut(),
+                committed_utf16_len: 0,
+                alignments_json: std::ptr::null_mut(),
+                debug_json,
+            }
         }
         Err(e) => {
             ffi_log(&format!("FEED => error: {e}"));
             set_err(out_err, &format!("{e}"));
-            std::ptr::null_mut()
+            AsrFeedResult {
+                text: std::ptr::null_mut(),
+                committed_utf16_len: 0,
+                alignments_json: std::ptr::null_mut(),
+                debug_json,
+            }
         }
     }
+}
+
+#[no_mangle]
+pub extern "C" fn asr_feed_result_free(result: AsrFeedResult) {
+    if !result.text.is_null() { unsafe { drop(CString::from_raw(result.text)); } }
+    if !result.alignments_json.is_null() { unsafe { drop(CString::from_raw(result.alignments_json)); } }
+    if !result.debug_json.is_null() { unsafe { drop(CString::from_raw(result.debug_json)); } }
 }
 
 #[no_mangle]
@@ -419,18 +488,6 @@ pub extern "C" fn asr_session_finish(
 }
 
 #[no_mangle]
-pub extern "C" fn asr_session_committed_utf16_len(session: *const AsrSession) -> usize {
-    if session.is_null() {
-        return 0;
-    }
-    let session = unsafe { &*session };
-    // The streaming module tracks committed_text internally.
-    // For now, return 0 (all text is "pending" from the IME's perspective).
-    // TODO: expose committed_text from StreamingState for proper IME styling.
-    0
-}
-
-#[no_mangle]
 pub extern "C" fn asr_session_last_language(session: *const AsrSession) -> *mut c_char {
     if session.is_null() {
         return std::ptr::null_mut();
@@ -451,11 +508,6 @@ pub extern "C" fn asr_session_set_language(
     // Language changes mid-stream not yet supported in MLX backend.
     // The language is set at session creation.
     true
-}
-
-#[no_mangle]
-pub extern "C" fn asr_session_take_debug_events_json(session: *mut AsrSession) -> *mut c_char {
-    to_c_string("[]")
 }
 
 #[no_mangle]

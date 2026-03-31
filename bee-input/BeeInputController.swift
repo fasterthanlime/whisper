@@ -70,11 +70,10 @@ class BeeInputController: IMKInputController {
 
         currentMarkedText = displayText
 
-        let attrs: [NSAttributedString.Key: Any] = [
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
-            .underlineColor: NSColor.systemBlue.withAlphaComponent(0.5),
-        ]
-        let attributed = NSAttributedString(string: displayText, attributes: attrs)
+        let attributed = NSAttributedString(string: displayText, attributes: [
+            .underlineStyle: 0,
+            .backgroundColor: NSColor.systemBlue.withAlphaComponent(0.08),
+        ])
 
         client.setMarkedText(
             attributed,

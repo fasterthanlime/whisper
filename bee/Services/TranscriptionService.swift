@@ -1,9 +1,6 @@
 import Foundation
 import os
 
-@_silgen_name("asr_session_committed_utf16_len")
-private func asr_session_committed_utf16_len_ffi(_ session: OpaquePointer) -> UInt
-
 /// Wraps the Rust qwen3-asr-ffi library for streaming transcription.
 final class TranscriptionService: @unchecked Sendable {
     private static let logger = Logger(
@@ -100,49 +97,51 @@ final class TranscriptionService: @unchecked Sendable {
     }
 
     func feed(session: StreamingSession, samples: [Float]) -> StreamingUpdate? {
+        feedImpl(session: session, samples: samples, finalizing: false)
+    }
+
+    func feedFinalizing(session: StreamingSession, samples: [Float]) -> StreamingUpdate? {
+        feedImpl(session: session, samples: samples, finalizing: true)
+    }
+
+    private func feedImpl(session: StreamingSession, samples: [Float], finalizing: Bool) -> StreamingUpdate? {
         var err: UnsafeMutablePointer<CChar>?
-        let result = samples.withUnsafeBufferPointer { buf in
-            asr_session_feed(session.ptr, buf.baseAddress, buf.count, &err)
+        let result: AsrFeedResult = samples.withUnsafeBufferPointer { buf in
+            if finalizing {
+                return asr_session_feed_finalizing(session.ptr, buf.baseAddress, buf.count, &err)
+            } else {
+                return asr_session_feed(session.ptr, buf.baseAddress, buf.count, &err)
+            }
         }
 
         if let err {
             let msg = String(cString: err, encoding: .utf8) ?? "unknown"
             asr_string_free(err)
             Self.logger.error("feed error: \(msg, privacy: .public)")
+            // Still free the result (debug_json may be non-null even on error)
+            asr_feed_result_free(result)
             return nil
         }
 
-        guard let result else { return nil }
-        let text = String(cString: result)
-        asr_string_free(result)
-
-        let committedUTF16 = Int(asr_session_committed_utf16_len_ffi(session.ptr))
-        let clamped = min(max(0, committedUTF16), (text as NSString).length)
-
-        return StreamingUpdate(text: text, committedUTF16Count: clamped, detectedLanguage: nil)
-    }
-
-    func feedFinalizing(session: StreamingSession, samples: [Float]) -> StreamingUpdate? {
-        var err: UnsafeMutablePointer<CChar>?
-        let result = samples.withUnsafeBufferPointer { buf in
-            asr_session_feed_finalizing(session.ptr, buf.baseAddress, buf.count, &err)
-        }
-
-        if let err {
-            let msg = String(cString: err, encoding: .utf8) ?? "unknown"
-            asr_string_free(err)
-            Self.logger.error("feedFinalizing error: \(msg, privacy: .public)")
+        guard result.text != nil else {
+            asr_feed_result_free(result)
             return nil
         }
 
-        guard let result else { return nil }
-        let text = String(cString: result)
-        asr_string_free(result)
+        let text = String(cString: result.text)
+        let committedUTF16 = min(Int(result.committed_utf16_len), (text as NSString).length)
+        let alignmentsJSON = result.alignments_json.map { String(cString: $0) }
+        let debugJSON = result.debug_json.map { String(cString: $0) }
 
-        let committedUTF16 = Int(asr_session_committed_utf16_len_ffi(session.ptr))
-        let clamped = min(max(0, committedUTF16), (text as NSString).length)
+        asr_feed_result_free(result)
 
-        return StreamingUpdate(text: text, committedUTF16Count: clamped, detectedLanguage: nil)
+        return StreamingUpdate(
+            text: text,
+            committedUTF16Count: committedUTF16,
+            detectedLanguage: nil,
+            alignmentsJSON: alignmentsJSON,
+            debugJSON: debugJSON
+        )
     }
 
     func finish(session: StreamingSession) -> String? {

@@ -171,7 +171,7 @@ pub struct StreamingState {
     overlap_samples: usize,
 
     // Rotate mode state
-    committed_text: String,
+    pub committed_text: String,
     committed_token_ids: Vec<u32>,
     /// The first `commit_token_count` tokens from the last update, for stability tracking.
     last_prefix_tokens: Vec<u32>,
@@ -180,6 +180,13 @@ pub struct StreamingState {
 
     /// Forced aligner for precise audio boundaries (Rotate mode).
     aligner: Option<ForcedAligner>,
+
+    /// Accumulated word-level alignments from all commits.
+    pub committed_alignments: Vec<crate::forced_aligner::ForcedAlignItem>,
+    /// Audio time (seconds) trimmed before current audio_accum. Used to offset aligner timestamps.
+    committed_audio_offset: f64,
+    /// Debug events accumulated since last drain.
+    pub debug_events: Vec<String>,
 
     /// Persistent decoder KV cache for RotateCached mode.
     decoder_cache: Option<crate::decoder::KVCache>,
@@ -222,6 +229,9 @@ impl StreamingState {
             last_prefix_tokens: Vec::new(),
             stable_count: 0,
             aligner,
+            committed_alignments: Vec::new(),
+            committed_audio_offset: 0.0,
+            debug_events: Vec::new(),
             decoder_cache: None,
             decoder_next_pos: 0,
             is_first_step: true,
@@ -317,12 +327,18 @@ fn feed_accumulate(
     state.chunk_id += 1;
 
     if !finalizing && state.chunk_id > 1 {
-        let is_silence = if let Some(ref mut vad) = state.vad {
+        let (is_silence, vad_prob) = if let Some(ref mut vad) = state.vad {
             let prob = vad.process_audio(&chunk).unwrap_or(0.0);
-            prob < state.options.vad_threshold
+            (prob < state.options.vad_threshold, Some(prob))
         } else {
-            compute_rms(&chunk) < POST_SPEECH_SILENCE_RMS_THRESHOLD
+            (compute_rms(&chunk) < POST_SPEECH_SILENCE_RMS_THRESHOLD, None)
         };
+        if let Some(prob) = vad_prob {
+            state.debug_events.push(format!(
+                r#"{{"type":"vad","chunk":{},"prob":{:.3},"speech":{}}}"#,
+                state.chunk_id, prob, !is_silence,
+            ));
+        }
         if is_silence {
             return Ok(None);
         }
@@ -658,18 +674,32 @@ fn feed_rotate(
                 .decode(&current_prefix, true)
                 .unwrap_or_default();
 
-            // Find audio boundary
+            // Find audio boundary and store alignments
             let committed_audio_samples = if let Some(ref mut aligner) = state.aligner {
                 let t_align = std::time::Instant::now();
                 let result = aligner.align(&state.audio_accum, &committed_text_new);
-                log::info!("Aligner took {:.0}ms on {:.1}s audio",
-                    t_align.elapsed().as_millis(), state.audio_accum.len() as f64 / 16000.0);
+                let align_ms = t_align.elapsed().as_millis();
+                log::info!("Aligner took {align_ms}ms on {:.1}s audio",
+                    state.audio_accum.len() as f64 / 16000.0);
                 match result {
                     Ok(items) if !items.is_empty() => {
                         let last_word = &items[items.len() - 1];
                         let samples = (last_word.end_time * 16000.0) as usize;
                         log::info!("Aligner: boundary at {:.3}s, last word: {:?}",
                             last_word.end_time, last_word.word);
+                        // Store alignments with absolute timestamps
+                        let offset = state.committed_audio_offset;
+                        for item in &items {
+                            state.committed_alignments.push(crate::forced_aligner::ForcedAlignItem {
+                                word: item.word.clone(),
+                                start_time: item.start_time + offset,
+                                end_time: item.end_time + offset,
+                            });
+                        }
+                        state.debug_events.push(format!(
+                            r#"{{"type":"align","ms":{},"words":{},"boundary":{:.3}}}"#,
+                            align_ms, items.len(), last_word.end_time + offset,
+                        ));
                         samples
                     }
                     _ => estimate_audio_boundary(&committed_text_new, &state.text, state.audio_accum.len()),
@@ -687,7 +717,15 @@ fn feed_rotate(
             }
 
             let keep_from = committed_audio_samples.min(state.audio_accum.len());
+            let trimmed_secs = keep_from as f64 / 16000.0;
+            state.committed_audio_offset += trimmed_secs;
             let remaining_audio: Vec<f32> = state.audio_accum[keep_from..].to_vec();
+
+            state.debug_events.push(format!(
+                r#"{{"type":"commit","tokens":{},"text":{},"audio_offset":{:.3}}}"#,
+                n, serde_json::to_string(&state.committed_text).unwrap_or_default(),
+                state.committed_audio_offset,
+            ));
 
             log::info!(
                 "Committed {} tokens: {:?} | audio: kept {:.1}s of {:.1}s (boundary at {:.1}s)",

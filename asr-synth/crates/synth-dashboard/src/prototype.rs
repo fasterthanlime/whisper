@@ -1203,6 +1203,8 @@ fn build_edit_pool(spans: &[PrototypeSpanProposal]) -> Vec<AcceptedProposal> {
                 .or_else(|| candidate.acoustic_score.map(|score| score >= 0.74))
                 .unwrap_or(false);
             let phonetic_support = candidate.phonetic_score.unwrap_or(0.0);
+            let weak_lexical_support =
+                candidate.dice.unwrap_or(0.0) < 0.45 && candidate.prefix_ratio.unwrap_or(0.0) < 0.45;
             let via_threshold = match candidate.via.as_str() {
                 "spoken" => 0.68,
                 "confusion" => 0.72,
@@ -1211,9 +1213,15 @@ fn build_edit_pool(spans: &[PrototypeSpanProposal]) -> Vec<AcceptedProposal> {
                 _ => 0.68,
             };
             let phonetic_backed = match candidate.via.as_str() {
-                "confusion" => phonetic_support >= 0.74,
-                "spoken" => phonetic_support >= 0.72,
-                "alt" => phonetic_support >= 0.68,
+                "confusion" => {
+                    phonetic_support
+                        >= if weak_lexical_support { 0.80 } else { 0.74 }
+                }
+                "spoken" => {
+                    phonetic_support
+                        >= if weak_lexical_support { 0.84 } else { 0.72 }
+                }
+                "alt" => phonetic_support >= if weak_lexical_support { 0.76 } else { 0.68 },
                 _ => false,
             };
             let strong_prefix_match = matches!(candidate.via.as_str(), "spoken" | "confusion" | "alt")
@@ -1228,12 +1236,16 @@ fn build_edit_pool(spans: &[PrototypeSpanProposal]) -> Vec<AcceptedProposal> {
             let score_alone_supported =
                 candidate.score >= 0.68
                     && !matches!(candidate.via.as_str(), "confusion" | "spoken");
+            let acoustic_fallback_supported =
+                candidate.score >= 0.64
+                    && acoustically_supported
+                    && !matches!(candidate.via.as_str(), "confusion" | "spoken" | "alt");
             if !(candidate.exact_words
                 || candidate.exact_compact
                 || score_alone_supported
                 || via_supported
                 || strong_prefix_match
-                || (candidate.score >= 0.64 && acoustically_supported))
+                || acoustic_fallback_supported)
             {
                 continue;
             }
@@ -3228,6 +3240,133 @@ mod tests {
         let edits = build_edit_pool(&spans);
         assert_eq!(edits.len(), 1, "{:#?}", edits);
         assert_eq!(edits[0].to, "serde_json");
+    }
+
+    #[test]
+    fn build_edit_pool_rejects_low_lexical_spoken_even_with_good_phonetic_score() {
+        let spans = vec![PrototypeSpanProposal {
+            token_start: 6,
+            token_end: 7,
+            char_start: 31,
+            char_end: 34,
+            raw_text: "for".to_string(),
+            normalized: "for".to_string(),
+            phonemes: Some("f ɹ ɜ ˞ e ɪ ɑ".to_string()),
+            acoustic_phonemes: None,
+            parakeet_confidence: None,
+            observed_acoustic_score: None,
+            acoustic_trustworthy: false,
+            acoustic_window_start_sec: None,
+            acoustic_window_end_sec: None,
+            candidates: vec![PrototypeCandidate {
+                term: "repr".to_string(),
+                via: "spoken".to_string(),
+                matched_form: "reppur".to_string(),
+                matched_form_phonemes: Some("r e p p u r".to_string()),
+                term_preview: Some("reppur".to_string()),
+                term_preview_phonemes: Some("r e p p u r".to_string()),
+                score: 0.979,
+                lexical_score: Some(0.41),
+                dice: Some(0.18),
+                prefix_ratio: Some(0.12),
+                length_ratio: Some(0.55),
+                phonetic_score: Some(0.783),
+                phonetic_debug: None,
+                observed_acoustic_score: None,
+                acoustic_score: Some(0.783),
+                acoustic_delta: None,
+                phonemes: Some("r e p p u r".to_string()),
+                exact_words: false,
+                exact_compact: false,
+            }],
+        }];
+        let edits = build_edit_pool(&spans);
+        assert!(edits.is_empty(), "{:#?}", edits);
+    }
+
+    #[test]
+    fn build_edit_pool_rejects_low_lexical_confusion_without_strong_phone_support() {
+        let spans = vec![PrototypeSpanProposal {
+            token_start: 8,
+            token_end: 12,
+            char_start: 40,
+            char_end: 58,
+            raw_text: "sixty four so it".to_string(),
+            normalized: "sixtyfoursoit".to_string(),
+            phonemes: Some("s ɪ k s t i f ɔ ɹ s o ʊ ɪ t".to_string()),
+            acoustic_phonemes: None,
+            parakeet_confidence: None,
+            observed_acoustic_score: None,
+            acoustic_trustworthy: false,
+            acoustic_window_start_sec: None,
+            acoustic_window_end_sec: None,
+            candidates: vec![PrototypeCandidate {
+                term: "SQLite".to_string(),
+                via: "confusion".to_string(),
+                matched_form: "sixty four so it".to_string(),
+                matched_form_phonemes: Some("s ɪ k s t i f ɔ ɹ s o ʊ ɪ t".to_string()),
+                term_preview: Some("sequel light".to_string()),
+                term_preview_phonemes: Some("s i k w l aɪ t".to_string()),
+                score: 0.916,
+                lexical_score: Some(0.39),
+                dice: Some(0.24),
+                prefix_ratio: Some(0.22),
+                length_ratio: Some(0.58),
+                phonetic_score: Some(0.743),
+                phonetic_debug: None,
+                observed_acoustic_score: None,
+                acoustic_score: Some(0.743),
+                acoustic_delta: None,
+                phonemes: Some("s i k w l aɪ t".to_string()),
+                exact_words: false,
+                exact_compact: false,
+            }],
+        }];
+        let edits = build_edit_pool(&spans);
+        assert!(edits.is_empty(), "{:#?}", edits);
+    }
+
+    #[test]
+    fn build_edit_pool_keeps_low_lexical_spoken_when_phone_support_is_strong_enough() {
+        let spans = vec![PrototypeSpanProposal {
+            token_start: 6,
+            token_end: 10,
+            char_start: 31,
+            char_end: 49,
+            raw_text: "for ARC sixty four".to_string(),
+            normalized: "forarcsixtyfour".to_string(),
+            phonemes: Some("f ɹ ɜ ˞ e ɪ ɑ ɹ t ʃ s ɪ k s t i f ɔ ɹ".to_string()),
+            acoustic_phonemes: None,
+            parakeet_confidence: None,
+            observed_acoustic_score: None,
+            acoustic_trustworthy: false,
+            acoustic_window_start_sec: None,
+            acoustic_window_end_sec: None,
+            candidates: vec![PrototypeCandidate {
+                term: "AArch64".to_string(),
+                via: "spoken".to_string(),
+                matched_form: "A arch sixty-four".to_string(),
+                matched_form_phonemes: Some("eɪ ɑː tʃ s ɪ k s t ɪ f ə".to_string()),
+                term_preview: Some("A arch sixty-four".to_string()),
+                term_preview_phonemes: Some("eɪ ɑː tʃ s ɪ k s t ɪ f ə".to_string()),
+                score: 1.026,
+                lexical_score: Some(0.31),
+                dice: Some(0.20),
+                prefix_ratio: Some(0.16),
+                length_ratio: Some(0.68),
+                phonetic_score: Some(0.866),
+                phonetic_debug: None,
+                observed_acoustic_score: None,
+                acoustic_score: Some(0.866),
+                acoustic_delta: None,
+                phonemes: Some("eɪ ɑː tʃ s ɪ k s t ɪ f ə".to_string()),
+                exact_words: false,
+                exact_compact: false,
+            }],
+        }];
+        let edits = build_edit_pool(&spans);
+        assert_eq!(edits.len(), 1, "{:#?}", edits);
+        assert_eq!(edits[0].to, "AArch64");
     }
 
     #[test]

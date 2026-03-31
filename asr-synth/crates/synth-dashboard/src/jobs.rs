@@ -6894,6 +6894,7 @@ pub struct PrototypeCorrectionBody {
 pub struct PrototypeBakeoffBody {
     pub source: Option<String>,
     pub limit: Option<usize>,
+    #[serde(default, alias = "caseIds")]
     pub case_ids: Option<Vec<String>>,
     pub randomize: Option<bool>,
     pub sample_seed: Option<u64>,
@@ -6909,6 +6910,24 @@ pub struct PrototypeAlignmentDebugBody {
     pub transcript: Option<String>,
     pub recording_id: Option<i64>,
     pub audio_wav_base64: Option<String>,
+}
+
+fn bakeoff_case_ids_from_json(value: &serde_json::Value) -> Option<Vec<String>> {
+    for key in ["case_ids", "caseIds"] {
+        let Some(raw) = value.get(key) else {
+            continue;
+        };
+        let Some(items) = raw.as_array() else {
+            continue;
+        };
+        let values = items
+            .iter()
+            .filter_map(|item| item.as_str().map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>();
+        return (!values.is_empty()).then_some(values);
+    }
+    None
 }
 
 #[derive(Deserialize)]
@@ -8300,8 +8319,12 @@ pub async fn api_correct_prototype_alignment_benchmark(
 
 pub async fn api_correct_prototype_bakeoff(
     State(state): State<Arc<AppState>>,
-    Json(body): Json<PrototypeBakeoffBody>,
+    Json(raw_body): Json<serde_json::Value>,
 ) -> Result<Response, AppError> {
+    let mut body: PrototypeBakeoffBody = serde_json::from_value(raw_body.clone()).map_err(err)?;
+    if body.case_ids.is_none() {
+        body.case_ids = bakeoff_case_ids_from_json(&raw_body);
+    }
     let limit = body.limit.unwrap_or(150).clamp(1, 250);
     let source = body
         .source
@@ -11452,6 +11475,50 @@ mod tests {
     fn parse_human_case_ids_rejects_invalid_input() {
         let err = parse_human_case_ids(&["hum-nope".to_string()]).expect_err("should fail");
         assert!(err.to_string().contains("invalid human case id"));
+    }
+
+    #[test]
+    fn bakeoff_case_ids_from_json_accepts_snake_case() {
+        let value = serde_json::json!({
+            "source": "human",
+            "case_ids": ["hum-62", "183"],
+        });
+        assert_eq!(
+            bakeoff_case_ids_from_json(&value),
+            Some(vec!["hum-62".to_string(), "183".to_string()])
+        );
+    }
+
+    #[test]
+    fn bakeoff_case_ids_from_json_accepts_camel_case() {
+        let value = serde_json::json!({
+            "source": "human",
+            "caseIds": ["hum-62", "183"],
+        });
+        assert_eq!(
+            bakeoff_case_ids_from_json(&value),
+            Some(vec!["hum-62".to_string(), "183".to_string()])
+        );
+    }
+
+    #[test]
+    fn prototype_bakeoff_body_deserializes_case_ids_snake_case() {
+        let body: PrototypeBakeoffBody = serde_json::from_value(serde_json::json!({
+            "source": "human",
+            "case_ids": ["hum-62"],
+        }))
+        .expect("body should deserialize");
+        assert_eq!(body.case_ids, Some(vec!["hum-62".to_string()]));
+    }
+
+    #[test]
+    fn prototype_bakeoff_body_deserializes_case_ids_camel_case() {
+        let body: PrototypeBakeoffBody = serde_json::from_value(serde_json::json!({
+            "source": "human",
+            "caseIds": ["hum-62"],
+        }))
+        .expect("body should deserialize");
+        assert_eq!(body.case_ids, Some(vec!["hum-62".to_string()]));
     }
 
     #[test]

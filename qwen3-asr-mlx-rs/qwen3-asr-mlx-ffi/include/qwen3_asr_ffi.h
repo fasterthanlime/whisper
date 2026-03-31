@@ -24,6 +24,14 @@ typedef struct {
     unsigned int max_new_tokens_final;    /* 0 = use default (512) */
 } AsrSessionOptions;
 
+/* Result from a feed call. Check text != NULL for new transcript. */
+typedef struct {
+    char *text;                /* Full transcript (committed + pending), or NULL if buffering */
+    size_t committed_utf16_len; /* UTF-16 code units in the committed prefix */
+    char *alignments_json;     /* JSON array of word alignments for all committed words, or NULL */
+    char *debug_json;          /* JSON array of debug events since last call, or NULL */
+} AsrFeedResult;
+
 /*
  * Load a model from disk. Returns NULL on error; if out_err is non-NULL,
  * *out_err is set to a message string (free with asr_string_free).
@@ -76,32 +84,24 @@ AsrSession *asr_session_create(const AsrEngine *engine, AsrSessionOptions opts);
 /*
  * Feed 16 kHz mono float32 samples.
  *
- * Returns a freshly-allocated string with the current full transcript when a
- * chunk boundary is crossed. Returns NULL when still buffering.
- * On error, returns NULL and sets *out_err.
- * Caller must free the returned string with asr_string_free.
+ * Returns an AsrFeedResult. If result.text is non-NULL, a new transcript
+ * is available. Free the result with asr_feed_result_free.
+ * On error, result.text is NULL and *out_err is set.
  */
-char *asr_session_feed(AsrSession *session,
-                       const float *samples,
-                       size_t num_samples,
-                       char **out_err);
+AsrFeedResult asr_session_feed(AsrSession *session,
+                               const float *samples,
+                               size_t num_samples,
+                               char **out_err);
 
 /*
  * Feed finalization-time samples (stop path).
- *
  * Same semantics as asr_session_feed, but avoids dropping low-energy chunks
  * during stop/finalize so tail words are not lost.
  */
-char *asr_session_feed_finalizing(AsrSession *session,
-                                  const float *samples,
-                                  size_t num_samples,
-                                  char **out_err);
-
-/*
- * Return committed transcript prefix length in UTF-16 code units.
- * This excludes the current pending/uncommitted tail.
- */
-size_t asr_session_committed_utf16_len(const AsrSession *session);
+AsrFeedResult asr_session_feed_finalizing(AsrSession *session,
+                                          const float *samples,
+                                          size_t num_samples,
+                                          char **out_err);
 
 /*
  * Return the most recently detected language for this session.
@@ -117,13 +117,6 @@ char *asr_session_last_language(const AsrSession *session);
 bool asr_session_set_language(AsrSession *session, const char *language, char **out_err);
 
 /*
- * Drain and return structured ASR debug events as a JSON array string.
- * The returned string is always valid JSON (typically "[]").
- * Caller must free with asr_string_free.
- */
-char *asr_session_take_debug_events_json(AsrSession *session);
-
-/*
  * Finalize the session and return the complete transcript.
  * Caller must free the returned string with asr_string_free.
  */
@@ -131,6 +124,9 @@ char *asr_session_finish(AsrSession *session, char **out_err);
 
 /* Free a session handle. NULL-safe. */
 void asr_session_free(AsrSession *session);
+
+/* Free all strings inside an AsrFeedResult. */
+void asr_feed_result_free(AsrFeedResult result);
 
 /* Free a string returned by any asr_* function. NULL-safe. */
 void asr_string_free(char *s);
