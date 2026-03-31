@@ -4,8 +4,8 @@ set -euo pipefail
 BUILD_DIR="$(pwd)/build-bee-release"
 INPUT_METHOD_DIR="$HOME/Library/Input Methods"
 
-echo "Building Rust FFI (release)..."
-(cd qwen3-asr-rs && cargo build --release -p qwen3-asr-ffi 2>&1 | tail -3)
+echo "Building MLX Rust FFI (release)..."
+(cd qwen3-asr-mlx-rs && cargo build --release -p qwen3-asr-mlx-ffi 2>&1 | tail -3)
 
 echo "Generating Xcode project..."
 xcodegen generate --spec bee-project.yml

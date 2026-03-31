@@ -296,7 +296,7 @@ final class AppState {
 
     // MARK: - Model Loading
 
-    static let defaultModel = STTModelDefinition.allModels.first(where: { $0.id == "qwen3-1.7b-q8" })
+    static let defaultModel = STTModelDefinition.allModels.first(where: { $0.id == "qwen3-1.7b-mlx-4bit" })
         ?? STTModelDefinition.default
 
     func loadModelAtStartup() {

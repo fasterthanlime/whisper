@@ -71,6 +71,13 @@ struct STTModelDefinition: Identifiable, Hashable {
             ),
             downloadSizeMB: 1340
         ),
+        STTModelDefinition(
+            id: "qwen3-1.7b-mlx-4bit",
+            displayName: "Qwen3 ASR 1.7B (MLX 4-bit)",
+            repoID: "mlx-community/Qwen3-ASR-1.7B-4bit",
+            format: .safetensors,
+            downloadSizeMB: 1100
+        ),
     ]
 
     static let `default` = allModels[0]

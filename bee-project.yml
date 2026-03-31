@@ -35,15 +35,17 @@ targets:
         SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: YES
-        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/qwen3-asr-rs/qwen3-asr-ffi/include"
-        LIBRARY_SEARCH_PATHS: "$(PROJECT_DIR)/qwen3-asr-rs/target/release"
+        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/qwen3-asr-mlx-rs/qwen3-asr-mlx-ffi/include"
+        LIBRARY_SEARCH_PATHS: "$(PROJECT_DIR)/qwen3-asr-mlx-rs/target/release"
         OTHER_LDFLAGS:
-          - "-lqwen3_asr_ffi"
+          - "-lqwen3_asr_mlx_ffi"
           - "-lc++"
           - "-framework"
           - Metal
           - "-framework"
           - MetalPerformanceShaders
+          - "-framework"
+          - Accelerate
           - "-framework"
           - Security
           - "-framework"

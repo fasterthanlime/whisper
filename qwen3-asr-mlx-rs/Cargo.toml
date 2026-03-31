@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "qwen3-asr-mlx-ffi"]
+
 [package]
 name = "qwen3-asr-mlx"
 version = "0.1.0"
