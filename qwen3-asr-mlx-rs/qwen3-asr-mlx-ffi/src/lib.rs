@@ -97,6 +97,11 @@ fn find_tokenizer(model_dir: &Path) -> Option<tokenizers::Tokenizer> {
     None
 }
 
+fn find_vad_dir() -> Option<PathBuf> {
+    let dir = dirs::home_dir()?.join("Library/Caches/qwen3-asr/aitytech--Silero-VAD-v5-MLX");
+    if dir.exists() { Some(dir) } else { None }
+}
+
 fn find_aligner_dir() -> Option<PathBuf> {
     let base = dirs::home_dir()?.join("Library/Caches/qwen3-asr");
     // Prefer 4-bit quantized aligner
@@ -301,7 +306,22 @@ pub extern "C" fn asr_session_create(
         guard.tokenizer.clone()
     };
 
-    let state = StreamingState::new(streaming_opts, tokenizer, aligner);
+    let mut state = StreamingState::new(streaming_opts, tokenizer, aligner);
+
+    // Load Silero VAD if available
+    if let Some(vad_dir) = find_vad_dir() {
+        match qwen3_asr_mlx::vad::SileroVad::load(&vad_dir) {
+            Ok(vad) => {
+                log::info!("Silero VAD loaded for session");
+                ffi_log("Silero VAD loaded");
+                state.vad = Some(vad);
+            }
+            Err(e) => {
+                log::warn!("Failed to load Silero VAD: {e}");
+                ffi_log(&format!("Failed to load Silero VAD: {e}"));
+            }
+        }
+    }
 
     Box::into_raw(Box::new(AsrSession {
         engine: inner,

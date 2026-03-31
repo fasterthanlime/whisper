@@ -90,6 +90,8 @@ pub struct StreamingOptions {
     pub commit_after_stable: usize,
     /// Number of leading tokens to track for stability (Rotate mode). Default: 32
     pub commit_token_count: usize,
+    /// VAD speech probability threshold (0.0–1.0). Default: 0.5
+    pub vad_threshold: f32,
 }
 
 impl Default for StreamingOptions {
@@ -106,6 +108,7 @@ impl Default for StreamingOptions {
             overlap_sec: 0.5,
             commit_after_stable: 3,
             commit_token_count: 12,
+            vad_threshold: 0.5,
         }
     }
 }
@@ -122,6 +125,7 @@ impl StreamingOptions {
     pub fn with_overlap_sec(mut self, v: f32) -> Self { self.overlap_sec = v; self }
     pub fn with_commit_after_stable(mut self, v: usize) -> Self { self.commit_after_stable = v; self }
     pub fn with_commit_token_count(mut self, v: usize) -> Self { self.commit_token_count = v; self }
+    pub fn with_vad_threshold(mut self, v: f32) -> Self { self.vad_threshold = v; self }
 }
 
 // ── StreamingState ──────────────────────────────────────────────────────
@@ -150,6 +154,7 @@ pub struct StreamingState {
 
     // VAD
     speech_detected: bool,
+    pub vad: Option<crate::vad::SileroVad>,
 
     // Tokenizer + mel
     tokenizer: tokenizers::Tokenizer,
@@ -201,6 +206,7 @@ impl StreamingState {
             text: String::new(),
             encoder_cache: EncoderCache::new(),
             speech_detected: false,
+            vad: None,
             tokenizer,
             mel_extractor: MelExtractor::new(400, 160, 128, 16000),
             language_tokens,
@@ -262,9 +268,18 @@ fn feed_audio_inner(
     samples: &[f32],
     finalizing: bool,
 ) -> Result<Option<String>, Exception> {
-    // VAD gate
+    // VAD gate: use Silero VAD if available, else fall back to RMS
     if !state.speech_detected {
-        if let Some(onset) = detect_speech_onset(samples) {
+        if let Some(ref mut vad) = state.vad {
+            let prob = vad.process_audio(samples)
+                .unwrap_or(0.0);
+            if prob >= state.options.vad_threshold {
+                state.speech_detected = true;
+                state.buffer.extend_from_slice(samples);
+            } else {
+                return Ok(None);
+            }
+        } else if let Some(onset) = detect_speech_onset(samples) {
             state.speech_detected = true;
             state.buffer.extend_from_slice(&samples[onset..]);
         } else {
@@ -298,8 +313,13 @@ fn feed_accumulate(
     state.chunk_id += 1;
 
     if !finalizing && state.chunk_id > 1 {
-        let rms = compute_rms(&chunk);
-        if rms < POST_SPEECH_SILENCE_RMS_THRESHOLD {
+        let is_silence = if let Some(ref mut vad) = state.vad {
+            let prob = vad.process_audio(&chunk).unwrap_or(0.0);
+            prob < state.options.vad_threshold
+        } else {
+            compute_rms(&chunk) < POST_SPEECH_SILENCE_RMS_THRESHOLD
+        };
+        if is_silence {
             return Ok(None);
         }
     }
@@ -458,8 +478,13 @@ fn feed_overlap(
     state.chunk_id += 1;
 
     if !finalizing && state.chunk_id > 1 {
-        let rms = compute_rms(&chunk);
-        if rms < POST_SPEECH_SILENCE_RMS_THRESHOLD {
+        let is_silence = if let Some(ref mut vad) = state.vad {
+            let prob = vad.process_audio(&chunk).unwrap_or(0.0);
+            prob < state.options.vad_threshold
+        } else {
+            compute_rms(&chunk) < POST_SPEECH_SILENCE_RMS_THRESHOLD
+        };
+        if is_silence {
             return Ok(None);
         }
     }
@@ -726,8 +751,13 @@ fn feed_rotate_cached(
     state.chunk_id += 1;
 
     if !finalizing && state.chunk_id > 1 {
-        let rms = compute_rms(&chunk);
-        if rms < POST_SPEECH_SILENCE_RMS_THRESHOLD {
+        let is_silence = if let Some(ref mut vad) = state.vad {
+            let prob = vad.process_audio(&chunk).unwrap_or(0.0);
+            prob < state.options.vad_threshold
+        } else {
+            compute_rms(&chunk) < POST_SPEECH_SILENCE_RMS_THRESHOLD
+        };
+        if is_silence {
             return Ok(None);
         }
     }
