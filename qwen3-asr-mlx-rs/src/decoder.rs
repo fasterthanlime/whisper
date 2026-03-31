@@ -326,7 +326,6 @@ impl TextDecoder {
         input_ids: Option<&Array>,
         inputs_embeds: Option<&Array>,
         position_ids: &Array,
-        mask: Option<&Array>,
         cache: &mut Option<KVCache>,
     ) -> Result<Array, Exception> {
         let h = match (input_ids, inputs_embeds) {
@@ -335,13 +334,42 @@ impl TextDecoder {
             _ => return Err(Exception::custom("input_ids or inputs_embeds required")),
         };
 
+        let seq_len = h.shape()[1] as usize;
+
+        // Build causal mask
+        let mask = if let Some(ref cache) = cache {
+            if cache.offset > 0 {
+                // Decoding with cache: single token needs no mask,
+                // multi-token needs causal mask over prefix
+                if seq_len == 1 {
+                    None
+                } else {
+                    Some(create_causal_mask_with_prefix(seq_len, cache.offset))
+                }
+            } else {
+                // Prefill: full causal mask
+                if seq_len > 1 {
+                    Some(create_causal_mask(seq_len))
+                } else {
+                    None
+                }
+            }
+        } else {
+            // No cache: full causal mask
+            if seq_len > 1 {
+                Some(create_causal_mask(seq_len))
+            } else {
+                None
+            }
+        };
+
         let (cos, sin) = self.rotary_emb.forward(position_ids)?;
 
         let mut h = h;
         let num_layers = self.layers.len();
         for i in 0..num_layers {
             h = self.layers[i].forward_layer(
-                &h, &cos, &sin, mask,
+                &h, &cos, &sin, mask.as_ref(),
                 cache.as_mut(),
                 i,
             )?;
@@ -361,5 +389,23 @@ pub fn create_causal_mask(seq_len: usize) -> Array {
         }
     }
     let mask = Array::from_slice(&mask_data, &[seq_len as i32, seq_len as i32]);
+    ops::expand_dims_axes(&mask, &[0, 1]).unwrap()
+}
+
+/// Causal mask for decoding with a cached prefix.
+/// New tokens can attend to all prefix tokens and causally to each other.
+pub fn create_causal_mask_with_prefix(seq_len: usize, prefix_len: usize) -> Array {
+    let total_len = prefix_len + seq_len;
+    let mut mask_data = vec![0.0f32; seq_len * total_len];
+    for i in 0..seq_len {
+        // Prefix region: all visible (0.0)
+        // New tokens region: causal
+        for j in 0..seq_len {
+            if j > i {
+                mask_data[i * total_len + prefix_len + j] = -1e9;
+            }
+        }
+    }
+    let mask = Array::from_slice(&mask_data, &[seq_len as i32, total_len as i32]);
     ops::expand_dims_axes(&mask, &[0, 1]).unwrap()
 }

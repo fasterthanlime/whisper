@@ -77,7 +77,6 @@ impl Qwen3ASRModel {
             None,
             Some(&embeds),
             position_ids,
-            None,
             cache,
         )?;
 
@@ -98,7 +97,6 @@ impl Qwen3ASRModel {
             None,
             Some(&embeds),
             position_ids,
-            None,
             cache,
         )?;
         self.lm_head.forward(&hidden)
