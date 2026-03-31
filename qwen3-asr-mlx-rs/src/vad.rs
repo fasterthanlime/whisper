@@ -49,7 +49,11 @@ impl SileroVad {
         let st_path = model_dir.join("model.safetensors");
         let tensors = Array::load_safetensors(&st_path)
             .map_err(|e| Exception::custom(format!("load VAD safetensors: {e}")))?;
+        Self::from_tensors(&tensors)
+    }
 
+    /// Construct from pre-loaded tensors (avoids re-reading safetensors from disk).
+    pub fn from_tensors(tensors: &std::collections::HashMap<String, Array>) -> Result<Self, Exception> {
         let get = |key: &str| -> Result<Array, Exception> {
             tensors.get(key)
                 .cloned()

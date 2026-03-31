@@ -11,9 +11,13 @@ class BeeInputController: IMKInputController {
         super.activateServer(sender)
         BeeXPCService.shared.activeController = self
         BeeXPCService.shared.lastController = self
+        let clientName = (self.client() as? NSObject)?.description.prefix(80) ?? "nil"
+        beeInputLog("activateServer: client=\(clientName)")
+        BeeXPCService.shared.flushPending()
     }
 
     override func deactivateServer(_ sender: Any!) {
+        beeInputLog("deactivateServer: hadMarkedText=\(!currentMarkedText.isEmpty) isDictating=\(BeeXPCService.shared.isDictating)")
         let hadMarkedText = !currentMarkedText.isEmpty
 
         if hadMarkedText && BeeXPCService.shared.isDictating {
@@ -57,7 +61,10 @@ class BeeInputController: IMKInputController {
     // MARK: - Text handling
 
     func handleSetMarkedText(_ text: String) {
-        guard let client = self.client() else { return }
+        guard let client = self.client() else {
+            beeInputLog("handleSetMarkedText: NO CLIENT, dropping text")
+            return
+        }
 
         var displayText = text
         if !autoCommittedPrefix.isEmpty {
@@ -70,9 +77,13 @@ class BeeInputController: IMKInputController {
 
         currentMarkedText = displayText
 
+        // Use markedClauseSegment to hint that this text shouldn't get the
+        // default "thick underline" marked text treatment. Value 0 = single segment.
+        // Also explicitly request no underline and a subtle background.
         let attributed = NSAttributedString(string: displayText, attributes: [
+            .markedClauseSegment: 0,
             .underlineStyle: 0,
-            .backgroundColor: NSColor.systemBlue.withAlphaComponent(0.08),
+            .backgroundColor: NSColor.textColor.withAlphaComponent(0.06),
         ])
 
         client.setMarkedText(

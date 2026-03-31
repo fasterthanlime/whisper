@@ -24,6 +24,8 @@ struct AsrEngineInner {
     model: Qwen3ASRModel,
     tokenizer: tokenizers::Tokenizer,
     model_dir: PathBuf,
+    /// Pre-loaded VAD tensors (loaded once at engine init, used per session).
+    vad_tensors: Option<std::collections::HashMap<String, mlx_rs::Array>>,
 }
 
 // SAFETY: MLX arrays use heap-allocated Metal buffers accessed via Arc.
@@ -75,7 +77,7 @@ fn to_c_string(s: &str) -> *mut c_char {
 }
 
 fn ffi_log(msg: &str) {
-    let path = "/tmp/bee-ffi.log";
+    let path = "/tmp/bee.log";
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "[{:.3}] {}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(), msg);
     }
@@ -165,10 +167,25 @@ fn load_engine(model_dir: &Path) -> Result<AsrEngine, String> {
     let tokenizer = find_tokenizer(model_dir)
         .ok_or_else(|| "tokenizer.json not found".to_string())?;
 
+    let vad_tensors = find_vad_dir().and_then(|d| {
+        let st_path = d.join("model.safetensors");
+        match mlx_rs::Array::load_safetensors(&st_path) {
+            Ok(tensors) => {
+                ffi_log(&format!("Silero VAD loaded ({} tensors)", tensors.len()));
+                Some(tensors)
+            }
+            Err(e) => {
+                ffi_log(&format!("Failed to load VAD: {e}"));
+                None
+            }
+        }
+    });
+
     let inner = AsrEngineInner {
         model,
         tokenizer,
         model_dir: model_dir.to_path_buf(),
+        vad_tensors,
     };
 
     Ok(AsrEngine {
@@ -308,17 +325,13 @@ pub extern "C" fn asr_session_create(
 
     let mut state = StreamingState::new(streaming_opts, tokenizer, aligner);
 
-    // Load Silero VAD if available
-    if let Some(vad_dir) = find_vad_dir() {
-        match qwen3_asr_mlx::vad::SileroVad::load(&vad_dir) {
-            Ok(vad) => {
-                log::info!("Silero VAD loaded for session");
-                ffi_log("Silero VAD loaded");
-                state.vad = Some(vad);
-            }
-            Err(e) => {
-                log::warn!("Failed to load Silero VAD: {e}");
-                ffi_log(&format!("Failed to load Silero VAD: {e}"));
+    // Create VAD from pre-loaded tensors (no disk I/O)
+    {
+        let guard = inner.lock().unwrap();
+        if let Some(ref tensors) = guard.vad_tensors {
+            match qwen3_asr_mlx::vad::SileroVad::from_tensors(tensors) {
+                Ok(vad) => { state.vad = Some(vad); }
+                Err(e) => { ffi_log(&format!("Failed to create VAD: {e}")); }
             }
         }
     }

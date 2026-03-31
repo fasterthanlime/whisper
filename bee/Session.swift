@@ -100,7 +100,9 @@ actor Session {
         capture = .buffering
 
         // IME: activate and show bee cursor
+        beeLog("SESSION START: target=\(self.targetBundleID ?? "nil")")
         await MainActor.run { inputClient.activate() }
+        beeLog("SESSION: IME activated, sending 🐝")
         inputClient.setMarkedText("🐝")
         ime = .active
 
@@ -697,13 +699,26 @@ enum SessionResult: Sendable {
     case committed(id: UUID, text: String, submitted: Bool)
 }
 
+/// Log to the shared bee log file.
+func beeLog(_ msg: String) {
+    let ts = ProcessInfo.processInfo.systemUptime
+    let line = String(format: "[%.3f] %@\n", ts, msg)
+    if let data = line.data(using: .utf8),
+       let fh = FileHandle(forWritingAtPath: "/tmp/bee.log") {
+        fh.seekToEndOfFile()
+        fh.write(data)
+        fh.closeFile()
+    } else if let data = line.data(using: .utf8) {
+        try? data.write(to: URL(fileURLWithPath: "/tmp/bee.log"))
+    }
+}
+
 /// Simple file logger for debugging IME text flow.
 private final class IMELog: Sendable {
-    private let path = "/tmp/bee-ime.log"
+    private let path = "/tmp/bee.log"
 
     init() {
-        // Truncate on new session
-        try? "".write(toFile: path, atomically: true, encoding: .utf8)
+        // Don't truncate — shared log file
     }
 
     func write(_ msg: String) {

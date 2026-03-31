@@ -15,9 +15,13 @@ final class BeeInputClient: Sendable {
     // MARK: - Input Source Switching
 
     func activate() {
-        guard let beeSource = Self.findBeeInputSource() else { return }
+        guard let beeSource = Self.findBeeInputSource() else {
+            beeLog("IME ACTIVATE: bee input source NOT FOUND")
+            return
+        }
         Self.previousInputSource = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue()
-        TISSelectInputSource(beeSource)
+        let result = TISSelectInputSource(beeSource)
+        beeLog("IME ACTIVATE: TISSelectInputSource result=\(result)")
     }
 
     func deactivate() {
@@ -36,6 +40,11 @@ final class BeeInputClient: Sendable {
             userInfo: ["text": text],
             deliverImmediately: true
         )
+    }
+
+    func logSetMarkedText(_ text: String) {
+        beeLog("IME setMarkedText: \(text.prefix(60).debugDescription)")
+        setMarkedText(text)
     }
 
     func commitText(_ text: String) {

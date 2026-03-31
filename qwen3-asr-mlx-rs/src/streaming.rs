@@ -34,7 +34,7 @@ pub fn mlx_memory_stats() -> (usize, usize, usize) {
 
 fn stream_log(msg: &str) {
     use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/bee-stream.log") {
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/bee.log") {
         let _ = writeln!(f, "[{:.3}] {}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(), msg);
     }
 }
@@ -1080,11 +1080,21 @@ fn join_committed(committed: &str, new: &str) -> String {
         }
     }
 
-    // Don't add space if new text starts with apostrophe (contraction: 'll, 's, 't)
-    // or punctuation that attaches to the preceding word
-    let sep = match fixed.chars().next() {
-        Some('\'' | '\u{2019}' | ',' | '.' | '!' | '?' | ';' | ':') => "",
-        _ => " ",
+    // Don't add space if:
+    // - new text starts with apostrophe/punctuation (contraction: 'll, 's, 't)
+    // - committed ends mid-word (last char is alphanumeric and new starts with lowercase)
+    //   e.g. committed="St" new="upid" → "Stupid" not "St upid"
+    let committed_ends_midword = committed.chars().last()
+        .map_or(false, |c| c.is_alphanumeric());
+    let new_continues_word = fixed.chars().next()
+        .map_or(false, |c| c.is_lowercase());
+    let sep = if committed_ends_midword && new_continues_word {
+        "" // mid-word continuation
+    } else {
+        match fixed.chars().next() {
+            Some('\'' | '\u{2019}' | ',' | '.' | '!' | '?' | ';' | ':') => "",
+            _ => " ",
+        }
     };
     format!("{committed}{sep}{fixed}")
 }

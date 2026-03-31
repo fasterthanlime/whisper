@@ -6,15 +6,30 @@ class BeeXPCService: NSObject {
     weak var activeController: BeeInputController?
     var lastController: BeeInputController?
     var isDictating = false
+    var pendingText: String?
 
     var controller: BeeInputController? {
         activeController ?? lastController
     }
 
+    /// Called from BeeInputController.activateServer to flush any pending text.
+    func flushPending() {
+        if let text = pendingText, let ctrl = controller {
+            beeInputLog("flushPending: delivering \(text.prefix(40).debugDescription)")
+            pendingText = nil
+            ctrl.handleSetMarkedText(text)
+        }
+    }
+
     func setMarkedText(_ text: String) {
         isDictating = true
         DispatchQueue.main.async {
-            self.controller?.handleSetMarkedText(text)
+            if let ctrl = self.controller {
+                ctrl.handleSetMarkedText(text)
+            } else {
+                beeInputLog("setMarkedText: no controller, queuing \(text.prefix(40).debugDescription)")
+                self.pendingText = text
+            }
         }
     }
 
