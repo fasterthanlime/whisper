@@ -7,7 +7,6 @@ struct MenuBarView: View {
     @State private var showSettings = false
     @State private var pauseMediaEnabled = false // TODO: wire to MediaController
     @State private var runOnStartupEnabled = false
-    @State private var debugVisible = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -220,9 +219,8 @@ struct MenuBarView: View {
                 // TODO: persist to UserDefaults
             }
 
-            toggleRow(label: "Debug Overlay", isOn: debugVisible) {
-                debugVisible.toggle()
-                appState.debugEnabled = debugVisible
+            toggleRow(label: "Debug Overlay", isOn: appState.debugEnabled) {
+                appState.debugEnabled.toggle()
                 DebugPanel.shared.toggle(appState: appState)
             }
         }

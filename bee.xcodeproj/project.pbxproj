@@ -23,6 +23,7 @@
 		638D545266F00C866046B177 /* BeeInputAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F54E5F987731158C437D997 /* BeeInputAppDelegate.swift */; };
 		66493E87798EF2D09BC1BC43 /* BeeInputClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AA018C194359C6E4CE7BA63 /* BeeInputClient.swift */; };
 		89ADF5F490B96085E99E510C /* SoundEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4E52C13C56D37363BA384EF /* SoundEffects.swift */; };
+		ADA9083DFC2A9EDCB6698240 /* AudioPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0BF06C76650D4E68E461F7C /* AudioPipeline.swift */; };
 		C5FD939731D0805250AC95C8 /* BeeXPCService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A48B33C812878B9AC55B8D /* BeeXPCService.swift */; };
 		D70AC6C318840E971BF24ADB /* HotkeyMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 977266C3895F1E154E74F051 /* HotkeyMonitor.swift */; };
 		DC35DFDBCF6C52FA6E0A690A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5A35BE9759CA9C8519D87363 /* Assets.xcassets */; };
@@ -56,6 +57,7 @@
 		BBB5FE976B1CF01CA031AF66 /* BeeInputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeInputController.swift; sourceTree = "<group>"; };
 		C26401964247ABA42B4ADCA3 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		E27C82D82C5DDA273AC36889 /* beeInput.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = beeInput.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F0BF06C76650D4E68E461F7C /* AudioPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPipeline.swift; sourceTree = "<group>"; };
 		F154B4296E76BCBEDD666C34 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
 		FC8AFB3851834181E8F4EF77 /* TranscriptionHistoryItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionHistoryItem.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -128,6 +130,7 @@
 				0F2645E6EBE2D4D3E1BFA17C /* AppState.swift */,
 				5A35BE9759CA9C8519D87363 /* Assets.xcassets */,
 				221AD035A01421E2640E350E /* AudioEngine.swift */,
+				F0BF06C76650D4E68E461F7C /* AudioPipeline.swift */,
 				41126B678A8FDC75629B0B30 /* bee.entitlements */,
 				7059CA841745C6E21DA830A3 /* BeeApp.swift */,
 				977266C3895F1E154E74F051 /* HotkeyMonitor.swift */,
@@ -264,6 +267,7 @@
 			files = (
 				FCE25FA72869D4A5885A40D0 /* AppState.swift in Sources */,
 				599EE6A4E7B1CA2D6CE47107 /* AudioEngine.swift in Sources */,
+				ADA9083DFC2A9EDCB6698240 /* AudioPipeline.swift in Sources */,
 				EAD815EAA627296BFA0C4EA3 /* BeeApp.swift in Sources */,
 				66493E87798EF2D09BC1BC43 /* BeeInputClient.swift in Sources */,
 				267F48ED7025F3C068F6D04A /* DebugOverlay.swift in Sources */,

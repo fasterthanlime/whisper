@@ -45,15 +45,15 @@ final class SoundEffects {
     }
 
     func playRecordingStarted() {
-        play(tinkSound, volume: systemVolume())
+        play(tinkSound, volume: systemVolume() * 0.15)
     }
 
     func playCommit() {
-        play(tinkSound, volume: systemVolume() * 0.6)
+        play(tinkSound, volume: systemVolume() * 0.1)
     }
 
     func playCancel() {
-        play(popSound, volume: systemVolume())
+        play(popSound, volume: systemVolume() * 0.15)
     }
 
     private func play(_ sound: NSSound?, volume: Float) {

@@ -5,12 +5,17 @@ private let logger = Logger(subsystem: "fasterthanlime.bee", category: "Session"
 
 /// A Session is a self-contained unit of work for a single dictation attempt.
 ///
-/// It has three internal layers — Capture, ASR, and IME — that run
-/// concurrently. The streaming loop feeds audio from Capture to ASR
-/// continuously, including during the drain phase after commit/cancel.
+/// Three tasks connected by three channels:
+///
+/// ```
+/// AudioEngine ──Channel 0──→ Capture Task ──Channel 1──→ ASR Task ──Channel 2──→ Session actor
+///               [Float]       (VAD, drain)    AudioChunk   (Rust FFI)  TranscriptEvent  (IME)
+/// ```
+///
+/// End mode flows forward through all three channels.
 ///
 /// Three endings:
-/// - abort: immediate teardown, no trace
+/// - abort: all channels cancelled, no finalize
 /// - cancel: drain → finalize → history entry, IME clears
 /// - commit: drain → finalize → IME commits text
 actor Session {
@@ -28,17 +33,21 @@ actor Session {
     private let transcriptionService: TranscriptionService
     private let inputClient: BeeInputClient
 
-    // Internal
-    private var processedNativeCount: Int = 0
-    private var asrSession: StreamingSession?
-    private var streamingTask: Task<Void, Never>?
-    private var partialTranscript: String = ""
+    // Channels
+    private var ch0: RawAudioPipeline?
+    private var ch1: AudioPipeline?
+    private var ch2: TranscriptPipeline?
+
+    // Tasks
+    private var captureTask: Task<Void, Never>?
+    private var asrTask: Task<Void, Never>?
+    private var consumerTask: Task<Void, Never>?
 
     // Callbacks
     private var onComplete: (@Sendable (SessionResult) -> Void)?
 
-    // Diagnostics
-    private(set) var diag = SessionDiagnostics()
+    // Diagnostics — lock-protected, written by tasks, read by debug overlay
+    let diag = SessionDiag()
 
     func setOnComplete(_ handler: @Sendable @escaping (SessionResult) -> Void) {
         onComplete = handler
@@ -73,23 +82,174 @@ actor Session {
             }
         }
 
-        // Capture: start (copies pre-buffer)
-        audioEngine.startCapture(for: self.id)
+        diag.update { $0.startedAt = Date() }
+
+        // Create all three channels
+        let ch0 = RawAudioPipeline()
+        let ch1 = AudioPipeline()
+        let ch2 = TranscriptPipeline()
+        self.ch0 = ch0
+        self.ch1 = ch1
+        self.ch2 = ch2
+
+        // Register with AudioEngine (Channel 0 starts flowing)
+        audioEngine.startCapture(for: self.id, pipeline: ch0)
         capture = .buffering
-        diag.startedAt = Date()
-        diag.nativeRate = audioEngine.nativeSampleRate
 
         // IME: activate
         await MainActor.run { inputClient.activate() }
         ime = .active
 
         // ASR: create session
-        asrSession = transcriptionService.createSession(language: language)
+        let asrSession = transcriptionService.createSession(language: language)
         asr = asrSession != nil ? .streaming : .idle
 
-        // Start the streaming loop — runs until capture is delivered
-        streamingTask = Task { [weak self] in
-            await self?.streamingLoop()
+        // --- Capture Task ---
+        // Reads Channel 0, forwards to Channel 1, does VAD during drain.
+        let sessionID = self.id
+        let engine = self.audioEngine
+        let diagRef = self.diag
+
+        captureTask = Task.detached {
+            var allSamples: [Float] = []  // for debug WAV
+
+            for await _ in ch0.stream {
+                let buffers = ch0.drain()
+                for buf in buffers {
+                    allSamples.append(contentsOf: buf)
+                    ch1.send(.samples(buf))
+                }
+                diagRef.update { $0.capturedSamples = allSamples.count }
+            }
+
+            // Channel 0 finished — either abort (no end mode) or drain complete (end mode set)
+            // Drain any remaining
+            let remaining = ch0.drain()
+            for buf in remaining {
+                allSamples.append(contentsOf: buf)
+                ch1.send(.samples(buf))
+            }
+            diagRef.update {
+                $0.capturedSamples = allSamples.count
+                $0.totalSamples = allSamples.count
+            }
+
+            // Save debug WAV
+            let debugDir = FileManager.default.temporaryDirectory.appendingPathComponent("bee-debug")
+            try? FileManager.default.createDirectory(at: debugDir, withIntermediateDirectories: true)
+            let wavURL = debugDir.appendingPathComponent("\(sessionID.uuidString.prefix(8)).wav")
+            try? WavWriter.write(samples: allSamples, to: wavURL)
+            diagRef.update { $0.audioWavPath = wavURL.path }
+
+            // ch1 end is sent by the drain mechanism (see beginDrain)
+        }
+
+        // --- ASR Task ---
+        // Reads Channel 1, feeds Rust FFI, writes to Channel 2.
+        let ts = self.transcriptionService
+
+        asrTask = Task.detached {
+            guard let asrSession else {
+                // No ASR — just forward end mode
+                for await _ in ch1.stream {
+                    for chunk in ch1.drain() {
+                        if case .end(let mode) = chunk {
+                            ch2.send(.done(text: "", mode: mode))
+                            ch2.finish()
+                            return
+                        }
+                    }
+                }
+                return
+            }
+
+            for await _ in ch1.stream {
+                let chunks = ch1.drain()
+
+                // Batch all samples, check for end
+                var batch: [Float] = []
+                var endMode: EndMode?
+                for chunk in chunks {
+                    switch chunk {
+                    case .samples(let s):
+                        batch.append(contentsOf: s)
+                    case .end(let mode):
+                        endMode = mode
+                    }
+                }
+
+                // Feed accumulated audio
+                if !batch.isEmpty {
+                    let t0 = ProcessInfo.processInfo.systemUptime
+                    let update: StreamingUpdate?
+                    if endMode != nil {
+                        // Last feed — use feedFinalizing
+                        update = ts.feedFinalizing(session: asrSession, samples: batch)
+                    } else {
+                        update = ts.feed(session: asrSession, samples: batch)
+                    }
+                    let feedUs = Int((ProcessInfo.processInfo.systemUptime - t0) * 1_000_000)
+
+                    diagRef.update {
+                        $0.feeds += 1
+                        $0.lastFeedUs = feedUs
+                        $0.totalFeedUs += feedUs
+                        $0.fedSamples += batch.count
+                    }
+
+                    if let update {
+                        ch2.send(.partial(update.text))
+                    }
+                }
+
+                // End of stream — finalize
+                if let endMode {
+                    let t0 = ProcessInfo.processInfo.systemUptime
+                    let result = ts.finish(session: asrSession)
+                    let finalizeUs = Int((ProcessInfo.processInfo.systemUptime - t0) * 1_000_000)
+
+                    let finalText = result?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    diagRef.update {
+                        $0.finalizeUs = finalizeUs
+                        $0.finalText = finalText
+                    }
+
+                    logger.info("[\(sessionID)] Finalized: \"\(finalText.prefix(80))\"")
+                    ch2.send(.done(text: finalText, mode: endMode))
+                    ch2.finish()
+                    return
+                }
+            }
+
+            // Channel 1 ended without .end — abort path
+        }
+
+        // --- Consumer Task ---
+        // Reads Channel 2, updates IME. Runs on this actor.
+        let ic = self.inputClient
+
+        consumerTask = Task {
+            var lastPartial = ""
+
+            for await _ in ch2.stream {
+                let events = ch2.drain()
+                for event in events {
+                    switch event {
+                    case .partial(let text):
+                        lastPartial = text
+                        ic.setMarkedText(text)
+
+                    case .done(let text, let mode):
+                        let finalText = text.isEmpty ? lastPartial : text
+                        diag.update { $0.finalText = finalText }
+
+                        await self.finishIME(text: finalText, mode: mode)
+                        return
+                    }
+                }
+            }
+
+            // Channel 2 ended without .done — abort path
         }
     }
 
@@ -99,27 +259,27 @@ actor Session {
     func abort() async {
         logger.info("[\(self.id)] Aborting")
 
-        // Kill streaming loop
-        streamingTask?.cancel()
-
-        // Capture: discard
-        audioEngine.cancelCapture(for: self.id)
+        // Stop audio flow — Channel 0 ends
+        audioEngine.stopCapture(for: self.id)
+        // Close channels — tasks exit
+        ch1?.finish()
+        ch2?.finish()
         capture = .discarded
 
-        // ASR: drop
-        asrSession = nil
+        // Wait for all tasks
+        await captureTask?.value
+        await asrTask?.value
+        await consumerTask?.value
+        captureTask = nil
+        asrTask = nil
+        consumerTask = nil
         asr = .done
 
-        // IME: deactivate without committing
+        // IME: deactivate
         await MainActor.run { inputClient.deactivate() }
         ime = .tornDown
 
         onComplete?(.aborted(id: id))
-    }
-
-    enum EndMode: Sendable {
-        case commit(submit: Bool)
-        case cancel
     }
 
     func commit(submit: Bool) async { await end(.commit(submit: submit)) }
@@ -127,11 +287,8 @@ actor Session {
 
     /// Shared ending flow for commit and cancel.
     ///
-    /// 1. Signal capture to drain (VAD tail monitoring)
-    /// 2. Streaming loop continues during drain, feeding audio to ASR
-    /// 3. Drain completes → capture = delivered → streaming loop exits
-    /// 4. Finalize ASR with remaining samples
-    /// 5. Branch: commit → IME commits | cancel → IME clears
+    /// Tells the capture task to drain, then waits for the result to
+    /// flow all the way through Channel 1 → Channel 2.
     private func end(_ mode: EndMode) async {
         let modeLabel: String
         switch mode {
@@ -140,34 +297,61 @@ actor Session {
         }
         logger.info("[\(self.id)] Ending: \(modeLabel)")
 
-        diag.endedAt = Date()
-        diag.ending = modeLabel
-
-        // 1. Signal capture to drain — streaming loop keeps running
-        audioEngine.beginDrain(for: self.id)
+        diag.update {
+            $0.endedAt = Date()
+            $0.ending = modeLabel
+        }
         capture = .draining
 
-        // 2. Wait for streaming loop to finish
-        //    (it exits when capture becomes .delivered)
-        await streamingTask?.value
-        streamingTask = nil
+        // Begin drain: the capture task will monitor VAD, then send
+        // .end(mode) on Channel 1 when silence is detected.
+        beginDrain(mode: mode)
 
-        // 3. Collect all captured samples
-        let allNativeSamples = audioEngine.collectSamples(for: self.id)
+        // Wait for the consumer task — it exits when it sees .done on Channel 2
+        await consumerTask?.value
+        consumerTask = nil
+
+        // Also wait for the other tasks to clean up
+        await captureTask?.value
+        await asrTask?.value
+        captureTask = nil
+        asrTask = nil
         capture = .delivered
-        diag.totalNativeSamples = allNativeSamples.count
+        asr = .done
+    }
 
-        // 4. Finalize ASR
-        let finalText = await finalizeASR(allNativeSamples: allNativeSamples)
+    // MARK: - Drain (runs in capture task context)
 
-        // 5. Save audio for debugging
-        saveDebugAudio(nativeSamples: allNativeSamples, finalText: finalText)
+    /// Signals the capture task to start VAD monitoring and eventually
+    /// send .end(mode) on Channel 1.
+    ///
+    /// Implementation: we stop Channel 0 (AudioEngine stops forwarding),
+    /// which causes the capture task to exit its loop. Then the capture
+    /// task sends .end(mode) on Channel 1.
+    ///
+    /// TODO: real VAD with silence monitoring. For now, just stop immediately.
+    private func beginDrain(mode: EndMode) {
+        // Stop audio from AudioEngine → Channel 0 finishes
+        audioEngine.stopCapture(for: self.id)
+        // The capture task will exit its for-await loop, then we need
+        // to send .end on Channel 1. We do this by scheduling it after
+        // the capture task completes.
+        let ch1 = self.ch1
+        let captureTask = self.captureTask
+        Task.detached {
+            await captureTask?.value
+            ch1?.send(.end(mode))
+            ch1?.finish()
+        }
+    }
 
-        // 6. Branch on mode
+    // MARK: - IME Finalization
+
+    private func finishIME(text: String, mode: EndMode) async {
         switch mode {
         case .commit(let submit):
-            if !finalText.isEmpty {
-                inputClient.commitText(finalText)
+            if !text.isEmpty {
+                inputClient.commitText(text)
                 try? await Task.sleep(for: .milliseconds(50))
                 await MainActor.run { inputClient.deactivate() }
                 ime = .committed
@@ -180,141 +364,14 @@ actor Session {
                 await MainActor.run { inputClient.deactivate() }
                 ime = .committed
             }
-            onComplete?(.committed(id: id, text: finalText, submitted: mode.isSubmit))
+            onComplete?(.committed(id: id, text: text, submitted: submit))
 
         case .cancel:
             inputClient.clearMarkedText()
             await MainActor.run { inputClient.deactivate() }
             ime = .cleared
-            onComplete?(.cancelled(id: id, text: finalText))
+            onComplete?(.cancelled(id: id, text: text))
         }
-    }
-
-    // MARK: - Streaming Loop
-
-    /// Runs continuously, feeding audio from the capture layer to the ASR.
-    /// Keeps running during drain — only exits when capture is delivered
-    /// (drain complete) or the task is cancelled (abort).
-    private func streamingLoop() async {
-        guard let session = asrSession else { return }
-        let nativeRate = audioEngine.nativeSampleRate
-        let minNativeChunk = Int(nativeRate * 0.05)
-
-        while !Task.isCancelled {
-            // Check if capture is done (drain completed)
-            if audioEngine.isDrained(for: self.id) {
-                // One final peek to get everything including drain tail
-                let allNative = audioEngine.peekCapture(for: self.id)
-                let newCount = allNative.count
-                if newCount > processedNativeCount {
-                    let chunk = Array(allNative[processedNativeCount...])
-                    processedNativeCount = newCount
-                    let resampled = AudioEngine.resample(chunk, from: nativeRate)
-                    let t0 = ProcessInfo.processInfo.systemUptime
-                    let update = transcriptionService.feed(session: session, samples: resampled)
-                    let feedMs = Int((ProcessInfo.processInfo.systemUptime - t0) * 1000)
-                    diag.streamingFeeds += 1
-                    diag.streamedNativeSamples = processedNativeCount
-                    diag.streamedResampledSamples += resampled.count
-                    diag.lastFeedMs = feedMs
-                    diag.totalFeedMs += feedMs
-                    if let update {
-                        partialTranscript = update.text
-                        inputClient.setMarkedText(update.text)
-                    }
-                }
-                break
-            }
-
-            let allNative = audioEngine.peekCapture(for: self.id)
-            let newCount = allNative.count
-
-            guard newCount > processedNativeCount + minNativeChunk else {
-                try? await Task.sleep(for: .milliseconds(30))
-                continue
-            }
-
-            let chunk = Array(allNative[processedNativeCount...])
-            processedNativeCount = newCount
-            let resampled = AudioEngine.resample(chunk, from: nativeRate)
-
-            let t0 = ProcessInfo.processInfo.systemUptime
-            let update = transcriptionService.feed(session: session, samples: resampled)
-            let feedMs = Int((ProcessInfo.processInfo.systemUptime - t0) * 1000)
-
-            diag.streamingFeeds += 1
-            diag.streamedNativeSamples = processedNativeCount
-            diag.streamedResampledSamples += resampled.count
-            diag.lastFeedMs = feedMs
-            diag.totalFeedMs += feedMs
-
-            if let update {
-                partialTranscript = update.text
-                inputClient.setMarkedText(update.text)
-            }
-        }
-    }
-
-    // MARK: - ASR Finalization
-
-    private func finalizeASR(allNativeSamples: [Float]) async -> String {
-        guard let session = asrSession else {
-            asr = .done
-            return partialTranscript
-        }
-
-        asr = .finalizing
-        diag.finalizeStartedAt = Date()
-
-        let nativeRate = audioEngine.nativeSampleRate
-        let remainingNative = allNativeSamples.count > processedNativeCount
-            ? Array(allNativeSamples[processedNativeCount...])
-            : []
-
-        diag.remainingNativeSamples = remainingNative.count
-
-        // Feed any remaining samples via feedFinalizing
-        if !remainingNative.isEmpty {
-            var resampled = AudioEngine.resample(remainingNative, from: nativeRate)
-            diag.remainingResampledSamples = resampled.count
-
-            // Silence padding (100ms) to signal end of speech
-            let pad = Int(AudioEngine.targetSampleRate * 0.1)
-            resampled.append(contentsOf: repeatElement(Float(0), count: pad))
-
-            if let update = transcriptionService.feedFinalizing(session: session, samples: resampled) {
-                partialTranscript = update.text
-            }
-        }
-
-        // Final inference
-        let result = transcriptionService.finish(session: session)
-        let finalText: String
-        if let text = result?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
-            finalText = text
-        } else {
-            finalText = partialTranscript
-        }
-
-        asr = .done
-        asrSession = nil
-        diag.finalizeEndedAt = Date()
-        diag.finalText = finalText
-
-        logger.info("[\(self.id)] Finalized: \"\(finalText.prefix(80))\"")
-        return finalText
-    }
-
-    // MARK: - Debug
-
-    private func saveDebugAudio(nativeSamples: [Float], finalText: String) {
-        let nativeRate = audioEngine.nativeSampleRate
-        let allResampled = AudioEngine.resample(nativeSamples, from: nativeRate)
-        let debugDir = FileManager.default.temporaryDirectory.appendingPathComponent("bee-debug")
-        try? FileManager.default.createDirectory(at: debugDir, withIntermediateDirectories: true)
-        let wavURL = debugDir.appendingPathComponent("\(id.uuidString.prefix(8)).wav")
-        try? WavWriter.write(samples: allResampled, to: wavURL)
-        diag.audioWavPath = wavURL.path
     }
 }
 
@@ -361,15 +418,6 @@ extension Session {
     }
 }
 
-// MARK: - EndMode helpers
-
-extension Session.EndMode {
-    var isSubmit: Bool {
-        if case .commit(let submit) = self { return submit }
-        return false
-    }
-}
-
 // MARK: - Supporting types
 
 struct StreamingUpdate: Sendable {
@@ -378,45 +426,45 @@ struct StreamingUpdate: Sendable {
     let detectedLanguage: String?
 }
 
-struct SessionDiagnostics: Sendable {
-    var startedAt: Date?
-    var endedAt: Date?
-    var ending: String = ""
-    var nativeRate: Double = 0
+/// Thread-safe diagnostics container. Written by pipeline tasks,
+/// read by the debug overlay. No actor hops needed.
+final class SessionDiag: @unchecked Sendable {
+    struct Snapshot: Sendable {
+        var startedAt: Date?
+        var endedAt: Date?
+        var ending: String = ""
 
-    var streamingFeeds: Int = 0
-    var streamedNativeSamples: Int = 0
-    var streamedResampledSamples: Int = 0
-    var lastFeedMs: Int = 0
-    var totalFeedMs: Int = 0
+        var capturedSamples: Int = 0
+        var totalSamples: Int = 0
+        var feeds: Int = 0
+        var fedSamples: Int = 0
+        var lastFeedUs: Int = 0
+        var totalFeedUs: Int = 0
 
-    var totalNativeSamples: Int = 0
+        var finalizeUs: Int = 0
+        var finalText: String = ""
+        var audioWavPath: String = ""
 
-    var remainingNativeSamples: Int = 0
-    var remainingResampledSamples: Int = 0
-    var finalizeStartedAt: Date?
-    var finalizeEndedAt: Date?
-    var finalText: String = ""
-    var audioWavPath: String = ""
+        var recordingDurationMs: Int {
+            guard let s = startedAt, let e = endedAt else { return 0 }
+            return Int((e.timeIntervalSince(s) * 1000).rounded())
+        }
 
-    var recordingDurationMs: Int {
-        guard let s = startedAt, let e = endedAt else { return 0 }
-        return Int((e.timeIntervalSince(s) * 1000).rounded())
+        var totalAudioDurationMs: Int {
+            guard totalSamples > 0 else { return 0 }
+            return Int((Double(totalSamples) / AudioEngine.targetSampleRate * 1000).rounded())
+        }
     }
 
-    var finalizeDurationMs: Int {
-        guard let s = finalizeStartedAt, let e = finalizeEndedAt else { return 0 }
-        return Int((e.timeIntervalSince(s) * 1000).rounded())
+    private let lock = NSLock()
+    private var _snapshot = Snapshot()
+
+    var snapshot: Snapshot {
+        lock.withLock { _snapshot }
     }
 
-    var totalNativeDurationMs: Int {
-        guard nativeRate > 0 else { return 0 }
-        return Int((Double(totalNativeSamples) / nativeRate * 1000).rounded())
-    }
-
-    var remainingNativeDurationMs: Int {
-        guard nativeRate > 0 else { return 0 }
-        return Int((Double(remainingNativeSamples) / nativeRate * 1000).rounded())
+    func update(_ body: (inout Snapshot) -> Void) {
+        lock.withLock { body(&_snapshot) }
     }
 }
 

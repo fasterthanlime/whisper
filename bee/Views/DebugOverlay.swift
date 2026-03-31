@@ -19,7 +19,7 @@ struct DebugOverlay: View {
                 Text("active session")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(.orange)
-                SessionDebugView(session: session)
+                SessionDebugView(sessionDiag: session.diag)
             }
 
             if let diag = appState.lastSessionDiag {
@@ -75,14 +75,14 @@ struct DebugOverlay: View {
 }
 
 struct SessionDebugView: View {
-    let session: Session
+    let sessionDiag: SessionDiag
 
-    @State private var diag: SessionDiagnostics?
+    @State private var snapshot: SessionDiag.Snapshot?
 
     var body: some View {
         Group {
-            if let diag {
-                DiagnosticsView(diag: diag)
+            if let snapshot {
+                DiagnosticsView(diag: snapshot)
             } else {
                 Text("loading...")
                     .font(.system(size: 10, design: .monospaced))
@@ -91,7 +91,8 @@ struct SessionDebugView: View {
         }
         .task(id: UUID()) {
             while !Task.isCancelled {
-                diag = await session.diag
+                // No actor hop — just reads a lock-protected struct
+                snapshot = sessionDiag.snapshot
                 try? await Task.sleep(for: .milliseconds(100))
             }
         }
@@ -99,7 +100,7 @@ struct SessionDebugView: View {
 }
 
 struct DiagnosticsView: View {
-    let diag: SessionDiagnostics
+    let diag: SessionDiag.Snapshot
     var transcriptionService: TranscriptionService? = nil
 
     @State private var batchResult: String?
@@ -108,20 +109,18 @@ struct DiagnosticsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             row("ending", diag.ending.isEmpty ? "—" : diag.ending)
-            row("rate", "\(Int(diag.nativeRate)) Hz")
             row("rec dur", "\(diag.recordingDurationMs) ms")
 
             Divider().padding(.vertical, 1)
 
-            row("feeds", "\(diag.streamingFeeds) (last \(diag.lastFeedMs)ms, total \(diag.totalFeedMs)ms)")
-            row("streamed", "\(diag.streamedNativeSamples) nat → \(diag.streamedResampledSamples) @16k")
-            row("total", "\(diag.totalNativeSamples) nat (\(diag.totalNativeDurationMs) ms)")
+            row("feeds", "\(diag.feeds) (last \(diag.lastFeedUs)µs, total \(diag.totalFeedUs / 1000)ms)")
+            row("captured", "\(diag.capturedSamples) @16k")
+            row("fed", "\(diag.fedSamples) @16k")
+            row("total", "\(diag.totalSamples) @16k (\(diag.totalAudioDurationMs) ms)")
 
             Divider().padding(.vertical, 1)
 
-            row("remain", "\(diag.remainingNativeSamples) nat (\(diag.remainingNativeDurationMs) ms)")
-            row("remain@16k", "\(diag.remainingResampledSamples)")
-            row("finalize", "\(diag.finalizeDurationMs) ms")
+            row("finalize", "\(diag.finalizeUs / 1000) ms")
 
             if !diag.finalText.isEmpty {
                 Text(diag.finalText.prefix(100))

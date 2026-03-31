@@ -34,7 +34,7 @@ final class AppState {
 
     // Debug
     var debugEnabled = false
-    var lastSessionDiag: SessionDiagnostics?
+    var lastSessionDiag: SessionDiag.Snapshot?
 
     struct InputDeviceInfo: Sendable {
         let uid: String
@@ -250,10 +250,7 @@ final class AppState {
             await session.setOnComplete { [weak self] result in
                 Task { @MainActor in
                     guard let self else { return }
-                    // Capture diagnostics before handling result
-                    Task {
-                        self.lastSessionDiag = await session.diag
-                    }
+                    self.lastSessionDiag = session.diag.snapshot
                     self.handleSessionResult(result)
                 }
             }

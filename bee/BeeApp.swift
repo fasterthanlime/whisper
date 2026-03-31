@@ -9,24 +9,28 @@ struct BeeApp: App {
         let audioEngine = AudioEngine()
         let transcriptionService = TranscriptionService()
         let inputClient = BeeInputClient()
-        _appState = State(initialValue: AppState(
+        let state = AppState(
             audioEngine: audioEngine,
             transcriptionService: transcriptionService,
             inputClient: inputClient
-        ))
+        )
+        _appState = State(initialValue: state)
+
+        let monitor = HotkeyMonitor()
+        monitor.appState = state
+        monitor.start()
+        _hotkeyMonitor = State(initialValue: monitor)
+
+        BeeInputClient.ensureIMERegistered()
+        state.loadModelAtStartup()
     }
 
     var body: some Scene {
         MenuBarExtra {
             MenuBarView(appState: appState)
-                .onAppear {
-                    hotkeyMonitor.appState = appState
-                    hotkeyMonitor.start()
-                    BeeInputClient.ensureIMERegistered()
-                    appState.loadModelAtStartup()
-                }
         } label: {
             Image("MenuBarIcon")
         }
+        .menuBarExtraStyle(.window)
     }
 }

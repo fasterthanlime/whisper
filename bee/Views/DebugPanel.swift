@@ -3,15 +3,17 @@ import SwiftUI
 
 /// A floating, always-on-top debug panel showing state machine info.
 @MainActor
-final class DebugPanel {
+final class DebugPanel: NSObject, NSWindowDelegate {
     static let shared = DebugPanel()
 
     private var panel: NSPanel?
+    private weak var appState: AppState?
 
     var isVisible: Bool { panel != nil }
 
     func show(appState: AppState) {
         guard panel == nil else { return }
+        self.appState = appState
 
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 260, height: 200),
@@ -27,6 +29,7 @@ final class DebugPanel {
         panel.hasShadow = true
         panel.backgroundColor = .clear
         panel.titlebarAppearsTransparent = true
+        panel.delegate = self
 
         let hostingView = NSHostingView(rootView: DebugOverlay(appState: appState))
         panel.contentView = hostingView
@@ -53,6 +56,13 @@ final class DebugPanel {
             hide()
         } else {
             show(appState: appState)
+        }
+    }
+
+    nonisolated func windowWillClose(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            panel = nil
+            appState?.debugEnabled = false
         }
     }
 }
