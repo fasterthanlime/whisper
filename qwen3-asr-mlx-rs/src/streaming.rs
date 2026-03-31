@@ -134,6 +134,10 @@ pub struct StreamingState {
     // Encoder cache (Accumulate/Rotate modes)
     encoder_cache: EncoderCache,
 
+    // TODO: mel caching (skip recompute when audio hasn't grown)
+    // Not implemented yet — mel is ~1% of runtime per profiling,
+    // and rotate mode keeps sessions short.
+
     // VAD
     speech_detected: bool,
 
@@ -286,11 +290,18 @@ fn run_accumulate_step(
     state: &mut StreamingState,
     max_new_tokens: usize,
 ) -> Result<(), Exception> {
+    let t_step = std::time::Instant::now();
+
+    let t0 = std::time::Instant::now();
     let (mel_data, n_mels, n_frames) = state.mel_extractor.extract(&state.audio_accum)
         .map_err(|e| Exception::custom(format!("mel: {e}")))?;
+    let mel_ms = t0.elapsed().as_millis();
+
+    let t0 = std::time::Instant::now();
     let mel = Array::from_slice(&mel_data, &[n_mels as i32, n_frames as i32]);
     let audio_features = model.encode_incremental(&mel, &mut state.encoder_cache)?;
     let audio_features = mlx_rs::ops::expand_dims(&audio_features, 0)?;
+    let enc_ms = t0.elapsed().as_millis();
 
     let prefix_ids = compute_prefix_ids(state);
 
@@ -319,6 +330,7 @@ fn run_accumulate_step(
         log::debug!("chunk {}: no prefix (cold start), prompt {} tokens", state.chunk_id, full_prompt.len());
     }
 
+    let t0 = std::time::Instant::now();
     let mut cache = None;
     let (generated, _) = generate::prefill_and_decode(
         model,
@@ -328,10 +340,16 @@ fn run_accumulate_step(
         0,
         max_new_tokens,
     )?;
+    let decode_ms = t0.elapsed().as_millis();
     // Explicitly drop the KV cache and clear MLX memory cache
     drop(cache);
     unsafe { mlx_clear_cache(); }
-    log_memory(&format!("after chunk {}", state.chunk_id));
+
+    log::info!(
+        "step {}: mel={:.0}ms enc={:.0}ms decode={:.0}ms total={:.0}ms (audio={:.1}s, prompt={} tokens, gen={} tokens)",
+        state.chunk_id, mel_ms, enc_ms, decode_ms, t_step.elapsed().as_millis(),
+        state.audio_accum.len() as f64 / 16000.0, full_prompt.len(), generated.len(),
+    );
 
     log::debug!("chunk {}: generated {} tokens: {:?}", state.chunk_id, generated.len(), &generated[..generated.len().min(10)]);
 
