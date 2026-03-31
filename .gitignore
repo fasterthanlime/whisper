@@ -47,3 +47,4 @@ build-release/
 build-bee-release/
 .venv/
 venv/
+profile.json.gz

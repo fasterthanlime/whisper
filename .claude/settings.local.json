@@ -17,7 +17,17 @@
       "Bash(.venv/bin/python scripts/benchmark_asr.py --model mlx-community/Qwen3-ASR-1.7B-4bit --runs 3 ../../qwen3-asr-rs/tests/fixtures/audio/sample1.wav)",
       "Bash(.venv/bin/python scripts/benchmark_asr.py --model Qwen/Qwen3-ASR-1.7B --runs 3 ../../qwen3-asr-rs/tests/fixtures/audio/sample1.wav)",
       "Bash(.venv/bin/python scripts/benchmark_asr.py --model mlx-community/Qwen3-ASR-1.7B-8bit --runs 3 ../../qwen3-asr-rs/tests/fixtures/audio/sample1.wav)",
-      "Bash(./target/release/examples/bench ~/Library/Caches/qwen3-asr/Alkd--qwen3-asr-gguf--qwen3_asr_1_7b_q4_k_gguf tests/fixtures/audio/sample1.wav)"
+      "Bash(./target/release/examples/bench ~/Library/Caches/qwen3-asr/Alkd--qwen3-asr-gguf--qwen3_asr_1_7b_q4_k_gguf tests/fixtures/audio/sample1.wav)",
+      "Bash(./target/release/transcribe --streaming ~/Library/Caches/qwen3-asr/mlx-community--Qwen3-ASR-1.7B-4bit ../qwen3-asr-rs/tests/fixtures/audio/sample1.wav)",
+      "Bash(./target/release/transcribe --streaming ~/Library/Caches/qwen3-asr/mlx-community--Qwen3-ASR-1.7B-4bit ../qwen3-asr-rs/tests/fixtures/audio/sample4.wav)",
+      "Bash(git clone:*)",
+      "Bash(./target/release/transcribe --streaming=accumulate ~/Library/Caches/qwen3-asr/mlx-community--Qwen3-ASR-1.7B-4bit ../qwen3-asr-rs/tests/fixtures/audio/sample4.wav)",
+      "Bash(RUST_LOG=debug ./target/release/transcribe --streaming=accumulate ~/Library/Caches/qwen3-asr/mlx-community--Qwen3-ASR-1.7B-4bit ../qwen3-asr-rs/tests/fixtures/audio/sample1.wav)",
+      "Bash(uv pip:*)",
+      "Bash(.venv/bin/python3 -c \":*)",
+      "Bash(./target/release/transcribe --streaming=accumulate ~/Library/Caches/qwen3-asr/mlx-community--Qwen3-ASR-1.7B-4bit ../qwen3-asr-rs/tests/fixtures/audio/sample1.wav)",
+      "Bash(./target/release/transcribe --streaming=overlap ~/Library/Caches/qwen3-asr/mlx-community--Qwen3-ASR-1.7B-4bit ../qwen3-asr-rs/tests/fixtures/audio/sample4.wav)",
+      "Bash(RUST_LOG=info ./target/release/transcribe --streaming=rotate ~/Library/Caches/qwen3-asr/mlx-community--Qwen3-ASR-1.7B-4bit ../qwen3-asr-rs/tests/fixtures/audio/sample4.wav)"
     ]
   }
 }

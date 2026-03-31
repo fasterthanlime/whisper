@@ -12,7 +12,7 @@ use qwen3_asr_mlx::mel::{load_audio_wav, MelExtractor};
 use qwen3_asr_mlx::model::{
     Qwen3ASRModel, AUDIO_END_TOKEN_ID, AUDIO_PAD_TOKEN_ID, AUDIO_START_TOKEN_ID,
 };
-use qwen3_asr_mlx::streaming::{self, StreamingOptions, StreamingState};
+use qwen3_asr_mlx::streaming::{self, StreamingMode, StreamingOptions, StreamingState};
 
 // Chat template token IDs
 const TOK_IM_START: i32 = 151644;
@@ -42,11 +42,21 @@ fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     let args: Vec<String> = std::env::args().collect();
-    let streaming_mode = args.iter().any(|a| a == "--streaming");
+    let streaming_mode = args.iter().find_map(|a| {
+        if a == "--streaming" || a == "--streaming=accumulate" {
+            Some(StreamingMode::Accumulate)
+        } else if a == "--streaming=overlap" {
+            Some(StreamingMode::Overlap)
+        } else if a == "--streaming=rotate" {
+            Some(StreamingMode::Rotate)
+        } else {
+            None
+        }
+    });
     let non_flag_args: Vec<&String> = args[1..].iter().filter(|a| !a.starts_with("--")).collect();
 
     if non_flag_args.len() < 2 {
-        eprintln!("Usage: transcribe [--streaming] <model_dir> <audio.wav>");
+        eprintln!("Usage: transcribe [--streaming[=accumulate|overlap|rotate]] <model_dir> <audio.wav>");
         std::process::exit(1);
     }
 
@@ -84,11 +94,20 @@ fn main() -> anyhow::Result<()> {
         samples.len(), samples.len() as f64 / 16000.0, t0.elapsed().as_millis()
     );
 
+    // Report memory after model load
+    {
+        let (active, peak, cache) = qwen3_asr_mlx::streaming::mlx_memory_stats();
+        println!(
+            "Memory after load: active={:.1}MB peak={:.1}MB cache={:.1}MB",
+            active as f64 / 1e6, peak as f64 / 1e6, cache as f64 / 1e6,
+        );
+    }
+
     let tokenizer = find_tokenizer(model_dir)
         .ok_or_else(|| anyhow::anyhow!("no tokenizer.json found"))?;
 
-    if streaming_mode {
-        run_streaming(&mut model, &samples, tokenizer)?;
+    if let Some(mode) = streaming_mode {
+        run_streaming(&mut model, &samples, tokenizer, mode)?;
     } else {
         run_batch(&mut model, &samples, &tokenizer)?;
     }
@@ -100,12 +119,13 @@ fn run_streaming(
     model: &mut Qwen3ASRModel,
     samples: &[f32],
     tokenizer: tokenizers::Tokenizer,
+    mode: StreamingMode,
 ) -> anyhow::Result<()> {
-    let opts = StreamingOptions::default();
+    let opts = StreamingOptions::default().with_mode(mode);
     let chunk_samples = (opts.chunk_size_sec * 16000.0) as usize;
     let mut state = StreamingState::new(opts, tokenizer);
 
-    println!("\n--- Streaming mode (chunk={}s) ---", state.options.chunk_size_sec);
+    println!("\n--- Streaming mode={:?} (chunk={}s) ---", mode, state.options.chunk_size_sec);
 
     let t_total = Instant::now();
     let mut chunk_idx = 0;
