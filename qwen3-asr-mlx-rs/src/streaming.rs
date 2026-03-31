@@ -86,7 +86,7 @@ impl Default for StreamingOptions {
     fn default() -> Self {
         Self {
             mode: StreamingMode::Accumulate,
-            chunk_size_sec: 2.0,
+            chunk_size_sec: 0.4,
             unfixed_chunk_num: 2,
             unfixed_token_num: 5,
             max_new_tokens_streaming: 32,
@@ -95,7 +95,7 @@ impl Default for StreamingOptions {
             initial_text: None,
             overlap_sec: 0.5,
             commit_after_stable: 3,
-            commit_token_count: 32,
+            commit_token_count: 12,
         }
     }
 }
@@ -370,7 +370,7 @@ fn finish_accumulate(
 
     // For Rotate mode, merge committed text with final session text
     if state.options.mode == StreamingMode::Rotate && !state.committed_text.is_empty() {
-        state.text = append_chunk_text(&state.committed_text, &state.text);
+        state.text = join_committed(&state.committed_text, &state.text);
     }
 
     Ok(state.text.clone())
@@ -599,7 +599,7 @@ fn feed_rotate(
 
             // Append to committed text
             if !state.committed_text.is_empty() {
-                state.committed_text = append_chunk_text(&state.committed_text, &committed_text_new);
+                state.committed_text = join_committed(&state.committed_text, &committed_text_new);
             } else {
                 state.committed_text = committed_text_new;
             }
@@ -615,11 +615,19 @@ fn feed_rotate(
                 keep_from as f64 / 16000.0,
             );
 
-            // Reset for new session
+            // Keep tokens for the uncommitted tail
+            let remaining_tokens: Vec<u32> = state.raw_token_ids[n..].to_vec();
+            log::info!(
+                "Seeding new session with {} remaining tokens",
+                remaining_tokens.len(),
+            );
+
+            // Reset for new session — seed with remaining tokens + audio
             state.audio_accum = remaining_audio;
             state.encoder_cache = EncoderCache::new();
-            state.raw_token_ids.clear();
-            state.chunk_id = 0;
+            state.raw_token_ids = remaining_tokens;
+            // Skip cold start so prefix rollback kicks in immediately
+            state.chunk_id = state.options.unfixed_chunk_num + 1;
             state.stable_count = 0;
             state.last_prefix_tokens.clear();
 
@@ -629,7 +637,7 @@ fn feed_rotate(
 
         // Display: committed text + current session text
         if !state.committed_text.is_empty() {
-            state.text = append_chunk_text(&state.committed_text, &state.text);
+            state.text = join_committed(&state.committed_text, &state.text);
         }
     }
 
@@ -692,6 +700,24 @@ fn detect_speech_onset(samples: &[f32]) -> Option<usize> {
         }
     }
     None
+}
+
+/// Join committed text with new text, fixing capitalization at the boundary.
+fn join_committed(committed: &str, new: &str) -> String {
+    let needs_lowercase = !matches!(
+        committed.trim_end().chars().last(),
+        Some('.' | '!' | '?' | '。' | '！' | '？') | None
+    );
+    let fixed = if needs_lowercase {
+        let mut chars = new.chars();
+        match chars.next() {
+            Some(c) if c.is_uppercase() => c.to_lowercase().to_string() + chars.as_str(),
+            _ => new.to_string(),
+        }
+    } else {
+        new.to_string()
+    };
+    append_chunk_text(committed, &fixed)
 }
 
 fn compute_rms(samples: &[f32]) -> f32 {

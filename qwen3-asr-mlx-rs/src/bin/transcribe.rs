@@ -124,7 +124,10 @@ fn run_streaming(
     tokenizer: tokenizers::Tokenizer,
     mode: StreamingMode,
 ) -> anyhow::Result<()> {
-    let opts = StreamingOptions::default().with_mode(mode);
+    let mut opts = StreamingOptions::default().with_mode(mode);
+    if let Ok(v) = std::env::var("COMMIT_TOKENS") { opts.commit_token_count = v.parse().unwrap(); }
+    if let Ok(v) = std::env::var("COMMIT_STABLE") { opts.commit_after_stable = v.parse().unwrap(); }
+    if let Ok(v) = std::env::var("CHUNK_SEC") { opts.chunk_size_sec = v.parse().unwrap(); }
     let chunk_samples = (opts.chunk_size_sec * 16000.0) as usize;
 
     // Load forced aligner for rotate mode
