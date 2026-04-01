@@ -1,14 +1,15 @@
 //! FFI layer for qwen3-asr-mlx — same C API as the candle FFI.
 
 use std::ffi::{c_char, c_float, c_uint, CStr, CString};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Once};
-use std::io::Write;
 
-use qwen3_asr_mlx::config::AsrConfig;
-use qwen3_asr_mlx::forced_aligner::ForcedAligner;
-use qwen3_asr_mlx::model::Qwen3ASRModel;
-use qwen3_asr_mlx::streaming::{self, StreamingMode, StreamingOptions, StreamingState};
+use bee_asr::config::AsrConfig;
+use bee_asr::forced_aligner::ForcedAligner;
+use bee_asr::model::Qwen3ASRModel;
+use bee_asr::streaming::{self, StreamingMode, StreamingOptions, StreamingState};
+use bee_asr::{mlx_rs, tokenizers};
 
 static INIT_LOGGER: Once = Once::new();
 
@@ -73,13 +74,27 @@ fn set_err(out_err: *mut *mut c_char, msg: &str) {
 }
 
 fn to_c_string(s: &str) -> *mut c_char {
-    CString::new(s).map(|cs| cs.into_raw()).unwrap_or(std::ptr::null_mut())
+    CString::new(s)
+        .map(|cs| cs.into_raw())
+        .unwrap_or(std::ptr::null_mut())
 }
 
 fn ffi_log(msg: &str) {
     let path = "/tmp/bee.log";
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "[{:.3}] {}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(), msg);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(
+            f,
+            "[{:.3}] {}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64(),
+            msg
+        );
     }
 }
 
@@ -101,7 +116,11 @@ fn find_tokenizer(model_dir: &Path) -> Option<tokenizers::Tokenizer> {
 
 fn find_vad_dir() -> Option<PathBuf> {
     let dir = dirs::home_dir()?.join("Library/Caches/qwen3-asr/aitytech--Silero-VAD-v5-MLX");
-    if dir.exists() { Some(dir) } else { None }
+    if dir.exists() {
+        Some(dir)
+    } else {
+        None
+    }
 }
 
 fn find_aligner_dir() -> Option<PathBuf> {
@@ -113,7 +132,9 @@ fn find_aligner_dir() -> Option<PathBuf> {
     ];
     for name in &candidates {
         let dir = base.join(name);
-        if dir.exists() { return Some(dir); }
+        if dir.exists() {
+            return Some(dir);
+        }
     }
     None
 }
@@ -147,13 +168,13 @@ pub extern "C" fn asr_engine_load(
 fn load_engine(model_dir: &Path) -> Result<AsrEngine, String> {
     let config_str = std::fs::read_to_string(model_dir.join("config.json"))
         .map_err(|e| format!("read config: {e}"))?;
-    let config: AsrConfig = serde_json::from_str(&config_str)
-        .map_err(|e| format!("parse config: {e}"))?;
+    let config: AsrConfig =
+        serde_json::from_str(&config_str).map_err(|e| format!("parse config: {e}"))?;
 
-    let mut model = Qwen3ASRModel::new(&config.thinker_config)
-        .map_err(|e| format!("create model: {e}"))?;
+    let mut model =
+        Qwen3ASRModel::new(&config.thinker_config).map_err(|e| format!("create model: {e}"))?;
 
-    let stats = qwen3_asr_mlx::load::load_weights(&mut model, model_dir)
+    let stats = bee_asr::load::load_weights(&mut model, model_dir)
         .map_err(|e| format!("load weights: {e}"))?;
 
     use mlx_rs::module::ModuleParametersExt;
@@ -161,11 +182,14 @@ fn load_engine(model_dir: &Path) -> Result<AsrEngine, String> {
 
     log::info!(
         "MLX engine loaded: {}/{} keys, {} quantized ({}bit)",
-        stats.loaded, stats.total_keys, stats.quantized_layers, stats.bits,
+        stats.loaded,
+        stats.total_keys,
+        stats.quantized_layers,
+        stats.bits,
     );
 
-    let tokenizer = find_tokenizer(model_dir)
-        .ok_or_else(|| "tokenizer.json not found".to_string())?;
+    let tokenizer =
+        find_tokenizer(model_dir).ok_or_else(|| "tokenizer.json not found".to_string())?;
 
     let vad_tensors = find_vad_dir().and_then(|d| {
         let st_path = d.join("model.safetensors");
@@ -221,9 +245,13 @@ pub extern "C" fn asr_engine_from_pretrained(
     let model_dir = PathBuf::from(cache_dir).join(&dir_name);
 
     if !model_dir.exists() {
-        set_err(out_err, &format!(
-            "model not found at {}. Download it first.", model_dir.display()
-        ));
+        set_err(
+            out_err,
+            &format!(
+                "model not found at {}. Download it first.",
+                model_dir.display()
+            ),
+        );
         return std::ptr::null_mut();
     }
 
@@ -244,7 +272,10 @@ pub extern "C" fn asr_engine_from_gguf(
     _cache_dir: *const c_char,
     out_err: *mut *mut c_char,
 ) -> *mut AsrEngine {
-    set_err(out_err, "GGUF not supported by MLX backend — use safetensors models");
+    set_err(
+        out_err,
+        "GGUF not supported by MLX backend — use safetensors models",
+    );
     std::ptr::null_mut()
 }
 
@@ -280,13 +311,31 @@ pub extern "C" fn asr_session_create(
     let engine_ref = unsafe { &*engine };
     let inner = engine_ref.inner.clone();
 
-    let chunk_size = if opts.chunk_size_sec > 0.0 { opts.chunk_size_sec } else { 0.4 };
-    let max_streaming = if opts.max_new_tokens_streaming > 0 { opts.max_new_tokens_streaming as usize } else { 32 };
-    let max_final = if opts.max_new_tokens_final > 0 { opts.max_new_tokens_final as usize } else { 512 };
+    let chunk_size = if opts.chunk_size_sec > 0.0 {
+        opts.chunk_size_sec
+    } else {
+        0.4
+    };
+    let max_streaming = if opts.max_new_tokens_streaming > 0 {
+        opts.max_new_tokens_streaming as usize
+    } else {
+        32
+    };
+    let max_final = if opts.max_new_tokens_final > 0 {
+        opts.max_new_tokens_final as usize
+    } else {
+        512
+    };
 
     let language = if !opts.language.is_null() {
-        let s = unsafe { CStr::from_ptr(opts.language) }.to_str().unwrap_or("");
-        if s.is_empty() { None } else { Some(s.to_string()) }
+        let s = unsafe { CStr::from_ptr(opts.language) }
+            .to_str()
+            .unwrap_or("");
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
     } else {
         None
     };
@@ -329,9 +378,13 @@ pub extern "C" fn asr_session_create(
     {
         let guard = inner.lock().unwrap();
         if let Some(ref tensors) = guard.vad_tensors {
-            match qwen3_asr_mlx::vad::SileroVad::from_tensors(tensors) {
-                Ok(vad) => { state.vad = Some(vad); }
-                Err(e) => { ffi_log(&format!("Failed to create VAD: {e}")); }
+            match bee_asr::vad::SileroVad::from_tensors(tensors) {
+                Ok(vad) => {
+                    state.vad = Some(vad);
+                }
+                Err(e) => {
+                    ffi_log(&format!("Failed to create VAD: {e}"));
+                }
             }
         }
     }
@@ -415,27 +468,35 @@ fn feed_impl(
     match result {
         Ok(Some(text)) => {
             if text != session.last_text {
-                ffi_log(&format!("FEED text changed:\n  was: {:?}\n  now: {:?}", session.last_text, text));
+                ffi_log(&format!(
+                    "FEED text changed:\n  was: {:?}\n  now: {:?}",
+                    session.last_text, text
+                ));
             }
             session.last_text = text.clone();
 
             // Compute committed UTF-16 length
-            let committed_utf16_len = session.state.committed_text
-                .encode_utf16().count();
+            let committed_utf16_len = session.state.committed_text.encode_utf16().count();
 
             // Serialize alignments if any
             let alignments_json = if session.state.committed_alignments.is_empty() {
                 std::ptr::null_mut()
             } else {
-                let json = serde_json::to_string(&session.state.committed_alignments
-                    .iter()
-                    .map(|a| serde_json::json!({
-                        "word": a.word,
-                        "start": (a.start_time * 1000.0).round() / 1000.0,
-                        "end": (a.end_time * 1000.0).round() / 1000.0,
-                    }))
-                    .collect::<Vec<_>>()
-                ).unwrap_or_else(|_| "[]".to_string());
+                let json = serde_json::to_string(
+                    &session
+                        .state
+                        .committed_alignments
+                        .iter()
+                        .map(|a| {
+                            serde_json::json!({
+                                "word": a.word,
+                                "start": (a.start_time * 1000.0).round() / 1000.0,
+                                "end": (a.end_time * 1000.0).round() / 1000.0,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_else(|_| "[]".to_string());
                 to_c_string(&json)
             };
 
@@ -446,14 +507,12 @@ fn feed_impl(
                 debug_json,
             }
         }
-        Ok(None) => {
-            AsrFeedResult {
-                text: std::ptr::null_mut(),
-                committed_utf16_len: 0,
-                alignments_json: std::ptr::null_mut(),
-                debug_json,
-            }
-        }
+        Ok(None) => AsrFeedResult {
+            text: std::ptr::null_mut(),
+            committed_utf16_len: 0,
+            alignments_json: std::ptr::null_mut(),
+            debug_json,
+        },
         Err(e) => {
             ffi_log(&format!("FEED => error: {e}"));
             set_err(out_err, &format!("{e}"));
@@ -469,9 +528,21 @@ fn feed_impl(
 
 #[no_mangle]
 pub extern "C" fn asr_feed_result_free(result: AsrFeedResult) {
-    if !result.text.is_null() { unsafe { drop(CString::from_raw(result.text)); } }
-    if !result.alignments_json.is_null() { unsafe { drop(CString::from_raw(result.alignments_json)); } }
-    if !result.debug_json.is_null() { unsafe { drop(CString::from_raw(result.debug_json)); } }
+    if !result.text.is_null() {
+        unsafe {
+            drop(CString::from_raw(result.text));
+        }
+    }
+    if !result.alignments_json.is_null() {
+        unsafe {
+            drop(CString::from_raw(result.alignments_json));
+        }
+    }
+    if !result.debug_json.is_null() {
+        unsafe {
+            drop(CString::from_raw(result.debug_json));
+        }
+    }
 }
 
 #[no_mangle]

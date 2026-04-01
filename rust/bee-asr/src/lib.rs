@@ -1,3 +1,6 @@
+pub use mlx_rs;
+pub use tokenizers;
+
 pub mod config;
 pub mod decoder;
 pub mod encoder;

@@ -1,5 +1,5 @@
 [package]
-name = "qwen3-asr-mlx"
+name = "bee-asr"
 version = "0.1.0"
 edition = "2021"
 description = "Qwen3-ASR inference via MLX on Apple Silicon"

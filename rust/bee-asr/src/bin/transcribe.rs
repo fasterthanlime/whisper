@@ -5,14 +5,12 @@ use mlx_rs::module::ModuleParametersExt;
 use mlx_rs::ops;
 use mlx_rs::Array;
 
-use qwen3_asr_mlx::config::AsrConfig;
-use qwen3_asr_mlx::generate;
-use qwen3_asr_mlx::load;
-use qwen3_asr_mlx::mel::{load_audio_wav, MelExtractor};
-use qwen3_asr_mlx::model::{
-    Qwen3ASRModel, AUDIO_END_TOKEN_ID, AUDIO_PAD_TOKEN_ID, AUDIO_START_TOKEN_ID,
-};
-use qwen3_asr_mlx::streaming::{self, StreamingMode, StreamingOptions, StreamingState};
+use bee_asr::config::AsrConfig;
+use bee_asr::generate;
+use bee_asr::load;
+use bee_asr::mel::{load_audio_wav, MelExtractor};
+use bee_asr::model::{Qwen3ASRModel, AUDIO_END_TOKEN_ID, AUDIO_PAD_TOKEN_ID, AUDIO_START_TOKEN_ID};
+use bee_asr::streaming::{self, StreamingMode, StreamingOptions, StreamingState};
 
 // Chat template token IDs
 const TOK_IM_START: i32 = 151644;
@@ -59,7 +57,9 @@ fn main() -> anyhow::Result<()> {
     let non_flag_args: Vec<&String> = args[1..].iter().filter(|a| !a.starts_with("--")).collect();
 
     if non_flag_args.len() < 2 {
-        eprintln!("Usage: transcribe [--streaming[=accumulate|overlap|rotate]] <model_dir> <audio.wav>");
+        eprintln!(
+            "Usage: transcribe [--streaming[=accumulate|overlap|rotate]] <model_dir> <audio.wav>"
+        );
         std::process::exit(1);
     }
 
@@ -86,7 +86,10 @@ fn main() -> anyhow::Result<()> {
     println!(
         "Weights loaded in {:.0}ms: {}/{} keys, {} quantized layers ({}bit)",
         t0.elapsed().as_millis(),
-        stats.loaded, stats.total_keys, stats.quantized_layers, stats.bits,
+        stats.loaded,
+        stats.total_keys,
+        stats.quantized_layers,
+        stats.bits,
     );
 
     // 4. Load audio
@@ -94,20 +97,24 @@ fn main() -> anyhow::Result<()> {
     let samples = load_audio_wav(audio_path, 16000)?;
     println!(
         "Audio: {} samples ({:.1}s) in {:.0}ms",
-        samples.len(), samples.len() as f64 / 16000.0, t0.elapsed().as_millis()
+        samples.len(),
+        samples.len() as f64 / 16000.0,
+        t0.elapsed().as_millis()
     );
 
     // Report memory after model load
     {
-        let (active, peak, cache) = qwen3_asr_mlx::streaming::mlx_memory_stats();
+        let (active, peak, cache) = bee_asr::streaming::mlx_memory_stats();
         println!(
             "Memory after load: active={:.1}MB peak={:.1}MB cache={:.1}MB",
-            active as f64 / 1e6, peak as f64 / 1e6, cache as f64 / 1e6,
+            active as f64 / 1e6,
+            peak as f64 / 1e6,
+            cache as f64 / 1e6,
         );
     }
 
-    let tokenizer = find_tokenizer(model_dir)
-        .ok_or_else(|| anyhow::anyhow!("no tokenizer.json found"))?;
+    let tokenizer =
+        find_tokenizer(model_dir).ok_or_else(|| anyhow::anyhow!("no tokenizer.json found"))?;
 
     if align_mode {
         run_align(&samples, &tokenizer, model_dir)?;
@@ -127,9 +134,15 @@ fn run_streaming(
     mode: StreamingMode,
 ) -> anyhow::Result<()> {
     let mut opts = StreamingOptions::default().with_mode(mode);
-    if let Ok(v) = std::env::var("COMMIT_TOKENS") { opts.commit_token_count = v.parse().unwrap(); }
-    if let Ok(v) = std::env::var("COMMIT_STABLE") { opts.commit_after_stable = v.parse().unwrap(); }
-    if let Ok(v) = std::env::var("CHUNK_SEC") { opts.chunk_size_sec = v.parse().unwrap(); }
+    if let Ok(v) = std::env::var("COMMIT_TOKENS") {
+        opts.commit_token_count = v.parse().unwrap();
+    }
+    if let Ok(v) = std::env::var("COMMIT_STABLE") {
+        opts.commit_after_stable = v.parse().unwrap();
+    }
+    if let Ok(v) = std::env::var("CHUNK_SEC") {
+        opts.chunk_size_sec = v.parse().unwrap();
+    }
     let chunk_samples = (opts.chunk_size_sec * 16000.0) as usize;
 
     // Load forced aligner for rotate mode
@@ -140,10 +153,7 @@ fn run_streaming(
         if aligner_dir.exists() {
             println!("Loading forced aligner for rotate mode...");
             let t0 = Instant::now();
-            let a = qwen3_asr_mlx::forced_aligner::ForcedAligner::load(
-                &aligner_dir,
-                tokenizer.clone(),
-            )?;
+            let a = bee_asr::forced_aligner::ForcedAligner::load(&aligner_dir, tokenizer.clone())?;
             println!("Aligner loaded in {:.0}ms", t0.elapsed().as_millis());
             Some(a)
         } else {
@@ -156,7 +166,10 @@ fn run_streaming(
 
     let mut state = StreamingState::new(opts, tokenizer, aligner);
 
-    println!("\n--- Streaming mode={:?} (chunk={}s) ---", mode, state.options.chunk_size_sec);
+    println!(
+        "\n--- Streaming mode={:?} (chunk={}s) ---",
+        mode, state.options.chunk_size_sec
+    );
 
     let t_total = Instant::now();
     let mut chunk_idx = 0;
@@ -208,10 +221,8 @@ fn run_align(
 
     println!("\nLoading forced aligner...");
     let t0 = Instant::now();
-    let mut aligner = qwen3_asr_mlx::forced_aligner::ForcedAligner::load(
-        &aligner_dir,
-        tokenizer.clone(),
-    )?;
+    let mut aligner =
+        bee_asr::forced_aligner::ForcedAligner::load(&aligner_dir, tokenizer.clone())?;
     println!("Aligner loaded in {:.0}ms", t0.elapsed().as_millis());
 
     // Use a known transcription for testing
@@ -223,7 +234,10 @@ fn run_align(
     println!("Aligned in {:.0}ms\n", t0.elapsed().as_millis());
 
     for item in &items {
-        println!("  [{:.3}s - {:.3}s] {}", item.start_time, item.end_time, item.word);
+        println!(
+            "  [{:.3}s - {:.3}s] {}",
+            item.start_time, item.end_time, item.word
+        );
     }
 
     Ok(())
@@ -244,19 +258,31 @@ fn run_batch(
     let n_audio_tokens = audio_features.shape()[0] as usize;
     println!(
         "Encoded: {} audio tokens in {:.0}ms",
-        n_audio_tokens, t0.elapsed().as_millis()
+        n_audio_tokens,
+        t0.elapsed().as_millis()
     );
 
     let audio_features = mlx_rs::ops::expand_dims(&audio_features, 0)?;
 
     let mut prompt_tokens: Vec<i32> = vec![
-        TOK_IM_START, TOK_SYSTEM, TOK_NEWLINE, TOK_IM_END, TOK_NEWLINE,
-        TOK_IM_START, TOK_USER, TOK_NEWLINE, AUDIO_START_TOKEN_ID,
+        TOK_IM_START,
+        TOK_SYSTEM,
+        TOK_NEWLINE,
+        TOK_IM_END,
+        TOK_NEWLINE,
+        TOK_IM_START,
+        TOK_USER,
+        TOK_NEWLINE,
+        AUDIO_START_TOKEN_ID,
     ];
     prompt_tokens.extend(std::iter::repeat_n(AUDIO_PAD_TOKEN_ID, n_audio_tokens));
     prompt_tokens.extend_from_slice(&[
-        AUDIO_END_TOKEN_ID, TOK_IM_END, TOK_NEWLINE,
-        TOK_IM_START, TOK_ASSISTANT, TOK_NEWLINE,
+        AUDIO_END_TOKEN_ID,
+        TOK_IM_END,
+        TOK_NEWLINE,
+        TOK_IM_START,
+        TOK_ASSISTANT,
+        TOK_NEWLINE,
     ]);
 
     let seq_len = prompt_tokens.len();
@@ -277,14 +303,21 @@ fn run_batch(
         let gen_ms = total_ms - enc_ms;
         println!(
             "Run {}: encode {:.0}ms + generate {} tokens in {:.0}ms ({:.1} tok/s) = {:.0}ms total",
-            run + 1, enc_ms, output_tokens.len(), gen_ms,
-            output_tokens.len() as f64 / (gen_ms as f64 / 1000.0), total_ms,
+            run + 1,
+            enc_ms,
+            output_tokens.len(),
+            gen_ms,
+            output_tokens.len() as f64 / (gen_ms as f64 / 1000.0),
+            total_ms,
         );
     }
 
-    let output_tokens = generate::generate(&mut model, &input_ids, &audio_features, &position_ids, 512)?;
+    let output_tokens =
+        generate::generate(&mut model, &input_ids, &audio_features, &position_ids, 512)?;
     let ids: Vec<u32> = output_tokens.iter().map(|&t| t as u32).collect();
-    let text = tokenizer.decode(&ids, true).map_err(|e| anyhow::anyhow!("decode: {e}"))?;
+    let text = tokenizer
+        .decode(&ids, true)
+        .map_err(|e| anyhow::anyhow!("decode: {e}"))?;
     println!("\nTranscription: {}", text);
 
     Ok(())
