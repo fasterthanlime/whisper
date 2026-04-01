@@ -211,7 +211,6 @@ impl Engine {
             encoder_cache: EncoderCache::new(),
             mel_extractor: MelExtractor::new(400, 160, 128, 16000),
             token_ids: Vec::new(),
-            committed_text: String::new(),
             committed_tokens: Vec::new(),
             committed_alignments: Vec::new(),
             committed_audio_offset: 0.0,
@@ -244,7 +243,6 @@ pub struct Session<'a> {
     token_ids: Vec<u32>,
 
     // Committed state (accumulated across rotations)
-    committed_text: String,
     committed_tokens: Vec<u32>,
     committed_alignments: Vec<AlignedWord>,
     committed_audio_offset: f64,
@@ -325,7 +323,9 @@ impl<'a> Session<'a> {
         }
 
         // Align any remaining uncommitted text
-        let remaining_text = self.current_text();
+        let remaining_text = self.engine.tokenizer
+            .decode(&self.token_ids, true)
+            .unwrap_or_default();
         if !remaining_text.is_empty() && !self.audio.is_empty() {
             if let Ok(items) = self.engine.aligner.align(&self.audio, &remaining_text) {
                 let offset = self.committed_audio_offset;
@@ -459,8 +459,7 @@ impl<'a> Session<'a> {
             });
         }
 
-        // Update committed state — tokenizer already encodes whitespace
-        self.committed_text.push_str(&commit_text);
+        // Update committed tokens
         self.committed_tokens
             .extend_from_slice(&self.token_ids[..commit_count]);
 
@@ -474,8 +473,8 @@ impl<'a> Session<'a> {
         self.chunk_count = 3;
 
         log::info!(
-            "Committed: {:?} | kept {:.1}s audio, {} seed tokens",
-            self.committed_text,
+            "Committed {} tokens | kept {:.1}s audio, {} seed tokens",
+            self.committed_tokens.len(),
             self.audio.len() as f64 / 16000.0,
             self.token_ids.len(),
         );
@@ -483,19 +482,36 @@ impl<'a> Session<'a> {
         Ok(())
     }
 
-    /// Decode current segment tokens to text.
-    fn current_text(&self) -> String {
-        self.engine
-            .tokenizer
-            .decode(&self.token_ids, true)
-            .unwrap_or_default()
+    /// Decode all tokens (committed + current session) as one sequence
+    /// so the tokenizer preserves whitespace context across the boundary.
+    fn full_token_ids(&self) -> Vec<u32> {
+        let mut all = self.committed_tokens.clone();
+        all.extend_from_slice(&self.token_ids);
+        all
     }
 
     /// Build the Update to return to the caller.
+    ///
+    /// Decodes all tokens (committed + current) as one sequence so the
+    /// tokenizer preserves whitespace across commit boundaries. The
+    /// committed_len is derived from decoding just the committed tokens
+    /// within the same full decode.
     fn make_update(&self) -> Update {
-        let current = self.current_text();
-        let committed_len = self.committed_text.len();
-        let text = format!("{}{}", self.committed_text, current);
+        let all_ids = self.full_token_ids();
+        let text = self.engine.tokenizer.decode(&all_ids, true).unwrap_or_default();
+
+        // Committed length = decode committed tokens in the same context
+        let committed_len = if self.committed_tokens.is_empty() {
+            0
+        } else {
+            // Decode committed portion to find its length in the full string.
+            // Since the full decode has the same prefix, the committed part
+            // is always the first N characters.
+            let committed_text = self.engine.tokenizer
+                .decode(&self.committed_tokens, true)
+                .unwrap_or_default();
+            committed_text.len()
+        };
 
         Update {
             text,
