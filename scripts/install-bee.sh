@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$PROJECT_ROOT/build-bee-release"
 INPUT_METHOD_DIR="$HOME/Library/Input Methods"
+SWIFT_DIR="$PROJECT_ROOT/swift"
+XCODE_PROJECT="$SWIFT_DIR/bee.xcodeproj"
+XCODE_SPEC="$SWIFT_DIR/bee-project.yml"
 
 if [ -t 1 ]; then
   RED=$'\033[0;31m'
@@ -52,9 +55,9 @@ run_step() {
 }
 
 run_step "Building MLX Rust FFI (release)" "cd \"$PROJECT_ROOT/rust\" && cargo build --release -p bee-ffi"
-run_step "Generating Xcode project" "cd \"$PROJECT_ROOT\" && xcodegen generate --spec bee-project.yml"
-run_step "Building bee (Release)" "cd \"$PROJECT_ROOT\" && xcodebuild -project bee.xcodeproj -scheme bee -configuration Release CONFIGURATION_BUILD_DIR=\"$BUILD_DIR\" build"
-run_step "Building beeInput (Release)" "cd \"$PROJECT_ROOT\" && xcodebuild -project bee.xcodeproj -scheme beeInput -configuration Release CONFIGURATION_BUILD_DIR=\"$BUILD_DIR\" build"
+run_step "Generating Xcode project" "cd \"$SWIFT_DIR\" && xcodegen generate --spec \"$XCODE_SPEC\""
+run_step "Building bee (Release)" "cd \"$SWIFT_DIR\" && xcodebuild -project \"$XCODE_PROJECT\" -scheme bee -configuration Release CONFIGURATION_BUILD_DIR=\"$BUILD_DIR\" build"
+run_step "Building beeInput (Release)" "cd \"$SWIFT_DIR\" && xcodebuild -project \"$XCODE_PROJECT\" -scheme beeInput -configuration Release CONFIGURATION_BUILD_DIR=\"$BUILD_DIR\" build"
 
 run_step "Installing bee to /Applications/bee.app" "rsync -a --delete \"$BUILD_DIR/bee.app/\" /Applications/bee.app/"
 
