@@ -326,7 +326,11 @@ private struct AdvancedSettingsView: View {
                             get: { appState.debugEnabled },
                             set: {
                                 appState.debugEnabled = $0
-                                DebugPanel.shared.toggle(appState: appState)
+                                if $0 {
+                                    DebugPanel.shared.show(appState: appState)
+                                } else {
+                                    DebugPanel.shared.hide()
+                                }
                             }
                         ))
                     }
@@ -339,6 +343,11 @@ private struct AdvancedSettingsView: View {
             }
             .frame(maxWidth: 760, alignment: .leading)
             .padding(24)
+        }
+        .onAppear {
+            if appState.debugEnabled {
+                DebugPanel.shared.show(appState: appState)
+            }
         }
     }
 

@@ -3,6 +3,7 @@
 Place custom WAV files in this folder with exactly these names:
 
 - `bee-recording-started.wav`
+- `bee-start-failure.wav`
 - `bee-commit.wav`
 - `bee-commit-submit.wav`
 - `bee-cancel.wav`

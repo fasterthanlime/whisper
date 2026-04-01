@@ -4,7 +4,7 @@ import Foundation
 
 @objc
 private protocol BeeIMEControlXPC {
-    func prepareSession(_ sessionID: String, targetPID: Int32, withReply reply: @escaping (Bool) -> Void)
+    func prepareSession(_ sessionID: String, targetPID: Int32, activationID: String, withReply reply: @escaping (Bool) -> Void)
     func sessionStatus(_ sessionID: String, withReply reply: @escaping (Bool, Int32, String) -> Void)
     func clearSession(_ sessionID: String, withReply reply: @escaping () -> Void)
 }
@@ -24,13 +24,18 @@ final class BeeInputClient: Sendable {
 
     nonisolated(unsafe) private static var previousInputSource: TISInputSource?
     nonisolated(unsafe) private static var xpcConnection: NSXPCConnection?
-    nonisolated(unsafe) private static let xpcLock = NSLock()
+    private static let xpcLock = NSLock()
 
     // MARK: - Input Source Switching
 
     @discardableResult
     func activate(sessionID: UUID, targetPID: pid_t?) async -> Bool {
-        let prepared = await Self.prepareSessionXPC(sessionID: sessionID, targetPID: targetPID)
+        let activationID = UUID().uuidString
+        let prepared = await Self.prepareSessionXPC(
+            sessionID: sessionID,
+            targetPID: targetPID,
+            activationID: activationID
+        )
         guard prepared else {
             beeLog("IME ACTIVATE: prepareSession failed for session=\(sessionID.uuidString.prefix(8))")
             return false
@@ -42,7 +47,11 @@ final class BeeInputClient: Sendable {
             return false
         }
 
-        let ready = await Self.awaitSessionReadyXPC(sessionID: sessionID, targetPID: targetPID)
+        let ready = await Self.awaitSessionReadyXPC(
+            sessionID: sessionID,
+            targetPID: targetPID,
+            activationID: activationID
+        )
         if !ready {
             beeLog("IME ACTIVATE: session ready timeout id=\(sessionID.uuidString.prefix(8))")
             await Self.clearSessionXPC(sessionID: sessionID)
@@ -183,7 +192,7 @@ final class BeeInputClient: Sendable {
         xpcConnection = nil
     }
 
-    private static func prepareSessionXPC(sessionID: UUID, targetPID: pid_t?) async -> Bool {
+    private static func prepareSessionXPC(sessionID: UUID, targetPID: pid_t?, activationID: String) async -> Bool {
         await withCheckedContinuation { continuation in
             let connection = getXPCConnection()
             let proxy = connection.remoteObjectProxyWithErrorHandler { error in
@@ -197,7 +206,11 @@ final class BeeInputClient: Sendable {
                 return
             }
 
-            proxy.prepareSession(sessionID.uuidString, targetPID: targetPID ?? -1) { ok in
+            proxy.prepareSession(
+                sessionID.uuidString,
+                targetPID: targetPID ?? -1,
+                activationID: activationID
+            ) { ok in
                 continuation.resume(returning: ok)
             }
         }
@@ -225,20 +238,20 @@ final class BeeInputClient: Sendable {
         }
     }
 
-    private static func awaitSessionReadyXPC(sessionID: UUID, targetPID: pid_t?) async -> Bool {
+    private static func awaitSessionReadyXPC(sessionID: UUID, targetPID: pid_t?, activationID: String) async -> Bool {
         let deadline = ProcessInfo.processInfo.systemUptime + (Double(readyTimeoutMs) / 1000.0)
         while ProcessInfo.processInfo.systemUptime < deadline {
             let status = await sessionStatusXPC(sessionID: sessionID)
             if status.ready {
                 beeLog(
-                    "IME ACTIVATE: session ready id=\(sessionID.uuidString.prefix(8)) clientPID=\(status.clientPID.map(String.init) ?? "nil") clientID=\(status.clientID ?? "nil")"
+                    "IME ACTIVATE: session ready id=\(sessionID.uuidString.prefix(8)) activationID=\(activationID.prefix(8)) clientPID=\(status.clientPID.map(String.init) ?? "nil") clientID=\(status.clientID ?? "nil")"
                 )
                 return true
             }
             try? await Task.sleep(nanoseconds: readyPollIntervalMs * 1_000_000)
         }
         beeLog(
-            "IME ACTIVATE: session not ready id=\(sessionID.uuidString.prefix(8)) targetPID=\(targetPID.map(String.init) ?? "nil")"
+            "IME ACTIVATE: session not ready id=\(sessionID.uuidString.prefix(8)) activationID=\(activationID.prefix(8)) targetPID=\(targetPID.map(String.init) ?? "nil")"
         )
         return false
     }

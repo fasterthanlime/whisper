@@ -48,6 +48,9 @@ struct BeeApp: App {
 
         BeeInputClient.ensureIMERegistered()
         state.loadModelAtStartup()
+        if state.debugEnabled {
+            DebugPanel.shared.show(appState: state)
+        }
     }
 
     var body: some Scene {

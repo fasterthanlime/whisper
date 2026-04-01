@@ -19,6 +19,7 @@ final class AppState {
     private enum DefaultsKey {
         static let selectedInputDeviceUID = "audio.selectedInputDeviceUID"
         static let deviceWarmPolicy = "audio.deviceWarmPolicy"
+        static let debugOverlayEnabled = "ui.debugOverlayEnabled"
     }
 
     private static let imeSubmitName = NSNotification.Name("fasterthanlime.bee.imeSubmit")
@@ -71,7 +72,11 @@ final class AppState {
     var maxNewTokensFinal: UInt32 = 0      // 0 = Rust default (512)
 
     // Debug
-    var debugEnabled = false
+    var debugEnabled = false {
+        didSet {
+            UserDefaults.standard.set(debugEnabled, forKey: DefaultsKey.debugOverlayEnabled)
+        }
+    }
     var lastSessionDiag: SessionDiag.Snapshot?
     var parkedOverlayText = ""
 
@@ -110,6 +115,7 @@ final class AppState {
         self.audioEngine = audioEngine
         self.transcriptionService = transcriptionService
         self.inputClient = inputClient
+        self.debugEnabled = UserDefaults.standard.bool(forKey: DefaultsKey.debugOverlayEnabled)
         restoreAudioPreferences()
         installExternalObservers()
         installCaptureDeviceObservers()

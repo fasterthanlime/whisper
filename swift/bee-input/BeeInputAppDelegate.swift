@@ -3,20 +3,24 @@ import InputMethodKit
 
 @objc
 private protocol BeeIMEControlXPC {
-    func prepareSession(_ sessionID: String, targetPID: Int32, withReply reply: @escaping (Bool) -> Void)
+    func prepareSession(_ sessionID: String, targetPID: Int32, activationID: String, withReply reply: @escaping (Bool) -> Void)
     func sessionStatus(_ sessionID: String, withReply reply: @escaping (Bool, Int32, String) -> Void)
     func clearSession(_ sessionID: String, withReply reply: @escaping () -> Void)
 }
 
 private final class BeeIMEControlService: NSObject, BeeIMEControlXPC {
-    func prepareSession(_ sessionID: String, targetPID: Int32, withReply reply: @escaping (Bool) -> Void) {
+    func prepareSession(_ sessionID: String, targetPID: Int32, activationID: String, withReply reply: @escaping (Bool) -> Void) {
         DispatchQueue.main.async {
             guard let sessionID = UUID(uuidString: sessionID) else {
                 reply(false)
                 return
             }
             let pid: pid_t? = targetPID >= 0 ? pid_t(targetPID) : nil
-            BeeIMEBridgeState.shared.prepareSession(sessionID: sessionID, targetPID: pid)
+            BeeIMEBridgeState.shared.prepareSession(
+                sessionID: sessionID,
+                targetPID: pid,
+                activationID: activationID
+            )
             reply(true)
         }
     }

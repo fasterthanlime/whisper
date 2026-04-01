@@ -15,7 +15,7 @@ final class SoundEffects {
         var fileName: String {
             switch self {
             case .recordingStarted: "bee-recording-started"
-            case .startFailure: "bee-cancel"
+            case .startFailure: "bee-start-failure"
             case .commit: "bee-commit"
             case .commitSubmit: "bee-commit-submit"
             case .cancel: "bee-cancel"

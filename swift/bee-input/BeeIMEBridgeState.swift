@@ -17,6 +17,8 @@ final class BeeIMEBridgeState: NSObject {
     private(set) var activeClientIdentity: String?
     private(set) var activeSessionID: UUID?
     private(set) var expectedTargetPID: pid_t?
+    private(set) var expectedActivationID: String?
+    private(set) var activeActivationID: String?
     var pendingText: String?
     private var acknowledgedSessionID: UUID?
     private var boundClientIdentity: String?
@@ -33,7 +35,7 @@ final class BeeIMEBridgeState: NSObject {
         activeSessionID != nil
     }
 
-    func prepareSession(sessionID: UUID, targetPID: pid_t?) {
+    func prepareSession(sessionID: UUID, targetPID: pid_t?, activationID: String) {
         let previous = self.activeSessionID
         if previous != sessionID {
             self.pendingText = nil
@@ -43,8 +45,10 @@ final class BeeIMEBridgeState: NSObject {
 
         self.activeSessionID = sessionID
         self.expectedTargetPID = targetPID
+        self.expectedActivationID = activationID
+        self.activeActivationID = nil
         beeInputLog(
-            "prepareSession: session=\(sessionID.uuidString.prefix(8)) targetPID=\(targetPID.map(String.init) ?? "nil")"
+            "prepareSession: session=\(sessionID.uuidString.prefix(8)) activationID=\(activationID.prefix(8)) targetPID=\(targetPID.map(String.init) ?? "nil")"
         )
         self.flushPending()
     }
@@ -143,6 +147,8 @@ final class BeeIMEBridgeState: NSObject {
     private func clearSessionState() {
         activeSessionID = nil
         expectedTargetPID = nil
+        expectedActivationID = nil
+        activeActivationID = nil
         pendingText = nil
         acknowledgedSessionID = nil
         boundClientIdentity = nil
@@ -152,8 +158,11 @@ final class BeeIMEBridgeState: NSObject {
         activeController = controller
         activeControllerPID = clientPID
         activeClientIdentity = clientIdentity
+        if activeSessionID != nil, let expectedActivationID {
+            activeActivationID = expectedActivationID
+        }
         beeInputLog(
-            "registerActiveController: pid=\(clientPID.map(String.init) ?? "nil") clientID=\(clientIdentity ?? "nil")"
+            "registerActiveController: pid=\(clientPID.map(String.init) ?? "nil") clientID=\(clientIdentity ?? "nil") activationID=\(activeActivationID?.prefix(8) ?? "nil")"
         )
     }
 
@@ -184,6 +193,9 @@ final class BeeIMEBridgeState: NSObject {
     func isSessionReady(sessionID: UUID) -> Bool {
         guard activeSessionID == sessionID else { return false }
         guard canRouteToCurrentController() else { return false }
+        if let expectedActivationID {
+            guard activeActivationID == expectedActivationID else { return false }
+        }
         guard let expectedTargetPID else { return true }
         guard let activeControllerPID else { return false }
         return activeControllerPID == expectedTargetPID
@@ -197,7 +209,7 @@ final class BeeIMEBridgeState: NSObject {
 
     private func routingDebugInfo() -> String {
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        return "frontmost=\(frontmostPID.map(String.init) ?? "nil") controllerPID=\(activeControllerPID.map(String.init) ?? "nil") expectedPID=\(expectedTargetPID.map(String.init) ?? "nil") clientID=\(activeClientIdentity ?? "nil") boundClientID=\(boundClientIdentity ?? "nil") hasController=\(activeController != nil)"
+        return "frontmost=\(frontmostPID.map(String.init) ?? "nil") controllerPID=\(activeControllerPID.map(String.init) ?? "nil") expectedPID=\(expectedTargetPID.map(String.init) ?? "nil") activationID=\(activeActivationID?.prefix(8) ?? "nil") expectedActivationID=\(expectedActivationID?.prefix(8) ?? "nil") clientID=\(activeClientIdentity ?? "nil") boundClientID=\(boundClientIdentity ?? "nil") hasController=\(activeController != nil)"
     }
 
     func switchAwayFromBeeInput() {
