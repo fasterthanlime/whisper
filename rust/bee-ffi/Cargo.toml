@@ -1,5 +1,5 @@
 [package]
-name = "qwen3-asr-mlx-ffi"
+name = "bee-ffi"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,8 +7,8 @@ edition = "2021"
 crate-type = ["staticlib"]
 
 [dependencies]
-qwen3-asr-mlx = { path = ".." }
-mlx-rs = { path = "../../vendor/mlx-rs/mlx-rs", features = ["safetensors", "metal", "accelerate"] }
+qwen3-asr-mlx = { path = "../qwen3-asr-mlx-rs" }
+mlx-rs = { version = "0.25", features = ["safetensors", "metal", "accelerate"] }
 tokenizers = { version = "0.22", features = ["onig"] }
 log = "0.4"
 env_logger = "0.11"

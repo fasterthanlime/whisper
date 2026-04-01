@@ -35,10 +35,10 @@ targets:
         SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: YES
-        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/qwen3-asr-mlx-rs/qwen3-asr-mlx-ffi/include"
-        LIBRARY_SEARCH_PATHS: "$(PROJECT_DIR)/qwen3-asr-mlx-rs/target/release"
+        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/../rust/bee-ffi/include"
+        LIBRARY_SEARCH_PATHS: "$(PROJECT_DIR)/../target/release"
         OTHER_LDFLAGS:
-          - "-lqwen3_asr_mlx_ffi"
+          - "-lbee_ffi"
           - "-lc++"
           - "-framework"
           - Metal

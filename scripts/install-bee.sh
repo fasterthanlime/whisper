@@ -5,7 +5,7 @@ BUILD_DIR="$(pwd)/build-bee-release"
 INPUT_METHOD_DIR="$HOME/Library/Input Methods"
 
 echo "Building MLX Rust FFI (release)..."
-(cd qwen3-asr-mlx-rs && cargo build --release -p qwen3-asr-mlx-ffi 2>&1 | tail -3)
+(cd rust && cargo build --release -p bee-ffi 2>&1 | tail -3)
 
 echo "Generating Xcode project..."
 xcodegen generate --spec bee-project.yml
