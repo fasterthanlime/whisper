@@ -81,7 +81,7 @@ impl Default for PipelineConfig {
 /// Returns the generated training pairs.
 pub fn run_pipeline(
     config: &PipelineConfig,
-    sentences: &[synth_textgen::templates::GeneratedSentence],
+    sentences: &[beeml_textgen::templates::GeneratedSentence],
     mut on_event: impl FnMut(PipelineEvent),
 ) -> Result<Vec<TrainingPair>> {
     on_event(PipelineEvent::Status(
@@ -179,7 +179,7 @@ pub fn run_pipeline(
 }
 
 /// Load sentences from a JSONL file
-pub fn load_sentences(path: &str) -> Result<Vec<synth_textgen::templates::GeneratedSentence>> {
+pub fn load_sentences(path: &str) -> Result<Vec<beeml_textgen::templates::GeneratedSentence>> {
     let content = std::fs::read_to_string(path)?;
     let mut sentences = Vec::new();
     for line in content.lines() {
@@ -188,7 +188,7 @@ pub fn load_sentences(path: &str) -> Result<Vec<synth_textgen::templates::Genera
             continue;
         }
         let v: serde_json::Value = serde_json::from_str(line)?;
-        sentences.push(synth_textgen::templates::GeneratedSentence {
+        sentences.push(beeml_textgen::templates::GeneratedSentence {
             text: v["text"].as_str().unwrap_or("").to_string(),
             spoken: v["spoken"].as_str().unwrap_or("").to_string(),
             vocab_terms: v["vocab_terms"]

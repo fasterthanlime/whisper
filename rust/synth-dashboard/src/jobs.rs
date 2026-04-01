@@ -1319,7 +1319,7 @@ async fn background_hydrate_templates_once(state: &Arc<AppState>) -> anyhow::Res
 
     let mut made_progress = false;
     let mut generator =
-        synth_train::SentenceGenerator::start(&synth_train::SentenceGeneratorConfig::default())
+        beeml_train::SentenceGenerator::start(&beeml_train::SentenceGeneratorConfig::default())
             .ok();
 
     for (term, desc) in &batch {
@@ -2896,7 +2896,7 @@ struct SpokenSentence(String);
 /// Generate a (written, spoken) sentence pair for a vocab term.
 /// Tries the LLM generator first if available, falls back to Markov chain.
 fn make_sentence_pair(
-    generator: Option<&mut synth_train::SentenceGenerator>,
+    generator: Option<&mut beeml_train::SentenceGenerator>,
     chain: &MarkovChain,
     term: &WrittenTerm,
     spoken: &SpokenTerm,
@@ -4233,7 +4233,7 @@ async fn run_corpus_job(
             "Starting sentence generator (Qwen2.5-1.5B-Instruct)...",
         );
         drop(db);
-        match synth_train::SentenceGenerator::start(&synth_train::SentenceGeneratorConfig::default())
+        match beeml_train::SentenceGenerator::start(&beeml_train::SentenceGeneratorConfig::default())
         {
             Ok(g) => {
                 let db = state.db.lock().unwrap();
@@ -4703,7 +4703,7 @@ pub async fn api_start_prepare_job(
             while correction_count < n_error && error_attempts < max_error_attempts {
                 error_attempts += 1;
                 let row = &build.train_mistakes[sample_weighted_index(&error_weights, &mut rng)];
-                let prompt = synth_train::build_correction_prompt("", &row.corrupted_sentence);
+                let prompt = beeml_train::build_correction_prompt("", &row.corrupted_sentence);
                 if push_example(PreparedExample {
                     prompt,
                     completion: format!(" {}<|endoftext|>", row.clean_sentence),
@@ -4726,7 +4726,7 @@ pub async fn api_start_prepare_job(
                 counterexample_attempts += 1;
                 let item = &build.train_counterexamples
                     [sample_weighted_index(&counterexample_weights, &mut rng)];
-                let prompt = synth_train::build_correction_prompt("", &item.sentence);
+                let prompt = beeml_train::build_correction_prompt("", &item.sentence);
                 let repeats = counterexample_example_repeat_count(item.weight);
                 let mut added = 0usize;
                 for _ in 0..repeats {
@@ -4751,7 +4751,7 @@ pub async fn api_start_prepare_job(
             {
                 identity_attempts += 1;
                 let sentence = &build.train_identity[rng.random_range(0..build.train_identity.len())];
-                let prompt = synth_train::build_correction_prompt("", sentence);
+                let prompt = beeml_train::build_correction_prompt("", sentence);
                 if push_example(PreparedExample {
                     prompt,
                     completion: format!(" {}<|endoftext|>", sentence),
@@ -4768,14 +4768,14 @@ pub async fn api_start_prepare_job(
             let valid = &examples[n_train..];
 
             std::fs::create_dir_all("training/data").ok();
-            synth_train::write_jsonl("training/data/train.jsonl", train).ok();
-            synth_train::write_jsonl("training/data/valid.jsonl", valid).ok();
+            beeml_train::write_jsonl("training/data/train.jsonl", train).ok();
+            beeml_train::write_jsonl("training/data/valid.jsonl", valid).ok();
             let applied_eval_json = build
                 .eval_mistakes
                 .iter()
                 .map(|row| serde_json::to_value(row).unwrap_or(serde_json::Value::Null))
                 .collect::<Vec<_>>();
-            synth_train::write_jsonl("training/applied-eval.jsonl", &applied_eval_json).ok();
+            beeml_train::write_jsonl("training/applied-eval.jsonl", &applied_eval_json).ok();
 
             let stats = serde_json::json!({
                 "mode": "applied-known-mistake",
@@ -5080,8 +5080,8 @@ pub async fn api_start_prototype_reranker_prepare_job(
             let n = train.len() + valid.len();
 
             std::fs::create_dir_all("training/prototype-reranker").ok();
-            synth_train::write_jsonl("training/prototype-reranker/train.jsonl", &train).ok();
-            synth_train::write_jsonl("training/prototype-reranker/valid.jsonl", &valid).ok();
+            beeml_train::write_jsonl("training/prototype-reranker/train.jsonl", &train).ok();
+            beeml_train::write_jsonl("training/prototype-reranker/valid.jsonl", &valid).ok();
 
             let stats = serde_json::json!({
                 "requested_corpus_limit": corpus_limit,
@@ -5158,7 +5158,7 @@ pub async fn api_start_train_job(
 ) -> Result<Response, AppError> {
     check_no_running_jobs(&state)?;
 
-    let config = synth_train::TrainConfig {
+    let config = beeml_train::TrainConfig {
         data: body.data.unwrap_or_else(|| "training/data".into()),
         adapters: body.adapters.unwrap_or_else(|| "training/adapters".into()),
         model: body
@@ -5205,7 +5205,7 @@ pub async fn api_start_train_job(
             );
         }
 
-        let result = synth_train::train_streaming(
+        let result = beeml_train::train_streaming(
             &config,
             || state2.job_cancel.load(Ordering::Relaxed),
             |line| {
@@ -5819,14 +5819,14 @@ pub async fn api_start_eval_job(
 ) -> Result<Response, AppError> {
     check_no_running_jobs(&state)?;
 
-    let config = synth_train::InferenceConfig {
+    let config = beeml_train::InferenceConfig {
         model: body
             .model
-            .unwrap_or_else(|| synth_train::InferenceConfig::default().model),
+            .unwrap_or_else(|| beeml_train::InferenceConfig::default().model),
         adapters: body.adapters.unwrap_or_else(|| "training/adapters".into()),
         ..Default::default()
     };
-    let resolved_model = synth_train::resolved_correction_base_model(&config)
+    let resolved_model = beeml_train::resolved_correction_base_model(&config)
         .unwrap_or_else(|_| config.model.clone());
     let source = body.source.unwrap_or_else(|| "applied".to_string());
     let repeats = body.repeats.unwrap_or(1).clamp(1, 32);
@@ -5951,7 +5951,7 @@ pub async fn api_start_eval_job(
                     ),
                 );
                 drop(db);
-                match synth_train::InferenceServer::start(&config) {
+                match beeml_train::InferenceServer::start(&config) {
                     Ok(s) => {
                         *guard = Some(s);
                     }
@@ -6021,7 +6021,7 @@ pub async fn api_start_eval_job(
 
                 attempt_idx += 1;
                 let prompt =
-                    synth_train::build_correction_prompt("", &item.corrupted_sentence);
+                    beeml_train::build_correction_prompt("", &item.corrupted_sentence);
                 let infer_started = std::time::Instant::now();
                 let result = {
                     let mut guard = state2.inference_server.lock().unwrap();
@@ -6220,7 +6220,7 @@ pub async fn api_start_eval_job(
                     let full_expected =
                         splice_fragment(&template_sentence, &item.term, &item.original);
                     let full_asr = splice_fragment(&template_sentence, &item.term, &item.qwen);
-                    let prompt = synth_train::build_correction_prompt("", &full_asr);
+                    let prompt = beeml_train::build_correction_prompt("", &full_asr);
                     let infer_started = std::time::Instant::now();
                     let result = {
                         let mut guard = state2.inference_server.lock().unwrap();
@@ -6533,7 +6533,7 @@ pub async fn api_start_eval_job(
                 };
                 let asr_ms = asr_started.elapsed().as_millis() as u64;
 
-                let prompt = synth_train::build_correction_prompt("", &asr_qwen);
+                let prompt = beeml_train::build_correction_prompt("", &asr_qwen);
                 let infer_started = std::time::Instant::now();
                 let result = {
                     let mut guard = state2.inference_server.lock().unwrap();
@@ -7485,7 +7485,7 @@ fn transcript_ipa_words_to_zipa_timing(
     }
     for i in 1..=m {
         for j in 1..=n {
-            let sub = (synth_corrupt::features::substitution_cost(&q_features[i - 1].0, &z_features[j - 1].0) * 100.0) as u32;
+            let sub = (beeml_corrupt::features::substitution_cost(&q_features[i - 1].0, &z_features[j - 1].0) * 100.0) as u32;
             let mut best = dp[i - 1][j - 1].saturating_add(sub);
             let mut step = PhoneAlignStep::Match;
             let del = dp[i - 1][j].saturating_add(feature_delete_cost(&q_features[i - 1].0));
@@ -7870,7 +7870,7 @@ pub async fn api_correct(
 ) -> Result<Response, AppError> {
     let state2 = state.clone();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-        let config = synth_train::InferenceConfig {
+        let config = beeml_train::InferenceConfig {
             attach_adapters: body.use_adapters.unwrap_or(true),
             ..Default::default()
         };
@@ -7885,11 +7885,11 @@ pub async fn api_correct(
                 server.kill();
             }
             eprintln!("[correct] Starting inference server...");
-            *server_guard = Some(synth_train::InferenceServer::start(&config)?);
+            *server_guard = Some(beeml_train::InferenceServer::start(&config)?);
             eprintln!("[correct] Inference server ready");
         }
         let server = server_guard.as_mut().unwrap();
-        let prompt = synth_train::build_correction_prompt(&body.parakeet, &body.qwen);
+        let prompt = beeml_train::build_correction_prompt(&body.parakeet, &body.qwen);
         let output = server.infer_with_stats(&prompt)?;
         Ok(serde_json::json!({
             "corrected": output.text,
@@ -8929,7 +8929,7 @@ pub async fn api_correct_prototype_bakeoff(
         let current_outputs = if prototype_only_eval {
             items.iter().map(|item| item.qwen.clone()).collect::<Vec<_>>()
         } else {
-            let current_config = synth_train::InferenceConfig {
+            let current_config = beeml_train::InferenceConfig {
                 attach_adapters: use_current_adapters,
                 ..Default::default()
             };
@@ -8942,12 +8942,12 @@ pub async fn api_correct_prototype_bakeoff(
                 if let Some(mut server) = server_guard.take() {
                     server.kill();
                 }
-                *server_guard = Some(synth_train::InferenceServer::start(&current_config)?);
+                *server_guard = Some(beeml_train::InferenceServer::start(&current_config)?);
             }
             let server = server_guard.as_mut().unwrap();
             let mut outputs = Vec::with_capacity(items.len());
             for item in &items {
-                let prompt = synth_train::build_correction_prompt("", &item.qwen);
+                let prompt = beeml_train::build_correction_prompt("", &item.qwen);
                 let output = server.infer_with_stats(&prompt)?;
                 outputs.push(output.text);
             }
@@ -9718,7 +9718,7 @@ fn prototype_reranker_config(
     state: &AppState,
     use_adapters: bool,
     selected_train_id: Option<i64>,
-) -> synth_train::InferenceConfig {
+) -> beeml_train::InferenceConfig {
     let (model, adapters) = if use_adapters {
         let db = state.db.lock().unwrap();
         let recent = recent_completed_prototype_reranker_trains(&db);
@@ -9739,7 +9739,7 @@ fn prototype_reranker_config(
             String::new(),
         )
     };
-    synth_train::InferenceConfig {
+    beeml_train::InferenceConfig {
         model,
         adapters,
         attach_adapters: use_adapters,
@@ -9997,7 +9997,7 @@ fn run_prototype_reranker(
         if let Some(mut server) = server_guard.take() {
             server.kill();
         }
-        *server_guard = Some(synth_train::InferenceServer::start(&infer_config)?);
+        *server_guard = Some(beeml_train::InferenceServer::start(&infer_config)?);
     }
     let server = server_guard.as_mut().unwrap();
 

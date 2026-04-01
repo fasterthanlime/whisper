@@ -178,7 +178,7 @@ fn build_opus_head(pre_skip: u16, input_sample_rate: u32, channels: u8) -> Vec<u
 }
 
 fn build_opus_tags() -> Vec<u8> {
-    let vendor = b"hark synth-dashboard";
+    let vendor = b"bee beeml-api";
     let mut out = Vec::with_capacity(16 + vendor.len());
     out.extend_from_slice(b"OpusTags");
     out.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
@@ -828,7 +828,7 @@ pub fn detect_unknown_words(text: &str) -> Vec<String> {
     let mut unknown = Vec::new();
 
     for word in extract_words(text) {
-        if !synth_textgen::corpus::is_valid_vocab_term(&word) {
+        if !beeml_textgen::corpus::is_valid_vocab_term(&word) {
             continue;
         }
         let lower = word.to_lowercase();

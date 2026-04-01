@@ -1,10 +1,10 @@
 [package]
-name = "synth-dashboard"
+name = "beeml-api"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "synth-dashboard"
+name = "beeml-api"
 path = "src/main.rs"
 
 [dependencies]
@@ -17,10 +17,10 @@ tower-http = { version = "0.6", features = ["fs", "cors"] }
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 hound.workspace = true
-synth-textgen = { path = "../synth-textgen" }
-synth-pipeline = { path = "../synth-pipeline" }
-synth-train = { path = "../synth-train" }
-synth-corrupt = { path = "../synth-corrupt" }
+beeml-textgen = { path = "../synth-textgen" }
+beeml-pipeline = { path = "../synth-pipeline" }
+beeml-train = { path = "../synth-train" }
+beeml-corrupt = { path = "../synth-corrupt" }
 shellexpand = "3"
 rand = "0.9"
 
@@ -34,7 +34,7 @@ mlx-rs = "0.25"
 reqwest = { version = "0.12", features = ["json", "blocking"] }
 
 # ASR
-qwen3-asr = { path = "../../../qwen3-asr-rs", features = ["metal", "hub"] }
+qwen3-asr = { workspace = true, features = ["metal", "hub"] }
 parakeet-rs = "0.3"
 rubato = "0.15"
 crime = { version = "0.5", features = ["ogg"] }

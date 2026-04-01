@@ -15,7 +15,7 @@ struct Args {
     qwen: String,
 }
 
-fn print_result(label: &str, result: &synth_train::InferenceOutput) {
+fn print_result(label: &str, result: &beeml_train::InferenceOutput) {
     println!("== {label} ==");
     println!("sanitized: {}", result.text);
     println!("raw: {}", result.raw_text);
@@ -34,16 +34,16 @@ fn print_result(label: &str, result: &synth_train::InferenceOutput) {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let prompt = synth_train::build_correction_prompt(&args.parakeet, &args.qwen);
+    let prompt = beeml_train::build_correction_prompt(&args.parakeet, &args.qwen);
 
-    let base_config = synth_train::InferenceConfig {
+    let base_config = beeml_train::InferenceConfig {
         model: args.model.clone(),
         adapters: args.adapters.clone(),
         attach_adapters: false,
         max_tokens: args.max_tokens,
         ..Default::default()
     };
-    let adapter_config = synth_train::InferenceConfig {
+    let adapter_config = beeml_train::InferenceConfig {
         model: args.model,
         adapters: args.adapters,
         attach_adapters: true,
@@ -51,7 +51,7 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
-    match synth_train::InferenceServer::start(&base_config)
+    match beeml_train::InferenceServer::start(&base_config)
         .and_then(|mut server| server.infer_with_stats(&prompt))
     {
         Ok(result) => print_result("base", &result),
@@ -62,7 +62,7 @@ fn main() -> Result<()> {
         }
     }
 
-    match synth_train::InferenceServer::start(&adapter_config)
+    match beeml_train::InferenceServer::start(&adapter_config)
         .and_then(|mut server| server.infer_with_stats(&prompt))
     {
         Ok(result) => print_result("adapter", &result),

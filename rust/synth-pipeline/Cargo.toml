@@ -1,13 +1,13 @@
 [package]
-name = "synth-pipeline"
+name = "beeml-pipeline"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 pocket-tts = { version = "0.6", features = ["metal", "quantized"] }
 parakeet-rs = "0.3"
-qwen3-asr = { path = "../../../qwen3-asr-rs", features = ["metal"] }
-synth-textgen = { path = "../synth-textgen" }
+qwen3-asr = { workspace = true, features = ["metal"] }
+beeml-textgen = { path = "../synth-textgen" }
 rubato = "0.15"
 shellexpand = "3"
 anyhow.workspace = true

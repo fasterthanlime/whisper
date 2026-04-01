@@ -45,9 +45,9 @@ pub struct AppState {
     job_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     training_exclusive: AtomicBool,
     /// Shared inference server for live correction (started on first use)
-    inference_server: std::sync::Mutex<Option<synth_train::InferenceServer>>,
+    inference_server: std::sync::Mutex<Option<beeml_train::InferenceServer>>,
     /// Shared reranker server for prototype candidate scoring.
-    prototype_reranker_server: std::sync::Mutex<Option<synth_train::InferenceServer>>,
+    prototype_reranker_server: std::sync::Mutex<Option<beeml_train::InferenceServer>>,
     /// Shared MLX reranker sidecar for trained prototype reranker inference.
     prototype_reranker_sidecar: std::sync::Mutex<Option<jobs::PrototypeRerankerSidecar>>,
     /// Shared experimental official Qwen3 reranker sidecar.
@@ -535,7 +535,7 @@ async fn api_vocab_import(State(state): State<Arc<AppState>>) -> Result<Response
     let state2 = state.clone();
 
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let vocab = synth_textgen::corpus::extract_vocab(&docs_root)?;
+        let vocab = beeml_textgen::corpus::extract_vocab(&docs_root)?;
         let db = state2.db.lock().unwrap();
         let count = db.import_vocab(&vocab)?;
         Ok(serde_json::json!({
@@ -650,7 +650,7 @@ async fn api_vocab_add(
     if term.is_empty() {
         return Ok(Json(serde_json::json!({"error": "term is empty"})).into_response());
     }
-    let spoken_auto = synth_textgen::corpus::to_spoken(&term);
+    let spoken_auto = beeml_textgen::corpus::to_spoken(&term);
     let db = state.db.lock().unwrap();
     db.insert_candidate_vocab(&term, &spoken_auto)
         .map_err(err)?;
@@ -816,7 +816,7 @@ async fn api_candidates_import(
 
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         eprintln!("[import] extracting vocab from {docs_root}...");
-        let vocab = synth_textgen::corpus::extract_vocab(&docs_root)?;
+        let vocab = beeml_textgen::corpus::extract_vocab(&docs_root)?;
         eprintln!("[import] {} vocab terms extracted", vocab.len());
 
         let overrides = {
@@ -825,7 +825,7 @@ async fn api_candidates_import(
         };
 
         // Build term lookup for sentence matching
-        let term_lookup: std::collections::HashMap<String, &synth_textgen::corpus::VocabEntry> = vocab
+        let term_lookup: std::collections::HashMap<String, &beeml_textgen::corpus::VocabEntry> = vocab
             .iter()
             .map(|v| (v.term.to_lowercase(), v))
             .collect();
@@ -896,7 +896,7 @@ async fn api_candidates_import(
                 { continue; }
 
                 // Process this text through the sentence pipeline
-                let sentences = synth_textgen::templates::extract_sentences(
+                let sentences = beeml_textgen::templates::extract_sentences(
                     text, &term_lookup, &overrides,
                 );
 
@@ -1550,7 +1550,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "synth_dashboard=debug,info".parse().unwrap()),
+                .unwrap_or_else(|_| "beeml_api=debug,info".parse().unwrap()),
         )
         .init();
 

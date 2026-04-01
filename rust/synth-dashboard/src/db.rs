@@ -1128,8 +1128,8 @@ impl Db {
     pub fn seed_overrides(&self) -> Result<usize> {
         let now = now_str();
         let mut count = 0;
-        for &(term, spoken) in synth_textgen::corpus::PRONUNCIATION_OVERRIDES {
-            let auto = synth_textgen::corpus::to_spoken(term);
+        for &(term, spoken) in beeml_textgen::corpus::PRONUNCIATION_OVERRIDES {
+            let auto = beeml_textgen::corpus::to_spoken(term);
             let result = self.conn.execute(
                 "INSERT OR IGNORE INTO vocab (term, spoken_auto, spoken_override, reviewed, created_at, updated_at)
                  VALUES (?1, ?2, ?3, 0, ?4, ?4)",
@@ -1144,7 +1144,7 @@ impl Db {
 
     /// Import extracted vocab entries into the table. Sets spoken_auto but
     /// does NOT overwrite existing spoken_override values.
-    pub fn import_vocab(&self, entries: &[synth_textgen::corpus::VocabEntry]) -> Result<usize> {
+    pub fn import_vocab(&self, entries: &[beeml_textgen::corpus::VocabEntry]) -> Result<usize> {
         let now = now_str();
         let mut count = 0;
         for entry in entries {
@@ -1283,7 +1283,7 @@ impl Db {
 
     pub fn insert_sentences(
         &self,
-        sentences: &[synth_textgen::templates::GeneratedSentence],
+        sentences: &[beeml_textgen::templates::GeneratedSentence],
     ) -> Result<usize> {
         let now = now_str();
         let mut count = 0;

@@ -1,10 +1,10 @@
 [package]
-name = "synth-qwen"
+name = "beeml-qwen"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-qwen3-asr = { path = "../../../qwen3-asr-rs", features = ["metal"] }
+qwen3-asr = { workspace = true, features = ["metal"] }
 shellexpand = "3"
 anyhow.workspace = true
 clap.workspace = true

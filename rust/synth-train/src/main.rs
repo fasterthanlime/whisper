@@ -46,13 +46,13 @@ fn main() -> Result<()> {
             total_examples,
             error_rate,
         } => {
-            let config = synth_train::PrepareConfig {
+            let config = beeml_train::PrepareConfig {
                 input,
                 output,
                 total_examples,
                 error_rate,
             };
-            let stats = synth_train::prepare(&config, |msg| eprintln!("{msg}"))?;
+            let stats = beeml_train::prepare(&config, |msg| eprintln!("{msg}"))?;
             eprintln!(
                 "({} error + {} identity = {} total)",
                 stats.correction_examples, stats.identity_examples, stats.total
@@ -73,7 +73,7 @@ fn main() -> Result<()> {
             eprintln!("Adapters: {adapters}");
             eprintln!("Iters:    {iters}");
 
-            let config = synth_train::TrainConfig {
+            let config = beeml_train::TrainConfig {
                 data,
                 adapters: adapters.clone(),
                 model,
@@ -82,7 +82,7 @@ fn main() -> Result<()> {
                 num_layers,
                 ..Default::default()
             };
-            let status = synth_train::train(&config)?;
+            let status = beeml_train::train(&config)?;
             if !status.success() {
                 anyhow::bail!("Training failed with exit code: {:?}", status.code());
             }

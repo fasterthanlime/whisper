@@ -1,4 +1,4 @@
-# synth-corrupt
+# beeml-corrupt
 
 Phoneme-based ASR corruption engine. Given a technical term, finds plausible
 ASR confusions (single-word and multi-word) using phoneme edit distance.

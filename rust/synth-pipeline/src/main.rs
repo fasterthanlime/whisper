@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use synth_pipeline::{PipelineConfig, PipelineEvent};
+use beeml_pipeline::{PipelineConfig, PipelineEvent};
 
 #[derive(Parser)]
 struct Args {
@@ -45,13 +45,13 @@ fn main() -> Result<()> {
 
     let sentences = if let Some(ref path) = args.sentences {
         eprintln!("Loading sentences from {path}...");
-        synth_pipeline::load_sentences(path)?
+        beeml_pipeline::load_sentences(path)?
     } else {
         let docs_root = shellexpand::tilde(&args.docs_root).to_string();
         eprintln!("Scanning {docs_root} for vocabulary...");
-        let vocab = synth_textgen::corpus::extract_vocab(&docs_root)?;
+        let vocab = beeml_textgen::corpus::extract_vocab(&docs_root)?;
         eprintln!("Extracted {} terms", vocab.len());
-        synth_textgen::templates::generate(&vocab, args.count, None, None)
+        beeml_textgen::templates::generate(&vocab, args.count, None, None)
     };
     eprintln!("{} sentences ready", sentences.len());
 
@@ -63,7 +63,7 @@ fn main() -> Result<()> {
         voice_id: "amos".into(),
     };
 
-    let pairs = synth_pipeline::run_pipeline(&config, &sentences, |event| match event {
+    let pairs = beeml_pipeline::run_pipeline(&config, &sentences, |event| match event {
         PipelineEvent::Status(msg) => eprintln!("{msg}"),
         PipelineEvent::SentenceStart { index, total, text } => {
             eprint!("[{}/{}] \"{}\" ... ", index + 1, total, text);
@@ -81,7 +81,7 @@ fn main() -> Result<()> {
         }
     })?;
 
-    synth_pipeline::write_pairs(&args.output, &pairs)?;
+    beeml_pipeline::write_pairs(&args.output, &pairs)?;
     eprintln!("Wrote {} pairs to {}", pairs.len(), args.output);
 
     Ok(())
