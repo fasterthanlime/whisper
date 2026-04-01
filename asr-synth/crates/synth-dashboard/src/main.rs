@@ -1,6 +1,10 @@
 mod db;
 mod jobs;
+mod phonetic_index;
+mod phonetic_lexicon;
+mod phonetic_verify;
 mod prototype;
+mod region_proposal;
 mod review;
 mod tts;
 
@@ -2685,6 +2689,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pipeline/scan-results", get(jobs::api_scan_results))
         .route("/api/correct", post(jobs::api_correct))
         .route("/api/correct-prototype", post(jobs::api_correct_prototype))
+        .route(
+            "/api/correct-prototype/retrieval-debug",
+            post(jobs::api_phonetic_retrieval_debug),
+        )
         .route("/api/zipa/timing-debug", post(jobs::api_zipa_timing_debug))
         .route(
             "/api/correct-prototype/alignment-debug",

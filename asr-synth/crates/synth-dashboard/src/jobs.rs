@@ -69,6 +69,40 @@ struct AppliedMistakeBuildOutput {
     stats: AppliedMistakeBuildStats,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PhoneticRetrievalDebugBody {
+    pub transcript: String,
+    pub max_span_words: Option<usize>,
+    pub max_candidates_per_span: Option<usize>,
+    pub max_spans: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct PhoneticRetrievalDebugTiming {
+    db_ms: u64,
+    lexicon_ms: u64,
+    index_ms: u64,
+    span_enumeration_ms: u64,
+    shortlist_ms: u64,
+    verify_ms: u64,
+    total_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct PhoneticRetrievalDebugSpan {
+    token_start: usize,
+    token_end: usize,
+    char_start: usize,
+    char_end: usize,
+    start_sec: Option<f64>,
+    end_sec: Option<f64>,
+    text: String,
+    ipa_tokens: Vec<String>,
+    reduced_ipa_tokens: Vec<String>,
+    shortlist: Vec<crate::phonetic_index::RetrievalCandidate>,
+    verified: Vec<crate::phonetic_verify::VerifiedCandidate>,
+}
+
 fn load_applied_eval_rows(path: &str) -> anyhow::Result<Vec<AppliedMistakeEvalRow>> {
     let content = std::fs::read_to_string(path)?;
     let mut rows = Vec::new();
@@ -8000,6 +8034,142 @@ pub async fn api_correct_prototype(
         },
     }))
     .into_response())
+}
+
+pub async fn api_phonetic_retrieval_debug(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PhoneticRetrievalDebugBody>,
+) -> Result<Response, AppError> {
+    let state2 = state.clone();
+    let value = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+        let total_started = std::time::Instant::now();
+        let transcript = body.transcript.trim().to_string();
+        if transcript.is_empty() {
+            anyhow::bail!("missing transcript");
+        }
+
+        let db_started = std::time::Instant::now();
+        let (vocab, confusion_forms) = {
+            let db = state2.db.lock().unwrap();
+            (
+                db.list_reviewed_vocab()?,
+                db.get_all_reviewed_confusion_surfaces()?,
+            )
+        };
+        let db_ms = db_started.elapsed().as_millis() as u64;
+
+        let lexicon_started = std::time::Instant::now();
+        let lexicon = crate::phonetic_lexicon::build_phonetic_lexicon(&vocab, &confusion_forms);
+        let lexicon_ms = lexicon_started.elapsed().as_millis() as u64;
+
+        let index_started = std::time::Instant::now();
+        let index = crate::phonetic_index::build_index(lexicon);
+        let index_ms = index_started.elapsed().as_millis() as u64;
+
+        let data_dir = ensure_espeak_bundled_data_dir()?;
+        let engine = espeak_ng::EspeakNg::with_data_dir("en", data_dir)?;
+        let max_span_words = body.max_span_words.unwrap_or(4).clamp(1, 6);
+        let span_started = std::time::Instant::now();
+        let spans = crate::region_proposal::enumerate_transcript_spans_with(
+            &transcript,
+            max_span_words,
+            None,
+            |text| {
+                let ipa = engine.text_to_phonemes(text).ok()?;
+                let tokens = crate::prototype::parse_house_ipa(&ipa);
+                (!tokens.is_empty()).then_some(tokens)
+            },
+        );
+        let span_enumeration_ms = span_started.elapsed().as_millis() as u64;
+
+        let shortlist_limit = body.max_candidates_per_span.unwrap_or(8).clamp(1, 24);
+        let max_spans = body.max_spans.unwrap_or(48).clamp(1, 256);
+
+        let shortlist_started = std::time::Instant::now();
+        let shortlisted = spans
+            .into_iter()
+            .map(|span| {
+                let shortlist = crate::phonetic_index::query_index(
+                    &index,
+                    &crate::phonetic_index::RetrievalQuery {
+                        text: span.text.clone(),
+                        ipa_tokens: span.ipa_tokens.clone(),
+                        reduced_ipa_tokens: span.reduced_ipa_tokens.clone(),
+                        token_count: (span.token_end - span.token_start).min(u8::MAX as usize) as u8,
+                    },
+                    shortlist_limit,
+                );
+                (span, shortlist)
+            })
+            .filter(|(_, shortlist)| !shortlist.is_empty())
+            .collect::<Vec<_>>();
+        let shortlist_ms = shortlist_started.elapsed().as_millis() as u64;
+
+        let verify_started = std::time::Instant::now();
+        let mut spans = shortlisted
+            .into_iter()
+            .map(|(span, shortlist)| {
+                let verified = crate::phonetic_verify::verify_shortlist(
+                    &span,
+                    &shortlist,
+                    &index,
+                    shortlist_limit,
+                );
+                PhoneticRetrievalDebugSpan {
+                    token_start: span.token_start,
+                    token_end: span.token_end,
+                    char_start: span.char_start,
+                    char_end: span.char_end,
+                    start_sec: span.start_sec,
+                    end_sec: span.end_sec,
+                    text: span.text,
+                    ipa_tokens: span.ipa_tokens,
+                    reduced_ipa_tokens: span.reduced_ipa_tokens,
+                    shortlist,
+                    verified,
+                }
+            })
+            .collect::<Vec<_>>();
+        let verify_ms = verify_started.elapsed().as_millis() as u64;
+
+        spans.sort_by(|a, b| {
+            let a_score = a.verified.first().map(|cand| cand.phonetic_score).unwrap_or_default();
+            let b_score = b.verified.first().map(|cand| cand.phonetic_score).unwrap_or_default();
+            b_score
+                .total_cmp(&a_score)
+                .then_with(|| a.token_start.cmp(&b.token_start))
+                .then_with(|| a.token_end.cmp(&b.token_end))
+        });
+        spans.truncate(max_spans);
+
+        let timings = PhoneticRetrievalDebugTiming {
+            db_ms,
+            lexicon_ms,
+            index_ms,
+            span_enumeration_ms,
+            shortlist_ms,
+            verify_ms,
+            total_ms: total_started.elapsed().as_millis() as u64,
+        };
+
+        Ok(serde_json::json!({
+            "ok": true,
+            "transcript": transcript,
+            "summary": {
+                "alias_count": index.aliases.len(),
+                "returned_spans": spans.len(),
+                "max_span_words": max_span_words,
+                "max_candidates_per_span": shortlist_limit,
+            },
+            "timing": timings,
+            "spans": spans,
+        }))
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)?;
+
+    Ok(Json(value).into_response())
 }
 
 pub async fn api_correct_prototype_alignment_debug(

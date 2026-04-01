@@ -2033,7 +2033,7 @@ pub(crate) fn parse_house_ipa(text: &str) -> Vec<String> {
     tokenize_compact_ipa(text)
 }
 
-fn parse_reviewed_ipa(text: &str) -> Vec<String> {
+pub(crate) fn parse_reviewed_ipa(text: &str) -> Vec<String> {
     parse_house_ipa(text)
 }
 
@@ -2229,7 +2229,7 @@ fn phoneme_similarity_debug(
     })
 }
 
-fn phoneme_similarity(a: &[String], b: &[String]) -> Option<f32> {
+pub(crate) fn phoneme_similarity(a: &[String], b: &[String]) -> Option<f32> {
     phoneme_similarity_debug(a, b).map(|debug| debug.blended_score)
 }
 
