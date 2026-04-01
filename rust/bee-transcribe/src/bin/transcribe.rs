@@ -1,0 +1,120 @@
+use std::path::Path;
+use std::time::Instant;
+
+use bee_transcribe::{EngineConfig, SessionOptions, Update};
+
+fn main() -> anyhow::Result<()> {
+    env_logger::init();
+
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 2 {
+        eprintln!("Usage: transcribe <audio.wav>");
+        std::process::exit(1);
+    }
+    let audio_path = &args[1];
+
+    let model_dir = std::env::var("BEE_ASR_MODEL_DIR")
+        .map_err(|_| anyhow::anyhow!("BEE_ASR_MODEL_DIR not set"))?;
+    let tokenizer_path = std::env::var("BEE_TOKENIZER_PATH")
+        .map_err(|_| anyhow::anyhow!("BEE_TOKENIZER_PATH not set"))?;
+    let aligner_dir = std::env::var("BEE_ALIGNER_DIR")
+        .map_err(|_| anyhow::anyhow!("BEE_ALIGNER_DIR not set"))?;
+    let vad_dir = std::env::var("BEE_VAD_DIR").ok();
+
+    // Load engine
+    let t0 = Instant::now();
+    let engine = bee_transcribe::Engine::load(&EngineConfig {
+        model_dir: Path::new(&model_dir),
+        tokenizer_path: Path::new(&tokenizer_path),
+        aligner_dir: Path::new(&aligner_dir),
+    })?;
+    println!("Engine loaded in {:.0}ms", t0.elapsed().as_millis());
+
+    // Load audio
+    let t0 = Instant::now();
+    let samples = bee_qwen3_asr::mel::load_audio_wav(audio_path, 16000)?;
+    let duration = samples.len() as f64 / 16000.0;
+    println!(
+        "Audio: {:.1}s ({} samples) loaded in {:.0}ms",
+        duration,
+        samples.len(),
+        t0.elapsed().as_millis()
+    );
+
+    // Create session
+    let options = SessionOptions::default();
+    let chunk_samples = (options.chunk_duration * 16000.0) as usize;
+    let mut session = engine.session(options);
+
+    // Optionally load VAD
+    if let Some(ref vad_dir) = vad_dir {
+        match bee_vad::SileroVad::load(Path::new(vad_dir)) {
+            Ok(vad) => {
+                session.set_vad(vad);
+                println!("VAD loaded");
+            }
+            Err(e) => println!("VAD not loaded: {e}"),
+        }
+    }
+
+    println!("\n--- Streaming (chunk={:.0}ms) ---\n", chunk_samples as f64 / 16.0);
+
+    let t_total = Instant::now();
+    let mut chunk_idx = 0;
+    let mut offset = 0;
+    let mut last_text = String::new();
+
+    // Feed chunks
+    while offset < samples.len() {
+        let end = (offset + chunk_samples).min(samples.len());
+        let chunk = &samples[offset..end];
+        offset = end;
+        chunk_idx += 1;
+
+        let t0 = Instant::now();
+        let result = session.feed(chunk)?;
+        let ms = t0.elapsed().as_millis();
+
+        match result {
+            Some(update) => {
+                if update.text != last_text {
+                    print_update(chunk_idx, ms, &update);
+                    last_text = update.text.clone();
+                } else {
+                    println!("  chunk {chunk_idx}: {ms:.0}ms (unchanged)");
+                }
+            }
+            None => {
+                println!("  chunk {chunk_idx}: {ms:.0}ms (silence/buffering)");
+            }
+        }
+    }
+
+    // Finish
+    let t0 = Instant::now();
+    let final_update = session.finish()?;
+    let finish_ms = t0.elapsed().as_millis();
+
+    println!("\n--- Final ({finish_ms:.0}ms, total {:.0}ms) ---", t_total.elapsed().as_millis());
+    println!("  committed: {:?}", &final_update.text[..final_update.committed_len]);
+    println!("  full:      {:?}", final_update.text);
+
+    if !final_update.alignments.is_empty() {
+        println!("\nAlignments:");
+        for w in &final_update.alignments {
+            println!("  [{:.3}s - {:.3}s] {}", w.start, w.end, w.word);
+        }
+    }
+
+    Ok(())
+}
+
+fn print_update(chunk: usize, ms: u128, update: &Update) {
+    let committed = &update.text[..update.committed_len];
+    let pending = &update.text[update.committed_len..];
+    if committed.is_empty() {
+        println!("  chunk {chunk}: {ms:.0}ms | {pending}");
+    } else {
+        println!("  chunk {chunk}: {ms:.0}ms | [{committed}] {pending}");
+    }
+}

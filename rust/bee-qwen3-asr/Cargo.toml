@@ -22,7 +22,3 @@ thiserror = "2"
 half = "2"
 dirs = "6"
 facet = "0.44.3"
-
-[[bin]]
-name = "transcribe"
-path = "src/bin/transcribe.rs"

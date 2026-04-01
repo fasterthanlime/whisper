@@ -180,8 +180,10 @@ dependencies = [
 name = "bee-transcribe"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bee-qwen3-asr",
  "bee-vad",
+ "env_logger",
  "facet",
  "log",
  "mlx-rs",
@@ -2474,6 +2476,7 @@ dependencies = [
  "js-sys",
  "tokio",
  "tokio-tungstenite",
+ "vox-core",
  "vox-types",
  "wasm-bindgen",
  "web-sys",
