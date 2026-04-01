@@ -96,24 +96,17 @@ final class BeeInputClient: Sendable {
             return false
         }
 
-        // Ensure the IME process is alive before switching input sources.
-        // On cold start, TISSelectInputSource launches the IME, but if we
-        // switch before it's connected to the broker the activation is lost.
-        // Call TISSelectInputSource first (to trigger the launch), then wait
-        // for the IME to connect, then call it again so the activation sticks.
-        let firstSelect = await Self.selectBeeInputSource()
-        if firstSelect {
-            let imeReady = await Self.waitForIMEXPC()
-            if !imeReady {
-                beeLog("IME ACTIVATE: waitForIME failed, proceeding anyway")
-            } else {
-                // Re-select now that the IME is definitely connected
-                let _ = await Self.selectBeeInputSource()
-            }
-        }
-        guard firstSelect else {
+        // Select the bee input source (on cold start this also launches the
+        // IME process), then wait for the IME to be connected to the broker.
+        let selected = await Self.selectBeeInputSource()
+        guard selected else {
             await Self.clearSessionXPC(sessionID: sessionID)
             return false
+        }
+
+        let imeReady = await Self.waitForIMEXPC()
+        if !imeReady {
+            beeLog("IME ACTIVATE: waitForIME failed")
         }
 
         beeLog(
