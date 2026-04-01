@@ -63,4 +63,5 @@ run_step "Installing bee to /Applications/bee.app" "rsync -a --delete \"$BUILD_D
 run_step "Installing beeInput to $INPUT_METHOD_DIR/beeInput.app" "mkdir -p \"$INPUT_METHOD_DIR\" && rsync -a --delete \"$BUILD_DIR/beeInput.app/\" \"$INPUT_METHOD_DIR/beeInput.app/\""
 run_step "Restarting beeInput" "pkill beeInput || true"
 run_step "Killing running bee" "pkill bee || true"
+sleep 1
 run_step "Launching bee" "open -a /Applications/bee.app"
