@@ -18,13 +18,10 @@ final class BeeInputClient: Sendable {
     // MARK: - Input Source Switching
 
     @discardableResult
-    func activate(expectedTargetPID: pid_t?, sessionID: UUID) -> Bool {
-        var userInfo: [AnyHashable: Any] = [
+    func activate(sessionID: UUID) -> Bool {
+        let userInfo: [AnyHashable: Any] = [
             "sessionID": sessionID.uuidString,
         ]
-        if let expectedTargetPID {
-            userInfo["pid"] = Int(expectedTargetPID)
-        }
 
         Self.dnc.postNotificationName(
             Self.setSessionContextName,
@@ -47,15 +44,6 @@ final class BeeInputClient: Sendable {
         beeLog("IME ACTIVATE: TISSelectInputSource result=\(result)")
         guard result == noErr else {
             return false
-        }
-
-        if let expectedTargetPID {
-            let actualPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-            if actualPID != expectedTargetPID {
-                beeLog("IME ACTIVATE: target mismatch expected=\(expectedTargetPID) actual=\(actualPID.map(String.init) ?? "nil"), restoring input source")
-                Self.switchAwayFromBeeInputIfNeeded()
-                return false
-            }
         }
 
         return true

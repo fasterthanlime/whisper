@@ -76,17 +76,7 @@ class BeeInputAppDelegate: NSObject, NSApplicationDelegate {
             object: nil, queue: .main
         ) { notification in
             guard let sessionID = Self.sessionID(from: notification) else { return }
-            let pid: pid_t?
-            if let number = notification.userInfo?["pid"] as? NSNumber {
-                pid = number.int32Value
-            } else if let intValue = notification.userInfo?["pid"] as? Int {
-                pid = pid_t(intValue)
-            } else if let int32Value = notification.userInfo?["pid"] as? Int32 {
-                pid = int32Value
-            } else {
-                pid = nil
-            }
-            BeeXPCService.shared.setSessionContext(sessionID: sessionID, expectedTargetPID: pid)
+            BeeXPCService.shared.setSessionContext(sessionID: sessionID)
             Self.postSessionStartedIfReady()
         }
     }

@@ -3,10 +3,20 @@ import SwiftUI
 
 struct MenuBarView: View {
     @Bindable var appState: AppState
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SettingsLink {
+            Button {
+                NSApp.activate(ignoringOtherApps: true)
+                openSettings()
+                DispatchQueue.main.async {
+                    let normalWindow = NSApp.orderedWindows.first { window in
+                        !(window is NSPanel)
+                    }
+                    normalWindow?.makeKeyAndOrderFront(nil)
+                }
+            } label: {
                 Label("Open Bee", systemImage: "app.badge")
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 6)
@@ -28,7 +38,6 @@ struct MenuBarView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .keyboardShortcut("q")
         }
         .padding(10)
         .frame(width: 220)
@@ -95,6 +104,13 @@ private struct BeeOverviewView: View {
                             .textSelection(.enabled)
                             .lineLimit(3)
                     }
+                }
+            }
+
+            Section("App") {
+                Button("Quit Bee") {
+                    BeeInputClient.restoreInputSourceIfNeeded()
+                    NSApp.terminate(nil)
                 }
             }
         }

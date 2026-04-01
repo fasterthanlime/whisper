@@ -56,10 +56,26 @@ struct BeeApp: App {
         } label: {
             MenuBarLabelView(appState: appState)
         }
-        .menuBarExtraStyle(.window)
+        .menuBarExtraStyle(.menu)
 
         Settings {
             BeeSettingsView(appState: appState)
+        }
+        .commands {
+            CommandGroup(replacing: .appTermination) {
+                Button("Close Bee Window") {
+                    if let keyWindow = NSApp.keyWindow, !(keyWindow is NSPanel) {
+                        keyWindow.performClose(nil)
+                        return
+                    }
+
+                    let normalWindow = NSApp.orderedWindows.first { window in
+                        window.isVisible && !(window is NSPanel)
+                    }
+                    normalWindow?.performClose(nil)
+                }
+                .keyboardShortcut("q")
+            }
         }
     }
 }
@@ -77,7 +93,14 @@ private struct MenuBarLabelView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .beeOpenMainWindowRequest)) { _ in
+            NSApp.activate(ignoringOtherApps: true)
             openSettings()
+            DispatchQueue.main.async {
+                let normalWindow = NSApp.orderedWindows.first { window in
+                    !(window is NSPanel)
+                }
+                normalWindow?.makeKeyAndOrderFront(nil)
+            }
         }
     }
 

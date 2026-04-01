@@ -8,9 +8,9 @@ final class BeeXPCService: NSObject {
 
     weak var activeController: BeeInputController?
     private(set) var activeControllerPID: pid_t?
+    private(set) var activeClientIdentity: String?
     private(set) var activeSessionID: UUID?
     var pendingText: String?
-    var expectedTargetPID: pid_t?
     private var acknowledgedSessionID: UUID?
 
     var controller: BeeInputController? {
@@ -21,7 +21,11 @@ final class BeeXPCService: NSObject {
         activeSessionID != nil
     }
 
-    func setSessionContext(sessionID: UUID, expectedTargetPID: pid_t?) {
+    var hasActiveSession: Bool {
+        activeSessionID != nil
+    }
+
+    func setSessionContext(sessionID: UUID) {
         let previous = self.activeSessionID
         if previous != sessionID {
             self.pendingText = nil
@@ -29,9 +33,8 @@ final class BeeXPCService: NSObject {
         }
 
         self.activeSessionID = sessionID
-        self.expectedTargetPID = expectedTargetPID
         beeInputLog(
-            "setSessionContext: session=\(sessionID.uuidString.prefix(8)) pid=\(expectedTargetPID.map(String.init) ?? "nil")"
+            "setSessionContext: session=\(sessionID.uuidString.prefix(8))"
         )
         self.flushPending()
     }
@@ -124,20 +127,23 @@ final class BeeXPCService: NSObject {
     private func clearSessionState() {
         activeSessionID = nil
         pendingText = nil
-        expectedTargetPID = nil
         acknowledgedSessionID = nil
     }
 
-    func registerActiveController(_ controller: BeeInputController, clientPID: pid_t?) {
+    func registerActiveController(_ controller: BeeInputController, clientPID: pid_t?, clientIdentity: String?) {
         activeController = controller
         activeControllerPID = clientPID
-        beeInputLog("registerActiveController: pid=\(clientPID.map(String.init) ?? "nil")")
+        activeClientIdentity = clientIdentity
+        beeInputLog(
+            "registerActiveController: pid=\(clientPID.map(String.init) ?? "nil") clientID=\(clientIdentity ?? "nil")"
+        )
     }
 
     func unregisterActiveController(_ controller: BeeInputController) {
         guard activeController === controller else { return }
         activeController = nil
         activeControllerPID = nil
+        activeClientIdentity = nil
     }
 
     func consumeSessionStartAcknowledgementIfReady() -> UUID? {
@@ -148,25 +154,13 @@ final class BeeXPCService: NSObject {
         return sessionID
     }
 
-    private func isExpectedTargetFrontmost() -> Bool {
-        guard let expectedTargetPID else { return true }
-        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        return frontmostPID == expectedTargetPID
-    }
-
-    private func isControllerOnExpectedTarget() -> Bool {
-        guard let expectedTargetPID else { return controller != nil }
-        guard controller != nil, let activeControllerPID else { return false }
-        return activeControllerPID == expectedTargetPID
-    }
-
     private func canRouteToCurrentController() -> Bool {
-        isExpectedTargetFrontmost() && isControllerOnExpectedTarget()
+        controller != nil
     }
 
     private func routingDebugInfo() -> String {
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        return "expected=\(expectedTargetPID.map(String.init) ?? "nil") frontmost=\(frontmostPID.map(String.init) ?? "nil") controller=\(activeControllerPID.map(String.init) ?? "nil") hasController=\(activeController != nil)"
+        return "frontmost=\(frontmostPID.map(String.init) ?? "nil") controllerPID=\(activeControllerPID.map(String.init) ?? "nil") clientID=\(activeClientIdentity ?? "nil") hasController=\(activeController != nil)"
     }
 
     func switchAwayFromBeeInput() {

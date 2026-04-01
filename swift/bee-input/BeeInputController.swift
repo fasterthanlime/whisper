@@ -16,24 +16,25 @@ class BeeInputController: IMKInputController {
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        BeeXPCService.shared.registerActiveController(self, clientPID: frontmostPID)
+        let clientIdentity = currentClientIdentity()
+        BeeXPCService.shared.registerActiveController(
+            self,
+            clientPID: frontmostPID,
+            clientIdentity: clientIdentity
+        )
         let clientName = (self.client() as? NSObject)?.description.prefix(80) ?? "nil"
-        beeInputLog("activateServer: client=\(clientName) frontmostPID=\(frontmostPID.map(String.init) ?? "nil")")
+        beeInputLog(
+            "activateServer: client=\(clientName) clientID=\(clientIdentity ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil")"
+        )
+
+        guard BeeXPCService.shared.hasActiveSession else {
+            beeInputLog("activateServer: no app handshake/session, switching away")
+            BeeXPCService.shared.switchAwayFromBeeInput()
+            return
+        }
+
         BeeXPCService.shared.flushPending()
         postSessionStartedIfReady()
-
-        // If beeInput was selected manually (outside a dictation session),
-        // immediately switch back to a regular keyboard source.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            guard let self else { return }
-            guard BeeXPCService.shared.activeController === self else { return }
-            guard BeeXPCService.shared.activeSessionID == nil,
-                  BeeXPCService.shared.pendingText == nil else {
-                return
-            }
-            beeInputLog("activateServer: unexpected/manual activation, switching away")
-            BeeXPCService.shared.switchAwayFromBeeInput()
-        }
     }
 
     override func deactivateServer(_ sender: Any!) {
@@ -134,6 +135,13 @@ class BeeInputController: IMKInputController {
             }
             autoCommittedPrefix = ""
         }
+        finalText = finalText
+            .replacingOccurrences(of: "🐝", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !finalText.isEmpty else {
+            currentMarkedText = ""
+            return
+        }
 
         currentMarkedText = ""
         client.insertText(
@@ -159,6 +167,12 @@ class BeeInputController: IMKInputController {
             userInfo: userInfo,
             deliverImmediately: true
         )
+    }
+
+    private func currentClientIdentity() -> String? {
+        guard let client = self.client() else { return nil }
+        let opaque = Unmanaged.passUnretained(client as AnyObject).toOpaque()
+        return String(UInt(bitPattern: opaque), radix: 16, uppercase: true)
     }
 
     private func postSessionStartedIfReady() {

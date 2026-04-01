@@ -316,10 +316,9 @@ final class AppState {
 
             let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
             beeLog(
-                "SESSION: IME confirm timeout id=\(session.id.uuidString.prefix(8)) targetPID=\(self.activeSessionTargetPID.map(String.init) ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil"), aborting"
+                "SESSION: IME confirm timeout id=\(session.id.uuidString.prefix(8)) targetPID=\(self.activeSessionTargetPID.map(String.init) ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil"), continuing to capture"
             )
-            self.transitionToIdle()
-            Task { await session.abort() }
+            self.startIMEAckTimeoutIfNeeded(session: session)
         }
     }
 
@@ -594,6 +593,12 @@ final class AppState {
     private func handleIMEContextLost(sessionID: UUID?) {
         guard isNotificationForActiveSession(sessionID) else { return }
         if isSessionParked {
+            return
+        }
+        if let targetPID = activeSessionTargetPID,
+           let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+           frontmostPID == targetPID {
+            beeLog("SESSION: ignoring imeContextLost while still on targetPID=\(targetPID)")
             return
         }
 
