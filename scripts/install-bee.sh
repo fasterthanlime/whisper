@@ -1,28 +1,63 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BUILD_DIR="$(pwd)/build-bee-release"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+BUILD_DIR="$PROJECT_ROOT/build-bee-release"
 INPUT_METHOD_DIR="$HOME/Library/Input Methods"
 
-echo "Building MLX Rust FFI (release)..."
-(cd rust && cargo build --release -p bee-ffi 2>&1 | tail -3)
+if [ -t 1 ]; then
+  RED=$'\033[0;31m'
+  GREEN=$'\033[0;32m'
+  YELLOW=$'\033[0;33m'
+  BLUE=$'\033[0;34m'
+  MAGENTA=$'\033[0;35m'
+  CYAN=$'\033[0;36m'
+  BOLD=$'\033[1m'
+  RESET=$'\033[0m'
+else
+  RED=''
+  GREEN=''
+  YELLOW=''
+  BLUE=''
+  MAGENTA=''
+  CYAN=''
+  BOLD=''
+  RESET=''
+fi
 
-echo "Generating Xcode project..."
-xcodegen generate --spec bee-project.yml
+banner() {
+  local title="$1"
+  local width=72
+  local inner_width=$((width - 4))
+  local pad=$(( (inner_width - ${#title}) / 2 ))
+  local right_pad=$((inner_width - ${#title} - pad))
+  local left_pad=$(printf '%*s' "$pad" '')
+  local right_pad_str=$(printf '%*s' "$right_pad" '')
 
-echo "Building bee (Release)..."
-xcodebuild -project bee.xcodeproj -scheme bee -configuration Release \
-    CONFIGURATION_BUILD_DIR="$BUILD_DIR" build 2>&1 | tail -3
+  printf '\n%s\n' "${CYAN}${BOLD}$(printf '%*s' "$width" '' | tr ' ' '=')${RESET}"
+  printf '%s\n' "${CYAN}${BOLD}${left_pad} ${title} ${right_pad_str}${RESET}"
+  printf '%s\n\n' "${CYAN}${BOLD}$(printf '%*s' "$width" '' | tr ' ' '=')${RESET}"
+}
 
-echo "Building beeInput (Release)..."
-xcodebuild -project bee.xcodeproj -scheme beeInput -configuration Release \
-    CONFIGURATION_BUILD_DIR="$BUILD_DIR" build 2>&1 | tail -3
+run_step() {
+  local title="$1"
+  shift
+  banner "$title"
+  if ! bash -lc "$*"; then
+    printf '%s\n' "${RED}${BOLD}Step failed: $title${RESET}"
+    exit 1
+  fi
+  printf '%s\n' "${GREEN}${BOLD}Step complete: $title${RESET}"
+}
 
-echo "Installing bee to /Applications/bee.app..."
-rsync -a --delete "$BUILD_DIR/bee.app/" /Applications/bee.app/
+run_step "Building MLX Rust FFI (release)" "cd \"$PROJECT_ROOT/rust\" && cargo build --release -p bee-ffi"
+run_step "Generating Xcode project" "cd \"$PROJECT_ROOT\" && xcodegen generate --spec bee-project.yml"
+run_step "Building bee (Release)" "cd \"$PROJECT_ROOT\" && xcodebuild -project bee.xcodeproj -scheme bee -configuration Release CONFIGURATION_BUILD_DIR=\"$BUILD_DIR\" build"
+run_step "Building beeInput (Release)" "cd \"$PROJECT_ROOT\" && xcodebuild -project bee.xcodeproj -scheme beeInput -configuration Release CONFIGURATION_BUILD_DIR=\"$BUILD_DIR\" build"
 
-echo "Installing beeInput to $INPUT_METHOD_DIR/beeInput.app..."
-mkdir -p "$INPUT_METHOD_DIR"
-rsync -a --delete "$BUILD_DIR/beeInput.app/" "$INPUT_METHOD_DIR/beeInput.app/"
+run_step "Installing bee to /Applications/bee.app" "rsync -a --delete \"$BUILD_DIR/bee.app/\" /Applications/bee.app/"
 
-echo "Done. Launch bee from /Applications/bee.app"
+run_step "Installing beeInput to $INPUT_METHOD_DIR/beeInput.app" "mkdir -p \"$INPUT_METHOD_DIR\" && rsync -a --delete \"$BUILD_DIR/beeInput.app/\" \"$INPUT_METHOD_DIR/beeInput.app/\""
+
+banner "Done. Launch bee from /Applications/bee.app"
