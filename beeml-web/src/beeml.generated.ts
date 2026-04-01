@@ -10,15 +10,15 @@ import { wsConnector } from "@bearcove/vox-ws";
 import { RpcError } from "@bearcove/vox-core";
 
 // Named type definitions
-export interface ForcedAlignItem {
+export interface AlignedWord {
   word: string;
-  start_time: number;
-  end_time: number;
+  start: number;
+  end: number;
 }
 
 export interface TranscribeWavResult {
   transcript: string;
-  qwen_words: ForcedAlignItem[];
+  words: AlignedWord[];
 }
 
 // Request/Response type aliases
@@ -114,12 +114,12 @@ export const beeMl_send_schemas: import("@bearcove/vox-core").ServiceSendSchemas
     [0xba8125876d6388b4n, { id: 0xba8125876d6388b4n, type_params: [], kind: { tag: 'primitive', primitive_type: 'bytes' } }],
     [0x6847ab90feda71c1n, { id: 0x6847ab90feda71c1n, type_params: ['T0'], kind: { tag: 'tuple', elements: [{ tag: 'var', name: 'T0' }] } }],
     [0x3f2e589db81e95bfn, { id: 0x3f2e589db81e95bfn, type_params: [], kind: { tag: 'primitive', primitive_type: 'f64' } }],
-    [0xd3d5370bbeaf7b98n, { id: 0xd3d5370bbeaf7b98n, type_params: [], kind: { tag: 'struct', name: 'ForcedAlignItem', fields: [{ name: 'word', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'start_time', type_ref: { tag: 'concrete', type_id: 0x3f2e589db81e95bfn, args: [] }, required: true }, { name: 'end_time', type_ref: { tag: 'concrete', type_id: 0x3f2e589db81e95bfn, args: [] }, required: true }] } }],
+    [0x82fe1c941f431583n, { id: 0x82fe1c941f431583n, type_params: [], kind: { tag: 'struct', name: 'AlignedWord', fields: [{ name: 'word', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'start', type_ref: { tag: 'concrete', type_id: 0x3f2e589db81e95bfn, args: [] }, required: true }, { name: 'end', type_ref: { tag: 'concrete', type_id: 0x3f2e589db81e95bfn, args: [] }, required: true }] } }],
     [0x0a96b404b4d79d67n, { id: 0x0a96b404b4d79d67n, type_params: ['T'], kind: { tag: 'list', element: { tag: 'var', name: 'T' } } }],
-    [0xf4459a1e5148779cn, { id: 0xf4459a1e5148779cn, type_params: [], kind: { tag: 'struct', name: 'TranscribeWavResult', fields: [{ name: 'transcript', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'qwen_words', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0xd3d5370bbeaf7b98n, args: [] }] }, required: true }] } }],
+    [0xdf4236220e4a3571n, { id: 0xdf4236220e4a3571n, type_params: [], kind: { tag: 'struct', name: 'TranscribeWavResult', fields: [{ name: 'transcript', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'words', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x82fe1c941f431583n, args: [] }] }, required: true }] } }],
   ]),
   methods: new Map<bigint, import("@bearcove/vox-core").MethodSendSchemas>([
-    [0x5769301e350ea60bn, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xba8125876d6388b4n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xf4459a1e5148779cn, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
+    [0x5769301e350ea60bn, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xba8125876d6388b4n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xdf4236220e4a3571n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
   ]),
 };
 

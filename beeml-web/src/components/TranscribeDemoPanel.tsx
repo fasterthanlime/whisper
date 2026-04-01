@@ -3,18 +3,18 @@ import { connectBeeMl } from "../beeml.generated";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { EvalInspector } from "./EvalInspector";
 import type { EvalInspectorData, TimedToken } from "../types";
-import type { ForcedAlignItem } from "../beeml.generated";
+import type { AlignedWord } from "../beeml.generated";
 
-function qwenWordsToTimedTokens(words: ForcedAlignItem[]): TimedToken[] {
+function alignedWordsToTimedTokens(words: AlignedWord[]): TimedToken[] {
   return words.map((word) => ({
     w: word.word,
-    s: word.start_time,
-    e: word.end_time,
+    s: word.start,
+    e: word.end,
   }));
 }
 
-function toInspectorData(transcript: string, qwenWords: ForcedAlignItem[]): EvalInspectorData {
-  const qwenTokens = qwenWordsToTimedTokens(qwenWords);
+function toInspectorData(transcript: string, words: AlignedWord[]): EvalInspectorData {
+  const qwenTokens = alignedWordsToTimedTokens(words);
   return {
     transcript,
     transcriptLabel: "BeeML",
@@ -62,7 +62,7 @@ export function TranscribeDemoPanel() {
           throw new Error(result.error);
         }
 
-        setInspectorData(toInspectorData(result.value.transcript, result.value.qwen_words));
+        setInspectorData(toInspectorData(result.value.transcript, result.value.words));
         setStatus(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
