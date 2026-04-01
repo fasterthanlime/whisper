@@ -325,9 +325,13 @@ final class AppState {
             if !text.isEmpty {
                 addHistoryEntry(text: text)
             }
-        case .committed(let id, let text, _):
+        case .committed(let id, let text, let submitted):
             resultID = id
-            SoundEffects.shared.playCommit()
+            if submitted {
+                SoundEffects.shared.playCommitSubmit()
+            } else {
+                SoundEffects.shared.playCommit()
+            }
             if !text.isEmpty {
                 addHistoryEntry(text: text)
             }

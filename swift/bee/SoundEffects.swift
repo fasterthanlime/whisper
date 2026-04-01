@@ -76,19 +76,19 @@ final class SoundEffects {
     }
 
     func playRecordingStarted() {
-        play(recordingStartedSound, volume: systemVolume() * 0.15)
+        play(recordingStartedSound, volume: systemVolume())
     }
 
     func playCommit() {
-        play(commitSound, volume: systemVolume() * 0.1)
+        play(commitSound, volume: systemVolume())
     }
 
     func playCancel() {
-        play(cancelSound, volume: systemVolume() * 0.15)
+        play(cancelSound, volume: systemVolume())
     }
 
     func playCommitSubmit() {
-        play(commitSubmitSound, volume: systemVolume() * 0.15)
+        play(commitSubmitSound, volume: systemVolume())
     }
 
     private func play(_ sound: NSSound?, volume: Float) {
