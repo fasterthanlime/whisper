@@ -169,6 +169,36 @@ select:focus {
   text-align: center;
 }
 
+.demo-stream-output {
+  flex: 1;
+  padding: 1.5rem;
+  font-size: 1.1rem;
+  line-height: 1.8;
+  overflow: auto;
+}
+
+.demo-stream-output .committed {
+  color: var(--text);
+}
+
+.demo-stream-output .pending {
+  color: var(--text-muted);
+}
+
+.demo-stream-output .cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.2em;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  margin-left: 1px;
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
 /* ── Eval inspector ────────────────────────────────────────── */
 
 .eval-inspector {

@@ -1,9 +1,10 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { channel } from "@bearcove/vox-core";
 import { connectBeeMl } from "../beeml.generated";
+import type { Update, AlignedWord } from "../beeml.generated";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { EvalInspector } from "./EvalInspector";
 import type { EvalInspectorData, TimedToken } from "../types";
-import type { AlignedWord } from "../beeml.generated";
 
 function alignedWordsToTimedTokens(words: AlignedWord[]): TimedToken[] {
   return words.map((word) => ({
@@ -33,6 +34,35 @@ function toInspectorData(transcript: string, words: AlignedWord[]): EvalInspecto
   };
 }
 
+const micConstraints: MediaTrackConstraints = {
+  channelCount: 1,
+  sampleRate: 48000,
+  sampleSize: 16,
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+};
+
+function resampleMonoLinear(
+  input: Float32Array,
+  inputRate: number,
+  outputRate: number,
+): Float32Array {
+  if (inputRate === outputRate) return input;
+  const ratio = inputRate / outputRate;
+  const outLen = Math.max(1, Math.round(input.length / ratio));
+  const out = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const pos = i * ratio;
+    const idx = Math.floor(pos);
+    const frac = pos - idx;
+    const a = input[idx] ?? input[input.length - 1] ?? 0;
+    const b = input[idx + 1] ?? a;
+    out[i] = a + (b - a) * frac;
+  }
+  return out;
+}
+
 export function TranscribeDemoPanel() {
   const recorder = useAudioRecorder();
   const [wsUrl, setWsUrl] = useState("ws://127.0.0.1:9944");
@@ -40,6 +70,12 @@ export function TranscribeDemoPanel() {
   const [error, setError] = useState<string | null>(null);
   const [inspectorData, setInspectorData] = useState<EvalInspectorData | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | undefined>(undefined);
+
+  // Streaming state
+  const [streaming, setStreaming] = useState(false);
+  const [streamText, setStreamText] = useState("");
+  const [streamCommittedLen, setStreamCommittedLen] = useState(0);
+  const streamCleanupRef = useRef<(() => void) | null>(null);
 
   const handleRecord = useCallback(async () => {
     if (recorder.state === "recording") {
@@ -58,9 +94,7 @@ export function TranscribeDemoPanel() {
         setStatus("Transcribing...");
         const bytes = new Uint8Array(await blob.arrayBuffer());
         const result = await client.transcribeWav(bytes);
-        if (!result.ok) {
-          throw new Error(result.error);
-        }
+        if (!result.ok) throw new Error(result.error);
 
         setInspectorData(toInspectorData(result.value.transcript, result.value.words));
         setStatus(null);
@@ -77,15 +111,115 @@ export function TranscribeDemoPanel() {
     }
   }, [audioUrl, recorder, wsUrl]);
 
+  const handleStream = useCallback(async () => {
+    if (streaming) {
+      // Stop streaming
+      streamCleanupRef.current?.();
+      streamCleanupRef.current = null;
+      setStreaming(false);
+      setStatus(null);
+      return;
+    }
+
+    setError(null);
+    setInspectorData(null);
+    setStreamText("");
+    setStreamCommittedLen(0);
+
+    try {
+      setStatus("Connecting...");
+      const client = await connectBeeMl(wsUrl);
+
+      // Create channel pairs
+      const [audioTx, audioRx] = channel<number[]>();
+      const [updatesTx, updatesRx] = channel<Update>();
+
+      // Start the RPC (it runs until we close audioTx)
+      const rpcPromise = client.streamTranscribe(audioRx, updatesTx);
+
+      // Receive updates in background
+      const receiveLoop = (async () => {
+        while (true) {
+          const val = await updatesRx.recv();
+          if (val === null) break;
+          setStreamText(val.text);
+          setStreamCommittedLen(Number(val.committed_len));
+        }
+      })();
+
+      // Capture mic and stream chunks
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints });
+      const ctx = new AudioContext();
+      await ctx.resume();
+      const source = ctx.createMediaStreamSource(stream);
+      const processor = ctx.createScriptProcessor(4096, source.channelCount || 1, 1);
+      const sink = ctx.createGain();
+      sink.gain.value = 0;
+
+      processor.onaudioprocess = (event) => {
+        const input = event.inputBuffer;
+        const len = input.length;
+        const channels = input.numberOfChannels || 1;
+        const mono = new Float32Array(len);
+        for (let ch = 0; ch < channels; ch++) {
+          const data = input.getChannelData(ch);
+          for (let i = 0; i < len; i++) mono[i] += data[i];
+        }
+        const scale = 1 / channels;
+        for (let i = 0; i < len; i++) mono[i] *= scale;
+
+        // Resample to 16kHz and send
+        const resampled = resampleMonoLinear(mono, ctx.sampleRate, 16000);
+        audioTx.send(Array.from(resampled)).catch(() => {});
+      };
+
+      source.connect(processor);
+      processor.connect(sink);
+      sink.connect(ctx.destination);
+
+      setStreaming(true);
+      setStatus("Streaming...");
+
+      // Cleanup function
+      streamCleanupRef.current = () => {
+        processor.disconnect();
+        source.disconnect();
+        sink.disconnect();
+        stream.getTracks().forEach((t) => t.stop());
+        ctx.close();
+        audioTx.close();
+
+        // Wait for final results
+        Promise.all([rpcPromise, receiveLoop]).then(([result]) => {
+          if (result && !result.ok) {
+            setError(result.error);
+          }
+        });
+      };
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setStatus(null);
+      setStreaming(false);
+    }
+  }, [streaming, wsUrl]);
+
   return (
     <div className="demo-panel">
       <div className="demo-toolbar">
         <button
           className={recorder.state === "recording" ? "danger" : "primary"}
           onClick={handleRecord}
-          disabled={recorder.state === "processing"}
+          disabled={streaming || recorder.state === "processing"}
         >
           {recorder.state === "recording" ? "STOP" : "RECORD"}
+        </button>
+
+        <button
+          className={streaming ? "danger" : "primary"}
+          onClick={handleStream}
+          disabled={recorder.state === "recording"}
+        >
+          {streaming ? "STOP STREAM" : "STREAM"}
         </button>
 
         <label className="ws-label">
@@ -95,7 +229,7 @@ export function TranscribeDemoPanel() {
             value={wsUrl}
             onChange={(e) => setWsUrl(e.target.value)}
             placeholder="ws://127.0.0.1:9944"
-            disabled={recorder.state === "recording"}
+            disabled={recorder.state === "recording" || streaming}
           />
         </label>
 
@@ -103,13 +237,19 @@ export function TranscribeDemoPanel() {
         {error && <span className="error">{error}</span>}
       </div>
 
-      {inspectorData ? (
+      {streaming || streamText ? (
+        <div className="demo-stream-output">
+          <span className="committed">{streamText.slice(0, streamCommittedLen)}</span>
+          <span className="pending">{streamText.slice(streamCommittedLen)}</span>
+          {streaming && <span className="cursor" />}
+        </div>
+      ) : inspectorData ? (
         <EvalInspector data={inspectorData} audioUrl={audioUrl} />
       ) : (
         <div className="demo-empty">
           {recorder.state === "recording"
             ? "Recording... click STOP to transcribe"
-            : "Press RECORD to capture audio and transcribe with BeeML"}
+            : "Press RECORD for batch transcription, or STREAM for real-time"}
         </div>
       )}
     </div>
