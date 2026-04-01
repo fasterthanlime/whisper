@@ -1,12 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
+  # one per line plz
   "rust/peft-rs",
-  "rust/beeml-corrupt",
   "rust/beeml",
-  "rust/beeml-pipeline",
-  "rust/beeml-train",
-  "rust/qwen3-asr-mlx-rs",
+  "rust/bee-asr",
   "rust/bee-ffi",
 ]
 default-members = ["rust/beeml-api"]
