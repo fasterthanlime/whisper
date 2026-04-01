@@ -25,6 +25,7 @@ final class AppState {
     private static let imeCancelName = NSNotification.Name("fasterthanlime.bee.imeCancel")
     private static let imeUserTypedName = NSNotification.Name("fasterthanlime.bee.imeUserTyped")
     private static let imeContextLostName = NSNotification.Name("fasterthanlime.bee.imeContextLost")
+    private static let imeSessionStartedName = NSNotification.Name("fasterthanlime.bee.imeSessionStarted")
 
     private(set) var uiState: UIState = .idle
     private var pendingTimer: Task<Void, Never>?
@@ -33,6 +34,8 @@ final class AppState {
     private var activeSessionTargetPID: pid_t?
     fileprivate var activeSessionTargetAppName: String?
     fileprivate var activeSessionTargetAppIcon: NSImage?
+    private var activeSessionIMEConfirmed = false
+    private var pendingLockRequest = false
     private var isSessionParked = false
     private var distributedObservers: [NSObjectProtocol] = []
     private var workspaceObservers: [NSObjectProtocol] = []
@@ -149,6 +152,8 @@ final class AppState {
             activeSessionTargetPID = targetPID
             activeSessionTargetAppName = targetApp?.localizedName
             activeSessionTargetAppIcon = targetApp?.icon
+            activeSessionIMEConfirmed = false
+            pendingLockRequest = false
             isSessionParked = false
             parkedOverlayText = ""
             uiState = .pending(session)
@@ -178,6 +183,11 @@ final class AppState {
 
         switch uiState {
         case .pending(let session):
+            guard activeSessionIMEConfirmed else {
+                pendingLockRequest = true
+                beeLog("SESSION: ROpt up while IME unconfirmed, waiting")
+                return false
+            }
             pendingTimer?.cancel()
             uiState = .locked(session)
             playRecordingStartedSound()
@@ -269,10 +279,17 @@ final class AppState {
     private func startPendingTimer(session: Session) {
         pendingTimer = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            if case .pending(let s) = uiState, s.id == session.id {
+            while !Task.isCancelled {
+                guard case .pending(let s) = uiState, s.id == session.id else { return }
+                guard activeSessionIMEConfirmed else {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    continue
+                }
+                guard !pendingLockRequest else { return }
+
                 uiState = .pushToTalk(s)
                 playRecordingStartedSound()
+                return
             }
         }
     }
@@ -337,11 +354,17 @@ final class AppState {
             }
         }
 
+        if uiState.session?.id == resultID {
+            transitionToIdle()
+        }
+
         if activeSessionID == resultID {
             activeSessionID = nil
             activeSessionTargetPID = nil
             activeSessionTargetAppName = nil
             activeSessionTargetAppIcon = nil
+            activeSessionIMEConfirmed = false
+            pendingLockRequest = false
             isSessionParked = false
             hideParkedOverlay()
         }
@@ -454,6 +477,14 @@ final class AppState {
                 }
             }
         )
+        distributedObservers.append(
+            dnc.addObserver(forName: Self.imeSessionStartedName, object: nil, queue: .main) { [weak self] notification in
+                let sessionID = Self.extractSessionID(notification.userInfo)
+                Task { @MainActor in
+                    self?.handleIMESessionStarted(sessionID: sessionID)
+                }
+            }
+        )
         workspaceObservers.append(
             nc.addObserver(
                 forName: NSWorkspace.didActivateApplicationNotification,
@@ -548,6 +579,22 @@ final class AppState {
         }
     }
 
+    private func handleIMESessionStarted(sessionID: UUID?) {
+        guard isNotificationForActiveSession(sessionID) else { return }
+        guard !activeSessionIMEConfirmed else { return }
+
+        activeSessionIMEConfirmed = true
+        guard case .pending(let session) = uiState else { return }
+
+        beeLog("SESSION: IME confirmed id=\(session.id.uuidString.prefix(8))")
+        if pendingLockRequest {
+            pendingLockRequest = false
+            pendingTimer?.cancel()
+            uiState = .locked(session)
+            playRecordingStartedSound()
+        }
+    }
+
     private func handleDidActivateApplication(processIdentifier: pid_t?, bundleIdentifier: String?) {
         guard let session = uiState.session else { return }
         guard activeSessionID == session.id else { return }
@@ -607,6 +654,8 @@ final class AppState {
     private func transitionToIdle() {
         uiState = .idle
         pendingTimer?.cancel()
+        activeSessionIMEConfirmed = false
+        pendingLockRequest = false
         isSessionParked = false
         hideParkedOverlay()
     }

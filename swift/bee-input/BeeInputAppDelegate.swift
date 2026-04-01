@@ -16,6 +16,7 @@ func beeInputLog(_ msg: String) {
 
 class BeeInputAppDelegate: NSObject, NSApplicationDelegate {
     var server: IMKServer?
+    private static let imeSessionStartedName = NSNotification.Name("fasterthanlime.bee.imeSessionStarted")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let connectionName = Bundle.main.infoDictionary?["InputMethodConnectionName"] as? String,
@@ -86,6 +87,7 @@ class BeeInputAppDelegate: NSObject, NSApplicationDelegate {
                 pid = nil
             }
             BeeXPCService.shared.setSessionContext(sessionID: sessionID, expectedTargetPID: pid)
+            Self.postSessionStartedIfReady()
         }
     }
 
@@ -96,5 +98,18 @@ class BeeInputAppDelegate: NSObject, NSApplicationDelegate {
             return nil
         }
         return sessionID
+    }
+
+    private static func postSessionStartedIfReady() {
+        guard let sessionID = BeeXPCService.shared.consumeSessionStartAcknowledgementIfReady() else {
+            return
+        }
+        DistributedNotificationCenter.default().postNotificationName(
+            imeSessionStartedName,
+            object: nil,
+            userInfo: ["sessionID": sessionID.uuidString],
+            deliverImmediately: true
+        )
+        beeInputLog("imeSessionStarted: session=\(sessionID.uuidString.prefix(8))")
     }
 }

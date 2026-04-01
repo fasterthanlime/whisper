@@ -45,7 +45,9 @@ scripts/__pycache__/
 *.db*
 .analysis/
 .claude/settings.local.json
+build-debug
 build-release/
+build-bee-debut/
 build-bee-release/
 .venv/
 venv/

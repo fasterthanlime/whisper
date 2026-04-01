@@ -4,6 +4,7 @@ import Carbon.HIToolbox.Events
 
 @objc(BeeInputController)
 class BeeInputController: IMKInputController {
+    private static let imeSessionStartedNotification = NSNotification.Name("fasterthanlime.bee.imeSessionStarted")
     private static let imeSubmitNotification = NSNotification.Name("fasterthanlime.bee.imeSubmit")
     private static let imeCancelNotification = NSNotification.Name("fasterthanlime.bee.imeCancel")
     private static let imeUserTypedNotification = NSNotification.Name("fasterthanlime.bee.imeUserTyped")
@@ -14,10 +15,12 @@ class BeeInputController: IMKInputController {
 
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
-        BeeXPCService.shared.activeController = self
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        BeeXPCService.shared.registerActiveController(self, clientPID: frontmostPID)
         let clientName = (self.client() as? NSObject)?.description.prefix(80) ?? "nil"
-        beeInputLog("activateServer: client=\(clientName)")
+        beeInputLog("activateServer: client=\(clientName) frontmostPID=\(frontmostPID.map(String.init) ?? "nil")")
         BeeXPCService.shared.flushPending()
+        postSessionStartedIfReady()
 
         // If beeInput was selected manually (outside a dictation session),
         // immediately switch back to a regular keyboard source.
@@ -37,9 +40,7 @@ class BeeInputController: IMKInputController {
         beeInputLog("deactivateServer: hadMarkedText=\(!currentMarkedText.isEmpty) isDictating=\(BeeXPCService.shared.isDictating)")
         let hadMarkedText = !currentMarkedText.isEmpty
 
-        if BeeXPCService.shared.activeController === self {
-            BeeXPCService.shared.activeController = nil
-        }
+        BeeXPCService.shared.unregisterActiveController(self)
 
         if hadMarkedText,
            let sessionID = BeeXPCService.shared.activeSessionID {
@@ -158,5 +159,16 @@ class BeeInputController: IMKInputController {
             userInfo: userInfo,
             deliverImmediately: true
         )
+    }
+
+    private func postSessionStartedIfReady() {
+        guard let sessionID = BeeXPCService.shared.consumeSessionStartAcknowledgementIfReady() else {
+            return
+        }
+        Self.postNotification(
+            Self.imeSessionStartedNotification,
+            userInfo: ["sessionID": sessionID.uuidString]
+        )
+        beeInputLog("imeSessionStarted: session=\(sessionID.uuidString.prefix(8))")
     }
 }

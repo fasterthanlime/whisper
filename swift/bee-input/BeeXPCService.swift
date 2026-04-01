@@ -7,9 +7,11 @@ final class BeeXPCService: NSObject {
     private static let beeBundleID = "fasterthanlime.inputmethod.bee"
 
     weak var activeController: BeeInputController?
+    private(set) var activeControllerPID: pid_t?
     private(set) var activeSessionID: UUID?
     var pendingText: String?
     var expectedTargetPID: pid_t?
+    private var acknowledgedSessionID: UUID?
 
     var controller: BeeInputController? {
         activeController
@@ -20,26 +22,25 @@ final class BeeXPCService: NSObject {
     }
 
     func setSessionContext(sessionID: UUID, expectedTargetPID: pid_t?) {
-        DispatchQueue.main.async {
-            let previous = self.activeSessionID
-            if previous != sessionID {
-                self.pendingText = nil
-            }
-
-            self.activeSessionID = sessionID
-            self.expectedTargetPID = expectedTargetPID
-            beeInputLog(
-                "setSessionContext: session=\(sessionID.uuidString.prefix(8)) pid=\(expectedTargetPID.map(String.init) ?? "nil")"
-            )
-            self.flushPending()
+        let previous = self.activeSessionID
+        if previous != sessionID {
+            self.pendingText = nil
+            self.acknowledgedSessionID = nil
         }
+
+        self.activeSessionID = sessionID
+        self.expectedTargetPID = expectedTargetPID
+        beeInputLog(
+            "setSessionContext: session=\(sessionID.uuidString.prefix(8)) pid=\(expectedTargetPID.map(String.init) ?? "nil")"
+        )
+        self.flushPending()
     }
 
     /// Called from BeeInputController.activateServer to flush any pending text.
     func flushPending() {
         guard let text = pendingText else { return }
-        guard isExpectedTargetFrontmost() else {
-            beeInputLog("flushPending: target not frontmost, keeping pending")
+        guard canRouteToCurrentController() else {
+            beeInputLog("flushPending: route not ready, keeping pending")
             return
         }
         guard let ctrl = controller else {
@@ -61,9 +62,9 @@ final class BeeXPCService: NSObject {
                 return
             }
 
-            guard self.isExpectedTargetFrontmost() else {
+            guard self.canRouteToCurrentController() else {
                 beeInputLog(
-                    "setMarkedText: frontmost pid mismatch, queuing \(text.prefix(40).debugDescription)"
+                    "setMarkedText: route not ready (frontmost/controller mismatch), queuing \(text.prefix(40).debugDescription)"
                 )
                 self.pendingText = text
                 return
@@ -124,12 +125,43 @@ final class BeeXPCService: NSObject {
         activeSessionID = nil
         pendingText = nil
         expectedTargetPID = nil
+        acknowledgedSessionID = nil
+    }
+
+    func registerActiveController(_ controller: BeeInputController, clientPID: pid_t?) {
+        activeController = controller
+        activeControllerPID = clientPID
+        beeInputLog("registerActiveController: pid=\(clientPID.map(String.init) ?? "nil")")
+    }
+
+    func unregisterActiveController(_ controller: BeeInputController) {
+        guard activeController === controller else { return }
+        activeController = nil
+        activeControllerPID = nil
+    }
+
+    func consumeSessionStartAcknowledgementIfReady() -> UUID? {
+        guard let sessionID = activeSessionID else { return nil }
+        guard acknowledgedSessionID != sessionID else { return nil }
+        guard canRouteToCurrentController() else { return nil }
+        acknowledgedSessionID = sessionID
+        return sessionID
     }
 
     private func isExpectedTargetFrontmost() -> Bool {
         guard let expectedTargetPID else { return true }
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         return frontmostPID == expectedTargetPID
+    }
+
+    private func isControllerOnExpectedTarget() -> Bool {
+        guard let expectedTargetPID else { return controller != nil }
+        guard controller != nil, let activeControllerPID else { return false }
+        return activeControllerPID == expectedTargetPID
+    }
+
+    private func canRouteToCurrentController() -> Bool {
+        isExpectedTargetFrontmost() && isControllerOnExpectedTarget()
     }
 
     func switchAwayFromBeeInput() {

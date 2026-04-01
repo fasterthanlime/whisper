@@ -3,236 +3,126 @@ import SwiftUI
 
 struct MenuBarView: View {
     @Bindable var appState: AppState
-
-    @State private var showSettings = false
-    @State private var pauseMediaEnabled = false // TODO: wire to MediaController
-    @State private var runOnStartupEnabled = false
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            statusSection
-
-            if case .downloading(let progress) = appState.modelStatus {
-                ProgressView(value: progress)
-                    .padding(.horizontal, 2)
+            Button {
+                openWindow(id: "bee-main")
+            } label: {
+                Label("Open Bee", systemImage: "app.badge")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
 
-            if !appState.transcriptionHistory.isEmpty {
-                Divider().padding(.horizontal, 2)
-                historySection
+            SettingsLink {
+                Label("Settings…", systemImage: "gearshape")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
 
             Divider().padding(.horizontal, 2)
-            settingsDisclosure
 
-            if showSettings {
-                settingsContent
+            Button {
+                BeeInputClient.restoreInputSourceIfNeeded()
+                NSApplication.shared.terminate(nil)
+            } label: {
+                Label("Quit Bee", systemImage: "power")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
             }
-
-            Divider().padding(.horizontal, 2)
-            quitButton
+            .buttonStyle(.plain)
+            .keyboardShortcut("q")
         }
         .padding(10)
-        .frame(width: 280)
+        .frame(width: 220)
     }
+}
 
-    // MARK: - Status
+struct BeeSettingsView: View {
+    @Bindable var appState: AppState
 
-    @ViewBuilder
-    private var statusSection: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 9, height: 9)
-            Text(statusLabel)
-                .font(.system(.body, weight: .semibold))
-        }
-        .padding(.horizontal, 6)
-    }
+    @State private var runOnStartupEnabled = false
+    @State private var pauseMediaEnabled = false
 
-    private var statusLabel: String {
-        switch appState.uiState {
-        case .idle:
-            switch appState.modelStatus {
-            case .loaded: "Bee Ready"
-            case .loading: "Loading Model..."
-            case .downloading: "Downloading Model..."
-            case .notLoaded: "No Model"
-            case .error(let msg): "Error: \(msg)"
-            }
-        case .pending: "Starting..."
-        case .pushToTalk: "Recording"
-        case .locked: "Recording (Locked)"
-        case .lockedOptionHeld: "Recording (Locked)"
-        }
-    }
-
-    private var statusColor: Color {
-        switch appState.uiState {
-        case .idle:
-            switch appState.modelStatus {
-            case .loaded: .green
-            case .error: .red
-            default: .orange
-            }
-        case .pending, .pushToTalk, .locked, .lockedOptionHeld:
-            .red
-        }
-    }
-
-    // MARK: - History
-
-    @ViewBuilder
-    private var historySection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Recent")
-                .font(.system(.caption, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-
-            ForEach(appState.transcriptionHistory.prefix(10)) { item in
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(item.text, forType: .string)
+    var body: some View {
+        NavigationSplitView {
+            List {
+                NavigationLink {
+                    HowBeeWorksView()
                 } label: {
-                    Text(item.displayText)
-                        .font(.system(.caption))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background {
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(Color.primary.opacity(0.05))
-                        }
-                        .contentShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    Label("How Bee Works", systemImage: "book")
                 }
-                .buttonStyle(.plain)
-                .help(item.text)
+
+                NavigationLink {
+                    AdvancedSettingsView(
+                        appState: appState,
+                        runOnStartupEnabled: $runOnStartupEnabled,
+                        pauseMediaEnabled: $pauseMediaEnabled
+                    )
+                } label: {
+                    Label("Advanced", systemImage: "slider.horizontal.3")
+                }
             }
+            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
+        } detail: {
+            HowBeeWorksView()
+        }
+        .frame(minWidth: 760, minHeight: 520)
+    }
+}
+
+private struct HowBeeWorksView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("How Bee Works")
+                    .font(.title2.weight(.semibold))
+
+                settingSection(
+                    title: "Core Flow",
+                    body: "1. Hold Right Option to start.\n2. Keep holding for push-to-talk, or tap Right Command to lock.\n3. Press Enter to submit or Escape to cancel."
+                )
+
+                settingSection(
+                    title: "Mental Model",
+                    body: "Bee is designed to stay out of your way: use hotkeys for speed, use the Bee window for runtime visibility, and use this Settings window for learning + advanced tuning."
+                )
+
+                settingSection(
+                    title: "Best Practices",
+                    body: "Use the default chunk and token settings unless you have a specific latency/quality issue to solve. If audio quality changes, revisit input device + keep-warm first."
+                )
+            }
+            .frame(maxWidth: 700, alignment: .leading)
+            .padding(24)
         }
     }
 
-    // MARK: - Settings disclosure
-
-    @ViewBuilder
-    private var settingsDisclosure: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.15)) {
-                showSettings.toggle()
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "gearshape")
-                    .font(.system(.caption))
-                Text("Settings")
-                    .font(.system(.body))
-                Spacer()
-                Image(systemName: showSettings ? "chevron.up" : "chevron.down")
-                    .font(.system(.caption2, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: - Settings content
-
-    @ViewBuilder
-    private var settingsContent: some View {
+    private func settingSection(title: String, body: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            inputDeviceSection
-            Divider().padding(.horizontal, 2)
-            togglesSection
-        }
-        .padding(.leading, 8)
-    }
-
-    @ViewBuilder
-    private var inputDeviceSection: some View {
-        let deviceName = appState.activeInputDeviceName ?? "No Input"
-
-        HStack(spacing: 8) {
-            Text("Input")
-                .font(.system(.caption))
+            Text(title)
+                .font(.headline)
+            Text(body)
+                .font(.body)
                 .foregroundStyle(.secondary)
-                .frame(width: 60, alignment: .leading)
-            Spacer(minLength: 0)
-            Menu {
-                if appState.availableInputDevices.isEmpty {
-                    Text("No Input Devices")
-                } else {
-                    ForEach(appState.availableInputDevices, id: \.uid) { device in
-                        Button {
-                            appState.selectInputDevice(uid: device.uid)
-                        } label: {
-                            if device.uid == appState.activeInputDeviceUID {
-                                Label(device.name, systemImage: "checkmark")
-                            } else {
-                                Text(device.name)
-                            }
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "mic.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.blue)
-                    Text(deviceName)
-                        .font(.system(.caption2, weight: .medium))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(.caption2, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 4)
-                .background {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.primary.opacity(0.05))
-                }
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-
-        toggleRow(label: "Keep Warm", isOn: appState.activeInputDeviceKeepWarm) {
-            appState.toggleActiveInputDeviceKeepWarm()
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
+}
 
-    @ViewBuilder
-    private var togglesSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            chunkSizePicker
-            tokenLimitPicker(label: "Tokens/step", options: Self.streamingTokenOptions, current: appState.maxNewTokensStreaming) {
-                appState.maxNewTokensStreaming = $0
-            }
-            tokenLimitPicker(label: "Tokens/final", options: Self.finalTokenOptions, current: appState.maxNewTokensFinal) {
-                appState.maxNewTokensFinal = $0
-            }
-
-            toggleRow(label: "Run on Startup", isOn: runOnStartupEnabled) {
-                runOnStartupEnabled.toggle()
-                // TODO: SMAppService register/unregister
-            }
-
-            toggleRow(label: "Pause Media While Dictating", isOn: pauseMediaEnabled) {
-                pauseMediaEnabled.toggle()
-                // TODO: persist to UserDefaults
-            }
-
-            toggleRow(label: "Debug Overlay", isOn: appState.debugEnabled) {
-                appState.debugEnabled.toggle()
-                DebugPanel.shared.toggle(appState: appState)
-            }
-        }
-    }
+private struct AdvancedSettingsView: View {
+    @Bindable var appState: AppState
+    @Binding var runOnStartupEnabled: Bool
+    @Binding var pauseMediaEnabled: Bool
 
     private static let chunkSizeOptions: [(label: String, value: Float)] = [
         ("0.2s", 0.2),
@@ -254,123 +144,111 @@ struct MenuBarView: View {
         ("default", 0), ("64", 64), ("128", 128), ("256", 256), ("512", 512),
     ]
 
-    @ViewBuilder
-    private func tokenLimitPicker(label: String, options: [(label: String, value: UInt32)], current: UInt32, action: @escaping (UInt32) -> Void) -> some View {
-        HStack(spacing: 8) {
-            Text(label)
-                .font(.system(.caption))
-                .foregroundStyle(.secondary)
-                .frame(width: 60, alignment: .leading)
-            Spacer(minLength: 0)
-            Menu {
-                ForEach(options, id: \.value) { opt in
-                    Button {
-                        action(opt.value)
-                    } label: {
-                        if current == opt.value {
-                            Label(opt.label, systemImage: "checkmark")
-                        } else {
-                            Text(opt.label)
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Advanced")
+                    .font(.title2.weight(.semibold))
+
+                GroupBox("Audio") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        inputDevicePicker
+                        Toggle("Keep active input warm", isOn: Binding(
+                            get: { appState.activeInputDeviceKeepWarm },
+                            set: { _ in appState.toggleActiveInputDeviceKeepWarm() }
+                        ))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                GroupBox("Transcription") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        chunkSizePicker
+                        tokenLimitPicker(
+                            label: "Streaming tokens",
+                            options: Self.streamingTokenOptions,
+                            current: appState.maxNewTokensStreaming
+                        ) {
+                            appState.maxNewTokensStreaming = $0
+                        }
+                        tokenLimitPicker(
+                            label: "Final tokens",
+                            options: Self.finalTokenOptions,
+                            current: appState.maxNewTokensFinal
+                        ) {
+                            appState.maxNewTokensFinal = $0
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-            } label: {
-                rowMenuLabel(selectedText: options.first(where: { $0.value == current })?.label ?? "\(current)")
+
+                GroupBox("Behavior") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle("Run on startup", isOn: $runOnStartupEnabled)
+                        Toggle("Pause media while dictating", isOn: $pauseMediaEnabled)
+                        Toggle("Debug overlay", isOn: Binding(
+                            get: { appState.debugEnabled },
+                            set: {
+                                appState.debugEnabled = $0
+                                DebugPanel.shared.toggle(appState: appState)
+                            }
+                        ))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Text("Startup/media toggles are UI scaffolding for now and still need backend wiring.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: 700, alignment: .leading)
+            .padding(24)
         }
-        .padding(.horizontal, 6)
     }
 
-    @ViewBuilder
+    private var inputDevicePicker: some View {
+        Picker("Input device", selection: Binding(
+            get: { appState.activeInputDeviceUID ?? "" },
+            set: { appState.selectInputDevice(uid: $0) }
+        )) {
+            if appState.availableInputDevices.isEmpty {
+                Text("No Input Devices")
+                    .tag("")
+            } else {
+                ForEach(appState.availableInputDevices, id: \.uid) { device in
+                    Text(device.name).tag(device.uid)
+                }
+            }
+        }
+        .pickerStyle(.menu)
+    }
+
     private var chunkSizePicker: some View {
-        HStack(spacing: 8) {
-            Text("Chunk")
-                .font(.system(.caption))
-                .foregroundStyle(.secondary)
-                .frame(width: 60, alignment: .leading)
-            Spacer(minLength: 0)
-            Menu {
-                ForEach(Self.chunkSizeOptions, id: \.value) { opt in
-                    Button {
-                        appState.chunkSizeSec = opt.value
-                    } label: {
-                        if appState.chunkSizeSec == opt.value {
-                            Label(opt.label, systemImage: "checkmark")
-                        } else {
-                            Text(opt.label)
-                        }
-                    }
-                }
-            } label: {
-                rowMenuLabel(selectedText: Self.chunkSizeOptions.first(where: { $0.value == appState.chunkSizeSec })?.label ?? "\(appState.chunkSizeSec)s")
+        Picker("Chunk size", selection: Binding(
+            get: { appState.chunkSizeSec },
+            set: { appState.chunkSizeSec = $0 }
+        )) {
+            ForEach(Self.chunkSizeOptions, id: \.value) { option in
+                Text(option.label).tag(option.value)
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 6)
+        .pickerStyle(.menu)
     }
 
-    @ViewBuilder
-    private func rowMenuLabel(selectedText: String) -> some View {
-        HStack(spacing: 6) {
-            Text(selectedText)
-                .font(.system(.caption2, weight: .medium))
-                .lineLimit(1)
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.system(.caption2, weight: .semibold))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4)
-        .background {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.primary.opacity(0.05))
-        }
-    }
-
-    @ViewBuilder
-    private func toggleRow(label: String, isOn: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                if isOn {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(.caption, weight: .semibold))
-                        .foregroundStyle(.green)
-                }
-                Text(label)
-                    .font(.system(.caption))
-                Spacer()
+    private func tokenLimitPicker(
+        label: String,
+        options: [(label: String, value: UInt32)],
+        current: UInt32,
+        action: @escaping (UInt32) -> Void
+    ) -> some View {
+        Picker(label, selection: Binding(
+            get: { current },
+            set: action
+        )) {
+            ForEach(options, id: \.value) { option in
+                Text(option.label).tag(option.value)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: - Quit
-
-    @ViewBuilder
-    private var quitButton: some View {
-        Button {
-            BeeInputClient.restoreInputSourceIfNeeded()
-            NSApplication.shared.terminate(nil)
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "power")
-                    .font(.system(.caption))
-                Text("Quit Bee")
-                    .font(.system(.body))
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .keyboardShortcut("q")
+        .pickerStyle(.menu)
     }
 }
