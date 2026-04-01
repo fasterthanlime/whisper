@@ -20,7 +20,7 @@ struct BeemlServiceInner {
 
 impl BeeMl for BeeMlService {
     async fn transcribe_wav(&self, wav_bytes: Vec<u8>) -> Result<TranscribeWavResult, String> {
-        let mut engine = self.inner.asr_engine.lock().await;
+        let engine = self.inner.asr_engine.lock().await;
         let (transcript, qwen_words) = engine
             .transcribe_wav_with_alignments(&wav_bytes)
             .map_err(|e| e.to_string())?;

@@ -221,7 +221,7 @@ fn run_align(
 
     println!("\nLoading forced aligner...");
     let t0 = Instant::now();
-    let mut aligner =
+    let aligner =
         bee_qwen3_asr::forced_aligner::ForcedAligner::load(&aligner_dir, tokenizer.clone())?;
     println!("Aligner loaded in {:.0}ms", t0.elapsed().as_millis());
 

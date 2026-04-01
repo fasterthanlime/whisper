@@ -455,11 +455,11 @@ fn feed_impl(
     let session = unsafe { &mut *session };
     let audio = unsafe { std::slice::from_raw_parts(samples, num_samples) };
 
-    let mut guard = session.engine.lock().unwrap();
+    let guard = session.engine.lock().unwrap();
     let result = if finalizing {
-        streaming::feed_audio_finalizing(&mut guard.model, &mut session.state, audio)
+        streaming::feed_audio_finalizing(&guard.model, &mut session.state, audio)
     } else {
-        streaming::feed_audio(&mut guard.model, &mut session.state, audio)
+        streaming::feed_audio(&guard.model, &mut session.state, audio)
     };
     drop(guard);
 
@@ -563,8 +563,8 @@ pub unsafe extern "C" fn asr_session_finish(
     }
 
     let session = unsafe { &mut *session };
-    let mut guard = session.engine.lock().unwrap();
-    let result = streaming::finish_streaming(&mut guard.model, &mut session.state);
+    let guard = session.engine.lock().unwrap();
+    let result = streaming::finish_streaming(&guard.model, &mut session.state);
     drop(guard);
 
     match result {

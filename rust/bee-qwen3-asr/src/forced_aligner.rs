@@ -4,7 +4,7 @@
 //! a timestamp classification head instead of a vocabulary LM head).
 //!
 //! The aligner takes audio + known text, runs a single forward pass (non-autoregressive),
-//! and predicts timestamp buckets at designated [TS] positions in the prompt.
+//! and predicts timestamp buckets at designated \[TS\] positions in the prompt.
 
 use std::path::Path;
 
