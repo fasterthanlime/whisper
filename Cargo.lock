@@ -186,6 +186,7 @@ dependencies = [
  "bee-vad",
  "env_logger",
  "facet",
+ "hound",
  "log",
  "mlx-rs",
  "serde_json",
@@ -206,7 +207,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bee-phonetic",
- "bee-qwen3-asr",
+ "bee-transcribe",
  "facet",
  "tokio",
  "vox",

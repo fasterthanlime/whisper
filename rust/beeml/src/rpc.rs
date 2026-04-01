@@ -1,11 +1,11 @@
 use facet::Facet;
 
-use bee_qwen3_asr::forced_aligner::ForcedAlignItem;
+use bee_transcribe::AlignedWord;
 
 #[derive(Clone, Debug, Facet)]
 pub struct TranscribeWavResult {
     pub transcript: String,
-    pub qwen_words: Vec<ForcedAlignItem>,
+    pub words: Vec<AlignedWord>,
 }
 
 #[vox::service]

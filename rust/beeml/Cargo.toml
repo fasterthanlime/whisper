@@ -19,7 +19,7 @@ path = "src/bin/gen-ts-api.rs"
 
 [dependencies]
 bee-phonetic = { path = "../bee-phonetic" }
-bee-qwen3-asr = { path = "../bee-qwen3-asr" }
+bee-transcribe = { path = "../bee-transcribe" }
 anyhow = { workspace = true }
 facet = "0.44.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"], optional = true }
