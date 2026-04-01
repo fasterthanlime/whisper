@@ -3,6 +3,11 @@ import Carbon
 import Foundation
 
 final class BeeXPCService: NSObject {
+    struct SessionStartAck {
+        let sessionID: UUID
+        let clientIdentity: String?
+    }
+
     static let shared = BeeXPCService()
     private static let beeBundleID = "fasterthanlime.inputmethod.bee"
 
@@ -12,6 +17,7 @@ final class BeeXPCService: NSObject {
     private(set) var activeSessionID: UUID?
     var pendingText: String?
     private var acknowledgedSessionID: UUID?
+    private var boundClientIdentity: String?
 
     var controller: BeeInputController? {
         activeController
@@ -29,8 +35,9 @@ final class BeeXPCService: NSObject {
         let previous = self.activeSessionID
         if previous != sessionID {
             self.pendingText = nil
-            self.acknowledgedSessionID = nil
         }
+        self.acknowledgedSessionID = nil
+        self.boundClientIdentity = nil
 
         self.activeSessionID = sessionID
         beeInputLog(
@@ -128,6 +135,7 @@ final class BeeXPCService: NSObject {
         activeSessionID = nil
         pendingText = nil
         acknowledgedSessionID = nil
+        boundClientIdentity = nil
     }
 
     func registerActiveController(_ controller: BeeInputController, clientPID: pid_t?, clientIdentity: String?) {
@@ -146,21 +154,24 @@ final class BeeXPCService: NSObject {
         activeClientIdentity = nil
     }
 
-    func consumeSessionStartAcknowledgementIfReady() -> UUID? {
+    func consumeSessionStartAcknowledgementIfReady() -> SessionStartAck? {
         guard let sessionID = activeSessionID else { return nil }
         guard acknowledgedSessionID != sessionID else { return nil }
         guard canRouteToCurrentController() else { return nil }
         acknowledgedSessionID = sessionID
-        return sessionID
+        boundClientIdentity = activeClientIdentity
+        return SessionStartAck(sessionID: sessionID, clientIdentity: boundClientIdentity)
     }
 
     private func canRouteToCurrentController() -> Bool {
-        controller != nil
+        guard controller != nil else { return false }
+        guard let boundClientIdentity else { return true }
+        return activeClientIdentity == boundClientIdentity
     }
 
     private func routingDebugInfo() -> String {
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        return "frontmost=\(frontmostPID.map(String.init) ?? "nil") controllerPID=\(activeControllerPID.map(String.init) ?? "nil") clientID=\(activeClientIdentity ?? "nil") hasController=\(activeController != nil)"
+        return "frontmost=\(frontmostPID.map(String.init) ?? "nil") controllerPID=\(activeControllerPID.map(String.init) ?? "nil") clientID=\(activeClientIdentity ?? "nil") boundClientID=\(boundClientIdentity ?? "nil") hasController=\(activeController != nil)"
     }
 
     func switchAwayFromBeeInput() {

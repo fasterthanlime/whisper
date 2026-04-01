@@ -508,8 +508,9 @@ final class AppState {
         distributedObservers.append(
             dnc.addObserver(forName: Self.imeSessionStartedName, object: nil, queue: .main) { [weak self] notification in
                 let sessionID = Self.extractSessionID(notification.userInfo)
+                let clientID = Self.extractClientID(notification.userInfo)
                 Task { @MainActor in
-                    self?.handleIMESessionStarted(sessionID: sessionID)
+                    self?.handleIMESessionStarted(sessionID: sessionID, clientID: clientID)
                 }
             }
         )
@@ -613,14 +614,16 @@ final class AppState {
         }
     }
 
-    private func handleIMESessionStarted(sessionID: UUID?) {
+    private func handleIMESessionStarted(sessionID: UUID?, clientID: String?) {
         guard isNotificationForActiveSession(sessionID) else { return }
         guard !activeSessionIMEConfirmed else { return }
 
         activeSessionIMEConfirmed = true
         guard case .pending(let session) = uiState else { return }
 
-        beeLog("SESSION: IME confirmed id=\(session.id.uuidString.prefix(8))")
+        beeLog(
+            "SESSION: IME confirmed id=\(session.id.uuidString.prefix(8)) clientID=\(clientID ?? "nil")"
+        )
         if pendingLockRequest {
             pendingLockRequest = false
             pendingTimer?.cancel()
@@ -683,6 +686,10 @@ final class AppState {
             return nil
         }
         return UUID(uuidString: raw)
+    }
+
+    nonisolated private static func extractClientID(_ userInfo: [AnyHashable: Any]?) -> String? {
+        userInfo?["clientID"] as? String
     }
 
     private func transitionToIdle() {

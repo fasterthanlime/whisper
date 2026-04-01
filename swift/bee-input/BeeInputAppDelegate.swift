@@ -91,15 +91,21 @@ class BeeInputAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private static func postSessionStartedIfReady() {
-        guard let sessionID = BeeXPCService.shared.consumeSessionStartAcknowledgementIfReady() else {
+        guard let ack = BeeXPCService.shared.consumeSessionStartAcknowledgementIfReady() else {
             return
+        }
+        var userInfo: [AnyHashable: Any] = ["sessionID": ack.sessionID.uuidString]
+        if let clientID = ack.clientIdentity {
+            userInfo["clientID"] = clientID
         }
         DistributedNotificationCenter.default().postNotificationName(
             imeSessionStartedName,
             object: nil,
-            userInfo: ["sessionID": sessionID.uuidString],
+            userInfo: userInfo,
             deliverImmediately: true
         )
-        beeInputLog("imeSessionStarted: session=\(sessionID.uuidString.prefix(8))")
+        beeInputLog(
+            "imeSessionStarted: session=\(ack.sessionID.uuidString.prefix(8)) clientID=\(ack.clientIdentity ?? "nil")"
+        )
     }
 }
