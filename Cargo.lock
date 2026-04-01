@@ -138,11 +138,12 @@ checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
 name = "bee-ffi"
 version = "0.1.0"
 dependencies = [
- "bee-qwen3-asr",
+ "bee-transcribe",
  "bee-vad",
  "dirs",
  "env_logger",
  "log",
+ "mlx-rs",
  "serde_json",
 ]
 

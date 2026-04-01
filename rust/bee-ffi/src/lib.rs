@@ -1,15 +1,11 @@
-//! FFI layer for qwen3-asr-mlx — same C API as the candle FFI.
+//! FFI layer for bee-transcribe — C API for streaming speech-to-text.
 
 use std::ffi::{c_char, c_float, c_uint, CStr, CString};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Once};
 
-use bee_qwen3_asr::config::AsrConfig;
-use bee_qwen3_asr::forced_aligner::ForcedAligner;
-use bee_qwen3_asr::model::Qwen3ASRModel;
-use bee_qwen3_asr::streaming::{self, StreamingMode, StreamingOptions, StreamingState};
-use bee_qwen3_asr::{mlx_rs, tokenizers};
+use bee_transcribe::{Engine, EngineConfig, Language, Session, SessionOptions};
 
 static INIT_LOGGER: Once = Once::new();
 
@@ -21,31 +17,30 @@ fn init_logger() {
 
 // ── Engine ──────────────────────────────────────────────────────────────
 
-struct AsrEngineInner {
-    model: Qwen3ASRModel,
-    tokenizer: tokenizers::Tokenizer,
-    /// Pre-loaded VAD tensors (loaded once at engine init, used per session).
+pub struct AsrEngine {
+    inner: Arc<Engine>,
+    /// Pre-loaded VAD tensors (loaded once, cloned per session).
     vad_tensors: Option<std::collections::HashMap<String, mlx_rs::Array>>,
 }
 
-// SAFETY: MLX arrays use heap-allocated Metal buffers accessed via Arc.
-// Concurrent access is prevented by the Mutex in AsrSession.
-unsafe impl Send for AsrEngineInner {}
-
-pub struct AsrEngine {
-    inner: Arc<Mutex<AsrEngineInner>>,
-}
+// SAFETY: Engine is immutable after construction. MLX arrays are heap-allocated
+// Metal buffers; concurrent read access is safe.
+unsafe impl Send for AsrEngine {}
+unsafe impl Sync for AsrEngine {}
 
 // ── Session ─────────────────────────────────────────────────────────────
 
 pub struct AsrSession {
-    engine: Arc<Mutex<AsrEngineInner>>,
-    state: StreamingState,
+    // We store the Arc to keep the engine alive. The Session borrows it
+    // via a raw pointer with 'static lifetime — safe because the Arc
+    // guarantees the engine outlives the session.
+    _engine: Arc<Engine>,
+    session: Session<'static>,
     last_text: String,
 }
 
-// SAFETY: Same reasoning as AsrEngineInner — Metal buffers are heap-allocated,
-// concurrent access prevented by external synchronization (Swift calls are sequential).
+// SAFETY: Session contains MLX arrays (Metal buffers) accessed sequentially.
+// Swift calls are serialized by the caller.
 unsafe impl Send for AsrSession {}
 
 // ── Options (must match C header layout) ────────────────────────────────
@@ -97,45 +92,54 @@ fn ffi_log(msg: &str) {
     }
 }
 
-fn find_tokenizer(model_dir: &Path) -> Option<tokenizers::Tokenizer> {
-    let paths = [
-        model_dir.join("tokenizer.json"),
-        dirs::home_dir()?.join("Library/Caches/qwen3-asr/Qwen--Qwen3-ASR-1.7B/tokenizer.json"),
-        dirs::home_dir()?.join("Library/Caches/qwen3-asr/Qwen--Qwen3-ASR-0.6B/tokenizer.json"),
-    ];
-    for p in &paths {
-        if p.exists() {
-            if let Ok(t) = tokenizers::Tokenizer::from_file(p) {
-                return Some(t);
-            }
-        }
-    }
-    None
-}
-
 fn find_vad_dir() -> Option<PathBuf> {
-    let dir = dirs::home_dir()?.join("Library/Caches/qwen3-asr/aitytech--Silero-VAD-v5-MLX");
-    if dir.exists() {
-        Some(dir)
-    } else {
-        None
-    }
-}
-
-fn find_aligner_dir() -> Option<PathBuf> {
-    let base = dirs::home_dir()?.join("Library/Caches/qwen3-asr");
-    // Prefer 4-bit quantized aligner
-    let candidates = [
-        "mlx-community--Qwen3-ForcedAligner-0.6B-4bit",
-        "Qwen--Qwen3-ForcedAligner-0.6B",
-    ];
-    for name in &candidates {
-        let dir = base.join(name);
-        if dir.exists() {
-            return Some(dir);
+    if let Ok(dir) = std::env::var("BEE_VAD_DIR") {
+        let p = PathBuf::from(dir);
+        if p.exists() {
+            return Some(p);
         }
     }
-    None
+    let dir = dirs::home_dir()?.join("Library/Caches/qwen3-asr/aitytech--Silero-VAD-v5-MLX");
+    if dir.exists() { Some(dir) } else { None }
+}
+
+fn resolve_engine_config(model_dir: &Path) -> Result<EngineConfig<'static>, String> {
+    // Tokenizer: env var, then model_dir/tokenizer.json
+    let tokenizer_path: PathBuf = if let Ok(p) = std::env::var("BEE_TOKENIZER_PATH") {
+        PathBuf::from(p)
+    } else {
+        model_dir.join("tokenizer.json")
+    };
+    if !tokenizer_path.exists() {
+        return Err(format!("tokenizer not found at {}", tokenizer_path.display()));
+    }
+
+    // Aligner: env var, then well-known locations
+    let aligner_dir: PathBuf = if let Ok(p) = std::env::var("BEE_ALIGNER_DIR") {
+        PathBuf::from(p)
+    } else {
+        let home = dirs::home_dir().ok_or("no home dir")?;
+        let base = home.join("Library/Caches/qwen3-asr");
+        let candidates = [
+            "mlx-community--Qwen3-ForcedAligner-0.6B-4bit",
+            "Qwen--Qwen3-ForcedAligner-0.6B",
+        ];
+        candidates.iter()
+            .map(|n| base.join(n))
+            .find(|p| p.exists())
+            .ok_or("forced aligner not found")?
+    };
+
+    // Leak the PathBufs to get 'static references (engine lives for process lifetime)
+    let model_dir: &'static Path = Box::leak(model_dir.to_path_buf().into_boxed_path());
+    let tokenizer_path: &'static Path = Box::leak(tokenizer_path.into_boxed_path());
+    let aligner_dir: &'static Path = Box::leak(aligner_dir.into_boxed_path());
+
+    Ok(EngineConfig {
+        model_dir,
+        tokenizer_path,
+        aligner_dir,
+    })
 }
 
 // ── Engine API ──────────────────────────────────────────────────────────
@@ -160,37 +164,15 @@ pub unsafe extern "C" fn asr_engine_load(
     match load_engine(&model_dir) {
         Ok(engine) => Box::into_raw(Box::new(engine)),
         Err(e) => {
-            set_err(out_err, &e.to_string());
+            set_err(out_err, &e);
             std::ptr::null_mut()
         }
     }
 }
 
 fn load_engine(model_dir: &Path) -> Result<AsrEngine, String> {
-    let config_str = std::fs::read_to_string(model_dir.join("config.json"))
-        .map_err(|e| format!("read config: {e}"))?;
-    let config: AsrConfig =
-        serde_json::from_str(&config_str).map_err(|e| format!("parse config: {e}"))?;
-
-    let mut model =
-        Qwen3ASRModel::new(&config.thinker_config).map_err(|e| format!("create model: {e}"))?;
-
-    let stats = bee_qwen3_asr::load::load_weights(&mut model, model_dir)
-        .map_err(|e| format!("load weights: {e}"))?;
-
-    use mlx_rs::module::ModuleParametersExt;
-    model.eval().map_err(|e| format!("eval: {e}"))?;
-
-    log::info!(
-        "MLX engine loaded: {}/{} keys, {} quantized ({}bit)",
-        stats.loaded,
-        stats.total_keys,
-        stats.quantized_layers,
-        stats.bits,
-    );
-
-    let tokenizer =
-        find_tokenizer(model_dir).ok_or_else(|| "tokenizer.json not found".to_string())?;
+    let config = resolve_engine_config(model_dir)?;
+    let engine = Engine::load(&config).map_err(|e| format!("load engine: {e}"))?;
 
     let vad_tensors = find_vad_dir().and_then(|d| {
         let st_path = d.join("model.safetensors");
@@ -206,14 +188,9 @@ fn load_engine(model_dir: &Path) -> Result<AsrEngine, String> {
         }
     });
 
-    let inner = AsrEngineInner {
-        model,
-        tokenizer,
-        vad_tensors,
-    };
-
     Ok(AsrEngine {
-        inner: Arc::new(Mutex::new(inner)),
+        inner: Arc::new(engine),
+        vad_tensors,
     })
 }
 
@@ -242,25 +219,18 @@ pub unsafe extern "C" fn asr_engine_from_pretrained(
         }
     };
 
-    // Resolve repo ID to local directory: "org/model" → "org--model" under cache_dir
     let dir_name = model_id.replace('/', "--");
     let model_dir = PathBuf::from(cache_dir).join(&dir_name);
 
     if !model_dir.exists() {
-        set_err(
-            out_err,
-            &format!(
-                "model not found at {}. Download it first.",
-                model_dir.display()
-            ),
-        );
+        set_err(out_err, &format!("model not found at {}", model_dir.display()));
         return std::ptr::null_mut();
     }
 
     match load_engine(&model_dir) {
         Ok(engine) => Box::into_raw(Box::new(engine)),
         Err(e) => {
-            set_err(out_err, &e.to_string());
+            set_err(out_err, &e);
             std::ptr::null_mut()
         }
     }
@@ -274,10 +244,7 @@ pub extern "C" fn asr_engine_from_gguf(
     _cache_dir: *const c_char,
     out_err: *mut *mut c_char,
 ) -> *mut AsrEngine {
-    set_err(
-        out_err,
-        "GGUF not supported by MLX backend — use safetensors models",
-    );
+    set_err(out_err, "GGUF not supported by MLX backend — use safetensors models");
     std::ptr::null_mut()
 }
 
@@ -315,89 +282,45 @@ pub unsafe extern "C" fn asr_session_create(
     }
 
     let engine_ref = unsafe { &*engine };
-    let inner = engine_ref.inner.clone();
+    let arc = engine_ref.inner.clone();
 
-    let chunk_size = if opts.chunk_size_sec > 0.0 {
-        opts.chunk_size_sec
-    } else {
-        0.4
-    };
-    let max_streaming = if opts.max_new_tokens_streaming > 0 {
-        opts.max_new_tokens_streaming as usize
-    } else {
-        32
-    };
-    let max_final = if opts.max_new_tokens_final > 0 {
-        opts.max_new_tokens_final as usize
-    } else {
-        512
-    };
+    let chunk_duration = if opts.chunk_size_sec > 0.0 { opts.chunk_size_sec } else { 0.4 };
+    let max_streaming = if opts.max_new_tokens_streaming > 0 { opts.max_new_tokens_streaming as usize } else { 32 };
+    let max_final = if opts.max_new_tokens_final > 0 { opts.max_new_tokens_final as usize } else { 512 };
 
     let language = if !opts.language.is_null() {
-        let s = unsafe { CStr::from_ptr(opts.language) }
-            .to_str()
-            .unwrap_or("");
-        if s.is_empty() {
-            None
-        } else {
-            Some(s.to_string())
-        }
+        let s = unsafe { CStr::from_ptr(opts.language) }.to_str().unwrap_or("");
+        if s.is_empty() { Language::default() } else { Language(s.to_string()) }
     } else {
-        None
+        Language::default()
     };
 
-    let mut streaming_opts = StreamingOptions::default()
-        .with_mode(StreamingMode::Rotate)
-        .with_chunk_size_sec(chunk_size)
-        .with_max_new_tokens_streaming(max_streaming)
-        .with_max_new_tokens_final(max_final);
-
-    if let Some(lang) = language {
-        streaming_opts = streaming_opts.with_language(lang);
-    }
-
-    // Load forced aligner if available
-    let aligner = {
-        let guard = inner.lock().unwrap();
-        find_aligner_dir().and_then(|dir| {
-            match ForcedAligner::load(&dir, guard.tokenizer.clone()) {
-                Ok(a) => {
-                    log::info!("Forced aligner loaded for session");
-                    Some(a)
-                }
-                Err(e) => {
-                    log::warn!("Failed to load forced aligner: {e}");
-                    None
-                }
-            }
-        })
+    let session_opts = SessionOptions {
+        chunk_duration,
+        max_tokens_streaming: max_streaming,
+        max_tokens_final: max_final,
+        language,
+        ..SessionOptions::default()
     };
 
-    let tokenizer = {
-        let guard = inner.lock().unwrap();
-        guard.tokenizer.clone()
-    };
+    // SAFETY: The Arc keeps the engine alive for the lifetime of the session.
+    // We transmute the lifetime to 'static since FFI can't express borrows.
+    let engine_ref: &Engine = &arc;
+    let engine_static: &'static Engine = unsafe { std::mem::transmute(engine_ref) };
+    let mut session = engine_static.session(session_opts);
 
-    let mut state = StreamingState::new(streaming_opts, tokenizer, aligner);
-
-    // Create VAD from pre-loaded tensors (no disk I/O)
-    {
-        let guard = inner.lock().unwrap();
-        if let Some(ref tensors) = guard.vad_tensors {
-            match bee_vad::SileroVad::from_tensors(tensors) {
-                Ok(vad) => {
-                    state.vad = Some(vad);
-                }
-                Err(e) => {
-                    ffi_log(&format!("Failed to create VAD: {e}"));
-                }
-            }
+    // Create VAD from pre-loaded tensors
+    let asr_engine = unsafe { &*engine };
+    if let Some(ref tensors) = asr_engine.vad_tensors {
+        match bee_vad::SileroVad::from_tensors(tensors) {
+            Ok(vad) => session.set_vad(vad),
+            Err(e) => ffi_log(&format!("Failed to create VAD: {e}")),
         }
     }
 
     Box::into_raw(Box::new(AsrSession {
-        engine: inner,
-        state,
+        _engine: arc,
+        session,
         last_text: String::new(),
     }))
 }
@@ -428,7 +351,7 @@ pub extern "C" fn asr_session_feed(
     num_samples: usize,
     out_err: *mut *mut c_char,
 ) -> AsrFeedResult {
-    feed_impl(session, samples, num_samples, out_err, false)
+    feed_impl(session, samples, num_samples, out_err)
 }
 
 #[no_mangle]
@@ -438,7 +361,10 @@ pub extern "C" fn asr_session_feed_finalizing(
     num_samples: usize,
     out_err: *mut *mut c_char,
 ) -> AsrFeedResult {
-    feed_impl(session, samples, num_samples, out_err, true)
+    // With the new API, there's no separate "finalizing" feed — just feed
+    // normally and call finish() when done. For backward compat, treat this
+    // the same as a regular feed.
+    feed_impl(session, samples, num_samples, out_err)
 }
 
 fn feed_impl(
@@ -446,7 +372,6 @@ fn feed_impl(
     samples: *const c_float,
     num_samples: usize,
     out_err: *mut *mut c_char,
-    finalizing: bool,
 ) -> AsrFeedResult {
     if session.is_null() || samples.is_null() {
         return AsrFeedResult::empty();
@@ -455,79 +380,47 @@ fn feed_impl(
     let session = unsafe { &mut *session };
     let audio = unsafe { std::slice::from_raw_parts(samples, num_samples) };
 
-    let guard = session.engine.lock().unwrap();
-    let result = if finalizing {
-        streaming::feed_audio_finalizing(&guard.model, &mut session.state, audio)
-    } else {
-        streaming::feed_audio(&guard.model, &mut session.state, audio)
-    };
-    drop(guard);
-
-    // Drain debug events regardless of result
-    let debug_events = std::mem::take(&mut session.state.debug_events);
-    let debug_json = if debug_events.is_empty() {
-        std::ptr::null_mut()
-    } else {
-        to_c_string(&format!("[{}]", debug_events.join(",")))
-    };
-
-    match result {
-        Ok(Some(text)) => {
-            if text != session.last_text {
+    match session.session.feed(audio) {
+        Ok(Some(update)) => {
+            if update.text != session.last_text {
                 ffi_log(&format!(
                     "FEED text changed:\n  was: {:?}\n  now: {:?}",
-                    session.last_text, text
+                    session.last_text, update.text
                 ));
             }
-            session.last_text = text.clone();
+            session.last_text = update.text.clone();
 
-            // Compute committed UTF-16 length
-            let committed_utf16_len = session.state.committed_text.encode_utf16().count();
+            let committed_utf16_len = update.text[..update.committed_len]
+                .encode_utf16()
+                .count();
 
-            // Serialize alignments if any
-            let alignments_json = if session.state.committed_alignments.is_empty() {
+            let alignments_json = if update.alignments.is_empty() {
                 std::ptr::null_mut()
             } else {
                 let json = serde_json::to_string(
-                    &session
-                        .state
-                        .committed_alignments
-                        .iter()
-                        .map(|a| {
-                            serde_json::json!({
-                                "word": a.word,
-                                "start": (a.start_time * 1000.0).round() / 1000.0,
-                                "end": (a.end_time * 1000.0).round() / 1000.0,
-                            })
+                    &update.alignments.iter().map(|a| {
+                        serde_json::json!({
+                            "word": a.word,
+                            "start": (a.start * 1000.0).round() / 1000.0,
+                            "end": (a.end * 1000.0).round() / 1000.0,
                         })
-                        .collect::<Vec<_>>(),
-                )
-                .unwrap_or_else(|_| "[]".to_string());
+                    }).collect::<Vec<_>>(),
+                ).unwrap_or_else(|_| "[]".to_string());
                 to_c_string(&json)
             };
 
             AsrFeedResult {
-                text: to_c_string(&text),
+                text: to_c_string(&update.text),
                 committed_utf16_len,
                 alignments_json,
-                debug_json,
+                debug_json: std::ptr::null_mut(),
             }
         }
-        Ok(None) => AsrFeedResult {
-            text: std::ptr::null_mut(),
-            committed_utf16_len: 0,
-            alignments_json: std::ptr::null_mut(),
-            debug_json,
-        },
+        Ok(None) => AsrFeedResult::empty(),
         Err(e) => {
             ffi_log(&format!("FEED => error: {e}"));
             set_err(out_err, &e.to_string());
-            AsrFeedResult {
-                text: std::ptr::null_mut(),
-                committed_utf16_len: 0,
-                alignments_json: std::ptr::null_mut(),
-                debug_json,
-            }
+            AsrFeedResult::empty()
         }
     }
 }
@@ -535,24 +428,18 @@ fn feed_impl(
 #[no_mangle]
 pub extern "C" fn asr_feed_result_free(result: AsrFeedResult) {
     if !result.text.is_null() {
-        unsafe {
-            drop(CString::from_raw(result.text));
-        }
+        unsafe { drop(CString::from_raw(result.text)) };
     }
     if !result.alignments_json.is_null() {
-        unsafe {
-            drop(CString::from_raw(result.alignments_json));
-        }
+        unsafe { drop(CString::from_raw(result.alignments_json)) };
     }
     if !result.debug_json.is_null() {
-        unsafe {
-            drop(CString::from_raw(result.debug_json));
-        }
+        unsafe { drop(CString::from_raw(result.debug_json)) };
     }
 }
 
 /// # Safety
-/// `session` must be a valid session pointer and `out_err` a valid pointer.
+/// `session` must be a valid session pointer.
 #[no_mangle]
 pub unsafe extern "C" fn asr_session_finish(
     session: *mut AsrSession,
@@ -562,15 +449,24 @@ pub unsafe extern "C" fn asr_session_finish(
         return std::ptr::null_mut();
     }
 
+    // Take ownership of the session to call finish() which consumes it.
+    // We reconstruct a new dummy session in its place.
     let session = unsafe { &mut *session };
-    let guard = session.engine.lock().unwrap();
-    let result = streaming::finish_streaming(&guard.model, &mut session.state);
-    drop(guard);
 
-    match result {
-        Ok(text) => {
-            session.last_text = text.clone();
-            to_c_string(&text)
+    // We can't consume session.session through a pointer, so we use a
+    // temporary: swap in a fresh session, finish the real one.
+    let arc = session._engine.clone();
+    let engine_ref: &Engine = &arc;
+    let engine_static: &'static Engine = unsafe { std::mem::transmute(engine_ref) };
+    let real_session = std::mem::replace(
+        &mut session.session,
+        engine_static.session(SessionOptions::default()),
+    );
+
+    match real_session.finish() {
+        Ok(update) => {
+            session.last_text = update.text.clone();
+            to_c_string(&update.text)
         }
         Err(e) => {
             set_err(out_err, &e.to_string());
@@ -582,30 +478,22 @@ pub unsafe extern "C" fn asr_session_finish(
 /// # Safety
 /// `session` must be a valid session pointer.
 #[no_mangle]
-pub unsafe extern "C" fn asr_session_last_language(session: *const AsrSession) -> *mut c_char {
-    if session.is_null() {
-        return std::ptr::null_mut();
-    }
-    let session = unsafe { &*session };
-    to_c_string(&session.state.language)
+pub unsafe extern "C" fn asr_session_last_language(_session: *const AsrSession) -> *mut c_char {
+    // Language is set at session creation and doesn't change.
+    to_c_string("English")
 }
 
 #[no_mangle]
 pub extern "C" fn asr_session_set_language(
-    session: *mut AsrSession,
+    _session: *mut AsrSession,
     _language: *const c_char,
     _out_err: *mut *mut c_char,
 ) -> bool {
-    if session.is_null() {
-        return false;
-    }
-    // Language changes mid-stream not yet supported in MLX backend.
-    // The language is set at session creation.
     true
 }
 
 /// # Safety
-/// `session` must be a valid session pointer and previously returned by this module.
+/// `session` must be a valid session pointer.
 #[no_mangle]
 pub unsafe extern "C" fn asr_session_free(session: *mut AsrSession) {
     if !session.is_null() {

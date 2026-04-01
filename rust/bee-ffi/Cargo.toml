@@ -7,9 +7,10 @@ edition = "2021"
 crate-type = ["staticlib"]
 
 [dependencies]
-bee-qwen3-asr = { path = "../bee-qwen3-asr" }
+bee-transcribe = { path = "../bee-transcribe" }
 bee-vad = { path = "../bee-vad" }
+mlx-rs.workspace = true
+dirs = "6"
 log = "0.4"
 env_logger = "0.11"
-dirs = "6"
 serde_json = "1"
