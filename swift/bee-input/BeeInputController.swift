@@ -1,6 +1,6 @@
+import Carbon.HIToolbox.Events
 import Cocoa
 import InputMethodKit
-import Carbon.HIToolbox.Events
 
 @objc(BeeInputController)
 class BeeInputController: IMKInputController {
@@ -8,6 +8,7 @@ class BeeInputController: IMKInputController {
     private var autoCommittedPrefix: String = ""
 
     override func activateServer(_ sender: Any!) {
+        beeInputLog("activateServer: (start!)")
         super.activateServer(sender)
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let clientIdentity = currentClientIdentity()
@@ -25,30 +26,73 @@ class BeeInputController: IMKInputController {
             clientID: clientIdentity
         ) { [weak self] found, sessionID, _, _ in
             DispatchQueue.main.async {
-                guard let self else { return }
-                guard BeeIMEBridgeState.shared.activeController === self else { return }
-                guard found,
-                      let sessionID else {
-                    beeInputLog("activateServer: no prepared session for client, switching away")
-                    BeeIMEBridgeState.shared.switchAwayFromBeeInput()
+                beeInputLog(
+                    """
+                    activateServer: prepared-session callback on main queue found=\(found) \
+                    sessionID=\(sessionID.map(String.init) ?? "nil") callbackClientID=\(clientIdentity ?? "nil") \
+                    callbackPID=\(frontmostPID.map(String.init) ?? "nil")
+                    """)
+                guard let self else {
+                    beeInputLog(
+                        "activateServer: prepared-session callback dropped because self was released"
+                    )
                     return
                 }
+                beeInputLog(
+                    "activateServer: callback self alive activeControllerMatches=\(BeeIMEBridgeState.shared.activeController === self)"
+                )
+                guard BeeIMEBridgeState.shared.activeController === self else {
+                    beeInputLog(
+                        "activateServer: prepared-session callback ignored because controller is no longer active"
+                    )
+                    return
+                }
+                guard found,
+                    let sessionID
+                else {
+                    beeInputLog(
+                        """
+                        activateServer: no prepared session for client, switching away \
+                        clientID=\(clientIdentity ?? "nil") pid=\(frontmostPID.map(String.init) ?? "nil")
+                        """)
+                    BeeIMEBridgeState.shared.switchAwayFromBeeInput()
+                    beeInputLog("activateServer: switchAwayFromBeeInput requested")
+                    return
+                }
+                beeInputLog(
+                    """
+                    activateServer: attaching session sessionID=\(sessionID) \
+                    clientID=\(clientIdentity ?? "nil")
+                    """)
                 BeeIMEBridgeState.shared.attachSession(
                     sessionID: sessionID,
                     clientIdentity: clientIdentity
                 )
+                beeInputLog(
+                    "activateServer: attachSession complete, flushing pending bridge events")
                 BeeIMEBridgeState.shared.flushPending()
+                beeInputLog(
+                    """
+                    activateServer: flushPending complete, sending imeAttach sessionID=\(sessionID) \
+                    pid=\(frontmostPID.map(String.init) ?? "nil") clientID=\(clientIdentity ?? "nil")
+                    """)
                 BeeBrokerIMEClient.shared.imeAttach(
                     sessionID: sessionID,
                     clientPID: frontmostPID,
                     clientID: clientIdentity
                 )
+                beeInputLog("activateServer: imeAttach sent")
             }
         }
+        beeInputLog(
+            "activateServer: done!"
+        )
     }
 
     override func deactivateServer(_ sender: Any!) {
-        beeInputLog("deactivateServer: hadMarkedText=\(!currentMarkedText.isEmpty) isDictating=\(BeeIMEBridgeState.shared.isDictating)")
+        beeInputLog(
+            "deactivateServer: hadMarkedText=\(!currentMarkedText.isEmpty) isDictating=\(BeeIMEBridgeState.shared.isDictating)"
+        )
         let hadMarkedText = !currentMarkedText.isEmpty
         let isDictating = BeeIMEBridgeState.shared.isDictating
         let sessionID = BeeIMEBridgeState.shared.activeSessionID
@@ -67,8 +111,10 @@ class BeeInputController: IMKInputController {
     }
 
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
+        beeInputLog("handle!")
         guard let event, event.type == .keyDown,
-              let sessionID = BeeIMEBridgeState.shared.activeSessionID else {
+            let sessionID = BeeIMEBridgeState.shared.activeSessionID
+        else {
             return false
         }
 
@@ -94,6 +140,7 @@ class BeeInputController: IMKInputController {
     // MARK: - Text handling
 
     func handleSetMarkedText(_ text: String) {
+        beeInputLog("handleSetMarkedText!")
         guard let client = self.client() else {
             beeInputLog("handleSetMarkedText: NO CLIENT, dropping text")
             return
@@ -113,11 +160,13 @@ class BeeInputController: IMKInputController {
         // Use markedClauseSegment to hint that this text shouldn't get the
         // default "thick underline" marked text treatment. Value 0 = single segment.
         // Also explicitly request no underline and a subtle background.
-        let attributed = NSAttributedString(string: displayText, attributes: [
-            .markedClauseSegment: 0,
-            .underlineStyle: 0,
-            .backgroundColor: NSColor.textColor.withAlphaComponent(0.06),
-        ])
+        let attributed = NSAttributedString(
+            string: displayText,
+            attributes: [
+                .markedClauseSegment: 0,
+                .underlineStyle: 0,
+                .backgroundColor: NSColor.textColor.withAlphaComponent(0.06),
+            ])
 
         client.setMarkedText(
             attributed,
@@ -127,6 +176,7 @@ class BeeInputController: IMKInputController {
     }
 
     func handleCommitText(_ text: String, submit: Bool = false) {
+        beeInputLog("handleCommitText!")
         guard let client = self.client() else { return }
 
         var finalText = text
@@ -137,7 +187,8 @@ class BeeInputController: IMKInputController {
             }
             autoCommittedPrefix = ""
         }
-        finalText = finalText
+        finalText =
+            finalText
             .replacingOccurrences(of: "🐝", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !finalText.isEmpty else {
@@ -153,6 +204,7 @@ class BeeInputController: IMKInputController {
     }
 
     func handleCancelInput() {
+        beeInputLog("handleCancelInput!")
         guard let client = self.client() else { return }
         currentMarkedText = ""
         client.setMarkedText(

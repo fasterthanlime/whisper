@@ -106,9 +106,8 @@ actor Session {
             emitCompletion(.aborted(id: id))
             return
         }
-        beeLog("SESSION: IME activated, sending 🐝")
-        inputClient.setMarkedText("🐝", sessionID: id)
-        ime = .active
+        beeLog("SESSION: IME selected, awaiting IME session confirmation")
+        ime = .parked
 
         // Register with AudioEngine (Channel 0 starts flowing)
         audioEngine.startCapture(for: self.id, pipeline: ch0)

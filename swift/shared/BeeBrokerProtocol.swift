@@ -5,6 +5,8 @@ protocol BeeBrokerXPC {
     func appHello(_ appInstanceID: String, withReply reply: @escaping (Bool) -> Void)
     func imeHello(_ imeInstanceID: String, withReply reply: @escaping (Bool) -> Void)
 
+    func waitForIME(appInstanceID: String, withReply reply: @escaping (Bool) -> Void)
+
     func prepareSession(
         _ sessionID: String,
         targetPID: Int32,

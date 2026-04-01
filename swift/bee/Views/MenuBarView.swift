@@ -153,6 +153,7 @@ struct BeeSettingsView: View {
         } detail: {
             BeeOverviewView(appState: appState)
         }
+        .toolbar(removing: .sidebarToggle)
         .frame(minWidth: 820, minHeight: 560)
         .tint(.orange)
     }

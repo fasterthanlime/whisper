@@ -173,6 +173,7 @@ final class AppState {
             parkedOverlayText = ""
             uiState = .pending(session)
             startPendingTimer(session: session)
+            startIMEAckTimeoutIfNeeded(session: session)
             let config = TranscriptionService.SessionConfig(
                 chunkSizeSec: chunkSizeSec,
                 maxNewTokensStreaming: maxNewTokensStreaming,
@@ -321,7 +322,7 @@ final class AppState {
             defer { self.pendingIMEAckTimeoutTask = nil }
 
             guard case .pending(let s) = self.uiState, s.id == session.id else { return }
-            guard self.pendingLockRequest, !self.activeSessionIMEConfirmed else { return }
+            guard !self.activeSessionIMEConfirmed else { return }
 
             let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
             beeLog(
@@ -720,6 +721,7 @@ final class AppState {
         beeLog(
             "SESSION: IME confirmed id=\(session.id.uuidString.prefix(8)) clientPID=\(clientPID.map(String.init) ?? "nil") clientID=\(clientID ?? "nil")"
         )
+        Task { await session.routeDidBecomeActive() }
         if pendingLockRequest {
             pendingLockRequest = false
             pendingTimer?.cancel()

@@ -29,6 +29,7 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
     private var imeConnections: [String: NSXPCConnection] = [:]
     private var sessions: [String: SessionState] = [:]
     private var activeIMEInstanceID: String?
+    private var imeWaiters: [(Bool) -> Void] = []
     private var sequence: UInt64 = 0
 
     private func appProxy(_ appInstanceID: String) -> BeeBrokerPeerXPC? {
@@ -65,8 +66,25 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
         queue.async {
             self.imeConnections[imeInstanceID] = conn
             self.activeIMEInstanceID = imeInstanceID
-            brokerLog("imeHello: id=\(imeInstanceID.prefix(8))")
+            brokerLog("imeHello: id=\(imeInstanceID.prefix(8)) flushing \(self.imeWaiters.count) waiter(s)")
+            let waiters = self.imeWaiters
+            self.imeWaiters.removeAll()
+            for waiter in waiters {
+                waiter(true)
+            }
             reply(true)
+        }
+    }
+
+    func waitForIME(appInstanceID: String, withReply reply: @escaping (Bool) -> Void) {
+        queue.async {
+            if self.activeIMEInstanceID != nil {
+                brokerLog("waitForIME: IME already connected")
+                reply(true)
+            } else {
+                brokerLog("waitForIME: IME not connected, queuing waiter")
+                self.imeWaiters.append(reply)
+            }
         }
     }
 
