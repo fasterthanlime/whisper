@@ -53,33 +53,41 @@ struct BeeSettingsView: View {
     var body: some View {
         NavigationSplitView {
             List {
-                NavigationLink {
-                    BeeOverviewView(appState: appState)
-                } label: {
-                    Label("Bee", systemImage: "app.badge")
+                Section("Bee") {
+                    NavigationLink {
+                        BeeOverviewView(appState: appState)
+                    } label: {
+                        Label("Overview", systemImage: "app.badge")
+                    }
                 }
 
-                NavigationLink {
-                    HowBeeWorksView()
-                } label: {
-                    Label("How Bee Works", systemImage: "book")
+                Section("Guide") {
+                    NavigationLink {
+                        HowBeeWorksView()
+                    } label: {
+                        Label("How Bee Works", systemImage: "book.closed")
+                    }
                 }
 
-                NavigationLink {
-                    AdvancedSettingsView(
-                        appState: appState,
-                        runOnStartupEnabled: $runOnStartupEnabled,
-                        pauseMediaEnabled: $pauseMediaEnabled
-                    )
-                } label: {
-                    Label("Advanced", systemImage: "slider.horizontal.3")
+                Section("Settings") {
+                    NavigationLink {
+                        AdvancedSettingsView(
+                            appState: appState,
+                            runOnStartupEnabled: $runOnStartupEnabled,
+                            pauseMediaEnabled: $pauseMediaEnabled
+                        )
+                    } label: {
+                        Label("Advanced", systemImage: "slider.horizontal.3")
+                    }
                 }
             }
+            .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
             BeeOverviewView(appState: appState)
         }
         .frame(minWidth: 760, minHeight: 520)
+        .tint(.orange)
     }
 }
 
@@ -87,32 +95,77 @@ private struct BeeOverviewView: View {
     @Bindable var appState: AppState
 
     var body: some View {
-        List {
-            Section("Status") {
-                LabeledContent("State", value: statusLabel)
-                LabeledContent("Model", value: modelLabel)
-                LabeledContent("Input", value: appState.activeInputDeviceName ?? "None")
-            }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Bee")
+                    .font(.title2.weight(.semibold))
 
-            Section("Recent Transcripts") {
-                if appState.transcriptionHistory.isEmpty {
-                    Text("No transcripts yet")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(appState.transcriptionHistory.prefix(20)) { item in
-                        Text(item.text)
-                            .textSelection(.enabled)
-                            .lineLimit(3)
+                SettingsCard("Status") {
+                    KeyValueRow(label: "State", value: statusLabel)
+                    KeyValueRow(label: "Model", value: modelLabel)
+                    KeyValueRow(label: "Input", value: appState.activeInputDeviceName ?? "None")
+                }
+
+                SettingsCard("Last Transcript") {
+                    if let last = appState.transcriptionHistory.first {
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(last.text, forType: .string)
+                        } label: {
+                            Text(last.text)
+                                .lineLimit(4)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.08))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .help("Click to copy")
+                    } else {
+                        Text("No transcript yet")
+                            .foregroundStyle(.secondary)
                     }
                 }
-            }
 
-            Section("App") {
-                Button("Quit Bee") {
-                    BeeInputClient.restoreInputSourceIfNeeded()
-                    NSApp.terminate(nil)
+                SettingsCard("Recent Transcripts") {
+                    if appState.transcriptionHistory.isEmpty {
+                        Text("No transcripts yet")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(appState.transcriptionHistory.prefix(12)) { item in
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(item.text, forType: .string)
+                            } label: {
+                                Text(item.displayText)
+                                    .lineLimit(3)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.08))
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            .help("Click to copy full transcript")
+                        }
+                    }
+                }
+
+                SettingsCard("App") {
+                    Button("Quit Bee") {
+                        BeeInputClient.restoreInputSourceIfNeeded()
+                        NSApp.terminate(nil)
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
             }
+            .padding(24)
+            .frame(maxWidth: 760, alignment: .leading)
         }
         .navigationTitle("Bee")
     }
@@ -145,32 +198,38 @@ private struct HowBeeWorksView: View {
                 Text("How Bee Works")
                     .font(.title2.weight(.semibold))
 
-                settingSection(
-                    title: "Core Flow",
-                    body: "1. Hold Right Option to start.\n2. Keep holding for push-to-talk, or tap Right Command to lock.\n3. Press Enter to submit or Escape to cancel."
-                )
+                SettingsCard("Core Flow") {
+                    guideRow(number: "1", text: "Hold Right Option to start.")
+                    guideRow(number: "2", text: "Keep holding for push-to-talk, or tap Right Command to lock.")
+                    guideRow(number: "3", text: "Press Enter to submit or Escape to cancel.")
+                }
 
-                settingSection(
-                    title: "Mental Model",
-                    body: "Bee is designed to stay out of your way: use hotkeys for speed, use the Bee window for runtime visibility, and use this Settings window for learning + advanced tuning."
-                )
+                SettingsCard("Mental Model") {
+                    Text("Bee is designed to stay out of your way: use hotkeys for speed, use this window for visibility and tuning.")
+                        .foregroundStyle(.secondary)
+                }
 
-                settingSection(
-                    title: "Best Practices",
-                    body: "Use the default chunk and token settings unless you have a specific latency/quality issue to solve. If audio quality changes, revisit input device + keep-warm first."
-                )
+                SettingsCard("Best Practices") {
+                    Text("Leave defaults unless you are solving a specific latency or quality issue. Start with input device and keep-warm if audio quality shifts.")
+                        .foregroundStyle(.secondary)
+                }
             }
             .frame(maxWidth: 700, alignment: .leading)
             .padding(24)
         }
     }
 
-    private func settingSection(title: String, body: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.headline)
-            Text(body)
-                .font(.body)
+    private func guideRow(number: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(number)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 20, height: 20)
+                .background(
+                    Circle()
+                        .fill(.orange)
+                )
+            Text(text)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -208,7 +267,7 @@ private struct AdvancedSettingsView: View {
                 Text("Advanced")
                     .font(.title2.weight(.semibold))
 
-                GroupBox("Audio") {
+                SettingsCard("Audio") {
                     VStack(alignment: .leading, spacing: 12) {
                         inputDevicePicker
                         Toggle("Keep active input warm", isOn: Binding(
@@ -219,7 +278,7 @@ private struct AdvancedSettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                GroupBox("Transcription") {
+                SettingsCard("Transcription") {
                     VStack(alignment: .leading, spacing: 12) {
                         chunkSizePicker
                         tokenLimitPicker(
@@ -240,7 +299,7 @@ private struct AdvancedSettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                GroupBox("Behavior") {
+                SettingsCard("Behavior") {
                     VStack(alignment: .leading, spacing: 12) {
                         Toggle("Run on startup", isOn: $runOnStartupEnabled)
                         Toggle("Pause media while dictating", isOn: $pauseMediaEnabled)
@@ -308,5 +367,50 @@ private struct AdvancedSettingsView: View {
             }
         }
         .pickerStyle(.menu)
+    }
+}
+
+private struct SettingsCard<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline)
+            content
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(nsColor: .windowBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.05), radius: 4, x: 0, y: 1)
+        )
+    }
+}
+
+private struct KeyValueRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .fontWeight(.medium)
+                .multilineTextAlignment(.trailing)
+        }
     }
 }
