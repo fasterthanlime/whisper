@@ -3,7 +3,7 @@ import Foundation
 
 class BeeXPCService: NSObject {
     static let shared = BeeXPCService()
-    private static let beeBundleID = "fasterthanlime.inputmethod.bee" as CFString
+    private static let beeBundleID = "fasterthanlime.inputmethod.bee"
 
     weak var activeController: BeeInputController?
     var isDictating = false
@@ -113,7 +113,7 @@ class BeeXPCService: NSObject {
 
     private static func findBeeInputSource() -> TISInputSource? {
         let properties: [CFString: Any] = [
-            kTISPropertyBundleID: beeBundleID,
+            kTISPropertyBundleID: beeBundleID as CFString,
         ]
         guard let sources = TISCreateInputSourceList(properties as CFDictionary, false)?
             .takeRetainedValue() as? [TISInputSource],

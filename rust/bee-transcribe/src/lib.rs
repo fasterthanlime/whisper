@@ -427,19 +427,13 @@ impl<'a> Session<'a> {
             .len()
             .saturating_sub(self.options.rollback_tokens);
 
-        if fixed_count < self.options.commit_token_count {
+        // Wait until we have twice the commit threshold in fixed tokens,
+        // then commit half. This keeps a large seed for context.
+        if fixed_count < self.options.commit_token_count * 2 {
             return Ok(());
         }
 
-        // Commit the fixed tokens, but ensure the seed has at least
-        // rollback_tokens + 1 so there's always a locked prefix token
-        // after rotation (otherwise the model regenerates from scratch
-        // and may lose whitespace).
-        let max_commit = self.token_ids.len().saturating_sub(self.options.rollback_tokens + 1);
-        let commit_count = fixed_count.min(max_commit);
-        if commit_count == 0 {
-            return Ok(());
-        }
+        let commit_count = self.options.commit_token_count;
         let commit_text = self.engine.tokenizer
             .decode(&self.token_ids[..commit_count], true)
             .unwrap_or_default();

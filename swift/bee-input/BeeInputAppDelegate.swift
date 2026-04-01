@@ -56,6 +56,7 @@ class BeeInputAppDelegate: NSObject, NSApplicationDelegate {
             object: nil, queue: .main
         ) { _ in
             BeeXPCService.shared.isDictating = false
+            BeeXPCService.shared.pendingText = nil
         }
     }
 }

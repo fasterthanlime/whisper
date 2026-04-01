@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -81,17 +82,6 @@ final class AppState {
         self.transcriptionService = transcriptionService
         self.inputClient = inputClient
         installExternalObservers()
-    }
-
-    deinit {
-        let dnc = DistributedNotificationCenter.default()
-        let nc = NSWorkspace.shared.notificationCenter
-        for observer in distributedObservers {
-            dnc.removeObserver(observer)
-        }
-        for observer in workspaceObservers {
-            nc.removeObserver(observer)
-        }
     }
 
     // MARK: - State
@@ -388,22 +378,30 @@ final class AppState {
 
         distributedObservers.append(
             dnc.addObserver(forName: Self.imeSubmitName, object: nil, queue: .main) { [weak self] _ in
-                self?.handleIMESubmit()
+                Task { @MainActor in
+                    self?.handleIMESubmit()
+                }
             }
         )
         distributedObservers.append(
             dnc.addObserver(forName: Self.imeCancelName, object: nil, queue: .main) { [weak self] _ in
-                self?.handleIMECancel()
+                Task { @MainActor in
+                    self?.handleIMECancel()
+                }
             }
         )
         distributedObservers.append(
             dnc.addObserver(forName: Self.imeUserTypedName, object: nil, queue: .main) { [weak self] _ in
-                self?.handleIMEUserTyped()
+                Task { @MainActor in
+                    self?.handleIMEUserTyped()
+                }
             }
         )
         distributedObservers.append(
             dnc.addObserver(forName: Self.imeContextLostName, object: nil, queue: .main) { [weak self] _ in
-                self?.handleIMEContextLost()
+                Task { @MainActor in
+                    self?.handleIMEContextLost()
+                }
             }
         )
         workspaceObservers.append(
@@ -412,7 +410,12 @@ final class AppState {
                 object: nil,
                 queue: .main
             ) { [weak self] notification in
-                self?.handleDidActivateApplication(notification)
+                let activatedPID = (
+                    notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                )?.processIdentifier
+                Task { @MainActor in
+                    self?.handleDidActivateApplication(processIdentifier: activatedPID)
+                }
             }
         )
     }
@@ -448,12 +451,16 @@ final class AppState {
     private func handleIMEUserTyped() {
         switch uiState {
         case .pending(let session):
+            inputClient.stopDictating()
+            inputClient.clearMarkedText()
             pendingTimer?.cancel()
             transitionToIdle()
             Task { await session.abort() }
         case .pushToTalk(let session), .locked(let session), .lockedOptionHeld(let session):
+            inputClient.stopDictating()
+            inputClient.clearMarkedText()
             transitionToIdle()
-            Task { await session.cancel() }
+            Task { await session.abort() }
         case .idle:
             break
         }
@@ -462,29 +469,33 @@ final class AppState {
     private func handleIMEContextLost() {
         switch uiState {
         case .pending(let session):
+            inputClient.stopDictating()
+            inputClient.clearMarkedText()
             pendingTimer?.cancel()
             transitionToIdle()
             Task { await session.abort() }
         case .pushToTalk(let session), .locked(let session), .lockedOptionHeld(let session):
+            inputClient.stopDictating()
+            inputClient.clearMarkedText()
             transitionToIdle()
-            Task { await session.cancel() }
+            Task { await session.abort() }
         case .idle:
             break
         }
     }
 
-    private func handleDidActivateApplication(_ notification: Notification) {
+    private func handleDidActivateApplication(processIdentifier: pid_t?) {
         guard let session = uiState.session else { return }
         guard activeSessionID == session.id else { return }
         guard let targetPID = activeSessionTargetPID else { return }
-        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
-            return
-        }
-        guard app.processIdentifier != targetPID else { return }
+        guard let processIdentifier else { return }
+        guard processIdentifier != targetPID else { return }
 
-        beeLog("SESSION: active app changed targetPID=\(targetPID) newPID=\(app.processIdentifier), cancelling")
+        beeLog("SESSION: active app changed targetPID=\(targetPID) newPID=\(processIdentifier), cancelling")
+        inputClient.stopDictating()
+        inputClient.clearMarkedText()
         transitionToIdle()
-        Task { await session.cancel() }
+        Task { await session.abort() }
     }
 
     private func transitionToIdle() {

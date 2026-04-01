@@ -5,7 +5,7 @@ import Foundation
 /// Communicates with the bee-input IME process via distributed notifications.
 final class BeeInputClient: Sendable {
     private static let dnc = DistributedNotificationCenter.default()
-    private static let beeBundleID = "fasterthanlime.inputmethod.bee" as CFString
+    private static let beeBundleID = "fasterthanlime.inputmethod.bee"
 
     private static let setMarkedTextName = NSNotification.Name("fasterthanlime.bee.setMarkedText")
     private static let commitTextName = NSNotification.Name("fasterthanlime.bee.commitText")
@@ -84,6 +84,15 @@ final class BeeInputClient: Sendable {
     func clearMarkedText() {
         Self.dnc.postNotificationName(
             Self.cancelInputName,
+            object: nil,
+            userInfo: nil,
+            deliverImmediately: true
+        )
+    }
+
+    func stopDictating() {
+        Self.dnc.postNotificationName(
+            Self.stopDictatingName,
             object: nil,
             userInfo: nil,
             deliverImmediately: true
@@ -200,7 +209,7 @@ final class BeeInputClient: Sendable {
 
     private static func findBeeInputSource() -> TISInputSource? {
         let properties: [CFString: Any] = [
-            kTISPropertyBundleID: beeBundleID,
+            kTISPropertyBundleID: beeBundleID as CFString,
         ]
         guard let sources = TISCreateInputSourceList(properties as CFDictionary, false)?.takeRetainedValue() as? [TISInputSource],
               let source = sources.first else {

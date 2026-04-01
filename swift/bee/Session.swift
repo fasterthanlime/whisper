@@ -96,7 +96,8 @@ actor Session {
         self.ch2 = ch2
 
         // IME: activate and show bee cursor
-        beeLog("SESSION START: targetPID=\(self.targetProcessID.map(String.init) ?? "nil")")
+        let targetProcessID = self.targetProcessID
+        beeLog("SESSION START: targetPID=\(targetProcessID.map(String.init) ?? "nil")")
         let imeActivated = await MainActor.run {
             inputClient.activate(expectedTargetPID: targetProcessID)
         }
