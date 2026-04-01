@@ -7,7 +7,7 @@ edition = "2024"
 pocket-tts = { version = "0.6", features = ["metal", "quantized"] }
 parakeet-rs = "0.3"
 qwen3-asr = { workspace = true, features = ["metal"] }
-beeml-textgen = { path = "../synth-textgen" }
+beeml-textgen = { path = "../beeml-textgen" }
 rubato = "0.15"
 shellexpand = "3"
 anyhow.workspace = true

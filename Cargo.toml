@@ -2,18 +2,18 @@
 resolver = "2"
 members = [
   "rust/peft-rs",
-  "rust/synth-corrupt",
-  "rust/synth-dashboard",
-  "rust/synth-parakeet",
-  "rust/synth-pipeline",
-  "rust/synth-qwen",
-  "rust/synth-recorder",
-  "rust/synth-reviewer",
-  "rust/synth-textgen",
-  "rust/synth-train",
-  "rust/synth-tts",
+  "rust/beeml-corrupt",
+  "rust/beeml-api",
+  "rust/beeml-parakeet",
+  "rust/beeml-pipeline",
+  "rust/beeml-qwen",
+  "rust/beeml-recorder",
+  "rust/beeml-reviewer",
+  "rust/beeml-textgen",
+  "rust/beeml-train",
+  "rust/beeml-tts",
 ]
-default-members = ["rust/synth-dashboard"]
+default-members = ["rust/beeml-api"]
 
 [workspace.dependencies]
 anyhow = "1"

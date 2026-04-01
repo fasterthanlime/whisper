@@ -17,10 +17,10 @@ tower-http = { version = "0.6", features = ["fs", "cors"] }
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 hound.workspace = true
-beeml-textgen = { path = "../synth-textgen" }
-beeml-pipeline = { path = "../synth-pipeline" }
-beeml-train = { path = "../synth-train" }
-beeml-corrupt = { path = "../synth-corrupt" }
+beeml-textgen = { path = "../beeml-textgen" }
+beeml-pipeline = { path = "../beeml-pipeline" }
+beeml-train = { path = "../beeml-train" }
+beeml-corrupt = { path = "../beeml-corrupt" }
 shellexpand = "3"
 rand = "0.9"
 
