@@ -394,6 +394,10 @@ impl<'a> Session<'a> {
 
         self.token_ids = all_ids;
 
+        // KV cache dropped here; return freed buffers to the system
+        drop(cache);
+        clear_mlx_cache();
+
         Ok(())
     }
 
