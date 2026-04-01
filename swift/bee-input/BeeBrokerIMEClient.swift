@@ -137,6 +137,47 @@ final class BeeBrokerIMEClient {
 }
 
 private final class BeeIMEPeerSink: NSObject, BeeBrokerPeerXPC {
+    func handleNewPreparedSession(_ sessionID: String, targetPID: Int32) {
+        DispatchQueue.main.async {
+            let bridge = BeeIMEBridgeState.shared
+            guard let controller = bridge.activeController else {
+                beeInputLog("handleNewPreparedSession: no active controller, waiting for activateServer")
+                return
+            }
+            let controllerPID = bridge.activeControllerPID
+            let pid = targetPID >= 0 ? pid_t(targetPID) : nil
+            if let pid, let controllerPID, pid != controllerPID {
+                beeInputLog("handleNewPreparedSession: PID mismatch controller=\(controllerPID) target=\(pid), waiting for activateServer")
+                return
+            }
+            let clientIdentity = bridge.activeClientIdentity
+            beeInputLog("handleNewPreparedSession: controller still active, claiming session=\(sessionID.prefix(8)) directly")
+            BeeBrokerIMEClient.shared.claimPreparedSession(
+                clientPID: controllerPID,
+                clientID: clientIdentity
+            ) { found, claimedSessionID, _, _ in
+                DispatchQueue.main.async {
+                    guard found, let claimedSessionID else {
+                        beeInputLog("handleNewPreparedSession: claim failed")
+                        return
+                    }
+                    guard bridge.activeController === controller else {
+                        beeInputLog("handleNewPreparedSession: controller changed during claim")
+                        return
+                    }
+                    beeInputLog("handleNewPreparedSession: attached session=\(claimedSessionID.uuidString.prefix(8))")
+                    bridge.attachSession(sessionID: claimedSessionID, clientIdentity: clientIdentity)
+                    bridge.flushPending()
+                    BeeBrokerIMEClient.shared.imeAttach(
+                        sessionID: claimedSessionID,
+                        clientPID: controllerPID,
+                        clientID: clientIdentity
+                    )
+                }
+            }
+        }
+    }
+
     func handleClearSession(_ sessionID: String) {
         guard let id = UUID(uuidString: sessionID) else { return }
         BeeIMEBridgeState.shared.clearSessionIfMatching(sessionID: id)

@@ -54,6 +54,7 @@ private final class BeeAppControlSink: NSObject, BeeBrokerPeerXPC {
         )
     }
 
+    func handleNewPreparedSession(_ sessionID: String, targetPID: Int32) {}
     func handleClearSession(_ sessionID: String) {}
     func handleSetMarkedText(_ sessionID: String, text: String) {}
     func handleCommitText(_ sessionID: String, text: String, submit: Bool) {}
@@ -152,6 +153,11 @@ final class BeeInputClient: Sendable {
 
     func deactivate() {
         Self.switchAwayFromBeeInputIfNeeded()
+    }
+
+    /// Wait for the IME to connect to the broker.
+    static func waitForIMEReady() async -> Bool {
+        await waitForIMEXPC()
     }
 
     // MARK: - IME Commands
@@ -272,7 +278,7 @@ final class BeeInputClient: Sendable {
         //     }
         // }
 
-        beeLog("BROKER launchd: unable to start service=\(service)")
+        // beeLog("BROKER launchd: unable to start service=\(service)")
     }
 
     @discardableResult

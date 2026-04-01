@@ -1,6 +1,6 @@
+import AVFoundation
 import AppKit
 import ApplicationServices
-import AVFoundation
 import Foundation
 import SwiftUI
 import os
@@ -27,7 +27,8 @@ final class AppState {
     private static let imeCancelName = NSNotification.Name("fasterthanlime.bee.imeCancel")
     private static let imeUserTypedName = NSNotification.Name("fasterthanlime.bee.imeUserTyped")
     private static let imeContextLostName = NSNotification.Name("fasterthanlime.bee.imeContextLost")
-    private static let imeSessionStartedName = NSNotification.Name("fasterthanlime.bee.imeSessionStarted")
+    private static let imeSessionStartedName = NSNotification.Name(
+        "fasterthanlime.bee.imeSessionStarted")
 
     private(set) var uiState: UIState = .idle
     private var pendingTimer: Task<Void, Never>?
@@ -58,6 +59,9 @@ final class AppState {
     // Model
     var modelStatus: ModelStatus = .notLoaded
 
+    // IME readiness
+    var imeReady: Bool = false
+
     // Input devices
     var availableInputDevices: [InputDeviceInfo] = []
     var activeInputDeviceUID: String?
@@ -70,7 +74,7 @@ final class AppState {
     // ASR settings
     var chunkSizeSec: Float = 0.5
     var maxNewTokensStreaming: UInt32 = 0  // 0 = Rust default (32)
-    var maxNewTokensFinal: UInt32 = 0      // 0 = Rust default (512)
+    var maxNewTokensFinal: UInt32 = 0  // 0 = Rust default (512)
 
     // Debug
     var debugEnabled = false {
@@ -157,7 +161,9 @@ final class AppState {
         case .idle:
             let targetApp = NSWorkspace.shared.frontmostApplication
             let targetPID = targetApp?.processIdentifier
-            beeLog("APP: hotkey down targetPID=\(targetPID.map(String.init) ?? "nil") targetApp=\(targetApp?.localizedName ?? "nil")")
+            beeLog(
+                "APP: hotkey down targetPID=\(targetPID.map(String.init) ?? "nil") targetApp=\(targetApp?.localizedName ?? "nil")"
+            )
             let session = createSession(targetProcessID: targetPID)
             activeSessionID = session.id
             activeSessionTargetPID = targetPID
@@ -180,11 +186,12 @@ final class AppState {
                 maxNewTokensFinal: maxNewTokensFinal
             )
             Task { await session.start(language: detectLanguage(), asrConfig: config) }
-            return false // not swallowed
+            // return false // not swallowed
+            return true  // swallowed, just to test an IME theory
 
         case .locked(let session):
             uiState = .lockedOptionHeld(session)
-            return true // swallowed
+            return true  // swallowed
 
         default:
             return false
@@ -194,7 +201,7 @@ final class AppState {
     func handleROptUp() -> Bool {
         if consumeNextROptUp {
             consumeNextROptUp = false
-            return true // swallowed (after RCmd → Locked transition)
+            return true  // swallowed (after RCmd → Locked transition)
         }
 
         switch uiState {
@@ -216,12 +223,12 @@ final class AppState {
         case .pushToTalk(let session):
             transitionToIdle()
             Task { await session.commit(submit: false) }
-            return true // swallowed
+            return true  // swallowed
 
         case .lockedOptionHeld(let session):
             transitionToIdle()
             Task { await session.commit(submit: false) }
-            return true // swallowed
+            return true  // swallowed
 
         default:
             return false
@@ -233,7 +240,7 @@ final class AppState {
         case .pushToTalk(let session):
             uiState = .locked(session)
             consumeNextROptUp = true
-            return true // swallowed
+            return true  // swallowed
 
         default:
             return false
@@ -245,15 +252,15 @@ final class AppState {
         case .pushToTalk(let session):
             transitionToIdle()
             Task { await session.cancel() }
-            return true // swallowed
+            return true  // swallowed
 
         case .locked:
-            return false // passthrough
+            return false  // passthrough
 
         case .lockedOptionHeld(let session):
             transitionToIdle()
             Task { await session.cancel() }
-            return true // swallowed
+            return true  // swallowed
 
         default:
             return false
@@ -265,7 +272,7 @@ final class AppState {
         case .locked(let session):
             transitionToIdle()
             Task { await session.commit(submit: true) }
-            return true // swallowed
+            return true  // swallowed
 
         default:
             return false
@@ -282,7 +289,7 @@ final class AppState {
             if keyCode == 0x23 /* kVK_ANSI_P */ {
                 pasteLastHistoryEntry()
                 Task { await session.abort() }
-                return true // swallowed
+                return true  // swallowed
             }
 
             // Spurious activation — abort silently, let the key through
@@ -355,11 +362,22 @@ final class AppState {
         let focusedAppPID = focusedApp.flatMap { axPid($0) }
 
         let focusedElement = axElement(systemWide, kAXFocusedUIElementAttribute as CFString)
-        let role = focusedElement.flatMap { axAttribute($0, kAXRoleAttribute as CFString) as? String } ?? "nil"
-        let subrole = focusedElement.flatMap { axAttribute($0, kAXSubroleAttribute as CFString) as? String } ?? "nil"
-        let title = focusedElement.flatMap { axAttribute($0, kAXTitleAttribute as CFString) as? String } ?? "nil"
-        let valueClass = focusedElement.flatMap { axAttribute($0, kAXValueAttribute as CFString) }.map { String(describing: type(of: $0)) } ?? "nil"
-        let valueSettable = focusedElement.map { axAttributeSettable($0, kAXValueAttribute as CFString) }
+        let role =
+            focusedElement.flatMap { axAttribute($0, kAXRoleAttribute as CFString) as? String }
+            ?? "nil"
+        let subrole =
+            focusedElement.flatMap { axAttribute($0, kAXSubroleAttribute as CFString) as? String }
+            ?? "nil"
+        let title =
+            focusedElement.flatMap { axAttribute($0, kAXTitleAttribute as CFString) as? String }
+            ?? "nil"
+        let valueClass =
+            focusedElement.flatMap { axAttribute($0, kAXValueAttribute as CFString) }.map {
+                String(describing: type(of: $0))
+            } ?? "nil"
+        let valueSettable = focusedElement.map {
+            axAttributeSettable($0, kAXValueAttribute as CFString)
+        }
 
         beeLog(
             "FOCUS DIAG [\(reason)]: frontmostPID=\(frontmostPID.map(String.init) ?? "nil") app=\(frontmostName) bundleID=\(frontmostBundleID) focusedAppPID=\(focusedAppPID.map(String.init) ?? "nil") role=\(role) subrole=\(subrole) valueSettable=\(valueSettable.map(String.init) ?? "nil") title=\(title.debugDescription) valueClass=\(valueClass)"
@@ -436,7 +454,7 @@ final class AppState {
         switch result {
         case .aborted(let id):
             resultID = id
-            break // no trace
+            break  // no trace
         case .cancelled(let id, let text):
             resultID = id
             SoundEffects.shared.playCancel()
@@ -484,7 +502,8 @@ final class AppState {
 
     // MARK: - Model Loading
 
-    static let defaultModel = STTModelDefinition.allModels.first(where: { $0.id == "qwen3-1.7b-mlx-4bit" })
+    static let defaultModel =
+        STTModelDefinition.allModels.first(where: { $0.id == "qwen3-1.7b-mlx-4bit" })
         ?? STTModelDefinition.default
 
     func loadModelAtStartup() {
@@ -526,6 +545,26 @@ final class AppState {
         }
     }
 
+    func warmUpIME() {
+        Task {
+            // Launch the IME app so it connects to the broker.
+            let imeAppURL = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Input Methods/beeInput.app")
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = false
+            do {
+                try await NSWorkspace.shared.openApplication(at: imeAppURL, configuration: config)
+            } catch {
+                beeLog("IME WARMUP: failed to launch IME app: \(error)")
+            }
+            let ready = await BeeInputClient.waitForIMEReady()
+            await MainActor.run {
+                self.imeReady = ready
+                beeLog("IME WARMUP: done imeReady=\(ready)")
+            }
+        }
+    }
+
     // MARK: - Stubs
 
     private func detectLanguage() -> String? {
@@ -552,7 +591,8 @@ final class AppState {
         let nc = NSWorkspace.shared.notificationCenter
 
         distributedObservers.append(
-            ncLocal.addObserver(forName: Self.imeSubmitName, object: nil, queue: .main) { [weak self] notification in
+            ncLocal.addObserver(forName: Self.imeSubmitName, object: nil, queue: .main) {
+                [weak self] notification in
                 let sessionID = Self.extractSessionID(notification.userInfo)
                 Task { @MainActor in
                     self?.handleIMESubmit(sessionID: sessionID)
@@ -560,7 +600,8 @@ final class AppState {
             }
         )
         distributedObservers.append(
-            ncLocal.addObserver(forName: Self.imeCancelName, object: nil, queue: .main) { [weak self] notification in
+            ncLocal.addObserver(forName: Self.imeCancelName, object: nil, queue: .main) {
+                [weak self] notification in
                 let sessionID = Self.extractSessionID(notification.userInfo)
                 Task { @MainActor in
                     self?.handleIMECancel(sessionID: sessionID)
@@ -568,7 +609,8 @@ final class AppState {
             }
         )
         distributedObservers.append(
-            ncLocal.addObserver(forName: Self.imeUserTypedName, object: nil, queue: .main) { [weak self] notification in
+            ncLocal.addObserver(forName: Self.imeUserTypedName, object: nil, queue: .main) {
+                [weak self] notification in
                 let sessionID = Self.extractSessionID(notification.userInfo)
                 Task { @MainActor in
                     self?.handleIMEUserTyped(sessionID: sessionID)
@@ -576,7 +618,8 @@ final class AppState {
             }
         )
         distributedObservers.append(
-            ncLocal.addObserver(forName: Self.imeContextLostName, object: nil, queue: .main) { [weak self] notification in
+            ncLocal.addObserver(forName: Self.imeContextLostName, object: nil, queue: .main) {
+                [weak self] notification in
                 let sessionID = Self.extractSessionID(notification.userInfo)
                 let hadMarkedText = Self.extractBool(notification.userInfo, key: "hadMarkedText")
                 Task { @MainActor in
@@ -585,12 +628,14 @@ final class AppState {
             }
         )
         distributedObservers.append(
-            ncLocal.addObserver(forName: Self.imeSessionStartedName, object: nil, queue: .main) { [weak self] notification in
+            ncLocal.addObserver(forName: Self.imeSessionStartedName, object: nil, queue: .main) {
+                [weak self] notification in
                 let sessionID = Self.extractSessionID(notification.userInfo)
                 let clientPID = Self.extractPID(notification.userInfo, key: "clientPID")
                 let clientID = Self.extractClientID(notification.userInfo)
                 Task { @MainActor in
-                    self?.handleIMESessionStarted(sessionID: sessionID, clientPID: clientPID, clientID: clientID)
+                    self?.handleIMESessionStarted(
+                        sessionID: sessionID, clientPID: clientPID, clientID: clientID)
                 }
             }
         )
@@ -600,7 +645,9 @@ final class AppState {
                 object: nil,
                 queue: .main
             ) { [weak self] notification in
-                let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                let app =
+                    notification.userInfo?[NSWorkspace.applicationUserInfoKey]
+                    as? NSRunningApplication
                 let activatedPID = app?.processIdentifier
                 let activatedBundleID = app?.bundleIdentifier
                 Task { @MainActor in
@@ -617,7 +664,9 @@ final class AppState {
                 object: nil,
                 queue: .main
             ) { [weak self] notification in
-                let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                let app =
+                    notification.userInfo?[NSWorkspace.applicationUserInfoKey]
+                    as? NSRunningApplication
                 let terminatedPID = app?.processIdentifier
                 Task { @MainActor in
                     self?.handleDidTerminateApplication(processIdentifier: terminatedPID)
@@ -695,8 +744,9 @@ final class AppState {
     private func handleIMESessionStarted(sessionID: UUID?, clientPID: pid_t?, clientID: String?) {
         guard isNotificationForActiveSession(sessionID) else { return }
         if let targetPID = activeSessionTargetPID,
-           let clientPID,
-           clientPID != targetPID {
+            let clientPID,
+            clientPID != targetPID
+        {
             beeLog(
                 "SESSION: rejecting IME confirm id=\(sessionID?.uuidString.prefix(8) ?? "nil") targetPID=\(targetPID) clientPID=\(clientPID) clientID=\(clientID ?? "nil")"
             )
@@ -730,7 +780,8 @@ final class AppState {
         }
     }
 
-    private func handleDidActivateApplication(processIdentifier: pid_t?, bundleIdentifier: String?) {
+    private func handleDidActivateApplication(processIdentifier: pid_t?, bundleIdentifier: String?)
+    {
         guard let session = uiState.session else { return }
         guard activeSessionID == session.id else { return }
         guard let targetPID = activeSessionTargetPID else { return }
@@ -738,7 +789,9 @@ final class AppState {
 
         // Ignore Bee + beeInput activations; they're implementation detail
         // churn and should not affect dictation lifecycle.
-        if bundleIdentifier == "fasterthanlime.bee" || bundleIdentifier == "fasterthanlime.inputmethod.bee" {
+        if bundleIdentifier == "fasterthanlime.bee"
+            || bundleIdentifier == "fasterthanlime.inputmethod.bee"
+        {
             return
         }
 
@@ -750,7 +803,9 @@ final class AppState {
                     if !resumed {
                         await MainActor.run {
                             guard self.activeSessionID == session.id else { return }
-                            beeLog("SESSION: resume activation failed id=\(session.id.uuidString.prefix(8))")
+                            beeLog(
+                                "SESSION: resume activation failed id=\(session.id.uuidString.prefix(8))"
+                            )
                             self.transitionToIdle()
                         }
                         await session.cancel()
@@ -798,11 +853,15 @@ final class AppState {
         userInfo?["clientID"] as? String
     }
 
-    nonisolated private static func extractBool(_ userInfo: [AnyHashable: Any]?, key: String) -> Bool? {
+    nonisolated private static func extractBool(_ userInfo: [AnyHashable: Any]?, key: String)
+        -> Bool?
+    {
         userInfo?[key] as? Bool
     }
 
-    nonisolated private static func extractPID(_ userInfo: [AnyHashable: Any]?, key: String) -> pid_t? {
+    nonisolated private static func extractPID(_ userInfo: [AnyHashable: Any]?, key: String)
+        -> pid_t?
+    {
         if let pid = userInfo?[key] as? pid_t { return pid }
         if let number = userInfo?[key] as? NSNumber { return pid_t(number.int32Value) }
         return nil
@@ -820,8 +879,9 @@ final class AppState {
 
     private func showParkedOverlay(for session: Session) {
         if activeSessionTargetAppName == nil,
-           let targetPID = activeSessionTargetPID,
-           let app = NSRunningApplication(processIdentifier: targetPID) {
+            let targetPID = activeSessionTargetPID,
+            let app = NSRunningApplication(processIdentifier: targetPID)
+        {
             activeSessionTargetAppName = app.localizedName
             activeSessionTargetAppIcon = app.icon
         }
@@ -854,7 +914,8 @@ final class AppState {
             guard let self else { return }
             while !Task.isCancelled {
                 guard self.isSessionParked,
-                      self.activeSessionID == session.id else { return }
+                    self.activeSessionID == session.id
+                else { return }
                 self.parkedOverlayText = await session.liveText()
                 try? await Task.sleep(for: .milliseconds(80))
             }
@@ -917,7 +978,9 @@ final class AppState {
                 do {
                     try audioEngine.warmUp()
                 } catch {
-                    logger.error("Failed to warm audio engine for active device: \(error.localizedDescription, privacy: .public)")
+                    logger.error(
+                        "Failed to warm audio engine for active device: \(error.localizedDescription, privacy: .public)"
+                    )
                 }
             }
         } else if audioEngine.isWarm {
@@ -929,7 +992,9 @@ final class AppState {
         let center = NotificationCenter.default
 
         captureDeviceObservers.append(
-            center.addObserver(forName: AVCaptureDevice.wasConnectedNotification, object: nil, queue: .main) {
+            center.addObserver(
+                forName: AVCaptureDevice.wasConnectedNotification, object: nil, queue: .main
+            ) {
                 [weak self] _ in
                 Task { @MainActor in
                     self?.refreshInputDevices(reason: "capture-device-connected")
@@ -937,7 +1002,9 @@ final class AppState {
             }
         )
         captureDeviceObservers.append(
-            center.addObserver(forName: AVCaptureDevice.wasDisconnectedNotification, object: nil, queue: .main) {
+            center.addObserver(
+                forName: AVCaptureDevice.wasDisconnectedNotification, object: nil, queue: .main
+            ) {
                 [weak self] _ in
                 Task { @MainActor in
                     self?.refreshInputDevices(reason: "capture-device-disconnected")
@@ -957,7 +1024,8 @@ final class AppState {
         )
         let captureDevices = discovery.devices
 
-        let info = captureDevices
+        let info =
+            captureDevices
             .map { device in
                 InputDeviceInfo(
                     uid: device.uniqueID,
@@ -1001,7 +1069,8 @@ final class AppState {
         }
 
         persistAudioPreferences()
-        reconfigureAudioEngineIfNeeded(forceRestart: topologyChanged || previousUID != activeInputDeviceUID)
+        reconfigureAudioEngineIfNeeded(
+            forceRestart: topologyChanged || previousUID != activeInputDeviceUID)
 
         logger.info(
             "Refreshed input devices (\(reason, privacy: .public)): count=\(info.count), selected=\(self.activeInputDeviceUID ?? "none", privacy: .public)"
@@ -1055,10 +1124,12 @@ private struct ParkedOverlayView: View {
                 Text("Dictating in \(appState.activeSessionTargetAppName ?? "Target App")")
                     .font(.system(.headline, weight: .semibold))
                     .lineLimit(1)
-                Text(appState.parkedOverlayText.isEmpty ? "Listening..." : appState.parkedOverlayText)
-                    .font(.system(.body, design: .rounded))
-                    .lineLimit(2)
-                    .foregroundStyle(.primary)
+                Text(
+                    appState.parkedOverlayText.isEmpty ? "Listening..." : appState.parkedOverlayText
+                )
+                .font(.system(.body, design: .rounded))
+                .lineLimit(2)
+                .foregroundStyle(.primary)
             }
             Spacer(minLength: 0)
         }

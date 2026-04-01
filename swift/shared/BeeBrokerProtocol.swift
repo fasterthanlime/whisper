@@ -65,6 +65,9 @@ protocol BeeBrokerXPC {
 
 @objc
 protocol BeeBrokerPeerXPC {
+    // Broker -> IME: new session prepared, try claiming without activateServer.
+    func handleNewPreparedSession(_ sessionID: String, targetPID: Int32)
+
     // App -> IME forwarded commands.
     func handleClearSession(_ sessionID: String)
     func handleSetMarkedText(_ sessionID: String, text: String)

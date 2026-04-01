@@ -119,6 +119,12 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
             brokerLog(
                 "prepareSession: id=\(sessionID.prefix(8)) targetPID=\(targetPID >= 0 ? String(targetPID) : "nil") stored"
             )
+            // Notify the IME so it can claim directly if still active
+            // (i.e. deactivateServer was never called since last session).
+            if let ime = self.imeProxy() {
+                brokerLog("prepareSession: notifying IME of new session")
+                ime.handleNewPreparedSession(sessionID, targetPID: targetPID)
+            }
             reply(true)
         }
     }

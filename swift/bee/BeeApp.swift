@@ -48,6 +48,7 @@ struct BeeApp: App {
 
         BeeInputClient.ensureIMERegistered()
         state.loadModelAtStartup()
+        state.warmUpIME()
         if state.debugEnabled {
             DebugPanel.shared.show(appState: state)
         }
@@ -89,6 +90,7 @@ private struct MenuBarLabelView: View {
     var body: some View {
         Image("MenuBarIcon")
             .renderingMode(.template)
+            .opacity(isReady ? 1.0 : 0.4)
             .overlay(alignment: .bottomTrailing) {
                 if isSessionActive {
                     Circle()
@@ -111,6 +113,10 @@ private struct MenuBarLabelView: View {
                 normalWindow?.makeKeyAndOrderFront(nil)
             }
         }
+    }
+
+    private var isReady: Bool {
+        appState.imeReady && appState.modelStatus == .loaded
     }
 
     private var isSessionActive: Bool {
