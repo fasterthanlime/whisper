@@ -139,6 +139,7 @@ name = "bee-asr"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bee-vad",
  "dirs",
  "env_logger",
  "facet",
@@ -160,6 +161,7 @@ name = "bee-ffi"
 version = "0.1.0"
 dependencies = [
  "bee-asr",
+ "bee-vad",
  "dirs",
  "env_logger",
  "log",
@@ -172,6 +174,14 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "bee-vad"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "mlx-rs",
 ]
 
 [[package]]

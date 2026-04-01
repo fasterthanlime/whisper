@@ -208,7 +208,7 @@ pub struct StreamingState {
 
     // VAD
     speech_detected: bool,
-    pub vad: Option<crate::vad::SileroVad>,
+    pub vad: Option<bee_vad::SileroVad>,
 
     // Tokenizer + mel
     tokenizer: tokenizers::Tokenizer,

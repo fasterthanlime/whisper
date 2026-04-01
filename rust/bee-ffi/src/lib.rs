@@ -384,7 +384,7 @@ pub unsafe extern "C" fn asr_session_create(
     {
         let guard = inner.lock().unwrap();
         if let Some(ref tensors) = guard.vad_tensors {
-            match bee_asr::vad::SileroVad::from_tensors(tensors) {
+            match bee_vad::SileroVad::from_tensors(tensors) {
                 Ok(vad) => {
                     state.vad = Some(vad);
                 }

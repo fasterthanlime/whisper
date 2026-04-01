@@ -13,7 +13,6 @@ pub mod mel;
 pub mod model;
 pub mod mrope;
 pub mod streaming;
-pub mod vad;
 pub mod weights;
 
 pub use asr_engine::AsrEngine;
