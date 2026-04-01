@@ -5,9 +5,8 @@ members = [
   "rust/beeml",
   "rust/bee-asr",
   "rust/bee-ffi",
-  "rust/mlx-rs",
 ]
-default-members = ["rust/beeml"]
+exclude = ["mlx-rs"]
 
 [workspace.dependencies]
 anyhow = "1"
