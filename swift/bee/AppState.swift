@@ -38,6 +38,7 @@ final class AppState {
     private var pendingLockRequest = false
     private var loggedWaitingForIME = false
     private var pendingIMEAckTimeoutTask: Task<Void, Never>?
+    private var pendingIMEAckTimeoutCount = 0
     private var isSessionParked = false
     private var distributedObservers: [NSObjectProtocol] = []
     private var workspaceObservers: [NSObjectProtocol] = []
@@ -160,6 +161,7 @@ final class AppState {
             loggedWaitingForIME = false
             pendingIMEAckTimeoutTask?.cancel()
             pendingIMEAckTimeoutTask = nil
+            pendingIMEAckTimeoutCount = 0
             isSessionParked = false
             parkedOverlayText = ""
             uiState = .pending(session)
@@ -315,6 +317,16 @@ final class AppState {
             guard self.pendingLockRequest, !self.activeSessionIMEConfirmed else { return }
 
             let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            self.pendingIMEAckTimeoutCount += 1
+            if self.pendingIMEAckTimeoutCount >= 3 {
+                beeLog(
+                    "SESSION: IME confirm timeout id=\(session.id.uuidString.prefix(8)) targetPID=\(self.activeSessionTargetPID.map(String.init) ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil"), aborting"
+                )
+                self.pendingTimer?.cancel()
+                self.transitionToIdle()
+                Task { await session.abort() }
+                return
+            }
             beeLog(
                 "SESSION: IME confirm timeout id=\(session.id.uuidString.prefix(8)) targetPID=\(self.activeSessionTargetPID.map(String.init) ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil"), continuing to capture"
             )
@@ -393,6 +405,7 @@ final class AppState {
             activeSessionTargetAppIcon = nil
             activeSessionIMEConfirmed = false
             pendingLockRequest = false
+            pendingIMEAckTimeoutCount = 0
             isSessionParked = false
             hideParkedOverlay()
         }
@@ -500,17 +513,19 @@ final class AppState {
         distributedObservers.append(
             dnc.addObserver(forName: Self.imeContextLostName, object: nil, queue: .main) { [weak self] notification in
                 let sessionID = Self.extractSessionID(notification.userInfo)
+                let hadMarkedText = Self.extractBool(notification.userInfo, key: "hadMarkedText")
                 Task { @MainActor in
-                    self?.handleIMEContextLost(sessionID: sessionID)
+                    self?.handleIMEContextLost(sessionID: sessionID, hadMarkedText: hadMarkedText)
                 }
             }
         )
         distributedObservers.append(
             dnc.addObserver(forName: Self.imeSessionStartedName, object: nil, queue: .main) { [weak self] notification in
                 let sessionID = Self.extractSessionID(notification.userInfo)
+                let clientPID = Self.extractPID(notification.userInfo, key: "clientPID")
                 let clientID = Self.extractClientID(notification.userInfo)
                 Task { @MainActor in
-                    self?.handleIMESessionStarted(sessionID: sessionID, clientID: clientID)
+                    self?.handleIMESessionStarted(sessionID: sessionID, clientPID: clientPID, clientID: clientID)
                 }
             }
         )
@@ -591,17 +606,15 @@ final class AppState {
         }
     }
 
-    private func handleIMEContextLost(sessionID: UUID?) {
+    private func handleIMEContextLost(sessionID: UUID?, hadMarkedText: Bool?) {
         guard isNotificationForActiveSession(sessionID) else { return }
         if isSessionParked {
             return
         }
-        if let targetPID = activeSessionTargetPID,
-           let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-           frontmostPID == targetPID {
-            beeLog("SESSION: ignoring imeContextLost while still on targetPID=\(targetPID)")
-            return
-        }
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        beeLog(
+            "SESSION: imeContextLost id=\(activeSessionID?.uuidString.prefix(8) ?? "nil") targetPID=\(activeSessionTargetPID.map(String.init) ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil") hadMarkedText=\(hadMarkedText.map(String.init) ?? "nil")"
+        )
 
         switch uiState {
         case .pending(let session):
@@ -614,15 +627,34 @@ final class AppState {
         }
     }
 
-    private func handleIMESessionStarted(sessionID: UUID?, clientID: String?) {
+    private func handleIMESessionStarted(sessionID: UUID?, clientPID: pid_t?, clientID: String?) {
         guard isNotificationForActiveSession(sessionID) else { return }
+        if let targetPID = activeSessionTargetPID,
+           let clientPID,
+           clientPID != targetPID {
+            beeLog(
+                "SESSION: rejecting IME confirm id=\(sessionID?.uuidString.prefix(8) ?? "nil") targetPID=\(targetPID) clientPID=\(clientPID) clientID=\(clientID ?? "nil")"
+            )
+            return
+        }
+        if isSessionParked, let session = uiState.session {
+            beeLog(
+                "SESSION: IME route restored id=\(session.id.uuidString.prefix(8)) clientPID=\(clientPID.map(String.init) ?? "nil") clientID=\(clientID ?? "nil")"
+            )
+            activeSessionIMEConfirmed = true
+            isSessionParked = false
+            hideParkedOverlay()
+            Task { await session.routeDidBecomeActive() }
+            return
+        }
         guard !activeSessionIMEConfirmed else { return }
 
         activeSessionIMEConfirmed = true
+        pendingIMEAckTimeoutCount = 0
         guard case .pending(let session) = uiState else { return }
 
         beeLog(
-            "SESSION: IME confirmed id=\(session.id.uuidString.prefix(8)) clientID=\(clientID ?? "nil")"
+            "SESSION: IME confirmed id=\(session.id.uuidString.prefix(8)) clientPID=\(clientPID.map(String.init) ?? "nil") clientID=\(clientID ?? "nil")"
         )
         if pendingLockRequest {
             pendingLockRequest = false
@@ -646,10 +678,18 @@ final class AppState {
 
         if processIdentifier == targetPID {
             if isSessionParked {
-                beeLog("SESSION: resumed targetPID=\(targetPID)")
-                isSessionParked = false
-                hideParkedOverlay()
-                Task { await session.resume() }
+                beeLog("SESSION: resume requested targetPID=\(targetPID)")
+                Task {
+                    let resumed = await session.requestResumeActivation()
+                    if !resumed {
+                        await MainActor.run {
+                            guard self.activeSessionID == session.id else { return }
+                            beeLog("SESSION: resume activation failed id=\(session.id.uuidString.prefix(8))")
+                            self.transitionToIdle()
+                        }
+                        await session.cancel()
+                    }
+                }
             }
             return
         }
@@ -692,11 +732,22 @@ final class AppState {
         userInfo?["clientID"] as? String
     }
 
+    nonisolated private static func extractBool(_ userInfo: [AnyHashable: Any]?, key: String) -> Bool? {
+        userInfo?[key] as? Bool
+    }
+
+    nonisolated private static func extractPID(_ userInfo: [AnyHashable: Any]?, key: String) -> pid_t? {
+        if let pid = userInfo?[key] as? pid_t { return pid }
+        if let number = userInfo?[key] as? NSNumber { return pid_t(number.int32Value) }
+        return nil
+    }
+
     private func transitionToIdle() {
         uiState = .idle
         pendingTimer?.cancel()
         activeSessionIMEConfirmed = false
         pendingLockRequest = false
+        pendingIMEAckTimeoutCount = 0
         isSessionParked = false
         hideParkedOverlay()
     }

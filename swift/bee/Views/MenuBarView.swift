@@ -7,6 +7,20 @@ struct MenuBarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "mic.fill")
+                    .foregroundStyle(.secondary)
+                Text(appState.activeInputDeviceName ?? "No input")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+
+            Divider().padding(.horizontal, 2)
+
             Button {
                 NSApp.activate(ignoringOtherApps: true)
                 openSettings()
@@ -17,7 +31,7 @@ struct MenuBarView: View {
                     normalWindow?.makeKeyAndOrderFront(nil)
                 }
             } label: {
-                Label("Open Bee", systemImage: "app.badge")
+                Label("Open bee", systemImage: "app.badge")
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 4)
@@ -31,7 +45,7 @@ struct MenuBarView: View {
                 BeeInputClient.restoreInputSourceIfNeeded()
                 NSApplication.shared.terminate(nil)
             } label: {
-                Label("Quit Bee", systemImage: "power")
+                Label("Quit bee", systemImage: "power")
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 4)
@@ -53,23 +67,29 @@ struct BeeSettingsView: View {
     var body: some View {
         NavigationSplitView {
             List {
-                Section("Bee") {
+                Section("bee") {
                     NavigationLink {
                         BeeOverviewView(appState: appState)
                     } label: {
-                        Label("Overview", systemImage: "app.badge")
+                        Label("Overview", systemImage: "sparkles")
+                    }
+
+                    NavigationLink {
+                        BeeHistoryView(appState: appState)
+                    } label: {
+                        Label("History", systemImage: "clock.arrow.circlepath")
                     }
                 }
 
-                Section("Guide") {
+                Section("guide") {
                     NavigationLink {
                         HowBeeWorksView()
                     } label: {
-                        Label("How Bee Works", systemImage: "book.closed")
+                        Label("How bee works", systemImage: "keyboard")
                     }
                 }
 
-                Section("Settings") {
+                Section("settings") {
                     NavigationLink {
                         AdvancedSettingsView(
                             appState: appState,
@@ -82,11 +102,11 @@ struct BeeSettingsView: View {
                 }
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
+            .navigationSplitViewColumnWidth(min: 180, ideal: 220)
         } detail: {
             BeeOverviewView(appState: appState)
         }
-        .frame(minWidth: 760, minHeight: 520)
+        .frame(minWidth: 820, minHeight: 560)
         .tint(.orange)
     }
 }
@@ -97,8 +117,13 @@ private struct BeeOverviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Bee")
-                    .font(.title2.weight(.semibold))
+                HStack(spacing: 12) {
+                    Image("BeeColor")
+                        .resizable()
+                        .frame(width: 34, height: 34)
+                    Text("bee")
+                        .font(.title2.weight(.semibold))
+                }
 
                 SettingsCard("Status") {
                     KeyValueRow(label: "State", value: statusLabel)
@@ -106,58 +131,17 @@ private struct BeeOverviewView: View {
                     KeyValueRow(label: "Input", value: appState.activeInputDeviceName ?? "None")
                 }
 
-                SettingsCard("Last Transcript") {
+                SettingsCard("Last transcript") {
                     if let last = appState.transcriptionHistory.first {
-                        Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(last.text, forType: .string)
-                        } label: {
-                            Text(last.text)
-                                .lineLimit(4)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.08))
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .help("Click to copy")
+                        TranscriptRow(text: last.text)
                     } else {
                         Text("No transcript yet")
                             .foregroundStyle(.secondary)
                     }
                 }
 
-                SettingsCard("Recent Transcripts") {
-                    if appState.transcriptionHistory.isEmpty {
-                        Text("No transcripts yet")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(appState.transcriptionHistory.prefix(12)) { item in
-                            Button {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(item.text, forType: .string)
-                            } label: {
-                                Text(item.displayText)
-                                    .lineLimit(3)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 8)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                            .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.08))
-                                    )
-                            }
-                            .buttonStyle(.plain)
-                            .help("Click to copy full transcript")
-                        }
-                    }
-                }
-
                 SettingsCard("App") {
-                    Button("Quit Bee") {
+                    Button("Quit bee") {
                         BeeInputClient.restoreInputSourceIfNeeded()
                         NSApp.terminate(nil)
                     }
@@ -167,22 +151,22 @@ private struct BeeOverviewView: View {
             .padding(24)
             .frame(maxWidth: 760, alignment: .leading)
         }
-        .navigationTitle("Bee")
+        .navigationTitle("bee")
     }
 
     private var statusLabel: String {
         switch appState.uiState {
         case .idle: return "Idle"
         case .pending: return "Pending"
-        case .pushToTalk: return "Push To Talk"
+        case .pushToTalk: return "Push to talk"
         case .locked: return "Locked"
-        case .lockedOptionHeld: return "Locked (Option Held)"
+        case .lockedOptionHeld: return "Locked (option held)"
         }
     }
 
     private var modelLabel: String {
         switch appState.modelStatus {
-        case .notLoaded: return "Not Loaded"
+        case .notLoaded: return "Not loaded"
         case .downloading(let progress): return "Downloading (\(Int(progress * 100))%)"
         case .loading: return "Loading"
         case .loaded: return "Loaded"
@@ -191,47 +175,49 @@ private struct BeeOverviewView: View {
     }
 }
 
+private struct BeeHistoryView: View {
+    @Bindable var appState: AppState
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("History")
+                    .font(.title2.weight(.semibold))
+
+                SettingsCard("Recent transcripts") {
+                    if appState.transcriptionHistory.isEmpty {
+                        Text("No transcripts yet")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(appState.transcriptionHistory.prefix(50)) { item in
+                            TranscriptRow(text: item.text)
+                        }
+                    }
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: 760, alignment: .leading)
+        }
+        .navigationTitle("History")
+    }
+}
+
 private struct HowBeeWorksView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("How Bee Works")
+                Text("How bee works")
                     .font(.title2.weight(.semibold))
 
-                SettingsCard("Core Flow") {
-                    guideRow(number: "1", text: "Hold Right Option to start.")
-                    guideRow(number: "2", text: "Keep holding for push-to-talk, or tap Right Command to lock.")
-                    guideRow(number: "3", text: "Press Enter to submit or Escape to cancel.")
-                }
-
-                SettingsCard("Mental Model") {
-                    Text("Bee is designed to stay out of your way: use hotkeys for speed, use this window for visibility and tuning.")
-                        .foregroundStyle(.secondary)
-                }
-
-                SettingsCard("Best Practices") {
-                    Text("Leave defaults unless you are solving a specific latency or quality issue. Start with input device and keep-warm if audio quality shifts.")
-                        .foregroundStyle(.secondary)
+                SettingsCard("Core flow") {
+                    FlowRow(shortcuts: ["Right ⌥"], text: "Hold to start listening")
+                    FlowRow(shortcuts: ["Right ⌘"], text: "While holding, tap to lock")
+                    FlowRow(shortcuts: ["⏎ Enter"], text: "Submit")
+                    FlowRow(shortcuts: ["Esc"], text: "Cancel")
                 }
             }
-            .frame(maxWidth: 700, alignment: .leading)
+            .frame(maxWidth: 760, alignment: .leading)
             .padding(24)
-        }
-    }
-
-    private func guideRow(number: String, text: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Text(number)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 20, height: 20)
-                .background(
-                    Circle()
-                        .fill(.orange)
-                )
-            Text(text)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -318,7 +304,7 @@ private struct AdvancedSettingsView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: 700, alignment: .leading)
+            .frame(maxWidth: 760, alignment: .leading)
             .padding(24)
         }
     }
@@ -329,7 +315,7 @@ private struct AdvancedSettingsView: View {
             set: { appState.selectInputDevice(uid: $0) }
         )) {
             if appState.availableInputDevices.isEmpty {
-                Text("No Input Devices")
+                Text("No input devices")
                     .tag("")
             } else {
                 ForEach(appState.availableInputDevices, id: \.uid) { device in
@@ -412,5 +398,64 @@ private struct KeyValueRow: View {
                 .fontWeight(.medium)
                 .multilineTextAlignment(.trailing)
         }
+    }
+}
+
+private struct TranscriptRow: View {
+    let text: String
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        } label: {
+            Text(text)
+                .lineLimit(3)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.08))
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Click to copy")
+    }
+}
+
+private struct FlowRow: View {
+    let shortcuts: [String]
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            HStack(spacing: 6) {
+                ForEach(shortcuts, id: \.self) { value in
+                    ShortcutPill(text: value)
+                }
+            }
+            Text(text)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct ShortcutPill: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(.caption, design: .rounded).weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(.thinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.15), lineWidth: 1)
+                    )
+            )
     }
 }

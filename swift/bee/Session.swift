@@ -371,7 +371,11 @@ actor Session {
 
                             displayedText = String(chars)
                             textSnapshot.set(displayedText)
-                            ic.setMarkedText(Self.addCursor(displayedText), sessionID: sessionID)
+                            await self.renderMarkedTextIfActive(
+                                Self.addCursor(displayedText),
+                                inputClient: ic,
+                                sessionID: sessionID
+                            )
 
                             steps += 1
                             let delayMs = steps > 20 ? 8 : (steps > 10 ? 15 : 25)
@@ -381,7 +385,11 @@ actor Session {
                         // Snap to target in case animation was interrupted
                         displayedText = targetText
                         textSnapshot.set(displayedText)
-                        ic.setMarkedText(Self.addCursor(displayedText), sessionID: sessionID)
+                        await self.renderMarkedTextIfActive(
+                            Self.addCursor(displayedText),
+                            inputClient: ic,
+                            sessionID: sessionID
+                        )
 
                     case .done(let text, let mode):
                         let finalText = text.isEmpty ? targetText : text
@@ -389,7 +397,11 @@ actor Session {
                         textSnapshot.set(finalText)
 
                         // Snap to final text (no cursor)
-                        ic.setMarkedText(finalText, sessionID: sessionID)
+                        await self.renderMarkedTextIfActive(
+                            finalText,
+                            inputClient: ic,
+                            sessionID: sessionID
+                        )
                         await self.finishIME(text: finalText, mode: mode)
                         return
                     }
@@ -410,20 +422,32 @@ actor Session {
     }
 
     @discardableResult
-    func resume() async -> Bool {
+    func requestResumeActivation() async -> Bool {
         guard ime == .parked else { return true }
         let activated = await MainActor.run {
             inputClient.activate(sessionID: id)
         }
-        guard activated else {
-            beeLog("SESSION: resume failed id=\(id.uuidString.prefix(8))")
-            return false
+        if !activated {
+            beeLog("SESSION: resume activation failed id=\(id.uuidString.prefix(8))")
+        } else {
+            beeLog("SESSION: resume activation requested id=\(id.uuidString.prefix(8))")
         }
+        return activated
+    }
 
+    func routeDidBecomeActive() {
+        guard ime == .parked else { return }
         ime = .active
         let snapshot = textSnapshot.get()
         inputClient.setMarkedText(Self.addCursor(snapshot), sessionID: id)
         beeLog("SESSION: resumed id=\(id.uuidString.prefix(8))")
+    }
+
+    @discardableResult
+    func resume() async -> Bool {
+        let activated = await requestResumeActivation()
+        guard activated else { return false }
+        routeDidBecomeActive()
         return true
     }
 
@@ -568,6 +592,11 @@ actor Session {
             t = String(t.dropLast())
         }
         return t.isEmpty ? "🐝" : "\(t) 🐝"
+    }
+
+    private func renderMarkedTextIfActive(_ text: String, inputClient: BeeInputClient, sessionID: UUID) async {
+        guard ime == .active else { return }
+        inputClient.setMarkedText(text, sessionID: sessionID)
     }
 
     // MARK: - Shortest Edit Script (LCS-based)

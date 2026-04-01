@@ -60,7 +60,7 @@ run_step "Building bee (Release)" "cd \"$SWIFT_DIR\" && xcodebuild -project \"$X
 run_step "Building beeInput (Release)" "cd \"$SWIFT_DIR\" && xcodebuild -project \"$XCODE_PROJECT\" -scheme beeInput -configuration Release CONFIGURATION_BUILD_DIR=\"$BUILD_DIR\" build"
 
 run_step "Installing bee to /Applications/bee.app" "rsync -a --delete \"$BUILD_DIR/bee.app/\" /Applications/bee.app/"
-
 run_step "Installing beeInput to $INPUT_METHOD_DIR/beeInput.app" "mkdir -p \"$INPUT_METHOD_DIR\" && rsync -a --delete \"$BUILD_DIR/beeInput.app/\" \"$INPUT_METHOD_DIR/beeInput.app/\""
-
-banner "Done. Launch bee from /Applications/bee.app"
+run_step "Restarting beeInput" "pkill beeInput || true"
+run_step "Killing running bee" "pkill bee || true"
+run_step "Launching bee" "open -a /Applications/bee.app"

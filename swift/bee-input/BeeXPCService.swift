@@ -5,6 +5,7 @@ import Foundation
 final class BeeXPCService: NSObject {
     struct SessionStartAck {
         let sessionID: UUID
+        let clientPID: pid_t?
         let clientIdentity: String?
     }
 
@@ -160,7 +161,11 @@ final class BeeXPCService: NSObject {
         guard canRouteToCurrentController() else { return nil }
         acknowledgedSessionID = sessionID
         boundClientIdentity = activeClientIdentity
-        return SessionStartAck(sessionID: sessionID, clientIdentity: boundClientIdentity)
+        return SessionStartAck(
+            sessionID: sessionID,
+            clientPID: activeControllerPID,
+            clientIdentity: boundClientIdentity
+        )
     }
 
     private func canRouteToCurrentController() -> Bool {

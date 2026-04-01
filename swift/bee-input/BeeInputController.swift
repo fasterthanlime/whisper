@@ -40,15 +40,19 @@ class BeeInputController: IMKInputController {
     override func deactivateServer(_ sender: Any!) {
         beeInputLog("deactivateServer: hadMarkedText=\(!currentMarkedText.isEmpty) isDictating=\(BeeXPCService.shared.isDictating)")
         let hadMarkedText = !currentMarkedText.isEmpty
+        let isDictating = BeeXPCService.shared.isDictating
+        let sessionID = BeeXPCService.shared.activeSessionID
 
         BeeXPCService.shared.unregisterActiveController(self)
 
-        if hadMarkedText,
-           let sessionID = BeeXPCService.shared.activeSessionID {
+        if isDictating, let sessionID {
             autoCommittedPrefix = currentMarkedText
             Self.postNotification(
                 Self.imeContextLostNotification,
-                userInfo: ["sessionID": sessionID.uuidString]
+                userInfo: [
+                    "sessionID": sessionID.uuidString,
+                    "hadMarkedText": hadMarkedText,
+                ]
             )
         }
         currentMarkedText = ""
@@ -180,6 +184,9 @@ class BeeInputController: IMKInputController {
             return
         }
         var userInfo: [AnyHashable: Any] = ["sessionID": ack.sessionID.uuidString]
+        if let clientPID = ack.clientPID {
+            userInfo["clientPID"] = clientPID
+        }
         if let clientID = ack.clientIdentity {
             userInfo["clientID"] = clientID
         }
@@ -188,7 +195,7 @@ class BeeInputController: IMKInputController {
             userInfo: userInfo
         )
         beeInputLog(
-            "imeSessionStarted: session=\(ack.sessionID.uuidString.prefix(8)) clientID=\(ack.clientIdentity ?? "nil")"
+            "imeSessionStarted: session=\(ack.sessionID.uuidString.prefix(8)) clientPID=\(ack.clientPID.map(String.init) ?? "nil") clientID=\(ack.clientIdentity ?? "nil")"
         )
     }
 }
