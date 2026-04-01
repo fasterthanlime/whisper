@@ -240,6 +240,10 @@ struct MenuBarView: View {
         ("0.5s", 0.5),
         ("0.75s", 0.75),
         ("1s", 1.0),
+        ("1.5s", 1.5),
+        ("2s", 2.0),
+        ("2.5s", 2.5),
+        ("3s", 3.0),
     ]
 
     private static let streamingTokenOptions: [(label: String, value: UInt32)] = [
@@ -258,25 +262,23 @@ struct MenuBarView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 60, alignment: .leading)
             Spacer(minLength: 0)
-            HStack(spacing: 2) {
+            Menu {
                 ForEach(options, id: \.value) { opt in
                     Button {
                         action(opt.value)
                     } label: {
-                        Text(opt.label)
-                            .font(.system(size: 10, weight: current == opt.value ? .bold : .regular))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background {
-                                if current == opt.value {
-                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                        .fill(Color.accentColor.opacity(0.2))
-                                }
-                            }
+                        if current == opt.value {
+                            Label(opt.label, systemImage: "checkmark")
+                        } else {
+                            Text(opt.label)
+                        }
                     }
-                    .buttonStyle(.plain)
                 }
+            } label: {
+                rowMenuLabel(selectedText: options.first(where: { $0.value == current })?.label ?? "\(current)")
             }
+            .menuStyle(.borderlessButton)
+            .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 6)
     }
@@ -289,27 +291,43 @@ struct MenuBarView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 60, alignment: .leading)
             Spacer(minLength: 0)
-            HStack(spacing: 2) {
+            Menu {
                 ForEach(Self.chunkSizeOptions, id: \.value) { opt in
                     Button {
                         appState.chunkSizeSec = opt.value
                     } label: {
-                        Text(opt.label)
-                            .font(.system(size: 10, weight: appState.chunkSizeSec == opt.value ? .bold : .regular))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background {
-                                if appState.chunkSizeSec == opt.value {
-                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                        .fill(Color.accentColor.opacity(0.2))
-                                }
-                            }
+                        if appState.chunkSizeSec == opt.value {
+                            Label(opt.label, systemImage: "checkmark")
+                        } else {
+                            Text(opt.label)
+                        }
                     }
-                    .buttonStyle(.plain)
                 }
+            } label: {
+                rowMenuLabel(selectedText: Self.chunkSizeOptions.first(where: { $0.value == appState.chunkSizeSec })?.label ?? "\(appState.chunkSizeSec)s")
             }
+            .menuStyle(.borderlessButton)
+            .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 6)
+    }
+
+    @ViewBuilder
+    private func rowMenuLabel(selectedText: String) -> some View {
+        HStack(spacing: 6) {
+            Text(selectedText)
+                .font(.system(.caption2, weight: .medium))
+                .lineLimit(1)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(.caption2, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.primary.opacity(0.05))
+        }
     }
 
     @ViewBuilder

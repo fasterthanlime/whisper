@@ -1,6 +1,10 @@
 import AppKit
+import AVFoundation
 import Foundation
 import SwiftUI
+import os
+
+private let logger = Logger(subsystem: "fasterthanlime.bee", category: "AppState")
 
 // MARK: - UI Layer State Machine
 
@@ -12,6 +16,11 @@ import SwiftUI
 @Observable
 @MainActor
 final class AppState {
+    private enum DefaultsKey {
+        static let selectedInputDeviceUID = "audio.selectedInputDeviceUID"
+        static let deviceWarmPolicy = "audio.deviceWarmPolicy"
+    }
+
     private static let imeSubmitName = NSNotification.Name("fasterthanlime.bee.imeSubmit")
     private static let imeCancelName = NSNotification.Name("fasterthanlime.bee.imeCancel")
     private static let imeUserTypedName = NSNotification.Name("fasterthanlime.bee.imeUserTyped")
@@ -24,6 +33,9 @@ final class AppState {
     private var activeSessionTargetPID: pid_t?
     private var distributedObservers: [NSObjectProtocol] = []
     private var workspaceObservers: [NSObjectProtocol] = []
+    private var captureDeviceObservers: [NSObjectProtocol] = []
+    private var lastKnownInputDeviceUIDs: Set<String> = []
+    private var pendingAudioReconfigureAfterSession = false
 
     // Shared infrastructure
     let audioEngine: AudioEngine
@@ -59,18 +71,23 @@ final class AppState {
     }
 
     func selectInputDevice(uid: String) {
+        guard let device = availableInputDevices.first(where: { $0.uid == uid }) else { return }
         activeInputDeviceUID = uid
-        if let device = availableInputDevices.first(where: { $0.uid == uid }) {
-            activeInputDeviceName = device.name
-        }
+        activeInputDeviceName = device.name
+        activeInputDeviceKeepWarm = audioEngine.deviceWarmPolicy[uid] ?? false
         audioEngine.selectDevice(uid: uid)
+        persistAudioPreferences()
+        reconfigureAudioEngineIfNeeded(forceRestart: true)
     }
 
     func toggleActiveInputDeviceKeepWarm() {
         activeInputDeviceKeepWarm.toggle()
         if let uid = activeInputDeviceUID {
             audioEngine.deviceWarmPolicy[uid] = activeInputDeviceKeepWarm
+            persistAudioPreferences()
         }
+        reconfigureAudioEngineIfNeeded(forceRestart: pendingAudioReconfigureAfterSession)
+        pendingAudioReconfigureAfterSession = false
     }
 
     init(
@@ -81,7 +98,10 @@ final class AppState {
         self.audioEngine = audioEngine
         self.transcriptionService = transcriptionService
         self.inputClient = inputClient
+        restoreAudioPreferences()
         installExternalObservers()
+        installCaptureDeviceObservers()
+        refreshInputDevices(reason: "startup")
     }
 
     // MARK: - State
@@ -306,6 +326,8 @@ final class AppState {
             activeSessionID = nil
             activeSessionTargetPID = nil
         }
+
+        applyWarmPolicyForCurrentState()
     }
 
     private func addHistoryEntry(text: String) {
@@ -331,21 +353,26 @@ final class AppState {
             let micGranted = await AudioEngine.requestPermission()
             if !micGranted {
                 await MainActor.run {
+                    self.availableInputDevices = []
+                    self.activeInputDeviceUID = nil
+                    self.activeInputDeviceName = nil
+                    self.activeInputDeviceKeepWarm = false
                     self.modelStatus = .error("Microphone permission denied")
                 }
                 return
             }
 
             do {
+                await MainActor.run {
+                    self.refreshInputDevices(reason: "permission-granted")
+                }
                 try await transcriptionService.loadModel(
                     model: model,
                     cacheDir: STTModelDefinition.cacheDirectory
                 )
-                // Warm up audio engine after model loads
-                try audioEngine.warmUp()
-
                 await MainActor.run {
                     self.modelStatus = .loaded
+                    self.applyWarmPolicyForCurrentState()
                 }
             } catch {
                 await MainActor.run {
@@ -514,6 +541,153 @@ final class AppState {
     private func transitionToIdle() {
         uiState = .idle
         pendingTimer?.cancel()
+    }
+
+    // MARK: - Audio Preferences
+
+    private func restoreAudioPreferences() {
+        let defaults = UserDefaults.standard
+
+        if let rawPolicy = defaults.dictionary(forKey: DefaultsKey.deviceWarmPolicy) {
+            var policy: [String: Bool] = [:]
+            for (uid, rawValue) in rawPolicy {
+                if let boolValue = rawValue as? Bool {
+                    policy[uid] = boolValue
+                } else if let numberValue = rawValue as? NSNumber {
+                    policy[uid] = numberValue.boolValue
+                }
+            }
+            audioEngine.deviceWarmPolicy = policy
+        }
+
+        if let selectedUID = defaults.string(forKey: DefaultsKey.selectedInputDeviceUID) {
+            activeInputDeviceUID = selectedUID
+            activeInputDeviceKeepWarm = audioEngine.deviceWarmPolicy[selectedUID] ?? false
+            audioEngine.selectDevice(uid: selectedUID)
+        }
+    }
+
+    private func persistAudioPreferences() {
+        let defaults = UserDefaults.standard
+        defaults.set(activeInputDeviceUID, forKey: DefaultsKey.selectedInputDeviceUID)
+        defaults.set(audioEngine.deviceWarmPolicy, forKey: DefaultsKey.deviceWarmPolicy)
+    }
+
+    private func applyWarmPolicyForCurrentState() {
+        guard modelStatus == .loaded else { return }
+        guard activeSessionID == nil else { return }
+        if uiState.isRecording { return }
+
+        if activeInputDeviceKeepWarm {
+            if !audioEngine.isWarm {
+                do {
+                    try audioEngine.warmUp()
+                } catch {
+                    logger.error("Failed to warm audio engine for active device: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        } else if audioEngine.isWarm {
+            audioEngine.coolDown()
+        }
+    }
+
+    private func installCaptureDeviceObservers() {
+        let center = NotificationCenter.default
+
+        captureDeviceObservers.append(
+            center.addObserver(forName: AVCaptureDevice.wasConnectedNotification, object: nil, queue: .main) {
+                [weak self] _ in
+                Task { @MainActor in
+                    self?.refreshInputDevices(reason: "capture-device-connected")
+                }
+            }
+        )
+        captureDeviceObservers.append(
+            center.addObserver(forName: AVCaptureDevice.wasDisconnectedNotification, object: nil, queue: .main) {
+                [weak self] _ in
+                Task { @MainActor in
+                    self?.refreshInputDevices(reason: "capture-device-disconnected")
+                }
+            }
+        )
+    }
+
+    private func refreshInputDevices(reason: String) {
+        let previousUID = activeInputDeviceUID
+        let defaultUID = AVCaptureDevice.default(for: .audio)?.uniqueID
+
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external],
+            mediaType: .audio,
+            position: .unspecified
+        )
+        let captureDevices = discovery.devices
+
+        let info = captureDevices
+            .map { device in
+                InputDeviceInfo(
+                    uid: device.uniqueID,
+                    name: device.localizedName,
+                    isBuiltIn: device.deviceType == .microphone,
+                    isDefault: device.uniqueID == defaultUID
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.isDefault != rhs.isDefault { return lhs.isDefault && !rhs.isDefault }
+                if lhs.isBuiltIn != rhs.isBuiltIn { return lhs.isBuiltIn && !rhs.isBuiltIn }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+
+        availableInputDevices = info
+
+        let availableUIDs = Set(info.map(\.uid))
+        let topologyChanged = availableUIDs != lastKnownInputDeviceUIDs
+        lastKnownInputDeviceUIDs = availableUIDs
+
+        let selectedUID: String?
+        if let current = previousUID, availableUIDs.contains(current) {
+            selectedUID = current
+        } else if let preferred = activeInputDeviceUID, availableUIDs.contains(preferred) {
+            selectedUID = preferred
+        } else if let defaultUID, availableUIDs.contains(defaultUID) {
+            selectedUID = defaultUID
+        } else {
+            selectedUID = info.first?.uid
+        }
+
+        if let uid = selectedUID, let selected = info.first(where: { $0.uid == uid }) {
+            activeInputDeviceUID = uid
+            activeInputDeviceName = selected.name
+            activeInputDeviceKeepWarm = audioEngine.deviceWarmPolicy[uid] ?? false
+            audioEngine.selectDevice(uid: uid)
+        } else {
+            activeInputDeviceUID = nil
+            activeInputDeviceName = nil
+            activeInputDeviceKeepWarm = false
+        }
+
+        persistAudioPreferences()
+        reconfigureAudioEngineIfNeeded(forceRestart: topologyChanged || previousUID != activeInputDeviceUID)
+
+        logger.info(
+            "Refreshed input devices (\(reason, privacy: .public)): count=\(info.count), selected=\(self.activeInputDeviceUID ?? "none", privacy: .public)"
+        )
+    }
+
+    private func reconfigureAudioEngineIfNeeded(forceRestart: Bool) {
+        guard modelStatus == .loaded else { return }
+        if activeSessionID != nil || uiState.isRecording {
+            if forceRestart {
+                pendingAudioReconfigureAfterSession = true
+            }
+            return
+        }
+
+        if forceRestart && audioEngine.isWarm {
+            audioEngine.coolDown()
+        }
+
+        applyWarmPolicyForCurrentState()
     }
 }
 

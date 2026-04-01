@@ -11,22 +11,23 @@ final class BeeInputClient: Sendable {
     private static let commitTextName = NSNotification.Name("fasterthanlime.bee.commitText")
     private static let cancelInputName = NSNotification.Name("fasterthanlime.bee.cancelInput")
     private static let stopDictatingName = NSNotification.Name("fasterthanlime.bee.stopDictating")
-    private static let setTargetPIDName = NSNotification.Name("fasterthanlime.bee.setTargetPID")
+    private static let setSessionContextName = NSNotification.Name("fasterthanlime.bee.setSessionContext")
 
     nonisolated(unsafe) private static var previousInputSource: TISInputSource?
 
     // MARK: - Input Source Switching
 
     @discardableResult
-    func activate(expectedTargetPID: pid_t? = nil) -> Bool {
-        if let expectedTargetPID {
-            Self.dnc.postNotificationName(
-                Self.setTargetPIDName,
-                object: nil,
-                userInfo: ["pid": Int(expectedTargetPID)],
-                deliverImmediately: true
-            )
-        }
+    func activate(expectedTargetPID: pid_t?, sessionID: UUID) -> Bool {
+        Self.dnc.postNotificationName(
+            Self.setSessionContextName,
+            object: nil,
+            userInfo: [
+                "sessionID": sessionID.uuidString,
+                "pid": expectedTargetPID.map(Int.init) as Any,
+            ],
+            deliverImmediately: true
+        )
 
         guard let beeSource = Self.findBeeInputSource() else {
             beeLog("IME ACTIVATE: bee input source NOT FOUND")
@@ -62,49 +63,49 @@ final class BeeInputClient: Sendable {
 
     // MARK: - Distributed Notifications
 
-    func setMarkedText(_ text: String) {
+    func setMarkedText(_ text: String, sessionID: UUID) {
         Self.dnc.postNotificationName(
             Self.setMarkedTextName,
             object: nil,
-            userInfo: ["text": text],
+            userInfo: [
+                "sessionID": sessionID.uuidString,
+                "text": text,
+            ],
             deliverImmediately: true
         )
     }
 
-    func logSetMarkedText(_ text: String) {
+    func logSetMarkedText(_ text: String, sessionID: UUID) {
         beeLog("IME setMarkedText: \(text.prefix(60).debugDescription)")
-        setMarkedText(text)
+        setMarkedText(text, sessionID: sessionID)
     }
 
-    func commitText(_ text: String) {
-        Self.dnc.postNotificationName(
-            Self.stopDictatingName,
-            object: nil,
-            userInfo: nil,
-            deliverImmediately: true
-        )
+    func commitText(_ text: String, sessionID: UUID) {
         Self.dnc.postNotificationName(
             Self.commitTextName,
             object: nil,
-            userInfo: ["text": text],
+            userInfo: [
+                "sessionID": sessionID.uuidString,
+                "text": text,
+            ],
             deliverImmediately: true
         )
     }
 
-    func clearMarkedText() {
+    func clearMarkedText(sessionID: UUID) {
         Self.dnc.postNotificationName(
             Self.cancelInputName,
             object: nil,
-            userInfo: nil,
+            userInfo: ["sessionID": sessionID.uuidString],
             deliverImmediately: true
         )
     }
 
-    func stopDictating() {
+    func stopDictating(sessionID: UUID) {
         Self.dnc.postNotificationName(
             Self.stopDictatingName,
             object: nil,
-            userInfo: nil,
+            userInfo: ["sessionID": sessionID.uuidString],
             deliverImmediately: true
         )
     }
