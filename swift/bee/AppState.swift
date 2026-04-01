@@ -410,11 +410,14 @@ final class AppState {
                 object: nil,
                 queue: .main
             ) { [weak self] notification in
-                let activatedPID = (
-                    notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-                )?.processIdentifier
+                let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                let activatedPID = app?.processIdentifier
+                let activatedBundleID = app?.bundleIdentifier
                 Task { @MainActor in
-                    self?.handleDidActivateApplication(processIdentifier: activatedPID)
+                    self?.handleDidActivateApplication(
+                        processIdentifier: activatedPID,
+                        bundleIdentifier: activatedBundleID
+                    )
                 }
             }
         )
@@ -484,18 +487,28 @@ final class AppState {
         }
     }
 
-    private func handleDidActivateApplication(processIdentifier: pid_t?) {
+    private func handleDidActivateApplication(processIdentifier: pid_t?, bundleIdentifier: String?) {
         guard let session = uiState.session else { return }
         guard activeSessionID == session.id else { return }
         guard let targetPID = activeSessionTargetPID else { return }
         guard let processIdentifier else { return }
-        guard processIdentifier != targetPID else { return }
 
-        beeLog("SESSION: active app changed targetPID=\(targetPID) newPID=\(processIdentifier), cancelling")
-        inputClient.stopDictating()
-        inputClient.clearMarkedText()
-        transitionToIdle()
-        Task { await session.abort() }
+        // Ignore Bee + beeInput activations; they're implementation detail
+        // churn and should not affect dictation lifecycle.
+        if bundleIdentifier == "fasterthanlime.bee" || bundleIdentifier == "fasterthanlime.inputmethod.bee" {
+            return
+        }
+
+        if processIdentifier == targetPID {
+            // Returned to original target app: reactivate IME and continue.
+            beeLog("SESSION: resumed targetPID=\(targetPID), reactivating IME")
+            _ = inputClient.activate(expectedTargetPID: targetPID)
+            return
+        }
+
+        // Switched to another app: park session, stop routing IME there.
+        beeLog("SESSION: parked targetPID=\(targetPID), activePID=\(processIdentifier)")
+        inputClient.deactivate()
     }
 
     private func transitionToIdle() {

@@ -11,6 +11,7 @@ final class BeeInputClient: Sendable {
     private static let commitTextName = NSNotification.Name("fasterthanlime.bee.commitText")
     private static let cancelInputName = NSNotification.Name("fasterthanlime.bee.cancelInput")
     private static let stopDictatingName = NSNotification.Name("fasterthanlime.bee.stopDictating")
+    private static let setTargetPIDName = NSNotification.Name("fasterthanlime.bee.setTargetPID")
 
     nonisolated(unsafe) private static var previousInputSource: TISInputSource?
 
@@ -18,6 +19,15 @@ final class BeeInputClient: Sendable {
 
     @discardableResult
     func activate(expectedTargetPID: pid_t? = nil) -> Bool {
+        if let expectedTargetPID {
+            Self.dnc.postNotificationName(
+                Self.setTargetPIDName,
+                object: nil,
+                userInfo: ["pid": Int(expectedTargetPID)],
+                deliverImmediately: true
+            )
+        }
+
         guard let beeSource = Self.findBeeInputSource() else {
             beeLog("IME ACTIVATE: bee input source NOT FOUND")
             return false

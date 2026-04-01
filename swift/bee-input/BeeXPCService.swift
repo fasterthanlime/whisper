@@ -1,4 +1,5 @@
 import Carbon
+import AppKit
 import Foundation
 
 class BeeXPCService: NSObject {
@@ -8,6 +9,7 @@ class BeeXPCService: NSObject {
     weak var activeController: BeeInputController?
     var isDictating = false
     var pendingText: String?
+    var expectedTargetPID: pid_t?
 
     var controller: BeeInputController? {
         activeController
@@ -16,6 +18,10 @@ class BeeXPCService: NSObject {
     /// Called from BeeInputController.activateServer to flush any pending text.
     func flushPending() {
         if let text = pendingText, let ctrl = controller {
+            guard isExpectedTargetFrontmost() else {
+                beeInputLog("flushPending: target not frontmost, keeping pending")
+                return
+            }
             beeInputLog("flushPending: delivering \(text.prefix(40).debugDescription)")
             pendingText = nil
             ctrl.handleSetMarkedText(text)
@@ -25,6 +31,11 @@ class BeeXPCService: NSObject {
     func setMarkedText(_ text: String) {
         isDictating = true
         DispatchQueue.main.async {
+            guard self.isExpectedTargetFrontmost() else {
+                beeInputLog("setMarkedText: frontmost pid mismatch, queuing \(text.prefix(40).debugDescription)")
+                self.pendingText = text
+                return
+            }
             if let ctrl = self.controller {
                 ctrl.handleSetMarkedText(text)
             } else {
@@ -37,6 +48,7 @@ class BeeXPCService: NSObject {
     func commitText(_ text: String, submit: Bool) {
         isDictating = false
         pendingText = nil
+        expectedTargetPID = nil
         DispatchQueue.main.async {
             self.controller?.handleCommitText(text, submit: submit)
         }
@@ -45,9 +57,16 @@ class BeeXPCService: NSObject {
     func cancelInput() {
         isDictating = false
         pendingText = nil
+        expectedTargetPID = nil
         DispatchQueue.main.async {
             self.controller?.handleCancelInput()
         }
+    }
+
+    private func isExpectedTargetFrontmost() -> Bool {
+        guard let expectedTargetPID else { return true }
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        return frontmostPID == expectedTargetPID
     }
 
     func switchAwayFromBeeInput() {

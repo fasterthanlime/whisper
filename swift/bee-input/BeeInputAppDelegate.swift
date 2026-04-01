@@ -57,6 +57,17 @@ class BeeInputAppDelegate: NSObject, NSApplicationDelegate {
         ) { _ in
             BeeXPCService.shared.isDictating = false
             BeeXPCService.shared.pendingText = nil
+            BeeXPCService.shared.expectedTargetPID = nil
+        }
+
+        dnc.addObserver(
+            forName: NSNotification.Name("fasterthanlime.bee.setTargetPID"),
+            object: nil, queue: .main
+        ) { notification in
+            let pid = (notification.userInfo?["pid"] as? NSNumber)?.int32Value
+                ?? (notification.userInfo?["pid"] as? Int32)
+            BeeXPCService.shared.expectedTargetPID = pid
+            beeInputLog("setTargetPID: \(pid.map(String.init) ?? "nil")")
         }
     }
 }
