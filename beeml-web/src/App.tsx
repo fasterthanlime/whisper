@@ -21,7 +21,7 @@ export default function App() {
           background: "var(--bg-surface)",
         }}
       >
-        <strong>beehive</strong>
+        <strong>beeml-web</strong>
         <nav style={{ display: "flex", gap: "0.25rem" }}>
           <button
             className={tab === "live" ? "primary" : ""}

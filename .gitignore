@@ -25,16 +25,18 @@ Package.resolved
 *.dSYM.zip
 *.dSYM
 hark-*.zip
+bee-*.zip
 default.profraw
 target/
-asr-synth/models/
-asr-synth/output*.wav
-asr-synth/target/
-asr-synth/voices/*.wav
-asr-synth/voices/*.m4a
-asr-synth/data/
-asr-synth/training/data/
-asr-synth/training/adapters/
+beeml/models/
+beeml/output*.wav
+beeml/target/
+beeml/voices/*.wav
+beeml/voices/*.m4a
+beeml/data/
+beeml/training/data/
+beeml/training/adapters/
+beeml/scripts/__pycache__/
 
 # env vars
 .env
@@ -42,7 +44,6 @@ asr-synth/training/adapters/
 *.db*
 .analysis/
 .claude/settings.local.json
-asr-synth/scripts/__pycache__/
 build-release/
 build-bee-release/
 .venv/

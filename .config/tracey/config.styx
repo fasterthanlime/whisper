@@ -1,6 +1,6 @@
 specs (
     {
-        name hark
+        name bee
         include (spec/**/*.md)
         impls (
             {

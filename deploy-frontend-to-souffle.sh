@@ -2,8 +2,8 @@
 set -euo pipefail
 
 REMOTE=souffle
-REMOTE_ROOT=~/bearcove/hark/asr-synth/crates/synth-dashboard
-LOCAL_ROOT=/Users/amos/bearcove/hark/asr-synth/crates/synth-dashboard
+REMOTE_ROOT=~/bearcove/hark/beeml/crates/synth-dashboard
+LOCAL_ROOT=/Users/amos/bearcove/hark/beeml/crates/synth-dashboard
 
 echo "=== Syncing dashboard frontend to souffle ==="
 cd "$LOCAL_ROOT"
