@@ -11,6 +11,13 @@ use std::path::Path;
 
 extern "C" {
     fn mlx_set_cache_limit(res: *mut usize, limit: usize) -> std::ffi::c_int;
+    fn mlx_clear_cache() -> std::ffi::c_int;
+}
+
+/// Release unused MLX Metal buffers from the pool back to the system.
+/// Safe to call concurrently — only frees buffers with no live references.
+pub fn clear_mlx_cache() {
+    unsafe { mlx_clear_cache(); }
 }
 
 /// Set the MLX Metal buffer cache limit. Buffers beyond this are returned
@@ -351,6 +358,8 @@ impl<'a> Session<'a> {
                 .model
                 .encode_incremental(&mel, &mut self.encoder_cache)?;
         let audio_features = mlx_rs::ops::expand_dims(&audio_features, 0)?;
+        // Force evaluation so encoder intermediates can be freed
+        audio_features.eval()?;
 
         // Build prompt with prefix rollback
         let prefix_ids = self.compute_prefix();
