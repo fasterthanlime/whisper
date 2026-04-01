@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::db::{ReviewedConfusionSurfaceRow, VocabRow};
+use crate::types::{ReviewedConfusionSurfaceRow, VocabRow};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum AliasSource {

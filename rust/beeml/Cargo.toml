@@ -8,3 +8,4 @@ name = "beeml"
 path = "src/main.rs"
 
 [dependencies]
+beeml-phonetic = { path = "../beeml-phonetic" }

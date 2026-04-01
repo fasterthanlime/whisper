@@ -127,6 +127,17 @@ dependencies = [
 [[package]]
 name = "beeml"
 version = "0.1.0"
+dependencies = [
+ "beeml-phonetic",
+]
+
+[[package]]
+name = "beeml-phonetic"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "bindgen"

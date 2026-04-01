@@ -233,7 +233,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::db::{ReviewedConfusionSurfaceRow, VocabRow};
+    use crate::types::{ReviewedConfusionSurfaceRow, VocabRow};
     use crate::phonetic_lexicon::build_phonetic_lexicon;
 
     fn row_with_reviewed_ipa(term: &str, spoken: &str, reviewed_ipa: &str) -> VocabRow {
