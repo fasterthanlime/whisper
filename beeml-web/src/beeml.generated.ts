@@ -9,13 +9,25 @@ import { session } from "@bearcove/vox-core";
 import { wsConnector } from "@bearcove/vox-ws";
 import { RpcError } from "@bearcove/vox-core";
 
+// Named type definitions
+export interface ForcedAlignItem {
+  word: string;
+  start_time: number;
+  end_time: number;
+}
+
+export interface TranscribeWavResult {
+  transcript: string;
+  qwen_words: ForcedAlignItem[];
+}
+
 // Request/Response type aliases
 export type TranscribeWavRequest = [Uint8Array];
-export type TranscribeWavResponse = { ok: true; value: string } | { ok: false; error: string };
+export type TranscribeWavResponse = { ok: true; value: TranscribeWavResult } | { ok: false; error: string };
 
 // Caller interface for BeeMl
 export interface BeeMlCaller {
-  transcribeWav(wavBytes: Uint8Array): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
+  transcribeWav(wavBytes: Uint8Array): Promise<{ ok: true; value: TranscribeWavResult } | { ok: false; error: string }>;
 }
 
 // Client implementation for BeeMl
@@ -26,7 +38,7 @@ export class BeeMlClient implements BeeMlCaller {
     this.caller = caller;
   }
 
-  async transcribeWav(wavBytes: Uint8Array): Promise<{ ok: true; value: string } | { ok: false; error: string }> {
+  async transcribeWav(wavBytes: Uint8Array): Promise<{ ok: true; value: TranscribeWavResult } | { ok: false; error: string }> {
     const descriptor = beeMl_transcribeWav_method;
     const sendSchemas = beeMl_descriptor.send_schemas;
       try {
@@ -36,10 +48,10 @@ export class BeeMlClient implements BeeMlCaller {
           descriptor,
           sendSchemas,
         });
-        return { ok: true, value } as { ok: true; value: string } | { ok: false; error: string };
+        return { ok: true, value } as { ok: true; value: TranscribeWavResult } | { ok: false; error: string };
       } catch (e: any) {
         if (e instanceof RpcError && e.isUserError()) {
-          return { ok: false, error: e.userError } as { ok: true; value: string } | { ok: false; error: string };
+          return { ok: false, error: e.userError } as { ok: true; value: TranscribeWavResult } | { ok: false; error: string };
         }
         throw e;
       }
@@ -62,7 +74,7 @@ export async function connectBeeMl(
 
 // Handler interface for BeeMl
 export interface BeeMlHandler {
-  transcribeWav(wavBytes: Uint8Array): Promise<{ ok: true; value: string } | { ok: false; error: string }> | { ok: true; value: string } | { ok: false; error: string };
+  transcribeWav(wavBytes: Uint8Array): Promise<{ ok: true; value: TranscribeWavResult } | { ok: false; error: string }> | { ok: true; value: TranscribeWavResult } | { ok: false; error: string };
 }
 
 // Dispatcher for BeeMl
@@ -101,9 +113,13 @@ export const beeMl_send_schemas: import("@bearcove/vox-core").ServiceSendSchemas
     [0x4cf4b2aeb98a1939n, { id: 0x4cf4b2aeb98a1939n, type_params: ['E'], kind: { tag: 'enum', name: 'VoxError', variants: [{ name: 'User', index: 0, payload: { tag: 'newtype', type_ref: { tag: 'var', name: 'E' } } }, { name: 'UnknownMethod', index: 1, payload: { tag: 'unit' } }, { name: 'InvalidPayload', index: 2, payload: { tag: 'newtype', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] } } }, { name: 'Cancelled', index: 3, payload: { tag: 'unit' } }, { name: 'ConnectionClosed', index: 4, payload: { tag: 'unit' } }, { name: 'SessionShutdown', index: 5, payload: { tag: 'unit' } }, { name: 'SendFailed', index: 6, payload: { tag: 'unit' } }, { name: 'Indeterminate', index: 7, payload: { tag: 'unit' } }] } }],
     [0xba8125876d6388b4n, { id: 0xba8125876d6388b4n, type_params: [], kind: { tag: 'primitive', primitive_type: 'bytes' } }],
     [0x6847ab90feda71c1n, { id: 0x6847ab90feda71c1n, type_params: ['T0'], kind: { tag: 'tuple', elements: [{ tag: 'var', name: 'T0' }] } }],
+    [0x3f2e589db81e95bfn, { id: 0x3f2e589db81e95bfn, type_params: [], kind: { tag: 'primitive', primitive_type: 'f64' } }],
+    [0xd3d5370bbeaf7b98n, { id: 0xd3d5370bbeaf7b98n, type_params: [], kind: { tag: 'struct', name: 'ForcedAlignItem', fields: [{ name: 'word', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'start_time', type_ref: { tag: 'concrete', type_id: 0x3f2e589db81e95bfn, args: [] }, required: true }, { name: 'end_time', type_ref: { tag: 'concrete', type_id: 0x3f2e589db81e95bfn, args: [] }, required: true }] } }],
+    [0x0a96b404b4d79d67n, { id: 0x0a96b404b4d79d67n, type_params: ['T'], kind: { tag: 'list', element: { tag: 'var', name: 'T' } } }],
+    [0xf4459a1e5148779cn, { id: 0xf4459a1e5148779cn, type_params: [], kind: { tag: 'struct', name: 'TranscribeWavResult', fields: [{ name: 'transcript', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'qwen_words', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0xd3d5370bbeaf7b98n, args: [] }] }, required: true }] } }],
   ]),
   methods: new Map<bigint, import("@bearcove/vox-core").MethodSendSchemas>([
-    [0x5769301e350ea60bn, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xba8125876d6388b4n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
+    [0x5769301e350ea60bn, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xba8125876d6388b4n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xf4459a1e5148779cn, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
   ]),
 };
 

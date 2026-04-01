@@ -6,7 +6,7 @@ default-run = "beeml"
 
 [features]
 default = ["server"]
-server = ["dep:bee-asr", "dep:tokio", "dep:vox-core", "dep:vox-websocket"]
+server = ["dep:tokio", "dep:vox-core", "dep:vox-websocket"]
 
 [[bin]]
 name = "beeml"
@@ -19,8 +19,9 @@ path = "src/bin/gen-ts-api.rs"
 
 [dependencies]
 bee-phonetic = { path = "../bee-phonetic" }
-bee-asr = { path = "../bee-asr", optional = true }
+bee-asr = { path = "../bee-asr" }
 anyhow = { workspace = true }
+facet = "0.44.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"], optional = true }
 vox = { path = "../../../vox/rust/vox", default-features = false, features = ["runtime"] }
 vox-core = { path = "../../../vox/rust/vox-core", optional = true }

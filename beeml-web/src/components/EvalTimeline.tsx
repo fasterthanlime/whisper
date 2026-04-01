@@ -111,10 +111,10 @@ function buildLanes(
 
   if (parakeetAlignment.length > 0) {
     lanes.push({
-      label: "Parakeet",
+      label: "QWEN",
       tokens: parakeetAlignment,
-      color: "var(--lane-parakeet)",
-      bg: "var(--lane-parakeet-bg)",
+      color: "var(--lane-qwen)",
+      bg: "var(--lane-qwen-bg)",
     });
   }
 

@@ -17,8 +17,8 @@
   --warning: light-dark(#cc8800, #f59e0b);
 
   /* timeline lane colors */
-  --lane-parakeet: light-dark(#3b8a3e, #4ade80);
-  --lane-parakeet-bg: light-dark(#d4edda, #1a3a2a);
+  --lane-qwen: light-dark(#3b8a3e, #4ade80);
+  --lane-qwen-bg: light-dark(#d4edda, #1a3a2a);
   --lane-espeak: light-dark(#6b5bcd, #a78bfa);
   --lane-espeak-bg: light-dark(#e0d8f8, #2a2250);
   --lane-zipa-espeak: light-dark(#6b5bcd, #c4b5fd);
@@ -44,7 +44,10 @@ body,
 }
 
 body {
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
   background: var(--bg);
   color: var(--text);
   line-height: 1.5;

@@ -142,7 +142,7 @@ export function EvalInspector({
           currentTime={currentTime}
           duration={duration}
           zoom={zoom}
-          tokens={data.alignments.espeak ?? data.parakeetAlignment}
+          tokens={data.parakeetAlignment}
           onPlayPause={handlePlayPause}
           onSeek={handleSeek}
           onZoomChange={setZoom}

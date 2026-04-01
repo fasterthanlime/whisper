@@ -3,38 +3,26 @@ import { connectBeeMl } from "../beeml.generated";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { EvalInspector } from "./EvalInspector";
 import type { EvalInspectorData, TimedToken } from "../types";
+import type { ForcedAlignItem } from "../beeml.generated";
 
-function textToTimedTokens(text: string): TimedToken[] {
-  const words = text
-    .split(/\s+/)
-    .map((w) => w.trim())
-    .filter(Boolean);
-  if (words.length === 0) {
-    return [];
-  }
-
-  const perWord = 0.24;
-  return words.map((word, idx) => {
-    const start = idx * perWord;
-    return {
-      w: word,
-      s: start,
-      e: start + perWord,
-    };
-  });
+function qwenWordsToTimedTokens(words: ForcedAlignItem[]): TimedToken[] {
+  return words.map((word) => ({
+    w: word.word,
+    s: word.start_time,
+    e: word.end_time,
+  }));
 }
 
-function toInspectorData(transcript: string): EvalInspectorData {
-  const transcriptTokens = textToTimedTokens(transcript);
+function toInspectorData(transcript: string, qwenWords: ForcedAlignItem[]): EvalInspectorData {
+  const qwenTokens = qwenWordsToTimedTokens(qwenWords);
   return {
     transcript,
     transcriptLabel: "BeeML",
     transcriptSource: "transcript",
-    parakeetAlignment: transcriptTokens,
+    parakeetAlignment: qwenTokens,
     alignments: {
-      timingSource: "synthetic",
-      transcript: transcriptTokens,
-      espeak: transcriptTokens,
+      timingSource: "qwen-forced-aligner",
+      transcript: qwenTokens,
     },
     prototype: {
       corrected: transcript,
@@ -74,7 +62,7 @@ export function TranscribeDemoPanel() {
           throw new Error(result.error);
         }
 
-        setInspectorData(toInspectorData(result.value));
+        setInspectorData(toInspectorData(result.value.transcript, result.value.qwen_words));
         setStatus(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));

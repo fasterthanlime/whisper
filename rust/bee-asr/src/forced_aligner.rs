@@ -8,6 +8,7 @@
 
 use std::path::Path;
 
+use facet::Facet;
 use mlx_rs::error::Exception;
 use mlx_rs::module::{Module, ModuleParametersExt};
 use mlx_rs::ops;
@@ -19,7 +20,7 @@ use crate::load;
 use crate::model::Qwen3ASRModel;
 
 /// One word with its time boundaries from forced alignment.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Facet)]
 pub struct ForcedAlignItem {
     pub word: String,
     pub start_time: f64,

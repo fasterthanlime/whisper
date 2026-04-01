@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use bee_asr::AsrEngine;
-use beeml::rpc::BeeMl;
+use beeml::rpc::{BeeMl, TranscribeWavResult};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use vox::Caller;
@@ -19,9 +19,15 @@ struct BeemlServiceInner {
 }
 
 impl BeeMl for BeeMlService {
-    async fn transcribe_wav(&self, wav_bytes: Vec<u8>) -> Result<String, String> {
+    async fn transcribe_wav(&self, wav_bytes: Vec<u8>) -> Result<TranscribeWavResult, String> {
         let mut engine = self.inner.asr_engine.lock().await;
-        engine.transcribe_wav(&wav_bytes).map_err(|e| e.to_string())
+        let (transcript, qwen_words) = engine
+            .transcribe_wav_with_alignments(&wav_bytes)
+            .map_err(|e| e.to_string())?;
+        Ok(TranscribeWavResult {
+            transcript,
+            qwen_words,
+        })
     }
 }
 

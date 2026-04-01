@@ -6,7 +6,7 @@ export type TimedToken = {
   c?: number | null;
 };
 
-export type EvalTranscriptSource = "parakeet" | "transcript" | "unknown";
+export type EvalTranscriptSource = "qwen" | "transcript" | "unknown";
 
 export type PrototypeAlignments = {
   timingSource: string;
@@ -93,7 +93,7 @@ export type EvalInspectorData = {
   transcriptError?: string | null;
   transcriptSource: EvalTranscriptSource;
   expected?: string;
-  parakeetAlignment: TimedToken[];
+  qwenAlignment: TimedToken[];
   elapsedMs?: number | null;
   alignments: PrototypeAlignments;
   zipaTrace?: unknown;

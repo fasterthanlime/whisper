@@ -6,6 +6,7 @@ use mlx_rs::module::ModuleParametersExt;
 use mlx_rs::{ops, Array};
 
 use crate::config::AsrConfig;
+use crate::forced_aligner::{ForcedAlignItem, ForcedAligner};
 use crate::generate;
 use crate::load;
 use crate::mel::MelExtractor;
@@ -23,6 +24,7 @@ pub struct AsrEngine {
     model: Qwen3ASRModel,
     tokenizer: tokenizers::Tokenizer,
     mel_extractor: MelExtractor,
+    aligner: Option<ForcedAligner>,
 }
 
 impl AsrEngine {
@@ -43,17 +45,38 @@ impl AsrEngine {
                 model_dir.display()
             )
         })?;
+        let aligner = find_aligner_dir().and_then(|aligner_dir| {
+            match ForcedAligner::load(&aligner_dir, tokenizer.clone()) {
+                Ok(aligner) => Some(aligner),
+                Err(error) => {
+                    log::warn!(
+                        "failed to load forced aligner from {}: {error}",
+                        aligner_dir.display()
+                    );
+                    None
+                }
+            }
+        });
 
         Ok(Self {
             model,
             tokenizer,
             mel_extractor: MelExtractor::new(400, 160, 128, 16000),
+            aligner,
         })
     }
 
     pub fn transcribe_wav(&mut self, wav_bytes: &[u8]) -> Result<String> {
         let samples = decode_wav_to_f32_16k_mono(wav_bytes)?;
         self.transcribe_samples(&samples)
+    }
+
+    pub fn transcribe_wav_with_alignments(
+        &mut self,
+        wav_bytes: &[u8],
+    ) -> Result<(String, Vec<ForcedAlignItem>)> {
+        let samples = decode_wav_to_f32_16k_mono(wav_bytes)?;
+        self.transcribe_samples_with_alignments(&samples)
     }
 
     pub fn transcribe_samples(&mut self, samples: &[f32]) -> Result<String> {
@@ -121,6 +144,19 @@ impl AsrEngine {
 
         Ok(text)
     }
+
+    pub fn transcribe_samples_with_alignments(
+        &mut self,
+        samples: &[f32],
+    ) -> Result<(String, Vec<ForcedAlignItem>)> {
+        let text = self.transcribe_samples(samples)?;
+        let alignments = if let Some(aligner) = &mut self.aligner {
+            aligner.align(samples, &text)?
+        } else {
+            Vec::new()
+        };
+        Ok((text, alignments))
+    }
 }
 
 fn find_tokenizer(model_dir: &Path) -> Option<tokenizers::Tokenizer> {
@@ -139,6 +175,22 @@ fn find_tokenizer(model_dir: &Path) -> Option<tokenizers::Tokenizer> {
         }
     }
 
+    None
+}
+
+fn find_aligner_dir() -> Option<std::path::PathBuf> {
+    let home = dirs::home_dir()?;
+    let base = home.join("Library/Caches/qwen3-asr");
+    let candidates = [
+        "mlx-community--Qwen3-ForcedAligner-0.6B-4bit",
+        "Qwen--Qwen3-ForcedAligner-0.6B",
+    ];
+    for name in candidates {
+        let dir = base.join(name);
+        if dir.exists() {
+            return Some(dir);
+        }
+    }
     None
 }
 

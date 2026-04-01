@@ -112,43 +112,41 @@ export function useAudioRecorder() {
     setState("recording");
   }, []);
 
-  const stop = useCallback((): Promise<Blob> => {
-    return new Promise(async (resolve) => {
-      setState("processing");
+  const stop = useCallback(async (): Promise<Blob> => {
+    setState("processing");
 
-      // Tear down audio graph
-      processorRef.current?.disconnect();
-      sourceRef.current?.disconnect();
-      sinkRef.current?.disconnect();
-      streamRef.current?.getTracks().forEach((t) => t.stop());
+    // Tear down audio graph
+    processorRef.current?.disconnect();
+    sourceRef.current?.disconnect();
+    sinkRef.current?.disconnect();
+    streamRef.current?.getTracks().forEach((t) => t.stop());
 
-      const sampleRate = ctxRef.current?.sampleRate ?? 48000;
-      if (ctxRef.current) {
-        await ctxRef.current.close();
-      }
+    const sampleRate = ctxRef.current?.sampleRate ?? 48000;
+    if (ctxRef.current) {
+      await ctxRef.current.close();
+    }
 
-      // Merge chunks into a single Float32Array
-      const chunks = chunksRef.current;
-      const total = chunks.reduce((sum, c) => sum + c.length, 0);
-      const mono = new Float32Array(total);
-      let offset = 0;
-      for (const chunk of chunks) {
-        mono.set(chunk, offset);
-        offset += chunk.length;
-      }
+    // Merge chunks into a single Float32Array
+    const chunks = chunksRef.current;
+    const total = chunks.reduce((sum, c) => sum + c.length, 0);
+    const mono = new Float32Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      mono.set(chunk, offset);
+      offset += chunk.length;
+    }
 
-      const mono16k = resampleMonoLinear(mono, sampleRate, 16000);
-      const wavBuf = monoSamplesToWav(mono16k, 16000);
-      const blob = new Blob([wavBuf], { type: "audio/wav" });
+    const mono16k = resampleMonoLinear(mono, sampleRate, 16000);
+    const wavBuf = monoSamplesToWav(mono16k, 16000);
+    const blob = new Blob([wavBuf], { type: "audio/wav" });
 
-      ctxRef.current = null;
-      processorRef.current = null;
-      sourceRef.current = null;
-      sinkRef.current = null;
-      streamRef.current = null;
-      setState("idle");
-      resolve(blob);
-    });
+    ctxRef.current = null;
+    processorRef.current = null;
+    sourceRef.current = null;
+    sinkRef.current = null;
+    streamRef.current = null;
+    setState("idle");
+    return blob;
   }, []);
 
   return { state, start, stop };
