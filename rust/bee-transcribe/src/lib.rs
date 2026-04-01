@@ -326,7 +326,7 @@ impl<'a> Session<'a> {
 
         // Align any remaining uncommitted text
         let remaining_text = self.current_text();
-        if !remaining_text.trim().is_empty() && !self.audio.is_empty() {
+        if !remaining_text.is_empty() && !self.audio.is_empty() {
             if let Ok(items) = self.engine.aligner.align(&self.audio, &remaining_text) {
                 let offset = self.committed_audio_offset;
                 for item in &items {
@@ -459,13 +459,8 @@ impl<'a> Session<'a> {
             });
         }
 
-        // Update committed state
-        if self.committed_text.is_empty() {
-            self.committed_text = commit_text;
-        } else {
-            self.committed_text.push(' ');
-            self.committed_text.push_str(commit_text.trim());
-        }
+        // Update committed state — tokenizer already encodes whitespace
+        self.committed_text.push_str(&commit_text);
         self.committed_tokens
             .extend_from_slice(&self.token_ids[..commit_count]);
 
@@ -500,13 +495,7 @@ impl<'a> Session<'a> {
     fn make_update(&self) -> Update {
         let current = self.current_text();
         let committed_len = self.committed_text.len();
-        let text = if self.committed_text.is_empty() {
-            current
-        } else if current.trim().is_empty() {
-            self.committed_text.clone()
-        } else {
-            format!("{} {}", self.committed_text, current.trim())
-        };
+        let text = format!("{}{}", self.committed_text, current);
 
         Update {
             text,
