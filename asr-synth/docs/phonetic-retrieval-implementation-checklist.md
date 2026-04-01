@@ -6,6 +6,65 @@ Primary reference:
 
 - [phonetic-retrieval-roadmap.md](/Users/amos/bearcove/hark/asr-synth/docs/phonetic-retrieval-roadmap.md)
 
+## Current Status
+
+Implemented now:
+
+- `phonetic_lexicon.rs`
+  - canonical / spoken / confusion alias expansion
+  - reduced IPA tokens
+  - identifier flags
+- `phonetic_index.rs`
+  - boundary-aware 2-gram / 3-gram postings
+  - raw and reduced IPA views
+  - shortlist query API
+- `region_proposal.rs`
+  - transcript tokenization
+  - contiguous span enumeration
+  - eSpeak-backed span IPA generation hook
+- `phonetic_verify.rs`
+  - shortlist verification with phonetic scoring
+- backend debug route
+  - `POST /api/correct-prototype/retrieval-debug`
+- frontend playground
+  - local `beehive` Retrieval tab for probing spans/candidates interactively
+
+Not integrated into main correction yet:
+
+- indexed retrieval is not yet the proposal path in `prototype.rs`
+- no retrieval benchmark route yet
+- no span pruning beyond simple max-span enumeration
+- no candidate provenance beyond current matched-view / alias-source fields
+
+## Immediate Next Steps
+
+The next steps we have actually discussed are:
+
+1. add early span filters before verification
+   - suppress obviously low-value spans like leading function-word spans
+   - add cheap token-pattern and length heuristics before shortlist verification
+
+2. improve retrieval provenance
+   - return which q-gram view contributed most
+   - return overlap counts per view
+   - make it obvious why a candidate survived
+
+3. add a backend retrieval benchmark route
+   - `POST /api/correct-prototype/retrieval-benchmark`
+   - fixed human cases / transcripts
+   - top-1 / top-3 / top-10 target retrieval
+   - span count, shortlist count, verify count, latency
+
+4. wire indexed retrieval into `prototype.rs` behind a mode switch
+   - `BruteForce`
+   - `IndexedPhonetic`
+   - run eval with the new path before making it default
+
+5. promote the frontend retrieval playground from inspection-only to debugging tool
+   - allow copying a span directly into the correction flow
+   - add candidate/source badges
+   - add score sorting and span filtering controls
+
 ## Scope
 
 Target first implementation:
