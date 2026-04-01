@@ -670,9 +670,16 @@ fn feed_rotate(
             && n >= state.options.commit_token_count
             && state.raw_token_ids.len() >= state.options.commit_token_count + state.options.min_trailing_tokens
         {
-            let committed_text_new = state.tokenizer
-                .decode(&current_prefix, true)
-                .unwrap_or_default();
+            // Back up to a word boundary so we never commit mid-word.
+            let Some((n, current_prefix, committed_text_new)) =
+                find_word_boundary_commit(&state.raw_token_ids, n, &state.tokenizer)
+            else {
+                // No word boundary found in these tokens — reset stability
+                // and wait for more tokens.
+                state.stable_count = 0;
+                state.last_prefix_tokens.clear();
+                return Ok(Some(state.text.clone()));
+            };
 
             // Find audio boundary and store alignments
             let committed_audio_samples = if let Some(ref mut aligner) = state.aligner {
@@ -896,9 +903,14 @@ fn feed_rotate_cached(
             && n >= state.options.commit_token_count
             && state.raw_token_ids.len() >= state.options.commit_token_count + state.options.min_trailing_tokens
         {
-            let committed_text_new = state.tokenizer
-                .decode(&current_prefix, true)
-                .unwrap_or_default();
+            // Back up to a word boundary so we never commit mid-word.
+            let Some((n, current_prefix, committed_text_new)) =
+                find_word_boundary_commit(&state.raw_token_ids, n, &state.tokenizer)
+            else {
+                state.stable_count = 0;
+                state.last_prefix_tokens.clear();
+                return Ok(Some(state.text.clone()));
+            };
 
             let committed_audio_samples = if let Some(ref mut aligner) = state.aligner {
                 let t_align = std::time::Instant::now();
@@ -1080,23 +1092,39 @@ fn join_committed(committed: &str, new: &str) -> String {
         }
     }
 
-    // Don't add space if:
-    // - new text starts with apostrophe/punctuation (contraction: 'll, 's, 't)
-    // - committed ends mid-word (last char is alphanumeric and new starts with lowercase)
-    //   e.g. committed="St" new="upid" → "Stupid" not "St upid"
-    let committed_ends_midword = committed.chars().last()
-        .map_or(false, |c| c.is_alphanumeric());
-    let new_continues_word = fixed.chars().next()
-        .map_or(false, |c| c.is_lowercase());
-    let sep = if committed_ends_midword && new_continues_word {
-        "" // mid-word continuation
-    } else {
-        match fixed.chars().next() {
-            Some('\'' | '\u{2019}' | ',' | '.' | '!' | '?' | ';' | ':') => "",
-            _ => " ",
-        }
+    // Committed text always ends at a word boundary (enforced at commit time).
+    // Don't add space if new text starts with punctuation that attaches to
+    // the preceding word.
+    let sep = match fixed.chars().next() {
+        Some('\'' | '\u{2019}' | ',' | '.' | '!' | '?' | ';' | ':') => "",
+        _ => " ",
     };
     format!("{committed}{sep}{fixed}")
+}
+
+/// Find the largest token count <= `max_tokens` such that the decoded text
+/// ends at a word boundary (not mid-word). Returns (token_count, decoded_text).
+/// Returns None if no word boundary can be found (e.g., single token that is mid-word).
+fn find_word_boundary_commit(
+    token_ids: &[u32],
+    max_tokens: usize,
+    tokenizer: &tokenizers::Tokenizer,
+) -> Option<(usize, Vec<u32>, String)> {
+    let mut n = max_tokens.min(token_ids.len());
+    while n > 0 {
+        let prefix = &token_ids[..n];
+        let text = tokenizer.decode(prefix, true).unwrap_or_default();
+        let trimmed = text.trim_end();
+        // A word boundary: text ends with non-alphanumeric (space, punctuation)
+        // or is empty
+        if trimmed.is_empty()
+            || matches!(trimmed.chars().last(), Some(c) if !c.is_alphanumeric())
+        {
+            return Some((n, prefix.to_vec(), text));
+        }
+        n -= 1;
+    }
+    None
 }
 
 fn strip_punct(s: &str) -> String {
