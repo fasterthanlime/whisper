@@ -1,7 +1,11 @@
 extern crate cmake;
 
 use cmake::Config;
-use std::{env, path::PathBuf, process::Command};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 /// Find the clang runtime library path dynamically using xcrun
 fn find_clang_rt_path() -> Option<String> {
@@ -44,7 +48,29 @@ fn find_clang_rt_path() -> Option<String> {
     None
 }
 
-fn build_and_link_mlx_c() {
+fn link_common() {
+    println!("cargo:rustc-link-lib=c++");
+    println!("cargo:rustc-link-lib=dylib=objc");
+    println!("cargo:rustc-link-lib=framework=Foundation");
+
+    #[cfg(feature = "metal")]
+    {
+        println!("cargo:rustc-link-lib=framework=Metal");
+    }
+
+    #[cfg(feature = "accelerate")]
+    {
+        println!("cargo:rustc-link-lib=framework=Accelerate");
+    }
+
+    // Link against Xcode's clang runtime for ___isPlatformVersionAtLeast symbol.
+    if let Some(clang_rt_path) = find_clang_rt_path() {
+        println!("cargo:rustc-link-search={}", clang_rt_path);
+        println!("cargo:rustc-link-lib=static=clang_rt.osx");
+    }
+}
+
+fn build_and_link_mlx_c() -> PathBuf {
     let mut config = Config::new("src/mlx-c");
     config.very_verbose(true);
     config.define("CMAKE_INSTALL_PREFIX", ".");
@@ -82,44 +108,90 @@ fn build_and_link_mlx_c() {
     println!("cargo:rustc-link-search=native={}/build/lib", dst.display());
     println!("cargo:rustc-link-lib=static=mlx");
     println!("cargo:rustc-link-lib=static=mlxc");
+    link_common();
+    PathBuf::from("src/mlx-c")
+}
 
-    println!("cargo:rustc-link-lib=c++");
-    println!("cargo:rustc-link-lib=dylib=objc");
-    println!("cargo:rustc-link-lib=framework=Foundation");
+fn link_from_prefix(prefix: &Path) -> PathBuf {
+    let lib_dir = prefix.join("lib");
+    let alt_lib_dir = prefix.join("build/lib");
+    let include_dir = prefix.join("include");
 
-    #[cfg(feature = "metal")]
-    {
-        println!("cargo:rustc-link-lib=framework=Metal");
+    if !include_dir.exists() {
+        panic!(
+            "MLX_SYS_PREFIX={} is missing include directory",
+            prefix.display()
+        );
     }
 
-    #[cfg(feature = "accelerate")]
-    {
-        println!("cargo:rustc-link-lib=framework=Accelerate");
+    if lib_dir.exists() {
+        println!("cargo:rustc-link-search=native={}", lib_dir.display());
+    }
+    if alt_lib_dir.exists() {
+        println!("cargo:rustc-link-search=native={}", alt_lib_dir.display());
     }
 
-    // Link against Xcode's clang runtime for ___isPlatformVersionAtLeast symbol
-    // This is needed on macOS 26+ where the bundled LLVM runtime may be outdated
-    // See: https://github.com/conda-forge/llvmdev-feedstock/issues/244
-    if let Some(clang_rt_path) = find_clang_rt_path() {
-        println!("cargo:rustc-link-search={}", clang_rt_path);
-        println!("cargo:rustc-link-lib=static=clang_rt.osx");
+    println!("cargo:rustc-link-lib=static=mlx");
+    println!("cargo:rustc-link-lib=static=mlxc");
+    link_common();
+    include_dir
+}
+
+fn parse_prefix_from_env() -> Option<PathBuf> {
+    let value = env::var("MLX_SYS_PREFIX").ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
     }
+    Some(PathBuf::from(trimmed))
+}
+
+fn header_paths(include_root: &Path) -> Vec<PathBuf> {
+    vec![
+        include_root.join("mlx/c/mlx.h"),
+        include_root.join("mlx/c/linalg.h"),
+        include_root.join("mlx/c/error.h"),
+        include_root.join("mlx/c/transforms_impl.h"),
+    ]
+}
+
+fn emit_rerun_directives() {
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=MLX_SYS_PREFIX");
 }
 
 fn main() {
-    build_and_link_mlx_c();
+    emit_rerun_directives();
+
+    let include_root = if let Some(prefix) = parse_prefix_from_env() {
+        eprintln!(
+            "mlx-sys: using prebuilt libraries from MLX_SYS_PREFIX={}",
+            prefix.display()
+        );
+        link_from_prefix(&prefix)
+    } else {
+        build_and_link_mlx_c()
+    };
+
+    let headers = header_paths(&include_root);
+    for header in &headers {
+        if !header.exists() {
+            panic!("missing header for bindgen: {}", header.display());
+        }
+        println!("cargo:rerun-if-changed={}", header.display());
+    }
 
     // generate bindings
-    let bindings = bindgen::Builder::default()
+    let mut builder = bindgen::Builder::default()
         .rust_target("1.73.0".parse().expect("rust-version"))
-        .header("src/mlx-c/mlx/c/mlx.h")
-        .header("src/mlx-c/mlx/c/linalg.h")
-        .header("src/mlx-c/mlx/c/error.h")
-        .header("src/mlx-c/mlx/c/transforms_impl.h")
-        .clang_arg("-Isrc/mlx-c")
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-        .generate()
-        .expect("Unable to generate bindings");
+        .clang_arg(format!("-I{}", include_root.display()))
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()));
+
+    for header in &headers {
+        builder = builder.header(header.to_string_lossy());
+    }
+
+    let bindings = builder.generate().expect("Unable to generate bindings");
 
     // Write the bindings to the $OUT_DIR/bindings.rs file.
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
