@@ -727,7 +727,7 @@ final class AppState {
         }
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         beeLog(
-            "SESSION: imeContextLost id=\(hotkeyState.session?.id?.uuidString.prefix(8) ?? "nil") targetPID=\(activeSessionTargetPID.map(String.init) ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil") hadMarkedText=\(hadMarkedText.map(String.init) ?? "nil")"
+            "SESSION: imeContextLost id=\(hotkeyState.session?.id.uuidString.prefix(8) ?? "nil") targetPID=\(activeSessionTargetPID.map(String.init) ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil") hadMarkedText=\(hadMarkedText.map(String.init) ?? "nil")"
         )
 
         switch hotkeyState {
