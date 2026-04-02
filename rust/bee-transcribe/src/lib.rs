@@ -57,7 +57,7 @@ impl Language {
 
 impl Default for Language {
     fn default() -> Self {
-        Language("English".into())
+        Language("auto".into())
     }
 }
 
