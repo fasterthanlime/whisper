@@ -851,6 +851,8 @@ final class AppState {
     private func transitionToIdle() {
         uiState = .idle
         pendingTimer?.cancel()
+        pendingIMEAckTimeoutTask?.cancel()
+        pendingIMEAckTimeoutTask = nil
         isSessionParked = false
         hideParkedOverlay()
     }

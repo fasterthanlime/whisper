@@ -105,10 +105,11 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
             self.appConnections[appInstanceID] = conn
             let info = SessionInfo(id: sessionID, appInstanceID: appInstanceID)
             self.session = .prepared(info)
-            let hasIME = self.imeProxy() != nil
-            brokerLog("prepareSession: id=\(sessionID.prefix(8)) imeConnected=\(hasIME)")
             if let ime = self.imeProxy() {
+                brokerLog("prepareSession: id=\(sessionID.prefix(8)) → notifying IME")
                 ime.handleNewPreparedSession(sessionID)
+            } else {
+                brokerLog("prepareSession: id=\(sessionID.prefix(8)) (IME not connected)")
             }
             reply(true)
         }

@@ -108,7 +108,6 @@ final class BeeInputClient: Sendable {
         return true
     }
 
-    @MainActor
     /// Re-select bee input source. Called by retry logic when activateServer
     /// doesn't fire after the initial selection.
     @MainActor
