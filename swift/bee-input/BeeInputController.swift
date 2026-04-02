@@ -9,13 +9,10 @@ class BeeInputController: IMKInputController {
 
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
+        let bridge = BeeIMEBridgeState.shared
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let clientIdentity = currentClientIdentity()
-        BeeIMEBridgeState.shared.registerActiveController(
-            self,
-            clientPID: frontmostPID,
-            clientIdentity: clientIdentity
-        )
+        bridge.activate(self, pid: frontmostPID, clientID: clientIdentity)
 
         // Synchronous XPC claim — blocks so deactivateServer can't race.
         guard let sessionID = BeeBrokerIMEClient.shared.claimPreparedSessionSync() else {
@@ -24,20 +21,19 @@ class BeeInputController: IMKInputController {
         }
 
         beeInputLog("activateServer: claimed session=\(sessionID.uuidString.prefix(8))")
-        BeeIMEBridgeState.shared.attachSession(sessionID: sessionID)
-        BeeIMEBridgeState.shared.flushPending()
+        bridge.attachSession(sessionID: sessionID)
+        bridge.flushPending()
         BeeBrokerIMEClient.shared.imeAttach(sessionID: sessionID)
     }
 
     override func deactivateServer(_ sender: Any!) {
-        beeInputLog(
-            "deactivateServer: hadMarkedText=\(!currentMarkedText.isEmpty) isDictating=\(BeeIMEBridgeState.shared.isDictating)"
-        )
+        let bridge = BeeIMEBridgeState.shared
         let hadMarkedText = !currentMarkedText.isEmpty
-        let isDictating = BeeIMEBridgeState.shared.isDictating
-        let sessionID = BeeIMEBridgeState.shared.activeSessionID
+        let isDictating = bridge.isDictating
+        let sessionID = bridge.activeSessionID
 
-        BeeIMEBridgeState.shared.unregisterActiveController(self)
+        beeInputLog("deactivateServer: hadMarkedText=\(hadMarkedText) isDictating=\(isDictating)")
+        bridge.deactivate(self)
 
         if isDictating, let sessionID {
             autoCommittedPrefix = currentMarkedText
