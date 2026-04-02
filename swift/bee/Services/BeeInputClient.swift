@@ -111,6 +111,7 @@ final class BeeInputClient: Sendable {
         return true
     }
 
+    @MainActor
     private static func selectBeeInputSource() async -> Bool {
         guard let beeSource = findBeeInputSource() else {
             beeLog("IME ACTIVATE: bee input source NOT FOUND")
