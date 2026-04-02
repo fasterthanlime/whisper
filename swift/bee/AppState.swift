@@ -24,6 +24,7 @@ final class AppState {
         static let deviceWarmPolicy = "audio.deviceWarmPolicy"
         static let devicePriorityList = "audio.devicePriorityList"
         static let hiddenDeviceUIDs = "audio.hiddenDeviceUIDs"
+        static let knownDevices = "audio.knownDevices"
         static let debugOverlayEnabled = "ui.debugOverlayEnabled"
         static let totalSessions = "stats.totalSessions"
         static let totalWords = "stats.totalWords"
@@ -111,6 +112,8 @@ final class AppState {
     var activeInputDeviceKeepWarm: Bool = false
     var devicePriorityList: [String] = []  // UIDs, highest priority first
     var hiddenDeviceUIDs: Set<String> = []  // UIDs hidden from menu bar
+    /// All devices we've ever seen, keyed by UID. Used to show offline devices.
+    private(set) var knownDevices: [String: InputDeviceInfo] = [:]
 
     // History
     var transcriptionHistory: [TranscriptionHistoryItem] = []
@@ -1341,6 +1344,7 @@ final class AppState {
         if let savedHidden = defaults.stringArray(forKey: DefaultsKey.hiddenDeviceUIDs) {
             hiddenDeviceUIDs = Set(savedHidden)
         }
+        restoreKnownDevices()
     }
 
     private func persistAudioPreferences() {
@@ -1349,6 +1353,73 @@ final class AppState {
         defaults.set(audioEngine.deviceWarmPolicy, forKey: DefaultsKey.deviceWarmPolicy)
         defaults.set(devicePriorityList, forKey: DefaultsKey.devicePriorityList)
         defaults.set(Array(hiddenDeviceUIDs), forKey: DefaultsKey.hiddenDeviceUIDs)
+    }
+
+    private func persistKnownDevices() {
+        // Store as array of dictionaries
+        let encoded = knownDevices.values.map { device -> [String: String] in
+            var dict: [String: String] = [
+                "uid": device.uid,
+                "name": device.name,
+                "transport": device.transport.rawValue,
+            ]
+            if device.isBuiltIn { dict["isBuiltIn"] = "true" }
+            if let modelUID = device.modelUID { dict["modelUID"] = modelUID }
+            if let manufacturer = device.manufacturer { dict["manufacturer"] = manufacturer }
+            return dict
+        }
+        UserDefaults.standard.set(encoded, forKey: DefaultsKey.knownDevices)
+    }
+
+    private func restoreKnownDevices() {
+        guard let saved = UserDefaults.standard.array(forKey: DefaultsKey.knownDevices) as? [[String: String]] else { return }
+        for dict in saved {
+            guard let uid = dict["uid"], let name = dict["name"] else { continue }
+            let transport = AudioTransport(rawValue: dict["transport"] ?? "") ?? .unknown
+            knownDevices[uid] = InputDeviceInfo(
+                uid: uid,
+                name: name,
+                isBuiltIn: dict["isBuiltIn"] == "true",
+                isDefault: false,
+                transport: transport,
+                modelUID: dict["modelUID"],
+                manufacturer: dict["manufacturer"]
+            )
+        }
+    }
+
+    /// All known devices sorted by priority, with online status.
+    func allDevicesForSettings() -> [(device: InputDeviceInfo, isOnline: Bool)] {
+        let onlineUIDs = Set(availableInputDevices.map(\.uid))
+        let priority = devicePriorityList
+
+        // Merge: online devices (updated info) + offline known devices
+        var seen = Set<String>()
+        var result: [(device: InputDeviceInfo, isOnline: Bool)] = []
+
+        // First, all devices in priority order
+        for uid in priority {
+            if let online = availableInputDevices.first(where: { $0.uid == uid }) {
+                result.append((online, true))
+                seen.insert(uid)
+            } else if let known = knownDevices[uid] {
+                result.append((known, false))
+                seen.insert(uid)
+            }
+        }
+
+        // Then online devices not in priority list
+        for device in availableInputDevices where !seen.contains(device.uid) {
+            result.append((device, true))
+            seen.insert(device.uid)
+        }
+
+        // Then offline known devices not in priority list
+        for (uid, device) in knownDevices where !seen.contains(uid) {
+            result.append((device, false))
+        }
+
+        return result
     }
 
     private func applyWarmPolicyForCurrentState() {
@@ -1440,6 +1511,12 @@ final class AppState {
             }
 
         availableInputDevices = info
+
+        // Record all seen devices for offline display
+        for device in info {
+            knownDevices[device.uid] = device
+        }
+        persistKnownDevices()
 
         let availableUIDs = Set(info.map(\.uid))
         let topologyChanged = availableUIDs != lastKnownInputDeviceUIDs

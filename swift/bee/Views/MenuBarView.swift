@@ -477,26 +477,27 @@ private struct AudioSettingsView: View {
                             .foregroundStyle(.secondary)
 
                         List {
-                            ForEach(Array(orderedDevices.enumerated()), id: \.element.uid) { index, device in
+                            ForEach(Array(allDevices.enumerated()), id: \.element.device.uid) { index, entry in
                                 AudioSettingsDeviceRow(
-                                    device: device,
+                                    device: entry.device,
                                     rank: index + 1,
-                                    isActive: device.uid == appState.activeInputDeviceUID,
-                                    isWarm: appState.audioEngine.deviceWarmPolicy[device.uid] ?? false,
-                                    isHidden: appState.hiddenDeviceUIDs.contains(device.uid),
-                                    onSelect: { appState.selectInputDevice(uid: device.uid) },
-                                    onToggleWarm: { appState.toggleDeviceWarmPolicy(uid: device.uid) },
-                                    onToggleHidden: { appState.toggleDeviceHidden(uid: device.uid) }
+                                    isActive: entry.device.uid == appState.activeInputDeviceUID,
+                                    isOnline: entry.isOnline,
+                                    isWarm: appState.audioEngine.deviceWarmPolicy[entry.device.uid] ?? false,
+                                    isHidden: appState.hiddenDeviceUIDs.contains(entry.device.uid),
+                                    onSelect: entry.isOnline ? { appState.selectInputDevice(uid: entry.device.uid) } : nil,
+                                    onToggleWarm: { appState.toggleDeviceWarmPolicy(uid: entry.device.uid) },
+                                    onToggleHidden: { appState.toggleDeviceHidden(uid: entry.device.uid) }
                                 )
                             }
                             .onMove { source, destination in
-                                var uids = orderedDevices.map(\.uid)
+                                var uids = allDevices.map(\.device.uid)
                                 uids.move(fromOffsets: source, toOffset: destination)
                                 appState.setDevicePriority(orderedUIDs: uids)
                             }
                         }
                         .listStyle(.bordered(alternatesRowBackgrounds: false))
-                        .frame(minHeight: 200)
+                        .frame(maxHeight: .infinity)
                     }
 
                     // Level meter + controls
@@ -557,19 +558,8 @@ private struct AudioSettingsView: View {
         }
     }
 
-    private var orderedDevices: [AppState.InputDeviceInfo] {
-        let devices = appState.availableInputDevices
-        let priority = appState.devicePriorityList
-
-        // Sort by priority index, then by default/built-in/alpha for unranked
-        return devices.sorted { lhs, rhs in
-            let lhsIdx = priority.firstIndex(of: lhs.uid) ?? Int.max
-            let rhsIdx = priority.firstIndex(of: rhs.uid) ?? Int.max
-            if lhsIdx != rhsIdx { return lhsIdx < rhsIdx }
-            if lhs.isDefault != rhs.isDefault { return lhs.isDefault && !rhs.isDefault }
-            if lhs.isBuiltIn != rhs.isBuiltIn { return lhs.isBuiltIn && !rhs.isBuiltIn }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-        }
+    private var allDevices: [(device: AppState.InputDeviceInfo, isOnline: Bool)] {
+        appState.allDevicesForSettings()
     }
 
     // Reuse from AdvancedSettingsView
@@ -579,9 +569,10 @@ private struct AudioSettingsDeviceRow: View {
     let device: AppState.InputDeviceInfo
     let rank: Int
     let isActive: Bool
+    let isOnline: Bool
     let isWarm: Bool
     let isHidden: Bool
-    let onSelect: () -> Void
+    let onSelect: (() -> Void)?
     let onToggleWarm: () -> Void
     let onToggleHidden: () -> Void
 
@@ -596,7 +587,7 @@ private struct AudioSettingsDeviceRow: View {
             // Device icon
             DeviceIcon(device: device)
                 .font(.title3)
-                .foregroundStyle(isActive ? .orange : .secondary)
+                .foregroundStyle(isActive ? .orange : isOnline ? .secondary : .secondary.opacity(0.3))
                 .frame(width: 24)
 
             // Name + subtitle
@@ -604,10 +595,22 @@ private struct AudioSettingsDeviceRow: View {
                 HStack(spacing: 6) {
                     Text(device.name)
                         .fontWeight(isActive ? .medium : .regular)
+                        .foregroundStyle(isOnline ? .primary : .secondary)
                     if isActive {
                         Image(systemName: "checkmark")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.orange)
+                    }
+                    if !isOnline {
+                        Text("Offline")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary.opacity(0.6))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(
+                                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                    .fill(Color.primary.opacity(0.05))
+                            )
                     }
                 }
                 if let subtitle = device.subtitle {
@@ -639,7 +642,8 @@ private struct AudioSettingsDeviceRow: View {
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
-        .onTapGesture { onSelect() }
+        .onTapGesture { onSelect?() }
+        .opacity(isOnline ? 1 : 0.7)
     }
 }
 
