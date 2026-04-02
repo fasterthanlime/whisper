@@ -386,7 +386,8 @@ actor Session {
 
                             steps += 1
                             let delayMs = steps > 20 ? 8 : (steps > 10 ? 15 : 25)
-                            try? await Task.sleep(for: .milliseconds(delayMs))
+                            do { try await Task.sleep(for: .milliseconds(delayMs)) }
+                            catch { break }
                         }
 
                         // Snap to target in case animation was interrupted
@@ -672,12 +673,15 @@ actor Session {
         case .commit(let submit):
             if !text.isEmpty {
                 inputClient.commitText(text, sessionID: id)
-                try? await Task.sleep(for: .milliseconds(50))
-                await MainActor.run { inputClient.deactivate() }
                 ime = .committed
+                // Brief pause to let commit propagate before deactivating
+                do { try await Task.sleep(for: .milliseconds(50)) }
+                catch { beeLog("SESSION: finishIME commit sleep cancelled"); return }
+                await MainActor.run { inputClient.deactivate() }
 
                 if submit {
-                    try? await Task.sleep(for: .milliseconds(50))
+                    do { try await Task.sleep(for: .milliseconds(50)) }
+                    catch { beeLog("SESSION: finishIME submit sleep cancelled"); return }
                     inputClient.simulateReturn()
                 }
             } else {

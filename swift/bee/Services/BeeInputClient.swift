@@ -142,7 +142,8 @@ final class BeeInputClient: Sendable {
         targetApp.activate()
     }
 
-    func deactivate() {
+    func deactivate(caller: String = #function, file: String = #fileID, line: Int = #line) {
+        beeLog("IME DEACTIVATE called from \(file):\(line) \(caller)")
         Self.switchAwayFromBeeInputIfNeeded()
     }
 
@@ -211,7 +212,8 @@ final class BeeInputClient: Sendable {
         return false
     }
 
-    static func restoreInputSourceIfNeeded() {
+    static func restoreInputSourceIfNeeded(caller: String = #function, file: String = #fileID, line: Int = #line) {
+        beeLog("IME RESTORE called from \(file):\(line) \(caller)")
         switchAwayFromBeeInputIfNeeded()
     }
 

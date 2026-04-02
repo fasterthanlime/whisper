@@ -37,7 +37,7 @@ final class AppState {
     private var activeSessionTargetPID: pid_t?
     fileprivate var activeSessionTargetAppName: String?
     fileprivate var activeSessionTargetAppIcon: NSImage?
-    private var pendingIMEAckTimeoutTask: Task<Void, Never>?
+    // pendingIMEAckWorkItem declared near startIMEAckTimeoutIfNeeded
     private var distributedObservers: [NSObjectProtocol] = []
     private var workspaceObservers: [NSObjectProtocol] = []
     private var captureDeviceObservers: [NSObjectProtocol] = []
@@ -172,8 +172,8 @@ final class AppState {
             activeSessionTargetPID = targetPID
             activeSessionTargetAppName = targetApp?.localizedName
             activeSessionTargetAppIcon = targetApp?.icon
-            pendingIMEAckTimeoutTask?.cancel()
-            pendingIMEAckTimeoutTask = nil
+            pendingIMEAckWorkItem?.cancel()
+            pendingIMEAckWorkItem = nil
             imeSessionState = .activating
             parkedOverlayText = ""
             hotkeyState = .held(session)
@@ -306,11 +306,13 @@ final class AppState {
 
     private func startPendingTimer(session: Session) {
         pendingTimer = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(300))
+            do { try await Task.sleep(for: .milliseconds(300)) }
+            catch { return }
             while !Task.isCancelled {
                 guard case .held(let s) = hotkeyState, s.id == session.id else { return }
                 guard imeSessionState == .active else {
-                    try? await Task.sleep(for: .milliseconds(100))
+                    do { try await Task.sleep(for: .milliseconds(100)) }
+                    catch { return }
                     continue
                 }
                 hotkeyState = .pushToTalk(s)
@@ -320,49 +322,50 @@ final class AppState {
         }
     }
 
+    private var pendingIMEAckWorkItem: DispatchWorkItem?
+
     private func startIMEAckTimeoutIfNeeded(session: Session) {
-        guard pendingIMEAckTimeoutTask == nil else { return }
-        pendingIMEAckTimeoutTask = Task { @MainActor [weak self] in
-            // Wait 500ms — enough for session setup (~180ms) + TIS + 60ms deferred claim.
-            try? await Task.sleep(for: .milliseconds(500))
+        guard pendingIMEAckWorkItem == nil else { return }
+
+        let sessionID = session.id
+        let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-
             guard self.imeSessionState != .active else {
-                self.pendingIMEAckTimeoutTask = nil
+                self.pendingIMEAckWorkItem = nil
                 return
             }
-            guard self.hotkeyState.session?.id == session.id else {
-                self.pendingIMEAckTimeoutTask = nil
+            guard self.hotkeyState.session?.id == sessionID else {
+                self.pendingIMEAckWorkItem = nil
                 return
             }
 
-            // TISSelectInputSource didn't trigger activateServer, or it fired
-            // but was immediately revoked. Try a focus cycle to force it.
-            beeLog("SESSION: IME not stable after 200ms (imeState=\(self.imeSessionState)), trying focus cycle id=\(session.id.uuidString.prefix(8))")
-
+            beeLog("SESSION: IME not confirmed after 500ms (imeState=\(self.imeSessionState)), trying focus cycle id=\(sessionID.uuidString.prefix(8))")
             self.imeSessionState = .activating
-
             BeeInputClient.forceFocusCycle()
 
-            // Wait another 800ms for the focus cycle to work.
-            try? await Task.sleep(for: .milliseconds(800))
-
-            guard self.imeSessionState != .active else {
-                self.pendingIMEAckTimeoutTask = nil
-                return
+            // Schedule abort after another 1s
+            let abortWork = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                guard self.imeSessionState != .active else {
+                    self.pendingIMEAckWorkItem = nil
+                    return
+                }
+                guard self.hotkeyState.session?.id == sessionID else {
+                    self.pendingIMEAckWorkItem = nil
+                    return
+                }
+                beeLog("SESSION: IME confirm timeout id=\(sessionID.uuidString.prefix(8)), aborting")
+                self.playStartFailureSound()
+                self.pendingTimer?.cancel()
+                self.transitionToIdle()
+                Task { await session.abort() }
+                self.pendingIMEAckWorkItem = nil
             }
-            guard self.hotkeyState.session?.id == session.id else {
-                self.pendingIMEAckTimeoutTask = nil
-                return
-            }
-
-            beeLog("SESSION: IME confirm timeout id=\(session.id.uuidString.prefix(8)), aborting")
-            self.playStartFailureSound()
-            self.pendingTimer?.cancel()
-            self.transitionToIdle()
-            Task { await session.abort() }
-            self.pendingIMEAckTimeoutTask = nil
+            self.pendingIMEAckWorkItem = abortWork
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: abortWork)
         }
+        pendingIMEAckWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
     private func logFocusDiagnostics(reason: String) {
@@ -806,6 +809,12 @@ final class AppState {
             return
         }
 
+        // During IME activation (including focus cycle fallback),
+        // app switches are expected and should not abort the session.
+        if imeSessionState == .activating {
+            return
+        }
+
         if processIdentifier == targetPID {
             if imeSessionState == .parked {
                 beeLog("SESSION: resume requested targetPID=\(targetPID)")
@@ -880,8 +889,8 @@ final class AppState {
     private func transitionToIdle() {
         hotkeyState = .idle
         pendingTimer?.cancel()
-        pendingIMEAckTimeoutTask?.cancel()
-        pendingIMEAckTimeoutTask = nil
+        pendingIMEAckWorkItem?.cancel()
+        pendingIMEAckWorkItem = nil
         imeSessionState = .inactive
         hideParkedOverlay()
     }
