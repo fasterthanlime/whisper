@@ -203,6 +203,14 @@ final class BeeIMEBridgeState: NSObject {
     // MARK: - State transitions
 
     func activate(_ controller: BeeInputController, pid: pid_t?, clientID: String?) {
+        if case .serving(let session, let sessionID, let pending) = state {
+            // A spurious activateServer (e.g. from a focus cycle) must not
+            // destroy an active serving session. Just update the controller ref.
+            beeInputLog("activate: already serving session=\(sessionID.uuidString.prefix(8)), updating controller")
+            session.controller = controller
+            state = .serving(session, sessionID: sessionID, pendingText: pending)
+            return
+        }
         let session = BeeIMESession(controller: controller, pid: pid, clientID: clientID)
         state = .activated(session)
         beeInputLog("state → activated pid=\(pid.map(String.init) ?? "nil")")
