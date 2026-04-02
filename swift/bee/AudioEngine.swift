@@ -507,7 +507,7 @@ final class AudioEngine: @unchecked Sendable {
 
         var consumed = false
         _ = converter.convert(to: dstBuffer, error: nil) { _, outStatus in
-            if consumed { outStatus.pointee = .endOfStream; return nil }
+            if consumed { outStatus.pointee = .noDataNow; return nil }
             consumed = true
             outStatus.pointee = .haveData
             return srcBuffer
