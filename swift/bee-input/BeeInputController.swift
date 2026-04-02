@@ -22,18 +22,33 @@ class BeeInputController: IMKInputController {
             "activateServer: client=\(clientName) clientID=\(clientIdentity ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil")"
         )
 
-        // Synchronous XPC call — blocks main thread so deactivateServer
-        // can't race in before we finish attaching.
-        let result = BeeBrokerIMEClient.shared.claimPreparedSessionSync(
-            clientPID: frontmostPID,
-            clientID: clientIdentity
-        )
-
-        guard result.found, let sessionID = result.sessionID else {
-            beeInputLog(
-                "activateServer: no prepared session, ignoring clientID=\(clientIdentity ?? "nil") pid=\(frontmostPID.map(String.init) ?? "nil")"
+        // Check local state first (stored by handleNewPreparedSession),
+        // then fall back to synchronous XPC claim.
+        let sessionID: UUID
+        if let localSession = BeeIMEBridgeState.shared.takePreparedSession(forPID: frontmostPID) {
+            beeInputLog("activateServer: found local prepared session=\(localSession.uuidString.prefix(8))")
+            // Still need to tell the broker we're claiming it
+            let result = BeeBrokerIMEClient.shared.claimPreparedSessionSync(
+                clientPID: frontmostPID,
+                clientID: clientIdentity
             )
-            return
+            guard result.found, let claimed = result.sessionID else {
+                beeInputLog("activateServer: local session claim failed on broker")
+                return
+            }
+            sessionID = claimed
+        } else {
+            let result = BeeBrokerIMEClient.shared.claimPreparedSessionSync(
+                clientPID: frontmostPID,
+                clientID: clientIdentity
+            )
+            guard result.found, let claimed = result.sessionID else {
+                beeInputLog(
+                    "activateServer: no prepared session, ignoring clientID=\(clientIdentity ?? "nil") pid=\(frontmostPID.map(String.init) ?? "nil")"
+                )
+                return
+            }
+            sessionID = claimed
         }
 
         beeInputLog("activateServer: attaching session=\(sessionID.uuidString.prefix(8)) clientID=\(clientIdentity ?? "nil")")

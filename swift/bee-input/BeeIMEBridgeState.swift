@@ -9,15 +9,14 @@ final class BeeIMEBridgeState: NSObject {
     weak var activeController: BeeInputController?
     private(set) var activeControllerPID: pid_t?
     private(set) var activeClientIdentity: String?
-
-    /// Survives deactivateServer — the controller/client may still be usable
-    /// for direct session claims when activateServer doesn't fire.
-    weak var lastKnownController: BeeInputController?
-    private(set) var lastKnownControllerPID: pid_t?
-    private(set) var lastKnownClientIdentity: String?
     private(set) var activeSessionID: UUID?
     private var boundClientIdentity: String?
     var pendingText: String?
+
+    /// Session prepared by the broker but not yet claimed. Stored locally
+    /// so activateServer can claim synchronously without an XPC round-trip.
+    private(set) var pendingPreparedSessionID: UUID?
+    private(set) var pendingPreparedTargetPID: pid_t?
 
     var controller: BeeInputController? {
         activeController
@@ -142,12 +141,25 @@ final class BeeIMEBridgeState: NSObject {
         activeController = controller
         activeControllerPID = clientPID
         activeClientIdentity = clientIdentity
-        lastKnownController = controller
-        lastKnownControllerPID = clientPID
-        lastKnownClientIdentity = clientIdentity
         beeInputLog(
             "registerActiveController: pid=\(clientPID.map(String.init) ?? "nil") clientID=\(clientIdentity ?? "nil")"
         )
+    }
+
+    func storePreparedSession(sessionID: UUID, targetPID: pid_t?) {
+        pendingPreparedSessionID = sessionID
+        pendingPreparedTargetPID = targetPID
+        beeInputLog("storePreparedSession: session=\(sessionID.uuidString.prefix(8)) targetPID=\(targetPID.map(String.init) ?? "nil")")
+    }
+
+    func takePreparedSession(forPID pid: pid_t?) -> UUID? {
+        guard let sessionID = pendingPreparedSessionID else { return nil }
+        if let expected = pendingPreparedTargetPID, let actual = pid, expected != actual {
+            return nil
+        }
+        pendingPreparedSessionID = nil
+        pendingPreparedTargetPID = nil
+        return sessionID
     }
 
     func unregisterActiveController(_ controller: BeeInputController) {
