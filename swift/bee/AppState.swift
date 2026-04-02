@@ -345,7 +345,7 @@ final class AppState {
                     BeeInputClient.retrySelectBeeInputSource()
                 } else {
                     beeLog("SESSION: IME confirm timeout id=\(session.id.uuidString.prefix(8)), aborting")
-                    self.logFocusDiagnostics(reason: "ime-confirm-timeout")
+                    // self.logFocusDiagnostics(reason: "ime-confirm-timeout")
                     self.playStartFailureSound()
                     self.pendingTimer?.cancel()
                     self.transitionToIdle()
