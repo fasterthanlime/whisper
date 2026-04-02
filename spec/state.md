@@ -536,14 +536,19 @@ The IME layer manages text insertion via the beeInput InputMethodKit IME.
 
 > h[ime.key-intercept]
 > While isDictating is true, the IME intercepts Enter (triggers submit)
-> and Escape (triggers cancel) via distributed notifications back to the
+> and Escape (triggers cancel) via XPC through the broker back to the
 > main app.
 
 > h[ime.communication]
-> The main app communicates with the IME through:
-> - XPC for start/ack/control-plane lifecycle,
-> - IME text/control events (`setMarkedText`, `commitText`, `cancelInput`,
->   `stopDictating`) during the rendering lifecycle.
+> All communication between the main app and the IME goes through the
+> broker process via XPC:
+> - Session lifecycle: prepare, claim, attach, clear.
+> - App → IME text commands: `setMarkedText`, `commitText`, `cancelInput`,
+>   `stopDictating`.
+> - IME → App events: `imeSessionStarted`, `imeSubmit`, `imeCancel`,
+>   `imeUserTyped`, `imeContextLost`.
+> The broker also notifies the IME of newly prepared sessions so it can
+> claim directly if it already has an active controller.
 
 ## Hotkey
 
