@@ -170,6 +170,7 @@ final class BeeInputClient: Sendable {
         )
         window.level = .floating
         window.alphaValue = 0.0
+        window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
