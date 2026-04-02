@@ -1297,8 +1297,19 @@ final class AppState {
 
     private func applyWarmPolicyForCurrentState() {
         guard modelStatus == .loaded else { return }
-        guard hotkeyState.session == nil else { return }
-        if hotkeyState.isRecording { return }
+
+        // During recording, always keep warm (the session needs audio)
+        if hotkeyState.isRecording || hotkeyState.session != nil {
+            if !audioEngine.isWarm {
+                do {
+                    try audioEngine.warmUp()
+                    beeLog("AUDIO: re-warmed during active session")
+                } catch {
+                    beeLog("AUDIO: failed to re-warm during session: \(error)")
+                }
+            }
+            return
+        }
 
         let shouldBeWarm = activeInputDeviceKeepWarm || menuBarPanelOpen
         if shouldBeWarm {
@@ -1401,25 +1412,24 @@ final class AppState {
         }
 
         persistAudioPreferences()
-        reconfigureAudioEngineIfNeeded(
-            forceRestart: topologyChanged || previousUID != activeInputDeviceUID)
 
-        logger.info(
-            "Refreshed input devices (\(reason, privacy: .public)): count=\(info.count), selected=\(self.activeInputDeviceUID ?? "none", privacy: .public)"
-        )
+        let needsRestart = topologyChanged || previousUID != activeInputDeviceUID
+        beeLog("AUDIO: refreshInputDevices(\(reason)): count=\(info.count), prev=\(previousUID ?? "nil"), now=\(activeInputDeviceUID ?? "nil"), topologyChanged=\(topologyChanged), needsRestart=\(needsRestart)")
+
+        reconfigureAudioEngineIfNeeded(forceRestart: needsRestart)
     }
 
     private func reconfigureAudioEngineIfNeeded(forceRestart: Bool) {
         guard modelStatus == .loaded else { return }
-        if hotkeyState.isRecording {
+
+        if forceRestart && audioEngine.isWarm {
+            beeLog("AUDIO: reconfigure: force restarting (recording=\(hotkeyState.isRecording))")
+            audioEngine.coolDown()
+        } else if hotkeyState.isRecording {
             if forceRestart {
                 pendingAudioReconfigureAfterSession = true
             }
             return
-        }
-
-        if forceRestart && audioEngine.isWarm {
-            audioEngine.coolDown()
         }
 
         applyWarmPolicyForCurrentState()
