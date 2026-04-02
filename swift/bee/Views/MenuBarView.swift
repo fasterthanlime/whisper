@@ -489,6 +489,33 @@ private struct AdvancedSettingsView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Toggle("Run on startup", isOn: $runOnStartupEnabled)
                         Toggle("Pause media while dictating", isOn: $pauseMediaEnabled)
+
+                        Toggle("Lower volume during dictation", isOn: Binding(
+                            get: { appState.lowerVolumeDuringDictation },
+                            set: { appState.lowerVolumeDuringDictation = $0 }
+                        ))
+                        if appState.lowerVolumeDuringDictation {
+                            HStack(spacing: 8) {
+                                Image(systemName: "speaker.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Slider(
+                                    value: Binding(
+                                        get: { appState.dictationVolumeLevel },
+                                        set: { appState.dictationVolumeLevel = $0 }
+                                    ),
+                                    in: 0...1
+                                )
+                                Image(systemName: "speaker.wave.3.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text("\(Int(appState.dictationVolumeLevel * 100))%")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 36, alignment: .trailing)
+                            }
+                            .padding(.leading, 20)
+                        }
                         Toggle("Debug overlay", isOn: Binding(
                             get: { appState.debugEnabled },
                             set: {
@@ -766,11 +793,19 @@ private struct TranscriptRow: View {
     @State private var copied = false
     @State private var isHovered = false
 
+    private func copyText() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            copied = false
+        }
+    }
+
     private var tailText: String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Show the last ~120 characters if longer
-        if trimmed.count > 120 {
-            let start = trimmed.index(trimmed.endIndex, offsetBy: -120)
+        if trimmed.count > 200 {
+            let start = trimmed.index(trimmed.endIndex, offsetBy: -200)
             return "…" + trimmed[start...]
         }
         return trimmed
@@ -778,17 +813,11 @@ private struct TranscriptRow: View {
 
     var body: some View {
         Button {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
-            copied = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                copied = false
-            }
+            copyText()
         } label: {
             HStack(alignment: .center, spacing: 8) {
                 Text(tailText)
-                    .lineLimit(2)
-                    .truncationMode(.head)
+                    .lineLimit(1)
                 Spacer(minLength: 4)
                 ZStack {
                     // Always reserve space for timestamp text
@@ -822,7 +851,7 @@ private struct TranscriptRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .help("Click to copy")
+        .help(text)
     }
 }
 
@@ -897,6 +926,17 @@ private struct AudioDeviceRow: View {
         .padding(.vertical, 4)
         .contentShape(Rectangle())
         .onTapGesture { onSelect() }
+    }
+}
+
+private struct TooltipArrow: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { p in
+            p.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            p.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+            p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+            p.closeSubpath()
+        }
     }
 }
 

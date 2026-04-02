@@ -25,6 +25,8 @@ final class AppState {
         static let totalSessions = "stats.totalSessions"
         static let totalWords = "stats.totalWords"
         static let totalCharacters = "stats.totalCharacters"
+        static let lowerVolumeDuringDictation = "audio.lowerVolumeDuringDictation"
+        static let dictationVolumeLevel = "audio.dictationVolumeLevel"
         static let chunkSizeSec = "transcription.chunkSizeSec"
         static let maxNewTokensStreaming = "transcription.maxNewTokensStreaming"
         static let maxNewTokensFinal = "transcription.maxNewTokensFinal"
@@ -121,6 +123,15 @@ final class AppState {
     var maxNewTokensFinal: UInt32 = 0 {  // 0 = Rust default (512)
         didSet { UserDefaults.standard.set(Int(maxNewTokensFinal), forKey: DefaultsKey.maxNewTokensFinal) }
     }
+
+    // Volume ducking
+    var lowerVolumeDuringDictation: Bool = false {
+        didSet { UserDefaults.standard.set(lowerVolumeDuringDictation, forKey: DefaultsKey.lowerVolumeDuringDictation) }
+    }
+    var dictationVolumeLevel: Float = 0.25 {
+        didSet { UserDefaults.standard.set(dictationVolumeLevel, forKey: DefaultsKey.dictationVolumeLevel) }
+    }
+    private var savedVolume: Float?
 
     // Debug
     var debugEnabled = false {
@@ -298,6 +309,9 @@ final class AppState {
         self.totalSessions = defaults.integer(forKey: DefaultsKey.totalSessions)
         self.totalWords = defaults.integer(forKey: DefaultsKey.totalWords)
         self.totalCharacters = defaults.integer(forKey: DefaultsKey.totalCharacters)
+        self.lowerVolumeDuringDictation = defaults.bool(forKey: DefaultsKey.lowerVolumeDuringDictation)
+        let savedLevel = defaults.float(forKey: DefaultsKey.dictationVolumeLevel)
+        if savedLevel > 0 { self.dictationVolumeLevel = savedLevel }
         let savedChunk = defaults.float(forKey: DefaultsKey.chunkSizeSec)
         if savedChunk > 0 { self.chunkSizeSec = savedChunk }
         let savedStreaming = defaults.integer(forKey: DefaultsKey.maxNewTokensStreaming)
@@ -363,6 +377,7 @@ final class AppState {
             imeSessionState = .activating
             parkedOverlayText = ""
             hotkeyState = .held(session)
+            duckVolume()
             startPendingTimer(session: session)
             startIMEAckTimeoutIfNeeded(session: session)
             let config = TranscriptionService.SessionConfig(
@@ -1095,6 +1110,60 @@ final class AppState {
         pendingIMEAckWorkItem = nil
         imeSessionState = .inactive
         hideParkedOverlay()
+        restoreVolume()
+    }
+
+    // MARK: - Volume Ducking
+
+    private func duckVolume() {
+        guard lowerVolumeDuringDictation else { return }
+        if let current = Self.getSystemVolume() {
+            savedVolume = current
+            Self.setSystemVolume(current * dictationVolumeLevel)
+        }
+    }
+
+    private func restoreVolume() {
+        guard let volume = savedVolume else { return }
+        savedVolume = nil
+        Self.setSystemVolume(volume)
+    }
+
+    private static func getSystemVolume() -> Float? {
+        var deviceID = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let s1 = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
+        guard s1 == noErr else { return nil }
+
+        var volume: Float32 = 0
+        size = UInt32(MemoryLayout<Float32>.size)
+        address.mSelector = kAudioHardwareServiceDeviceProperty_VirtualMainVolume
+        address.mScope = kAudioDevicePropertyScopeOutput
+        let s2 = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &volume)
+        return s2 == noErr ? volume : nil
+    }
+
+    private static func setSystemVolume(_ volume: Float) {
+        var deviceID = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let s1 = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
+        guard s1 == noErr else { return }
+
+        var vol = max(0, min(1, volume))
+        size = UInt32(MemoryLayout<Float32>.size)
+        address.mSelector = kAudioHardwareServiceDeviceProperty_VirtualMainVolume
+        address.mScope = kAudioDevicePropertyScopeOutput
+        AudioObjectSetPropertyData(deviceID, &address, 0, nil, size, &vol)
     }
 
     private func showParkedOverlay(for session: Session) {
