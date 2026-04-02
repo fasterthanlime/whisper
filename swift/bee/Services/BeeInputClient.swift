@@ -134,12 +134,63 @@ final class BeeInputClient: Sendable {
     @MainActor
     static func forceFocusCycle() {
         guard let targetApp = NSWorkspace.shared.frontmostApplication else { return }
+
+        let env = ProcessInfo.processInfo.environment
+        let hideDelayMS = UInt32(env["BEE_FOCUS_CYCLE_HIDE_DELAY_MS"] ?? "500") ?? 0
+        let unhideDelayMS = UInt32(env["BEE_FOCUS_CYCLE_UNHIDE_DELAY_MS"] ?? "500") ?? 0
+        let activateDelayMS = UInt32(env["BEE_FOCUS_CYCLE_ACTIVATE_DELAY_MS"] ?? "500") ?? 500
+
         beeLog("IME ACTIVATE: focus cycle — hiding \(targetApp.localizedName ?? "?")")
         targetApp.hide()
-        usleep(200_000)  // 200ms — not cancellable
+        if hideDelayMS > 0 {
+            usleep(hideDelayMS * 1_000)
+        }
+
         beeLog("IME ACTIVATE: focus cycle — reactivating \(targetApp.localizedName ?? "?")")
         targetApp.unhide()
+        if unhideDelayMS > 0 {
+            usleep(unhideDelayMS * 1_000)
+        }
+
         targetApp.activate()
+        if activateDelayMS > 0 {
+            usleep(activateDelayMS * 1_000)
+        }
+    }
+
+    @MainActor
+    static func stealthFocusCycle() {
+        let previousApp = NSWorkspace.shared.frontmostApplication
+        let appName = previousApp?.localizedName ?? "?"
+        let appPID = previousApp?.processIdentifier ?? 0
+        beeLog("IME ACTIVATE: stealth focus cycle start frontmost=\(appName) pid=\(appPID)")
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.alphaValue = 0.0
+
+        beeLog("IME ACTIVATE: stealth focus cycle making panel key")
+        panel.makeKeyAndOrderFront(nil)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            beeLog("IME ACTIVATE: stealth focus cycle ordering panel out")
+            panel.orderOut(nil)
+
+            if let previousApp {
+                beeLog(
+                    "IME ACTIVATE: stealth focus cycle reactivating app name=\(previousApp.localizedName ?? "?") pid=\(previousApp.processIdentifier)"
+                )
+                previousApp.activate()
+            } else {
+                beeLog("IME ACTIVATE: stealth focus cycle no previous app to reactivate")
+            }
+        }
     }
 
     func deactivate(caller: String = #function, file: String = #fileID, line: Int = #line) {
@@ -212,7 +263,9 @@ final class BeeInputClient: Sendable {
         return false
     }
 
-    static func restoreInputSourceIfNeeded(caller: String = #function, file: String = #fileID, line: Int = #line) {
+    static func restoreInputSourceIfNeeded(
+        caller: String = #function, file: String = #fileID, line: Int = #line
+    ) {
         beeLog("IME RESTORE called from \(file):\(line) \(caller)")
         switchAwayFromBeeInputIfNeeded()
     }
