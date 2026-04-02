@@ -747,6 +747,8 @@ final class AppState {
 
     private func handleIMESessionStarted(sessionID: UUID?) {
         guard isNotificationForActiveSession(sessionID) else { return }
+
+        // Parked → active (resume after focus return)
         if imeSessionState == .parked, let session = hotkeyState.session {
             beeLog("SESSION: IME route restored id=\(session.id.uuidString.prefix(8))")
             imeSessionState = .active
@@ -754,6 +756,9 @@ final class AppState {
             Task { await session.routeDidBecomeActive() }
             return
         }
+
+        // Only process if we're still activating (ignore duplicate confirmations)
+        guard imeSessionState == .activating else { return }
 
         switch hotkeyState {
         case .held(let session):
