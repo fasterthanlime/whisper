@@ -59,6 +59,10 @@ protocol BeeBrokerXPC {
         imeInstanceID: String,
         withReply reply: @escaping () -> Void
     )
+    func imeActivationRevoked(
+        imeInstanceID: String,
+        withReply reply: @escaping () -> Void
+    )
 }
 
 @objc
@@ -79,4 +83,5 @@ protocol BeeBrokerPeerXPC {
     func handleIMECancel(_ sessionID: String)
     func handleIMEUserTyped(_ sessionID: String, keyCode: Int32, characters: String)
     func handleIMEContextLost(_ sessionID: String, hadMarkedText: Bool)
+    func handleIMEActivationRevoked()
 }

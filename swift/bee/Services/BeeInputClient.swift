@@ -47,6 +47,13 @@ private final class BeeAppControlSink: NSObject, BeeBrokerPeerXPC {
         )
     }
 
+    private static let imeActivationRevokedName = NSNotification.Name(
+        "fasterthanlime.bee.imeActivationRevoked")
+
+    func handleIMEActivationRevoked() {
+        post(Self.imeActivationRevokedName, userInfo: [:])
+    }
+
     func handleNewPreparedSession(_ sessionID: String, targetPID: Int32) {}
     func handleClearSession(_ sessionID: String) {}
     func handleSetMarkedText(_ sessionID: String, text: String) {}

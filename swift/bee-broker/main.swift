@@ -306,6 +306,20 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
             reply()
         }
     }
+
+    func imeActivationRevoked(
+        imeInstanceID: String,
+        withReply reply: @escaping () -> Void
+    ) {
+        queue.async {
+            // Forward to all connected apps
+            for (_, conn) in self.appConnections {
+                let app = conn.remoteObjectProxyWithErrorHandler { _ in } as? BeeBrokerPeerXPC
+                app?.handleIMEActivationRevoked()
+            }
+            reply()
+        }
+    }
 }
 
 private final class BeeBrokerDelegate: NSObject, NSXPCListenerDelegate {

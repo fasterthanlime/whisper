@@ -140,6 +140,12 @@ final class BeeBrokerIMEClient {
             imeInstanceID: imeInstanceID
         ) {}
     }
+
+    func imeActivationRevoked() {
+        let conn = getConnection()
+        let proxy = conn.remoteObjectProxyWithErrorHandler { _ in } as? BeeBrokerXPC
+        proxy?.imeActivationRevoked(imeInstanceID: imeInstanceID) {}
+    }
 }
 
 private final class BeeIMEPeerSink: NSObject, BeeBrokerPeerXPC {
@@ -196,4 +202,5 @@ private final class BeeIMEPeerSink: NSObject, BeeBrokerPeerXPC {
     func handleIMECancel(_ sessionID: String) {}
     func handleIMEUserTyped(_ sessionID: String, keyCode: Int32, characters: String) {}
     func handleIMEContextLost(_ sessionID: String, hadMarkedText: Bool) {}
+    func handleIMEActivationRevoked() {}
 }

@@ -38,39 +38,8 @@ final class BeeIMESession {
     func cancelPendingClaim() {
         guard pendingClaimToken != nil else { return }
         pendingClaimToken = nil
-        beeInputLog("deactivateServer: cancelled pending claim, triggering focus cycle")
-        triggerFocusCycle()
-    }
-
-    private func triggerFocusCycle() {
-        let targetPID = pid_t(BeeBrokerIMEClient.shared.expectedTargetPID)
-        guard targetPID != 0,
-              let targetApp = NSRunningApplication(processIdentifier: targetPID)
-        else {
-            beeInputLog("focus cycle: no target app")
-            return
-        }
-
-        beeInputLog("focus cycle: target=\(targetApp.localizedName ?? "?") pid=\(targetPID)")
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
-            styleMask: [],
-            backing: .buffered,
-            defer: false
-        )
-        window.level = .floating
-        window.alphaValue = 0.0
-        window.isReleasedWhenClosed = false
-
-        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
-        window.makeKeyAndOrderFront(nil)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            beeInputLog("focus cycle: closing, reactivating pid=\(targetPID)")
-            window.close()
-            targetApp.activate(options: [.activateIgnoringOtherApps])
-        }
+        beeInputLog("deactivateServer: cancelled pending claim, notifying app")
+        BeeBrokerIMEClient.shared.imeActivationRevoked()
     }
 
     private func performClaim() {
