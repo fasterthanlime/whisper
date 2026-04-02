@@ -191,10 +191,9 @@ final class AppState {
             // start the audio/ASR pipeline on the Session actor.
             let language = detectLanguage()
             beeLog("APP: handleROptDown done, dispatching Task")
-            Task { @MainActor in
+            Task {
                 beeLog("APP: Task started")
-                let imeOk = await self.inputClient.activate(sessionID: session.id, targetPID: targetPID)
-                await session.start(language: language, asrConfig: config, imeAlreadyActivated: imeOk)
+                await session.start(language: language, asrConfig: config)
             }
             return false  // not swallowed
 
