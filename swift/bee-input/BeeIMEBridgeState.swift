@@ -13,20 +13,7 @@ final class BeeIMEBridgeState: NSObject {
     private var boundClientIdentity: String?
     var pendingText: String?
 
-    /// Session prepared by the broker but not yet claimed. Stored locally
-    /// so activateServer can claim synchronously without an XPC round-trip.
-    private(set) var pendingPreparedSessionID: UUID?
-    private(set) var pendingPreparedTargetPID: pid_t?
-
-    var controller: BeeInputController? {
-        activeController
-    }
-
     var isDictating: Bool {
-        activeSessionID != nil
-    }
-
-    var hasActiveSession: Bool {
         activeSessionID != nil
     }
 
@@ -53,7 +40,7 @@ final class BeeIMEBridgeState: NSObject {
             beeInputLog("flushPending: route not ready, keeping pending (\(routingDebugInfo()))")
             return
         }
-        guard let ctrl = controller else {
+        guard let ctrl = activeController else {
             beeInputLog("flushPending: no controller, keeping pending")
             return
         }
@@ -80,7 +67,7 @@ final class BeeIMEBridgeState: NSObject {
                 return
             }
 
-            if let ctrl = self.controller {
+            if let ctrl = self.activeController {
                 ctrl.handleSetMarkedText(text)
             } else {
                 beeInputLog("setMarkedText: no controller, queuing \(text.prefix(40).debugDescription)")
@@ -98,7 +85,7 @@ final class BeeIMEBridgeState: NSObject {
                 return
             }
 
-            let ctrl = self.controller
+            let ctrl = self.activeController
             self.clearSessionState()
             ctrl?.handleCommitText(text, submit: submit)
         }
@@ -113,7 +100,7 @@ final class BeeIMEBridgeState: NSObject {
                 return
             }
 
-            let ctrl = self.controller
+            let ctrl = self.activeController
             self.clearSessionState()
             ctrl?.handleCancelInput()
         }
@@ -146,22 +133,6 @@ final class BeeIMEBridgeState: NSObject {
         )
     }
 
-    func storePreparedSession(sessionID: UUID, targetPID: pid_t?) {
-        pendingPreparedSessionID = sessionID
-        pendingPreparedTargetPID = targetPID
-        beeInputLog("storePreparedSession: session=\(sessionID.uuidString.prefix(8)) targetPID=\(targetPID.map(String.init) ?? "nil")")
-    }
-
-    func takePreparedSession(forPID pid: pid_t?) -> UUID? {
-        guard let sessionID = pendingPreparedSessionID else { return nil }
-        if let expected = pendingPreparedTargetPID, let actual = pid, expected != actual {
-            return nil
-        }
-        pendingPreparedSessionID = nil
-        pendingPreparedTargetPID = nil
-        return sessionID
-    }
-
     func unregisterActiveController(_ controller: BeeInputController) {
         guard activeController === controller else { return }
         activeController = nil
@@ -170,7 +141,7 @@ final class BeeIMEBridgeState: NSObject {
     }
 
     private func canRouteToCurrentController() -> Bool {
-        guard controller != nil else { return false }
+        guard activeController != nil else { return false }
         guard let boundClientIdentity else { return true }
         return activeClientIdentity == boundClientIdentity
     }

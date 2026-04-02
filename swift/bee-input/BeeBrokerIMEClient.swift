@@ -151,44 +151,39 @@ final class BeeBrokerIMEClient {
 
 private final class BeeIMEPeerSink: NSObject, BeeBrokerPeerXPC {
     func handleNewPreparedSession(_ sessionID: String, targetPID: Int32) {
-        guard let uuid = UUID(uuidString: sessionID) else { return }
-        let pid = targetPID >= 0 ? pid_t(targetPID) : nil
         DispatchQueue.main.async {
             let bridge = BeeIMEBridgeState.shared
+            let pid = targetPID >= 0 ? pid_t(targetPID) : nil
 
-            // If we have a live active controller for the right PID, claim now.
-            if let controller = bridge.activeController {
-                let controllerPID = bridge.activeControllerPID
-                if let pid, let controllerPID, pid != controllerPID {
-                    beeInputLog("handleNewPreparedSession: PID mismatch controller=\(controllerPID) target=\(pid), storing for activateServer")
-                    bridge.storePreparedSession(sessionID: uuid, targetPID: pid)
-                    return
-                }
-                let clientIdentity = bridge.activeClientIdentity
-                beeInputLog("handleNewPreparedSession: active controller alive, claiming session=\(sessionID.prefix(8)) directly")
-                let result = BeeBrokerIMEClient.shared.claimPreparedSessionSync(
-                    clientPID: controllerPID,
-                    clientID: clientIdentity
-                )
-                guard result.found, let claimedSessionID = result.sessionID else {
-                    beeInputLog("handleNewPreparedSession: claim failed, storing for activateServer")
-                    bridge.storePreparedSession(sessionID: uuid, targetPID: pid)
-                    return
-                }
-                beeInputLog("handleNewPreparedSession: attached session=\(claimedSessionID.uuidString.prefix(8))")
-                bridge.attachSession(sessionID: claimedSessionID, clientIdentity: clientIdentity)
-                bridge.flushPending()
-                BeeBrokerIMEClient.shared.imeAttach(
-                    sessionID: claimedSessionID,
-                    clientPID: controllerPID,
-                    clientID: clientIdentity
-                )
+            guard let _ = bridge.activeController else {
+                beeInputLog("newPreparedSession: no active controller, waiting for activateServer session=\(sessionID.prefix(8))")
                 return
             }
 
-            // No live controller — store session for activateServer to pick up.
-            beeInputLog("handleNewPreparedSession: no active controller, storing session=\(sessionID.prefix(8)) for activateServer")
-            bridge.storePreparedSession(sessionID: uuid, targetPID: pid)
+            let controllerPID = bridge.activeControllerPID
+            if let pid, let controllerPID, pid != controllerPID {
+                beeInputLog("newPreparedSession: PID mismatch controller=\(controllerPID) target=\(pid), waiting for activateServer")
+                return
+            }
+
+            let clientIdentity = bridge.activeClientIdentity
+            let result = BeeBrokerIMEClient.shared.claimPreparedSessionSync(
+                clientPID: controllerPID,
+                clientID: clientIdentity
+            )
+            guard result.found, let claimedSessionID = result.sessionID else {
+                beeInputLog("newPreparedSession: claim failed session=\(sessionID.prefix(8))")
+                return
+            }
+
+            beeInputLog("newPreparedSession: claimed session=\(claimedSessionID.uuidString.prefix(8)) pid=\(controllerPID.map(String.init) ?? "nil")")
+            bridge.attachSession(sessionID: claimedSessionID, clientIdentity: clientIdentity)
+            bridge.flushPending()
+            BeeBrokerIMEClient.shared.imeAttach(
+                sessionID: claimedSessionID,
+                clientPID: controllerPID,
+                clientID: clientIdentity
+            )
         }
     }
 

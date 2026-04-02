@@ -8,7 +8,6 @@ class BeeInputController: IMKInputController {
     private var autoCommittedPrefix: String = ""
 
     override func activateServer(_ sender: Any!) {
-        beeInputLog("activateServer: (start!)")
         super.activateServer(sender)
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let clientIdentity = currentClientIdentity()
@@ -17,41 +16,18 @@ class BeeInputController: IMKInputController {
             clientPID: frontmostPID,
             clientIdentity: clientIdentity
         )
-        let clientName = (self.client() as? NSObject)?.description.prefix(80) ?? "nil"
-        beeInputLog(
-            "activateServer: client=\(clientName) clientID=\(clientIdentity ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil")"
-        )
 
-        // Check local state first (stored by handleNewPreparedSession),
-        // then fall back to synchronous XPC claim.
-        let sessionID: UUID
-        if let localSession = BeeIMEBridgeState.shared.takePreparedSession(forPID: frontmostPID) {
-            beeInputLog("activateServer: found local prepared session=\(localSession.uuidString.prefix(8))")
-            // Still need to tell the broker we're claiming it
-            let result = BeeBrokerIMEClient.shared.claimPreparedSessionSync(
-                clientPID: frontmostPID,
-                clientID: clientIdentity
-            )
-            guard result.found, let claimed = result.sessionID else {
-                beeInputLog("activateServer: local session claim failed on broker")
-                return
-            }
-            sessionID = claimed
-        } else {
-            let result = BeeBrokerIMEClient.shared.claimPreparedSessionSync(
-                clientPID: frontmostPID,
-                clientID: clientIdentity
-            )
-            guard result.found, let claimed = result.sessionID else {
-                beeInputLog(
-                    "activateServer: no prepared session, ignoring clientID=\(clientIdentity ?? "nil") pid=\(frontmostPID.map(String.init) ?? "nil")"
-                )
-                return
-            }
-            sessionID = claimed
+        // Synchronous XPC claim — blocks so deactivateServer can't race.
+        let result = BeeBrokerIMEClient.shared.claimPreparedSessionSync(
+            clientPID: frontmostPID,
+            clientID: clientIdentity
+        )
+        guard result.found, let sessionID = result.sessionID else {
+            beeInputLog("activateServer: no prepared session pid=\(frontmostPID.map(String.init) ?? "nil")")
+            return
         }
 
-        beeInputLog("activateServer: attaching session=\(sessionID.uuidString.prefix(8)) clientID=\(clientIdentity ?? "nil")")
+        beeInputLog("activateServer: claimed session=\(sessionID.uuidString.prefix(8)) pid=\(frontmostPID.map(String.init) ?? "nil")")
         BeeIMEBridgeState.shared.attachSession(
             sessionID: sessionID,
             clientIdentity: clientIdentity
@@ -62,7 +38,6 @@ class BeeInputController: IMKInputController {
             clientPID: frontmostPID,
             clientID: clientIdentity
         )
-        beeInputLog("activateServer: done!")
     }
 
     override func deactivateServer(_ sender: Any!) {
