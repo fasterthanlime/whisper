@@ -34,6 +34,14 @@ final class AudioEngine: @unchecked Sendable {
     private var renderBufferData: UnsafeMutablePointer<Float>?
     private var renderBufferCapacity: UInt32 = 4096
 
+    // Cached resampler (created once per warmUp, reused across callbacks)
+    private var resampler: AVAudioConverter?
+    private var resamplerSrcFormat: AVAudioFormat?
+    private var resamplerDstFormat: AVAudioFormat?
+    // Accumulation buffer for resampling (collect native samples, resample in chunks)
+    private var resampleAccumulator: [Float] = []
+    private let resampleChunkSize = 4096  // resample in chunks for quality
+
     // Per-session raw audio pipelines (Channel 0)
     private var activePipelines: [UUID: RawAudioPipeline] = [:]
 
@@ -172,7 +180,21 @@ final class AudioEngine: @unchecked Sendable {
             UInt32(MemoryLayout<AURenderCallbackStruct>.size)
         ), "SetInputCallback")
 
-        // 9. Initialize and start
+        // 9. Set up cached resampler
+        if nativeRate != Self.targetSampleRate {
+            let srcFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: nativeRate, channels: 1, interleaved: false)!
+            let dstFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Self.targetSampleRate, channels: 1, interleaved: false)!
+            resamplerSrcFormat = srcFmt
+            resamplerDstFormat = dstFmt
+            resampler = AVAudioConverter(from: srcFmt, to: dstFmt)
+        } else {
+            resampler = nil
+            resamplerSrcFormat = nil
+            resamplerDstFormat = nil
+        }
+        resampleAccumulator.removeAll()
+
+        // 10. Initialize and start
         try checkOSStatus(AudioUnitInitialize(unit), "AudioUnitInitialize")
 
         lock.lock()
@@ -199,6 +221,10 @@ final class AudioEngine: @unchecked Sendable {
         }
         renderBufferData?.deallocate()
         renderBufferData = nil
+        resampler = nil
+        resamplerSrcFormat = nil
+        resamplerDstFormat = nil
+        resampleAccumulator.removeAll()
 
         lock.lock()
         state = .cold
@@ -255,26 +281,19 @@ final class AudioEngine: @unchecked Sendable {
 
         lock.lock()
 
-        let nativeRate = nativeSampleRate
-
-        // Resample once for all sessions
-        var resampled: [Float]?
-        func getResampled() -> [Float] {
-            if let r = resampled { return r }
-            let r = AudioEngine.resample(Array(samples), from: nativeRate)
-            resampled = r
-            return r
-        }
-
-        for (_, pipeline) in activePipelines {
-            pipeline.send(getResampled())
-        }
-
         // Fill circular pre-buffer (native rate)
         if state == .warm && preBufferCapacity > 0 {
             for sample in samples {
                 preBuffer[preBufferWriteIndex % preBufferCapacity] = sample
                 preBufferWriteIndex += 1
+            }
+        }
+
+        // Resample to 16kHz and send to pipelines
+        if !activePipelines.isEmpty {
+            let resampled = resampleCached(Array(samples))
+            for (_, pipeline) in activePipelines {
+                pipeline.send(resampled)
             }
         }
 
@@ -305,9 +324,7 @@ final class AudioEngine: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        let nativeRate = nativeSampleRate
-
-        // Collect pre-buffer at native rate
+        // Collect pre-buffer (native rate)
         var preBufferSamples: [Float] = []
         if preBufferCapacity > 0 {
             if preBufferWriteIndex >= preBufferCapacity {
@@ -321,7 +338,7 @@ final class AudioEngine: @unchecked Sendable {
 
         // Resample pre-buffer and send as first chunk
         if !preBufferSamples.isEmpty {
-            let resampled = AudioEngine.resample(preBufferSamples, from: nativeRate)
+            let resampled = resampleCached(preBufferSamples)
             if !resampled.isEmpty {
                 pipeline.send(resampled)
             }
@@ -340,17 +357,13 @@ final class AudioEngine: @unchecked Sendable {
 
     // MARK: - Resampling
 
-    static func resample(_ samples: [Float], from srcRate: Double) -> [Float] {
-        let dstRate = targetSampleRate
-        if srcRate == dstRate { return samples }
-        guard !samples.isEmpty else { return [] }
-
-        guard let srcFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: srcRate, channels: 1, interleaved: false
-        ), let dstFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: dstRate, channels: 1, interleaved: false
-        ), let converter = AVAudioConverter(from: srcFormat, to: dstFormat) else {
-            return samples
+    /// Resample using the cached converter (created once per warmUp).
+    /// Uses a fresh converter instance per call to avoid cross-boundary state issues,
+    /// but reuses the pre-created formats.
+    private func resampleCached(_ samples: [Float]) -> [Float] {
+        guard let srcFormat = resamplerSrcFormat,
+              let dstFormat = resamplerDstFormat else {
+            return samples // no conversion needed (native == target)
         }
 
         let srcCount = AVAudioFrameCount(samples.count)
@@ -362,8 +375,12 @@ final class AudioEngine: @unchecked Sendable {
             samples.withUnsafeBufferPointer { cd[0].update(from: $0.baseAddress!, count: samples.count) }
         }
 
-        let dstCount = AVAudioFrameCount(Double(srcCount) * dstRate / srcRate) + 1
+        let dstCount = AVAudioFrameCount(Double(srcCount) * dstFormat.sampleRate / srcFormat.sampleRate) + 1
         guard let dstBuffer = AVAudioPCMBuffer(pcmFormat: dstFormat, frameCapacity: dstCount) else {
+            return samples
+        }
+
+        guard let converter = AVAudioConverter(from: srcFormat, to: dstFormat) else {
             return samples
         }
 
