@@ -8,11 +8,17 @@ struct MenuBarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            InputDevicePicker(appState: appState)
+            InputDeviceList(appState: appState)
                 .padding(.horizontal, 6)
 
-            if !appState.transcriptionHistory.isEmpty {
-                Divider().padding(.horizontal, 2)
+            Divider().padding(.horizontal, 2)
+            if appState.transcriptionHistory.isEmpty {
+                Text("Transcripts will appear here")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+            } else {
                 VStack(spacing: 4) {
                     ForEach(appState.transcriptionHistory.prefix(3)) { item in
                         TranscriptRow(text: item.text, timestamp: item.timestamp)
@@ -52,7 +58,7 @@ struct MenuBarView: View {
             .keyboardShortcut("q", modifiers: [.command])
         }
         .padding(10)
-        .frame(width: 260)
+        .frame(width: 340)
     }
 
     private var currentStateLabel: String {
@@ -208,7 +214,7 @@ private struct BeeOverviewView: View {
 
                 // Input device + status
                 HStack(spacing: 12) {
-                    InputDevicePicker(appState: appState)
+                    InputDeviceList(appState: appState)
 
                     Spacer()
 
@@ -629,25 +635,67 @@ private struct SettingsCard<Content: View>: View {
     }
 }
 
-private struct InputDevicePicker: View {
+private struct InputDeviceList: View {
     @Bindable var appState: AppState
 
     var body: some View {
-        Picker(selection: Binding(
-            get: { appState.activeInputDeviceUID ?? "" },
-            set: { appState.selectInputDevice(uid: $0) }
-        )) {
-            if appState.availableInputDevices.isEmpty {
-                Text("No input devices").tag("")
-            } else {
+        if appState.availableInputDevices.isEmpty {
+            Text("No input devices")
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(spacing: 2) {
                 ForEach(appState.availableInputDevices, id: \.uid) { device in
-                    Label(device.name, systemImage: device.iconName).tag(device.uid)
+                    InputDeviceListRow(
+                        device: device,
+                        isActive: device.uid == appState.activeInputDeviceUID,
+                        onSelect: { appState.selectInputDevice(uid: device.uid) }
+                    )
                 }
             }
-        } label: {
-            EmptyView()
         }
-        .pickerStyle(.menu)
+    }
+}
+
+private struct InputDeviceListRow: View {
+    let device: AppState.InputDeviceInfo
+    let isActive: Bool
+    let onSelect: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 8) {
+                Image(systemName: device.iconName)
+                    .font(.title3)
+                    .foregroundStyle(isActive ? .orange : .secondary)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(device.name)
+                        .fontWeight(isActive ? .medium : .regular)
+                    if let subtitle = device.subtitle {
+                        Text(subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                Spacer()
+                if isActive {
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isHovered ? Color.primary.opacity(0.06) : .clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
     }
 }
 
@@ -737,37 +785,39 @@ private struct TranscriptRow: View {
                 copied = false
             }
         } label: {
-            HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .leading, spacing: 4) {
-                    if let timestamp {
+            HStack(alignment: .center, spacing: 8) {
+                Text(tailText)
+                    .lineLimit(2)
+                    .truncationMode(.head)
+                Spacer(minLength: 4)
+                ZStack {
+                    // Always reserve space for timestamp text
+                    Text("00 min")
+                        .font(.caption)
+                        .hidden()
+                    // Show either checkmark, copy icon, or timestamp
+                    if copied {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundColor(.green)
+                    } else if isHovered {
+                        Image(systemName: "doc.on.doc")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    } else if let timestamp {
                         Text(timestamp, style: .relative)
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
-                    Text(tailText)
-                        .lineLimit(3)
-                        .truncationMode(.head)
                 }
-                Spacer(minLength: 4)
-                Image(systemName: copied ? "checkmark.circle.fill" : "doc.on.doc")
-                    .font(.body)
-                    .foregroundColor(copied ? .green : .secondary)
-                    .opacity(copied || isHovered ? 1 : 0)
-                    .animation(.easeInOut(duration: 0.15), value: copied)
-                    .animation(.easeInOut(duration: 0.15), value: isHovered)
+                .frame(alignment: .trailing)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isHovered
-                        ? Color.primary.opacity(0.06)
-                        : Color(nsColor: .quaternaryLabelColor).opacity(0.04))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(isHovered ? 0.1 : 0), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isHovered ? Color.primary.opacity(0.06) : .clear)
             )
         }
         .buttonStyle(.plain)

@@ -60,16 +60,17 @@ final class BeeLifecycleDelegate: NSObject, NSApplicationDelegate {
 final class StatusBarController: NSObject {
     private let statusItem: NSStatusItem
     private let popover: NSPopover
-    private var eventMonitor: Any?
+    private var globalMonitor: Any?
+    private var localMonitor: Any?
     private weak var appState: AppState?
 
     init(appState: AppState) {
         self.appState = appState
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 260, height: 10) // height auto-sizes
+        popover.contentSize = NSSize(width: 260, height: 10)
         popover.behavior = .transient
-        popover.animates = true
+        popover.animates = false
         popover.contentViewController = NSHostingController(rootView: MenuBarView(appState: appState))
 
         super.init()
@@ -77,13 +78,27 @@ final class StatusBarController: NSObject {
         if let button = statusItem.button {
             button.image = NSImage(named: "MenuBarIcon")
             button.image?.isTemplate = true
-            button.action = #selector(handleClick)
-            button.target = self
-            button.sendAction(on: [.leftMouseDown, .rightMouseDown])
+        }
+
+        // Intercept mouseDown on the status item button before drag detection
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, let button = self.statusItem.button else { return event }
+            guard event.window == button.window else { return event }
+
+            let locationInButton = button.convert(event.locationInWindow, from: nil)
+            if button.bounds.contains(locationInButton) {
+                if self.popover.isShown {
+                    self.closePopover()
+                } else {
+                    self.showPopover()
+                }
+                return nil // consume the event
+            }
+            return event
         }
 
         // Close popover when clicking outside
-        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             self?.closePopover()
         }
 
@@ -100,14 +115,6 @@ final class StatusBarController: NSObject {
         )
 
         updateIcon()
-    }
-
-    @objc private func handleClick() {
-        if popover.isShown {
-            closePopover()
-        } else {
-            showPopover()
-        }
     }
 
     private func showPopover() {

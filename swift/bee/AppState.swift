@@ -135,6 +135,7 @@ final class AppState {
         case builtIn = "Built-in"
         case usb = "USB"
         case bluetooth = "Bluetooth"
+        case continuityCamera = "Continuity"
         case virtual = "Virtual"
         case aggregate = "Aggregate"
         case unknown = "External"
@@ -146,12 +147,19 @@ final class AppState {
         let isBuiltIn: Bool
         let isDefault: Bool
         let transport: AudioTransport
+        let modelUID: String?
 
         var iconName: String {
+            // Check model UID for specific device types
+            if let model = modelUID {
+                if model.contains("iPhone") { return "iphone" }
+                if model.contains("iPad") { return "ipad" }
+            }
             switch transport {
             case .builtIn: return "laptopcomputer"
             case .usb: return "cable.connector"
             case .bluetooth: return "headphones"
+            case .continuityCamera: return "iphone"
             case .virtual, .aggregate: return "waveform.circle"
             case .unknown: return "mic"
             }
@@ -159,7 +167,11 @@ final class AppState {
 
         var subtitle: String? {
             var parts: [String] = []
-            parts.append(transport.rawValue)
+            if let model = modelUID, !model.isEmpty {
+                parts.append(model)
+            } else {
+                parts.append(transport.rawValue)
+            }
             if isDefault { parts.append("Default") }
             return parts.joined(separator: " · ")
         }
@@ -198,14 +210,50 @@ final class AppState {
         let status2 = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &transportType)
         guard status2 == noErr else { return .unknown }
 
+        // 0x63637764 = "ccwd" = Continuity Camera Wireless Device
+        let kTransportTypeContinuityCamera: UInt32 = 0x63637764
+
         switch transportType {
         case kAudioDeviceTransportTypeBuiltIn: return .builtIn
         case kAudioDeviceTransportTypeUSB: return .usb
         case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE: return .bluetooth
+        case kTransportTypeContinuityCamera: return .continuityCamera
         case kAudioDeviceTransportTypeVirtual: return .virtual
         case kAudioDeviceTransportTypeAggregate: return .aggregate
         default: return .unknown
         }
+    }
+
+    static func queryModelUID(uid: String) -> String? {
+        var deviceID = AudioDeviceID(0)
+        var cfUID = uid as CFString
+        var translation = AudioValueTranslation(
+            mInputData: &cfUID,
+            mInputDataSize: UInt32(MemoryLayout<CFString>.size),
+            mOutputData: &deviceID,
+            mOutputDataSize: UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+        var translationSize = UInt32(MemoryLayout<AudioValueTranslation>.size)
+        var lookupAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDeviceForUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let s1 = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &lookupAddress, 0, nil, &translationSize, &translation
+        )
+        guard s1 == noErr, deviceID != 0 else { return nil }
+
+        var value: CFString?
+        var size = UInt32(MemoryLayout<CFString?>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyModelUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let s2 = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &value)
+        return s2 == noErr ? value as String? : nil
     }
 
     func selectInputDevice(uid: String) {
@@ -1193,12 +1241,14 @@ final class AppState {
             .filter { !$0.uniqueID.hasPrefix("CADefaultDevice") }
             .map { device in
                 let transport = Self.queryTransportType(uid: device.uniqueID)
+                let modelUID = Self.queryModelUID(uid: device.uniqueID)
                 return InputDeviceInfo(
                     uid: device.uniqueID,
                     name: device.localizedName,
                     isBuiltIn: device.deviceType == .microphone,
                     isDefault: device.uniqueID == defaultUID,
-                    transport: transport
+                    transport: transport,
+                    modelUID: modelUID
                 )
             }
             .sorted { lhs, rhs in
