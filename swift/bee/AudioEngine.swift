@@ -481,11 +481,12 @@ final class AudioEngine: @unchecked Sendable {
 
     // MARK: - Resampling
 
-    /// Resample using the cached converter (created once per warmUp).
-    /// Uses a fresh converter instance per call to avoid cross-boundary state issues,
-    /// but reuses the pre-created formats.
+    /// Resample using the persistent converter (created once per warmUp).
+    /// The converter maintains internal filter state across calls, ensuring
+    /// continuous signal without boundary artifacts.
     private func resampleCached(_ samples: [Float]) -> [Float] {
-        guard let srcFormat = resamplerSrcFormat,
+        guard let converter = resampler,
+              let srcFormat = resamplerSrcFormat,
               let dstFormat = resamplerDstFormat else {
             return samples // no conversion needed (native == target)
         }
@@ -499,12 +500,8 @@ final class AudioEngine: @unchecked Sendable {
             samples.withUnsafeBufferPointer { cd[0].update(from: $0.baseAddress!, count: samples.count) }
         }
 
-        let dstCount = AVAudioFrameCount(Double(srcCount) * dstFormat.sampleRate / srcFormat.sampleRate) + 1
+        let dstCount = AVAudioFrameCount(Double(srcCount) * dstFormat.sampleRate / srcFormat.sampleRate) + 2
         guard let dstBuffer = AVAudioPCMBuffer(pcmFormat: dstFormat, frameCapacity: dstCount) else {
-            return samples
-        }
-
-        guard let converter = AVAudioConverter(from: srcFormat, to: dstFormat) else {
             return samples
         }
 
