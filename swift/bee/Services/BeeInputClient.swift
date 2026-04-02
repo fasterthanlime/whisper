@@ -109,6 +109,21 @@ final class BeeInputClient: Sendable {
     }
 
     @MainActor
+    /// Re-select bee input source. Called by retry logic when activateServer
+    /// doesn't fire after the initial selection.
+    @MainActor
+    static func retrySelectBeeInputSource() {
+        guard let beeSource = findBeeInputSource() else { return }
+        let result = TISSelectInputSource(beeSource)
+        beeLog("IME RETRY: TISSelectInputSource result=\(result)")
+        let src = CGEventSource(stateID: .hidSystemState)
+        if let shiftUp = CGEvent(
+            keyboardEventSource: src, virtualKey: UInt16(kVK_Shift), keyDown: false)
+        {
+            shiftUp.post(tap: .cghidEventTap)
+        }
+    }
+
     private static func selectBeeInputSource() async -> Bool {
         guard let beeSource = findBeeInputSource() else {
             beeLog("IME ACTIVATE: bee input source NOT FOUND")

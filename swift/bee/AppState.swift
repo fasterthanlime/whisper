@@ -310,25 +310,36 @@ final class AppState {
     private func startIMEAckTimeoutIfNeeded(session: Session) {
         guard pendingIMEAckTimeoutTask == nil else { return }
         pendingIMEAckTimeoutTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(2600))
-            guard let self else { return }
-            defer { self.pendingIMEAckTimeoutTask = nil }
+            // Retry TISSelectInputSource every 300ms, abort after 2.6s total.
+            let retryInterval: Duration = .milliseconds(300)
+            let maxRetries = 8  // 8 × 300ms ≈ 2.4s, plus initial wait
 
-            switch self.uiState {
-            case .pending(let s, imeConfirmed: false) where s.id == session.id: break
-            case .pendingLockRequested(let s) where s.id == session.id: break
-            default: return
+            for attempt in 1...maxRetries {
+                try? await Task.sleep(for: retryInterval)
+                guard let self else { return }
+
+                switch self.uiState {
+                case .pending(let s, imeConfirmed: false) where s.id == session.id: break
+                case .pendingLockRequested(let s) where s.id == session.id: break
+                default:
+                    // Session confirmed or cancelled — stop retrying
+                    self.pendingIMEAckTimeoutTask = nil
+                    return
+                }
+
+                if attempt < maxRetries {
+                    beeLog("SESSION: IME retry \(attempt) id=\(session.id.uuidString.prefix(8))")
+                    BeeInputClient.retrySelectBeeInputSource()
+                } else {
+                    beeLog("SESSION: IME confirm timeout id=\(session.id.uuidString.prefix(8)), aborting")
+                    self.logFocusDiagnostics(reason: "ime-confirm-timeout")
+                    self.playStartFailureSound()
+                    self.pendingTimer?.cancel()
+                    self.transitionToIdle()
+                    Task { await session.abort() }
+                }
             }
-
-            let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-            beeLog(
-                "SESSION: IME confirm timeout id=\(session.id.uuidString.prefix(8)) targetPID=\(self.activeSessionTargetPID.map(String.init) ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil"), aborting"
-            )
-            self.logFocusDiagnostics(reason: "ime-confirm-timeout")
-            self.playStartFailureSound()
-            self.pendingTimer?.cancel()
-            self.transitionToIdle()
-            Task { await session.abort() }
+            self?.pendingIMEAckTimeoutTask = nil
         }
     }
 
