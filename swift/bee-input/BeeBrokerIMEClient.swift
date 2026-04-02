@@ -140,17 +140,29 @@ private final class BeeIMEPeerSink: NSObject, BeeBrokerPeerXPC {
     func handleNewPreparedSession(_ sessionID: String, targetPID: Int32) {
         DispatchQueue.main.async {
             let bridge = BeeIMEBridgeState.shared
-            guard let controller = bridge.activeController else {
-                beeInputLog("handleNewPreparedSession: no active controller, waiting for activateServer")
+            // Use active controller, or fall back to last known controller
+            // (survives deactivateServer — the client may still be valid).
+            let controller: BeeInputController
+            let controllerPID: pid_t?
+            let clientIdentity: String?
+            if let active = bridge.activeController {
+                controller = active
+                controllerPID = bridge.activeControllerPID
+                clientIdentity = bridge.activeClientIdentity
+            } else if let lastKnown = bridge.lastKnownController {
+                controller = lastKnown
+                controllerPID = bridge.lastKnownControllerPID
+                clientIdentity = bridge.lastKnownClientIdentity
+                beeInputLog("handleNewPreparedSession: using lastKnownController pid=\(controllerPID.map(String.init) ?? "nil")")
+            } else {
+                beeInputLog("handleNewPreparedSession: no controller at all, waiting for activateServer")
                 return
             }
-            let controllerPID = bridge.activeControllerPID
             let pid = targetPID >= 0 ? pid_t(targetPID) : nil
             if let pid, let controllerPID, pid != controllerPID {
                 beeInputLog("handleNewPreparedSession: PID mismatch controller=\(controllerPID) target=\(pid), waiting for activateServer")
                 return
             }
-            let clientIdentity = bridge.activeClientIdentity
             beeInputLog("handleNewPreparedSession: controller still active, claiming session=\(sessionID.prefix(8)) directly")
             BeeBrokerIMEClient.shared.claimPreparedSession(
                 clientPID: controllerPID,
@@ -166,6 +178,8 @@ private final class BeeIMEPeerSink: NSObject, BeeBrokerPeerXPC {
                         return
                     }
                     beeInputLog("handleNewPreparedSession: attached session=\(claimedSessionID.uuidString.prefix(8))")
+                    // Re-register as active so text routing works
+                    bridge.registerActiveController(controller, clientPID: controllerPID, clientIdentity: clientIdentity)
                     bridge.attachSession(sessionID: claimedSessionID, clientIdentity: clientIdentity)
                     bridge.flushPending()
                     BeeBrokerIMEClient.shared.imeAttach(
