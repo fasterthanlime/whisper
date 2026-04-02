@@ -18,26 +18,18 @@ class BeeInputController: IMKInputController {
         )
 
         // Synchronous XPC claim — blocks so deactivateServer can't race.
-        let result = BeeBrokerIMEClient.shared.claimPreparedSessionSync(
-            clientPID: frontmostPID,
-            clientID: clientIdentity
-        )
-        guard result.found, let sessionID = result.sessionID else {
-            beeInputLog("activateServer: no prepared session pid=\(frontmostPID.map(String.init) ?? "nil")")
+        guard let sessionID = BeeBrokerIMEClient.shared.claimPreparedSessionSync() else {
+            beeInputLog("activateServer: no prepared session")
             return
         }
 
-        beeInputLog("activateServer: claimed session=\(sessionID.uuidString.prefix(8)) pid=\(frontmostPID.map(String.init) ?? "nil")")
+        beeInputLog("activateServer: claimed session=\(sessionID.uuidString.prefix(8))")
         BeeIMEBridgeState.shared.attachSession(
             sessionID: sessionID,
             clientIdentity: clientIdentity
         )
         BeeIMEBridgeState.shared.flushPending()
-        BeeBrokerIMEClient.shared.imeAttach(
-            sessionID: sessionID,
-            clientPID: frontmostPID,
-            clientID: clientIdentity
-        )
+        BeeBrokerIMEClient.shared.imeAttach(sessionID: sessionID)
     }
 
     override func deactivateServer(_ sender: Any!) {

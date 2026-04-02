@@ -15,23 +15,23 @@ private func brokerLog(_ msg: String) {
 }
 
 private final class BeeBrokerService: NSObject, BeeBrokerXPC {
-    struct SessionState {
+    struct SessionInfo {
+        var id: String
         var appInstanceID: String
-        var targetPID: Int32?
-        var activationID: String
-        var order: UInt64
-        var ready: Bool
-        var clientPID: Int32?
-        var clientID: String?
+    }
+
+    enum SessionState {
+        case idle
+        case prepared(SessionInfo)
+        case claimed(SessionInfo)
     }
 
     private let queue = DispatchQueue(label: "fasterthanlime.bee.broker.state")
     private var appConnections: [String: NSXPCConnection] = [:]
     private var imeConnections: [String: NSXPCConnection] = [:]
-    private var sessions: [String: SessionState] = [:]
+    private var session: SessionState = .idle
     private var activeIMEInstanceID: String?
     private var imeWaiters: [(Bool) -> Void] = []
-    private var sequence: UInt64 = 0
 
     private func appProxy(_ appInstanceID: String) -> BeeBrokerPeerXPC? {
         guard let conn = appConnections[appInstanceID] else { return nil }
@@ -93,7 +93,6 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
 
     func prepareSession(
         _ sessionID: String,
-        targetPID: Int32,
         activationID: String,
         appInstanceID: String,
         withReply reply: @escaping (Bool) -> Void
@@ -103,81 +102,47 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
             return
         }
         queue.async {
-            // Bind this app instance to the active caller connection even if appHello
-            // has not been observed yet (ordering can race on first use).
             self.appConnections[appInstanceID] = conn
-            self.sessions[sessionID] = SessionState(
-                appInstanceID: appInstanceID,
-                targetPID: targetPID >= 0 ? targetPID : nil,
-                activationID: activationID,
-                order: self.sequence &+ 1,
-                ready: false,
-                clientPID: nil,
-                clientID: nil
-            )
-            self.sequence &+= 1
-            brokerLog(
-                "prepareSession: id=\(sessionID.prefix(8)) targetPID=\(targetPID >= 0 ? String(targetPID) : "nil") stored"
-            )
-            // Notify the IME so it can claim directly if still active
-            // (i.e. deactivateServer was never called since last session).
+            let info = SessionInfo(id: sessionID, appInstanceID: appInstanceID)
+            self.session = .prepared(info)
+            brokerLog("prepareSession: id=\(sessionID.prefix(8))")
             if let ime = self.imeProxy() {
-                brokerLog("prepareSession: notifying IME of new session")
-                ime.handleNewPreparedSession(sessionID, targetPID: targetPID)
+                ime.handleNewPreparedSession(sessionID)
             }
             reply(true)
         }
     }
 
-    func sessionStatus(
-        _ sessionID: String, withReply reply: @escaping (Bool, Int32, String) -> Void
-    ) {
-        queue.async {
-            guard let s = self.sessions[sessionID] else {
-                reply(false, -1, "")
-                return
-            }
-            reply(s.ready, s.clientPID ?? -1, s.clientID ?? "")
-        }
-    }
-
     func claimPreparedSession(
-        clientPID: Int32,
-        clientID: String,
         imeInstanceID: String,
-        withReply reply: @escaping (Bool, String, Int32, String) -> Void
+        withReply reply: @escaping (Bool, String) -> Void
     ) {
         guard let conn = NSXPCConnection.current() else {
-            reply(false, "", -1, "")
+            reply(false, "")
             return
         }
         queue.async {
             self.imeConnections[imeInstanceID] = conn
             self.activeIMEInstanceID = imeInstanceID
 
-            let candidate = self.sessions
-                .filter { _, s in
-                    guard !s.ready else { return false }
-                    guard let target = s.targetPID else { return false }
-                    return target == clientPID
-                }
-                .max { lhs, rhs in
-                    lhs.value.order < rhs.value.order
-                }
-
-            guard let (sessionID, state) = candidate else {
-                reply(false, "", -1, "")
+            guard case .prepared(let info) = self.session else {
+                reply(false, "")
                 return
             }
-            brokerLog(
-                "claimPreparedSession: session=\(sessionID.prefix(8)) clientPID=\(clientPID) clientID=\(clientID.isEmpty ? "nil" : clientID)"
-            )
-            reply(
-                true,
-                sessionID,
-                state.targetPID ?? -1,
-                state.activationID
-            )
+            self.session = .claimed(info)
+            brokerLog("claimPreparedSession: session=\(info.id.prefix(8))")
+            reply(true, info.id)
+        }
+    }
+
+    /// Get the app proxy for the current session, if any.
+    private func sessionAppProxy() -> (SessionInfo, BeeBrokerPeerXPC)? {
+        switch session {
+        case .claimed(let info):
+            guard let app = appProxy(info.appInstanceID) else { return nil }
+            return (info, app)
+        default:
+            return nil
         }
     }
 
@@ -188,7 +153,7 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
             if let ime = self.imeProxy() {
                 ime.handleClearSession(sessionID)
             }
-            self.sessions.removeValue(forKey: sessionID)
+            self.session = .idle
             reply()
         }
     }
@@ -200,9 +165,7 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
         withReply reply: @escaping (Bool) -> Void
     ) {
         queue.async {
-            guard let s = self.sessions[sessionID], s.appInstanceID == appInstanceID,
-                let ime = self.imeProxy()
-            else {
+            guard let ime = self.imeProxy() else {
                 reply(false)
                 return
             }
@@ -219,14 +182,12 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
         withReply reply: @escaping (Bool) -> Void
     ) {
         queue.async {
-            guard let s = self.sessions[sessionID], s.appInstanceID == appInstanceID,
-                let ime = self.imeProxy()
-            else {
+            guard let ime = self.imeProxy() else {
                 reply(false)
                 return
             }
             ime.handleCommitText(sessionID, text: text, submit: submit)
-            self.sessions.removeValue(forKey: sessionID)
+            self.session = .idle
             reply(true)
         }
     }
@@ -235,14 +196,12 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
         _ sessionID: String, appInstanceID: String, withReply reply: @escaping (Bool) -> Void
     ) {
         queue.async {
-            guard let s = self.sessions[sessionID], s.appInstanceID == appInstanceID,
-                let ime = self.imeProxy()
-            else {
+            guard let ime = self.imeProxy() else {
                 reply(false)
                 return
             }
             ime.handleCancelInput(sessionID)
-            self.sessions.removeValue(forKey: sessionID)
+            self.session = .idle
             reply(true)
         }
     }
@@ -251,22 +210,18 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
         _ sessionID: String, appInstanceID: String, withReply reply: @escaping (Bool) -> Void
     ) {
         queue.async {
-            guard let s = self.sessions[sessionID], s.appInstanceID == appInstanceID,
-                let ime = self.imeProxy()
-            else {
+            guard let ime = self.imeProxy() else {
                 reply(false)
                 return
             }
             ime.handleStopDictating(sessionID)
-            self.sessions.removeValue(forKey: sessionID)
+            self.session = .idle
             reply(true)
         }
     }
 
     func imeAttach(
         _ sessionID: String,
-        clientPID: Int32,
-        clientID: String,
         imeInstanceID: String,
         withReply reply: @escaping (Bool) -> Void
     ) {
@@ -275,26 +230,17 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
             return
         }
         queue.async {
-            // Same race-proofing as app side: ensure IME instance is bound by the time
-            // it first attaches to a session.
             self.imeConnections[imeInstanceID] = conn
             self.activeIMEInstanceID = imeInstanceID
-            guard var s = self.sessions[sessionID], let app = self.appProxy(s.appInstanceID) else {
+            guard case .claimed(let info) = self.session,
+                  info.id == sessionID,
+                  let app = self.appProxy(info.appInstanceID)
+            else {
                 reply(false)
                 return
             }
-            if let target = s.targetPID, target >= 0, clientPID >= 0, target != clientPID {
-                brokerLog(
-                    "imeAttach: pid mismatch session=\(sessionID.prefix(8)) target=\(target) got=\(clientPID)"
-                )
-                reply(false)
-                return
-            }
-            s.ready = true
-            s.clientPID = clientPID >= 0 ? clientPID : nil
-            s.clientID = clientID.isEmpty ? nil : clientID
-            self.sessions[sessionID] = s
-            app.handleIMESessionStarted(sessionID, clientPID: clientPID, clientID: clientID)
+            brokerLog("imeAttach: session=\(sessionID.prefix(8))")
+            app.handleIMESessionStarted(sessionID)
             reply(true)
         }
     }
@@ -303,9 +249,7 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
         _ sessionID: String, imeInstanceID: String, withReply reply: @escaping () -> Void
     ) {
         queue.async {
-            if let s = self.sessions[sessionID], let app = self.appProxy(s.appInstanceID) {
-                app.handleIMESubmit(sessionID)
-            }
+            if let (_, app) = self.sessionAppProxy() { app.handleIMESubmit(sessionID) }
             reply()
         }
     }
@@ -314,9 +258,7 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
         _ sessionID: String, imeInstanceID: String, withReply reply: @escaping () -> Void
     ) {
         queue.async {
-            if let s = self.sessions[sessionID], let app = self.appProxy(s.appInstanceID) {
-                app.handleIMECancel(sessionID)
-            }
+            if let (_, app) = self.sessionAppProxy() { app.handleIMECancel(sessionID) }
             reply()
         }
     }
@@ -329,7 +271,7 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
         withReply reply: @escaping () -> Void
     ) {
         queue.async {
-            if let s = self.sessions[sessionID], let app = self.appProxy(s.appInstanceID) {
+            if let (_, app) = self.sessionAppProxy() {
                 app.handleIMEUserTyped(sessionID, keyCode: keyCode, characters: characters)
             }
             reply()
@@ -343,7 +285,7 @@ private final class BeeBrokerService: NSObject, BeeBrokerXPC {
         withReply reply: @escaping () -> Void
     ) {
         queue.async {
-            if let s = self.sessions[sessionID], let app = self.appProxy(s.appInstanceID) {
+            if let (_, app) = self.sessionAppProxy() {
                 app.handleIMEContextLost(sessionID, hadMarkedText: hadMarkedText)
             }
             reply()

@@ -9,17 +9,13 @@ protocol BeeBrokerXPC {
 
     func prepareSession(
         _ sessionID: String,
-        targetPID: Int32,
         activationID: String,
         appInstanceID: String,
         withReply reply: @escaping (Bool) -> Void
     )
-    func sessionStatus(_ sessionID: String, withReply reply: @escaping (Bool, Int32, String) -> Void)
     func claimPreparedSession(
-        clientPID: Int32,
-        clientID: String,
         imeInstanceID: String,
-        withReply reply: @escaping (Bool, String, Int32, String) -> Void
+        withReply reply: @escaping (Bool, String) -> Void
     )
     func clearSession(_ sessionID: String, appInstanceID: String, withReply reply: @escaping () -> Void)
 
@@ -41,8 +37,6 @@ protocol BeeBrokerXPC {
 
     func imeAttach(
         _ sessionID: String,
-        clientPID: Int32,
-        clientID: String,
         imeInstanceID: String,
         withReply reply: @escaping (Bool) -> Void
     )
@@ -66,7 +60,7 @@ protocol BeeBrokerXPC {
 @objc
 protocol BeeBrokerPeerXPC {
     // Broker -> IME: new session prepared, try claiming without activateServer.
-    func handleNewPreparedSession(_ sessionID: String, targetPID: Int32)
+    func handleNewPreparedSession(_ sessionID: String)
 
     // App -> IME forwarded commands.
     func handleClearSession(_ sessionID: String)
@@ -76,7 +70,7 @@ protocol BeeBrokerPeerXPC {
     func handleStopDictating(_ sessionID: String)
 
     // IME -> App forwarded events.
-    func handleIMESessionStarted(_ sessionID: String, clientPID: Int32, clientID: String)
+    func handleIMESessionStarted(_ sessionID: String)
     func handleIMESubmit(_ sessionID: String)
     func handleIMECancel(_ sessionID: String)
     func handleIMEUserTyped(_ sessionID: String, keyCode: Int32, characters: String)

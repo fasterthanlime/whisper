@@ -59,7 +59,7 @@ final class BeeBrokerIMEClient {
         }
     }
 
-    func imeAttach(sessionID: UUID, clientPID: pid_t?, clientID: String?) {
+    func imeAttach(sessionID: UUID) {
         let conn = getConnection()
         let proxy = conn.remoteObjectProxyWithErrorHandler { error in
             beeInputLog("BROKER imeAttach error: \(error.localizedDescription)")
@@ -67,8 +67,6 @@ final class BeeBrokerIMEClient {
         } as? BeeBrokerXPC
         proxy?.imeAttach(
             sessionID.uuidString,
-            clientPID: clientPID.map { Int32($0) } ?? -1,
-            clientID: clientID ?? "",
             imeInstanceID: imeInstanceID
         ) { ok in
             if !ok {
@@ -79,40 +77,23 @@ final class BeeBrokerIMEClient {
 
     /// Synchronous (blocking) claim — use from activateServer to prevent
     /// deactivateServer from racing during the XPC round-trip.
-    func claimPreparedSessionSync(
-        clientPID: pid_t?,
-        clientID: String?
-    ) -> (found: Bool, sessionID: UUID?, targetPID: pid_t?, activationID: String?) {
+    /// Synchronous claim — blocks so deactivateServer can't race.
+    func claimPreparedSessionSync() -> UUID? {
         let conn = getConnection()
         let proxy = conn.synchronousRemoteObjectProxyWithErrorHandler { error in
             beeInputLog("BROKER claimPreparedSession error: \(error.localizedDescription)")
             self.invalidateConnection()
         } as? BeeBrokerXPC
 
-        guard let proxy else {
-            return (false, nil, nil, nil)
-        }
+        guard let proxy else { return nil }
 
-        var resultFound = false
         var resultSessionID: UUID?
-        var resultTargetPID: pid_t?
-        var resultActivationID: String?
-
-        proxy.claimPreparedSession(
-            clientPID: clientPID.map { Int32($0) } ?? -1,
-            clientID: clientID ?? "",
-            imeInstanceID: imeInstanceID
-        ) { found, sessionIDRaw, targetPIDRaw, activationID in
-            guard found, let sessionID = UUID(uuidString: sessionIDRaw) else {
-                return
+        proxy.claimPreparedSession(imeInstanceID: imeInstanceID) { found, sessionIDRaw in
+            if found, let id = UUID(uuidString: sessionIDRaw) {
+                resultSessionID = id
             }
-            resultFound = true
-            resultSessionID = sessionID
-            resultTargetPID = targetPIDRaw >= 0 ? pid_t(targetPIDRaw) : nil
-            resultActivationID = activationID.isEmpty ? nil : activationID
         }
-
-        return (resultFound, resultSessionID, resultTargetPID, resultActivationID)
+        return resultSessionID
     }
 
     func imeSubmit(sessionID: UUID) {
@@ -150,40 +131,24 @@ final class BeeBrokerIMEClient {
 }
 
 private final class BeeIMEPeerSink: NSObject, BeeBrokerPeerXPC {
-    func handleNewPreparedSession(_ sessionID: String, targetPID: Int32) {
+    func handleNewPreparedSession(_ sessionID: String) {
         DispatchQueue.main.async {
             let bridge = BeeIMEBridgeState.shared
-            let pid = targetPID >= 0 ? pid_t(targetPID) : nil
 
-            guard let _ = bridge.activeController else {
-                beeInputLog("newPreparedSession: no active controller, waiting for activateServer session=\(sessionID.prefix(8))")
+            guard bridge.activeController != nil else {
+                beeInputLog("newPreparedSession: no active controller, waiting for activateServer")
                 return
             }
 
-            let controllerPID = bridge.activeControllerPID
-            if let pid, let controllerPID, pid != controllerPID {
-                beeInputLog("newPreparedSession: PID mismatch controller=\(controllerPID) target=\(pid), waiting for activateServer")
+            guard let claimedSessionID = BeeBrokerIMEClient.shared.claimPreparedSessionSync() else {
+                beeInputLog("newPreparedSession: claim failed")
                 return
             }
 
-            let clientIdentity = bridge.activeClientIdentity
-            let result = BeeBrokerIMEClient.shared.claimPreparedSessionSync(
-                clientPID: controllerPID,
-                clientID: clientIdentity
-            )
-            guard result.found, let claimedSessionID = result.sessionID else {
-                beeInputLog("newPreparedSession: claim failed session=\(sessionID.prefix(8))")
-                return
-            }
-
-            beeInputLog("newPreparedSession: claimed session=\(claimedSessionID.uuidString.prefix(8)) pid=\(controllerPID.map(String.init) ?? "nil")")
-            bridge.attachSession(sessionID: claimedSessionID, clientIdentity: clientIdentity)
+            beeInputLog("newPreparedSession: claimed session=\(claimedSessionID.uuidString.prefix(8))")
+            bridge.attachSession(sessionID: claimedSessionID, clientIdentity: bridge.activeClientIdentity)
             bridge.flushPending()
-            BeeBrokerIMEClient.shared.imeAttach(
-                sessionID: claimedSessionID,
-                clientPID: controllerPID,
-                clientID: clientIdentity
-            )
+            BeeBrokerIMEClient.shared.imeAttach(sessionID: claimedSessionID)
         }
     }
 
@@ -212,7 +177,7 @@ private final class BeeIMEPeerSink: NSObject, BeeBrokerPeerXPC {
         BeeIMEBridgeState.shared.stopDictating(sessionID: id)
     }
 
-    func handleIMESessionStarted(_ sessionID: String, clientPID: Int32, clientID: String) {}
+    func handleIMESessionStarted(_ sessionID: String) {}
     func handleIMESubmit(_ sessionID: String) {}
     func handleIMECancel(_ sessionID: String) {}
     func handleIMEUserTyped(_ sessionID: String, keyCode: Int32, characters: String) {}

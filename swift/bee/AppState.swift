@@ -631,11 +631,8 @@ final class AppState {
             ncLocal.addObserver(forName: Self.imeSessionStartedName, object: nil, queue: .main) {
                 [weak self] notification in
                 let sessionID = Self.extractSessionID(notification.userInfo)
-                let clientPID = Self.extractPID(notification.userInfo, key: "clientPID")
-                let clientID = Self.extractClientID(notification.userInfo)
                 Task { @MainActor in
-                    self?.handleIMESessionStarted(
-                        sessionID: sessionID, clientPID: clientPID, clientID: clientID)
+                    self?.handleIMESessionStarted(sessionID: sessionID)
                 }
             }
         )
@@ -741,21 +738,10 @@ final class AppState {
         }
     }
 
-    private func handleIMESessionStarted(sessionID: UUID?, clientPID: pid_t?, clientID: String?) {
+    private func handleIMESessionStarted(sessionID: UUID?) {
         guard isNotificationForActiveSession(sessionID) else { return }
-        if let targetPID = activeSessionTargetPID,
-            let clientPID,
-            clientPID != targetPID
-        {
-            beeLog(
-                "SESSION: rejecting IME confirm id=\(sessionID?.uuidString.prefix(8) ?? "nil") targetPID=\(targetPID) clientPID=\(clientPID) clientID=\(clientID ?? "nil")"
-            )
-            return
-        }
         if isSessionParked, let session = uiState.session {
-            beeLog(
-                "SESSION: IME route restored id=\(session.id.uuidString.prefix(8)) clientPID=\(clientPID.map(String.init) ?? "nil") clientID=\(clientID ?? "nil")"
-            )
+            beeLog("SESSION: IME route restored id=\(session.id.uuidString.prefix(8))")
             activeSessionIMEConfirmed = true
             isSessionParked = false
             hideParkedOverlay()
@@ -768,9 +754,7 @@ final class AppState {
         pendingIMEAckTimeoutCount = 0
         guard case .pending(let session) = uiState else { return }
 
-        beeLog(
-            "SESSION: IME confirmed id=\(session.id.uuidString.prefix(8)) clientPID=\(clientPID.map(String.init) ?? "nil") clientID=\(clientID ?? "nil")"
-        )
+        beeLog("SESSION: IME confirmed id=\(session.id.uuidString.prefix(8))")
         Task { await session.routeDidBecomeActive() }
         if pendingLockRequest {
             pendingLockRequest = false

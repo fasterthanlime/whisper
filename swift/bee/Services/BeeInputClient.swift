@@ -14,15 +14,8 @@ private final class BeeAppControlSink: NSObject, BeeBrokerPeerXPC {
         NotificationCenter.default.post(name: name, object: nil, userInfo: userInfo)
     }
 
-    func handleIMESessionStarted(_ sessionID: String, clientPID: Int32, clientID: String) {
-        var userInfo: [AnyHashable: Any] = ["sessionID": sessionID]
-        if clientPID >= 0 {
-            userInfo["clientPID"] = Int(clientPID)
-        }
-        if !clientID.isEmpty {
-            userInfo["clientID"] = clientID
-        }
-        post(Self.imeSessionStartedName, userInfo: userInfo)
+    func handleIMESessionStarted(_ sessionID: String) {
+        post(Self.imeSessionStartedName, userInfo: ["sessionID": sessionID])
     }
 
     func handleIMESubmit(_ sessionID: String) {
@@ -54,7 +47,7 @@ private final class BeeAppControlSink: NSObject, BeeBrokerPeerXPC {
         )
     }
 
-    func handleNewPreparedSession(_ sessionID: String, targetPID: Int32) {}
+    func handleNewPreparedSession(_ sessionID: String) {}
     func handleClearSession(_ sessionID: String) {}
     func handleSetMarkedText(_ sessionID: String, text: String) {}
     func handleCommitText(_ sessionID: String, text: String, submit: Bool) {}
@@ -84,11 +77,10 @@ final class BeeInputClient: Sendable {
     // MARK: - Input Source Switching
 
     @discardableResult
-    func activate(sessionID: UUID, targetPID: pid_t?) async -> Bool {
+    func activate(sessionID: UUID) async -> Bool {
         let activationID = UUID().uuidString
         let prepared = await Self.prepareSessionXPC(
             sessionID: sessionID,
-            targetPID: targetPID,
             activationID: activationID
         )
         guard prepared else {
@@ -111,7 +103,7 @@ final class BeeInputClient: Sendable {
         }
 
         beeLog(
-            "IME ACTIVATE: selection done id=\(sessionID.uuidString.prefix(8)) activationID=\(activationID.prefix(8)) targetPID=\(targetPID.map(String.init) ?? "nil"), waiting for IME confirm event"
+            "IME ACTIVATE: selection done id=\(sessionID.uuidString.prefix(8)) activationID=\(activationID.prefix(8)), waiting for IME confirm event"
         )
         return true
     }
@@ -298,7 +290,7 @@ final class BeeInputClient: Sendable {
         }
     }
 
-    private static func prepareSessionXPC(sessionID: UUID, targetPID: pid_t?, activationID: String)
+    private static func prepareSessionXPC(sessionID: UUID, activationID: String)
         async -> Bool
     {
         sendHelloIfNeeded()
@@ -318,7 +310,6 @@ final class BeeInputClient: Sendable {
 
             proxy.prepareSession(
                 sessionID.uuidString,
-                targetPID: targetPID ?? -1,
                 activationID: activationID,
                 appInstanceID: appInstanceID
             ) { ok in

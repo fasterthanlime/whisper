@@ -97,9 +97,8 @@ actor Session {
         self.ch2 = ch2
 
         // IME: activate and show bee cursor
-        let targetProcessID = self.targetProcessID
-        beeLog("SESSION START: targetPID=\(targetProcessID.map(String.init) ?? "nil")")
-        let imeActivated = await inputClient.activate(sessionID: id, targetPID: targetProcessID)
+        beeLog("SESSION START")
+        let imeActivated = await inputClient.activate(sessionID: id)
         guard imeActivated else {
             logger.error("[\(self.id)] Failed to activate IME for target pid")
             inputClient.stopDictating(sessionID: id)
@@ -430,7 +429,7 @@ actor Session {
     @discardableResult
     func requestResumeActivation() async -> Bool {
         guard ime == .parked else { return true }
-        let activated = await inputClient.activate(sessionID: id, targetPID: targetProcessID)
+        let activated = await inputClient.activate(sessionID: id)
         if !activated {
             beeLog("SESSION: resume activation failed id=\(id.uuidString.prefix(8))")
         } else {
