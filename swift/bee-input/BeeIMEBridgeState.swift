@@ -92,8 +92,6 @@ final class BeeIMESession {
             string: displayText,
             attributes: [
                 .markedClauseSegment: 0,
-                .underlineStyle: 0,
-                .backgroundColor: NSColor.textColor.withAlphaComponent(0.06),
             ])
 
         client.setMarkedText(
