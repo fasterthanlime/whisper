@@ -179,7 +179,8 @@ final class BeeInputClient: Sendable {
         let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
         panel.contentView?.addSubview(textField)
 
-        beeLog("IME ACTIVATE: stealth focus cycle making panel key")
+        beeLog("IME ACTIVATE: stealth focus cycle activating bee + panel")
+        NSApp.activate()
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(textField)
 
