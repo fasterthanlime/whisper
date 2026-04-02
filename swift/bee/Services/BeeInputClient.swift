@@ -167,7 +167,7 @@ final class BeeInputClient: Sendable {
 
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: [],
             backing: .buffered,
             defer: false
         )
@@ -175,10 +175,15 @@ final class BeeInputClient: Sendable {
         panel.level = .floating
         panel.alphaValue = 0.0
 
+        // Add a text field so the text input system fully engages
+        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+        panel.contentView?.addSubview(textField)
+
         beeLog("IME ACTIVATE: stealth focus cycle making panel key")
         panel.makeKeyAndOrderFront(nil)
+        panel.makeFirstResponder(textField)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             beeLog("IME ACTIVATE: stealth focus cycle ordering panel out")
             panel.orderOut(nil)
 
@@ -220,7 +225,7 @@ final class BeeInputClient: Sendable {
     private static func findKeyboardLayout() -> TISInputSource? {
         // Prefer the current ASCII-capable keyboard layout
         if let ascii = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue(),
-           !isBeeInputSource(ascii)
+            !isBeeInputSource(ascii)
         {
             return ascii
         }
@@ -230,8 +235,10 @@ final class BeeInputClient: Sendable {
             kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource,
             kTISPropertyInputSourceIsSelectCapable: true,
         ]
-        guard let sources = TISCreateInputSourceList(props as CFDictionary, false)?
-            .takeRetainedValue() as? [TISInputSource] else { return nil }
+        guard
+            let sources = TISCreateInputSourceList(props as CFDictionary, false)?
+                .takeRetainedValue() as? [TISInputSource]
+        else { return nil }
         return sources.first(where: { !isBeeInputSource($0) })
     }
 
