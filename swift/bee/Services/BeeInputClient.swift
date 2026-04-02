@@ -186,11 +186,11 @@ final class BeeInputClient: Sendable {
 
         NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
         window.makeKeyAndOrderFront(nil)
-        usleep(50_000)  // 50ms — let OS fully process the focus steal
+        Self.waitUntil("bee active") { NSRunningApplication.current.isActive }
         window.close()
-        usleep(50_000)  // 50ms — let OS fully process the close
         beeLog("IME ACTIVATE: stealth focus cycle — reactivating \(targetApp.localizedName ?? "?") pid=\(targetPID)")
         targetApp.activate(options: [.activateIgnoringOtherApps])
+        Self.waitUntil("target active") { targetApp.isActive }
     }
 
     /// Cycle input sources: select a non-bee source, then re-select bee.
@@ -269,6 +269,17 @@ final class BeeInputClient: Sendable {
         usleep(30_000)  // 30ms
         beeLog("IME ACTIVATE: AX nudge — restoring focus")
         AXUIElementSetAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, element)
+    }
+
+    /// Spin the run loop until a condition is true, with a hard cap.
+    private static func waitUntil(_ label: String, _ condition: () -> Bool, timeout: TimeInterval = 0.2) {
+        let start = ProcessInfo.processInfo.systemUptime
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while !condition() && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.001))
+        }
+        let elapsed = (ProcessInfo.processInfo.systemUptime - start) * 1000
+        beeLog("IME ACTIVATE: waitUntil \(label) took \(String(format: "%.1f", elapsed))ms")
     }
 
     func deactivate(caller: String = #function, file: String = #fileID, line: Int = #line) {
