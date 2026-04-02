@@ -159,7 +159,7 @@ final class BeeInputClient: Sendable {
     }
 
     @MainActor
-    static func stealthFocusCycle() {
+    static func stealthFocusCycle() async {
         let previousApp = NSWorkspace.shared.frontmostApplication
         let appName = previousApp?.localizedName ?? "?"
         let appPID = previousApp?.processIdentifier ?? 0
@@ -184,6 +184,11 @@ final class BeeInputClient: Sendable {
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(textField)
 
+        if let beeSource = findBeeInputSource() {
+            let r = TISSelectInputSource(beeSource)
+            beeLog("TIS SELECT: \(inputSourceID(beeSource)) (stealth panel activate) result=\(r)")
+        }
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             beeLog("IME ACTIVATE: stealth focus cycle ordering panel out")
             panel.orderOut(nil)
@@ -193,6 +198,10 @@ final class BeeInputClient: Sendable {
                     "IME ACTIVATE: stealth focus cycle reactivating app name=\(previousApp.localizedName ?? "?") pid=\(previousApp.processIdentifier)"
                 )
                 previousApp.activate()
+                if let beeSource = Self.findBeeInputSource() {
+                    let r = TISSelectInputSource(beeSource)
+                    beeLog("TIS SELECT: \(Self.inputSourceID(beeSource)) (stealth panel reactivate) result=\(r)")
+                }
             } else {
                 beeLog("IME ACTIVATE: stealth focus cycle no previous app to reactivate")
             }
