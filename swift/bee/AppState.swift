@@ -163,9 +163,9 @@ final class AppState {
         let modelUID: String?
         let manufacturer: String?
 
-        /// SF Symbol name, or nil if using a custom asset image
+        /// SF Symbol name, or nil if using a custom symbol
         var iconName: String? {
-            if customIconAsset != nil { return nil }
+            if customSymbolName != nil { return nil }
             if let model = modelUID {
                 if model.contains("iPhone") { return "iphone" }
                 if model.contains("iPad") { return "ipad" }
@@ -181,9 +181,9 @@ final class AppState {
             }
         }
 
-        /// Custom asset image name for known hardware
-        var customIconAsset: String? {
-            if let mfr = manufacturer, mfr.contains("Focusrite") { return "FocusriteIcon" }
+        /// Custom symbol name for known hardware
+        var customSymbolName: String? {
+            if let mfr = manufacturer, mfr.contains("Focusrite") { return "focusrite" }
             return nil
         }
 

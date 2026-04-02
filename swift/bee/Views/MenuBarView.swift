@@ -723,10 +723,9 @@ private struct SettingsCard<Content: View>: View {
 private struct DeviceIcon: View {
     let device: AppState.InputDeviceInfo
     var body: some View {
-        if let asset = device.customIconAsset {
-            Image(asset)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
+        if let customSymbol = device.customSymbolName {
+            Image(customSymbol)
+                .symbolRenderingMode(.hierarchical)
         } else if let sfName = device.iconName {
             Image(systemName: sfName)
         }

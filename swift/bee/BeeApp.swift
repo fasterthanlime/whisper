@@ -267,6 +267,11 @@ struct BeeApp: App {
         monitor.start()
         _hotkeyMonitor = State(initialValue: monitor)
 
+        // Register custom fonts
+        if let fontURL = Bundle.main.url(forResource: "bee-symbols", withExtension: "ttf") {
+            CTFontManagerRegisterFontsForURL(fontURL as CFURL, .process, nil)
+        }
+
         BeeInputClient.ensureIMERegistered()
         state.loadModelAtStartup()
         state.warmUpIME()
