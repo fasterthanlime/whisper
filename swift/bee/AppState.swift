@@ -21,6 +21,7 @@ final class AppState {
     private enum DefaultsKey {
         static let selectedInputDeviceUID = "audio.selectedInputDeviceUID"
         static let deviceWarmPolicy = "audio.deviceWarmPolicy"
+        static let devicePriorityList = "audio.devicePriorityList"
         static let debugOverlayEnabled = "ui.debugOverlayEnabled"
         static let totalSessions = "stats.totalSessions"
         static let totalWords = "stats.totalWords"
@@ -106,6 +107,7 @@ final class AppState {
     var activeInputDeviceUID: String?
     var activeInputDeviceName: String?
     var activeInputDeviceKeepWarm: Bool = false
+    var devicePriorityList: [String] = []  // UIDs, highest priority first
 
     // History
     var transcriptionHistory: [TranscriptionHistoryItem] = []
@@ -307,6 +309,33 @@ final class AppState {
         }
         reconfigureAudioEngineIfNeeded(forceRestart: pendingAudioReconfigureAfterSession)
         pendingAudioReconfigureAfterSession = false
+    }
+
+    func setDevicePriority(orderedUIDs: [String]) {
+        devicePriorityList = orderedUIDs
+        persistAudioPreferences()
+        // If the highest-priority available device isn't currently selected, switch to it
+        let bestUID = bestAvailableDeviceUID()
+        if let bestUID, bestUID != activeInputDeviceUID {
+            beeLog("AUDIO: priority changed, switching to \(bestUID)")
+            selectInputDevice(uid: bestUID)
+        }
+    }
+
+    /// Returns the UID of the highest-priority device that's currently available.
+    private func bestAvailableDeviceUID() -> String? {
+        let availableUIDs = Set(availableInputDevices.map(\.uid))
+        // Check priority list first
+        for uid in devicePriorityList {
+            if availableUIDs.contains(uid) {
+                return uid
+            }
+        }
+        // Fall back to system default, then first available
+        if let defaultDevice = availableInputDevices.first(where: { $0.isDefault }) {
+            return defaultDevice.uid
+        }
+        return availableInputDevices.first?.uid
     }
 
     func setDeviceWarmPolicy(uid: String, warm: Bool) {
@@ -1287,12 +1316,17 @@ final class AppState {
             activeInputDeviceKeepWarm = audioEngine.deviceWarmPolicy[selectedUID] ?? false
             audioEngine.selectDevice(uid: selectedUID)
         }
+
+        if let savedPriority = defaults.stringArray(forKey: DefaultsKey.devicePriorityList) {
+            devicePriorityList = savedPriority
+        }
     }
 
     private func persistAudioPreferences() {
         let defaults = UserDefaults.standard
         defaults.set(activeInputDeviceUID, forKey: DefaultsKey.selectedInputDeviceUID)
         defaults.set(audioEngine.deviceWarmPolicy, forKey: DefaultsKey.deviceWarmPolicy)
+        defaults.set(devicePriorityList, forKey: DefaultsKey.devicePriorityList)
     }
 
     private func applyWarmPolicyForCurrentState() {
@@ -1389,16 +1423,10 @@ final class AppState {
         let topologyChanged = availableUIDs != lastKnownInputDeviceUIDs
         lastKnownInputDeviceUIDs = availableUIDs
 
-        let selectedUID: String?
-        if let current = previousUID, availableUIDs.contains(current) {
-            selectedUID = current
-        } else if let preferred = activeInputDeviceUID, availableUIDs.contains(preferred) {
-            selectedUID = preferred
-        } else if let defaultUID, availableUIDs.contains(defaultUID) {
-            selectedUID = defaultUID
-        } else {
-            selectedUID = info.first?.uid
-        }
+        // Priority-based device selection:
+        // On connect: switch to highest-priority available device
+        // On disconnect: fall back to highest-priority available device
+        let selectedUID = bestAvailableDeviceUID()
 
         if let uid = selectedUID, let selected = info.first(where: { $0.uid == uid }) {
             activeInputDeviceUID = uid

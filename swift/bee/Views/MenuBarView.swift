@@ -199,7 +199,7 @@ private struct MenuActionRow: View {
 }
 
 enum SidebarItem: Hashable {
-    case overview, history, howBeeWorks, advanced
+    case overview, audio, history, howBeeWorks, advanced
 }
 
 struct BeeSettingsView: View {
@@ -214,6 +214,8 @@ struct BeeSettingsView: View {
                     Section {
                         Label("Overview", systemImage: "sparkles")
                             .tag(SidebarItem.overview)
+                        Label("Audio", systemImage: "waveform")
+                            .tag(SidebarItem.audio)
                         Label("History", systemImage: "clock.arrow.circlepath")
                             .tag(SidebarItem.history)
                         Label("How bee works", systemImage: "keyboard")
@@ -253,6 +255,8 @@ struct BeeSettingsView: View {
                 switch selection {
                 case .overview:
                     BeeOverviewView(appState: appState, selection: $selection)
+                case .audio:
+                    AudioSettingsView(appState: appState)
                 case .history:
                     BeeHistoryView(appState: appState)
                 case .howBeeWorks:
@@ -449,6 +453,248 @@ private struct BeeHistoryView: View {
     }
 }
 
+// MARK: - Audio Settings
+
+private struct AudioSettingsView: View {
+    @Bindable var appState: AppState
+    @State private var echoActive = false
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                // Device priority list with level meter
+                HStack(alignment: .top, spacing: 16) {
+                    SettingsCard("Input Devices") {
+                        Text("Drag to set priority. When a higher-priority device becomes available, bee switches to it automatically.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.bottom, 4)
+
+                        VStack(spacing: 0) {
+                            ForEach(Array(prioritySortedDevices.enumerated()), id: \.element.uid) { index, device in
+                                AudioSettingsDeviceRow(
+                                    device: device,
+                                    rank: index + 1,
+                                    isActive: device.uid == appState.activeInputDeviceUID,
+                                    isWarm: appState.audioEngine.deviceWarmPolicy[device.uid] ?? false,
+                                    onSelect: { appState.selectInputDevice(uid: device.uid) },
+                                    onToggleWarm: { appState.setDeviceWarmPolicy(uid: device.uid, warm: $0) },
+                                    onMoveUp: index > 0 ? { moveDevice(at: index, by: -1) } : nil,
+                                    onMoveDown: index < prioritySortedDevices.count - 1 ? { moveDevice(at: index, by: 1) } : nil
+                                )
+
+                                if index < prioritySortedDevices.count - 1 {
+                                    Divider().padding(.leading, 44)
+                                }
+                            }
+                        }
+                    }
+
+                    // Level meter + controls
+                    VStack(spacing: 12) {
+                        Button {
+                            if echoActive {
+                                appState.audioEngine.stopEcho()
+                            } else {
+                                if !appState.audioEngine.isWarm {
+                                    try? appState.audioEngine.warmUp()
+                                }
+                                appState.audioEngine.startEcho()
+                            }
+                            echoActive = appState.audioEngine.echoEnabled
+                        } label: {
+                            Image(systemName: echoActive ? "ear.fill" : "ear")
+                                .font(.title3)
+                                .foregroundStyle(echoActive ? .orange : .secondary)
+                                .frame(width: 36, height: 36)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(echoActive ? Color.orange.opacity(0.15) : Color.primary.opacity(0.04))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .help("Listen to yourself (1s delay)")
+
+                        HStack(spacing: 6) {
+                            VerticalVolumeSlider(
+                                audioEngine: appState.audioEngine,
+                                selectedDeviceUID: appState.activeInputDeviceUID
+                            )
+                            .frame(width: 8)
+                            VerticalLevelMeter(audioEngine: appState.audioEngine)
+                        }
+                    }
+                    .frame(width: 60)
+                    .padding(.top, 40)
+                }
+
+                // Transcription settings
+                SettingsCard("Transcription") {
+                    chunkSizePicker
+                    tokenLimitPicker(
+                        label: "Streaming tokens",
+                        value: $appState.maxNewTokensStreaming,
+                        options: [0, 16, 32, 64, 128]
+                    )
+                    tokenLimitPicker(
+                        label: "Final tokens",
+                        value: $appState.maxNewTokensFinal,
+                        options: [0, 128, 256, 512, 1024]
+                    )
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: 600)
+        }
+        .onAppear {
+            if !appState.audioEngine.isWarm {
+                try? appState.audioEngine.warmUp()
+            }
+        }
+        .onDisappear {
+            if echoActive {
+                appState.audioEngine.stopEcho()
+                echoActive = false
+            }
+            if !appState.hotkeyState.isRecording && !appState.activeInputDeviceKeepWarm && !appState.menuBarPanelOpen {
+                appState.audioEngine.coolDown()
+            }
+        }
+    }
+
+    private var prioritySortedDevices: [AppState.InputDeviceInfo] {
+        let devices = appState.availableInputDevices
+        let priority = appState.devicePriorityList
+
+        // Sort by priority index, then by default/built-in/alpha for unranked
+        return devices.sorted { lhs, rhs in
+            let lhsIdx = priority.firstIndex(of: lhs.uid) ?? Int.max
+            let rhsIdx = priority.firstIndex(of: rhs.uid) ?? Int.max
+            if lhsIdx != rhsIdx { return lhsIdx < rhsIdx }
+            if lhs.isDefault != rhs.isDefault { return lhs.isDefault && !rhs.isDefault }
+            if lhs.isBuiltIn != rhs.isBuiltIn { return lhs.isBuiltIn && !rhs.isBuiltIn }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private func moveDevice(at index: Int, by offset: Int) {
+        var sorted = prioritySortedDevices.map(\.uid)
+        let target = index + offset
+        guard target >= 0 && target < sorted.count else { return }
+        sorted.swapAt(index, target)
+        appState.setDevicePriority(orderedUIDs: sorted)
+    }
+
+    // Reuse from AdvancedSettingsView
+    private var chunkSizePicker: some View {
+        Picker("Chunk size", selection: Binding(
+            get: { appState.chunkSizeSec },
+            set: { appState.chunkSizeSec = $0 }
+        )) {
+            ForEach([0.2, 0.3, 0.4, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0] as [Float], id: \.self) { val in
+                Text(val < 1 ? "\(Int(val * 1000))ms" : "\(String(format: "%.1f", val))s")
+                    .tag(val)
+            }
+        }
+    }
+
+    private func tokenLimitPicker(
+        label: String,
+        value: Binding<UInt32>,
+        options: [UInt32]
+    ) -> some View {
+        Picker(label, selection: value) {
+            ForEach(options, id: \.self) { val in
+                Text(val == 0 ? "Default" : "\(val)")
+                    .tag(val)
+            }
+        }
+    }
+}
+
+private struct AudioSettingsDeviceRow: View {
+    let device: AppState.InputDeviceInfo
+    let rank: Int
+    let isActive: Bool
+    let isWarm: Bool
+    let onSelect: () -> Void
+    let onToggleWarm: (Bool) -> Void
+    let onMoveUp: (() -> Void)?
+    let onMoveDown: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // Priority rank
+            Text("\(rank)")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(isActive ? .orange : .secondary)
+                .frame(width: 18)
+
+            // Move buttons
+            VStack(spacing: 0) {
+                Button { onMoveUp?() } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 8, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                .disabled(onMoveUp == nil)
+
+                Button { onMoveDown?() } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                .disabled(onMoveDown == nil)
+            }
+            .foregroundStyle(.secondary)
+            .frame(width: 14)
+
+            // Device icon
+            DeviceIcon(device: device)
+                .font(.title3)
+                .foregroundStyle(isActive ? .orange : .secondary)
+                .frame(width: 24)
+
+            // Name + subtitle
+            VStack(alignment: .leading, spacing: 1) {
+                Text(device.name)
+                    .fontWeight(isActive ? .medium : .regular)
+                if let subtitle = device.subtitle {
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+
+            // Keep warm toggle
+            Toggle("", isOn: Binding(
+                get: { isWarm },
+                set: { onToggleWarm($0) }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .labelsHidden()
+            .help("Keep microphone active between sessions")
+
+            // Select button
+            if isActive {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.orange)
+            } else {
+                Button { onSelect() } label: {
+                    Image(systemName: "circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 4)
+    }
+}
+
 private struct HowBeeWorksView: View {
     var body: some View {
         ScrollView {
@@ -535,29 +781,6 @@ private struct AdvancedSettingsView: View {
                     }
                 }
 
-                SettingsCard("Audio") {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if appState.availableInputDevices.isEmpty {
-                            Text("No input devices")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(Array(appState.availableInputDevices.enumerated()), id: \.element.uid) { index, device in
-                                AudioDeviceRow(
-                                    device: device,
-                                    isActive: device.uid == appState.activeInputDeviceUID,
-                                    isWarm: appState.audioEngine.deviceWarmPolicy[device.uid] ?? false,
-                                    onSelect: { appState.selectInputDevice(uid: device.uid) },
-                                    onToggleWarm: { appState.setDeviceWarmPolicy(uid: device.uid, warm: $0) }
-                                )
-                                if index < appState.availableInputDevices.count - 1 {
-                                    Divider().padding(.vertical, 4)
-                                }
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
                 SettingsCard("Behavior") {
                     VStack(alignment: .leading, spacing: 12) {
                         Toggle("Run on startup", isOn: Binding(
@@ -615,33 +838,6 @@ private struct AdvancedSettingsView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-
-                Text("Advanced")
-                    .font(.headline)
-                    .padding(.top, 8)
-
-                SettingsCard("Transcription") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        chunkSizePicker
-                        tokenLimitPicker(
-                            label: "Streaming tokens",
-                            options: Self.streamingTokenOptions,
-                            current: appState.maxNewTokensStreaming
-                        ) {
-                            appState.maxNewTokensStreaming = $0
-                        }
-                        tokenLimitPicker(
-                            label: "Final tokens",
-                            options: Self.finalTokenOptions,
-                            current: appState.maxNewTokensFinal
-                        ) {
-                            appState.maxNewTokensFinal = $0
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
 
                 SettingsCard("Diagnostics") {
                     VStack(alignment: .leading, spacing: 8) {
