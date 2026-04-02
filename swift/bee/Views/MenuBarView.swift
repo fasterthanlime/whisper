@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 
 struct MenuBarView: View {
@@ -117,8 +118,6 @@ struct BeeSettingsView: View {
     @Bindable var appState: AppState
 
     @State private var selection: SidebarItem = .overview
-    @State private var runOnStartupEnabled = false
-    @State private var pauseMediaEnabled = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -171,11 +170,7 @@ struct BeeSettingsView: View {
                 case .howBeeWorks:
                     HowBeeWorksView()
                 case .advanced:
-                    AdvancedSettingsView(
-                        appState: appState,
-                        runOnStartupEnabled: $runOnStartupEnabled,
-                        pauseMediaEnabled: $pauseMediaEnabled
-                    )
+                    AdvancedSettingsView(appState: appState)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -378,8 +373,6 @@ private struct HowBeeWorksView: View {
 
 private struct AdvancedSettingsView: View {
     @Bindable var appState: AppState
-    @Binding var runOnStartupEnabled: Bool
-    @Binding var pauseMediaEnabled: Bool
 
     @State private var showDiagSheet = false
     @State private var diagOutput = ""
@@ -464,31 +457,22 @@ private struct AdvancedSettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                SettingsCard("Transcription") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        chunkSizePicker
-                        tokenLimitPicker(
-                            label: "Streaming tokens",
-                            options: Self.streamingTokenOptions,
-                            current: appState.maxNewTokensStreaming
-                        ) {
-                            appState.maxNewTokensStreaming = $0
-                        }
-                        tokenLimitPicker(
-                            label: "Final tokens",
-                            options: Self.finalTokenOptions,
-                            current: appState.maxNewTokensFinal
-                        ) {
-                            appState.maxNewTokensFinal = $0
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
                 SettingsCard("Behavior") {
                     VStack(alignment: .leading, spacing: 12) {
-                        Toggle("Run on startup", isOn: $runOnStartupEnabled)
-                        Toggle("Pause media while dictating", isOn: $pauseMediaEnabled)
+                        Toggle("Run on startup", isOn: Binding(
+                            get: { SMAppService.mainApp.status == .enabled },
+                            set: { enable in
+                                do {
+                                    if enable {
+                                        try SMAppService.mainApp.register()
+                                    } else {
+                                        try SMAppService.mainApp.unregister()
+                                    }
+                                } catch {
+                                    beeLog("SMAppService error: \(error)")
+                                }
+                            }
+                        ))
 
                         Toggle("Lower volume during dictation", isOn: Binding(
                             get: { appState.lowerVolumeDuringDictation },
@@ -531,7 +515,30 @@ private struct AdvancedSettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                Text("Startup/media toggles are UI scaffolding for now and still need backend wiring.")
+                Text("Advanced")
+                    .font(.headline)
+                    .padding(.top, 8)
+
+                SettingsCard("Transcription") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        chunkSizePicker
+                        tokenLimitPicker(
+                            label: "Streaming tokens",
+                            options: Self.streamingTokenOptions,
+                            current: appState.maxNewTokensStreaming
+                        ) {
+                            appState.maxNewTokensStreaming = $0
+                        }
+                        tokenLimitPicker(
+                            label: "Final tokens",
+                            options: Self.finalTokenOptions,
+                            current: appState.maxNewTokensFinal
+                        ) {
+                            appState.maxNewTokensFinal = $0
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
