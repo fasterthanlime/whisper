@@ -784,6 +784,9 @@ final class AppState {
     private func handleIMEActivationRevoked() {
         guard imeSessionState == .activating else { return }
         guard let targetPID = activeSessionTargetPID else { return }
+        // Cancel the fallback timeout — we're handling it now
+        pendingIMEAckWorkItem?.cancel()
+        pendingIMEAckWorkItem = nil
         beeLog("SESSION: IME activation revoked, doing focus cycle for pid=\(targetPID)")
         BeeInputClient.stealthFocusCycle(targetPID: targetPID)
     }
