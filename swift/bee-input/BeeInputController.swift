@@ -7,7 +7,7 @@ class BeeInputController: IMKInputController {
     private var currentMarkedText: String = ""
     private var autoCommittedPrefix: String = ""
     private var didRequestSwitchAway: Bool = false
-    private var pendingClaim: DispatchWorkItem?
+    private var pendingClaimToken: UUID?
 
     override func activateServer(_ sender: Any!) {
         beeInputLog("activateServer: entry")
@@ -21,13 +21,14 @@ class BeeInputController: IMKInputController {
         // Defer the claim by 60ms. If deactivateServer fires before then,
         // the claim is cancelled and the session stays prepared for retry.
         pendingClaim?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.pendingClaim = nil
+        pendingClaim = nil
+        let token = UUID()
+        pendingClaimToken = token
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+            guard let self, self.pendingClaimToken == token else { return }
+            self.pendingClaimToken = nil
             self.performClaim()
         }
-        pendingClaim = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
     }
 
     private func performClaim() {
@@ -61,9 +62,8 @@ class BeeInputController: IMKInputController {
 
     override func deactivateServer(_ sender: Any!) {
         // Cancel any pending claim — the activation was spurious
-        if let pending = pendingClaim {
-            pending.cancel()
-            pendingClaim = nil
+        if pendingClaimToken != nil {
+            pendingClaimToken = nil
             beeInputLog("deactivateServer: cancelled pending claim")
         }
 
