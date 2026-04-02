@@ -159,7 +159,7 @@ final class BeeInputClient: Sendable {
     }
 
     @MainActor
-    static func stealthFocusCycle() async {
+    static func stealthFocusCycle() {
         let previousApp = NSWorkspace.shared.frontmostApplication
         let appName = previousApp?.localizedName ?? "?"
         let appPID = previousApp?.processIdentifier ?? 0
