@@ -14,7 +14,7 @@ struct DebugOverlay: View {
             row("ui", uiStateLabel)
             row("model", modelLabel)
 
-            if let session = appState.uiState.session {
+            if let session = appState.hotkeyState.session {
                 Divider()
                 Text("active session")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -41,15 +41,21 @@ struct DebugOverlay: View {
     }
 
     private var uiStateLabel: String {
-        switch appState.uiState {
+        let hotkey: String = switch appState.hotkeyState {
         case .idle: "Idle"
-        case .pending(_, imeConfirmed: false): "Pending"
-        case .pending(_, imeConfirmed: true): "Pending (IME OK)"
-        case .pendingLockRequested: "PendingLock"
+        case .held: "Held"
+        case .released: "Released"
         case .pushToTalk: "PushToTalk"
         case .locked: "Locked"
         case .lockedOptionHeld: "LockedOptionHeld"
         }
+        let ime: String = switch appState.imeSessionState {
+        case .inactive: "Inactive"
+        case .activating: "Activating"
+        case .active: "Active"
+        case .parked: "Parked"
+        }
+        return "\(hotkey) | IME: \(ime)"
     }
 
     private var modelLabel: String {

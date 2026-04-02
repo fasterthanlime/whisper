@@ -120,8 +120,8 @@ private struct MenuBarLabelView: View {
     }
 
     private var isSessionActive: Bool {
-        switch appState.uiState {
-        case .pending, .pendingLockRequested, .pushToTalk, .locked, .lockedOptionHeld:
+        switch appState.hotkeyState {
+        case .held, .released, .pushToTalk, .locked, .lockedOptionHeld:
             return true
         case .idle:
             return false

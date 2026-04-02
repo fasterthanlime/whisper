@@ -30,14 +30,14 @@ final class AppState {
     private static let imeSessionStartedName = NSNotification.Name(
         "fasterthanlime.bee.imeSessionStarted")
 
-    private(set) var uiState: UIState = .idle
+    private(set) var hotkeyState: HotkeyState = .idle
+    private(set) var imeSessionState: IMESessionState = .inactive
     private var pendingTimer: Task<Void, Never>?
     private var consumeNextROptUp = false
     private var activeSessionTargetPID: pid_t?
     fileprivate var activeSessionTargetAppName: String?
     fileprivate var activeSessionTargetAppIcon: NSImage?
     private var pendingIMEAckTimeoutTask: Task<Void, Never>?
-    private var isSessionParked = false
     private var distributedObservers: [NSObjectProtocol] = []
     private var workspaceObservers: [NSObjectProtocol] = []
     private var captureDeviceObservers: [NSObjectProtocol] = []
@@ -124,19 +124,19 @@ final class AppState {
 
     // MARK: - State
 
-    enum UIState {
+    enum HotkeyState {
         case idle
-        case pending(Session, imeConfirmed: Bool)
-        case pendingLockRequested(Session)  // ROpt released before IME confirmed
-        case pushToTalk(Session)
-        case locked(Session)
-        case lockedOptionHeld(Session)
+        case held(Session)              // ROpt held, session starting
+        case released(Session)          // ROpt released (tap), wants locked when IME ready
+        case pushToTalk(Session)        // ROpt held past 300ms, recording
+        case locked(Session)            // hands-free recording
+        case lockedOptionHeld(Session)  // locked, ROpt pressed again
 
         var session: Session? {
             switch self {
             case .idle: nil
-            case .pending(let s, _): s
-            case .pendingLockRequested(let s): s
+            case .held(let s): s
+            case .released(let s): s
             case .pushToTalk(let s): s
             case .locked(let s): s
             case .lockedOptionHeld(let s): s
@@ -151,10 +151,17 @@ final class AppState {
         }
     }
 
+    enum IMESessionState {
+        case inactive
+        case activating   // prepareSession done, waiting for IME confirmation
+        case active       // IME confirmed, text can be routed
+        case parked       // target app lost focus, session paused
+    }
+
     // MARK: - Event Handlers
 
     func handleROptDown() -> Bool {
-        switch uiState {
+        switch hotkeyState {
         case .idle:
             let targetApp = NSWorkspace.shared.frontmostApplication
             let targetPID = targetApp?.processIdentifier
@@ -167,9 +174,9 @@ final class AppState {
             activeSessionTargetAppIcon = targetApp?.icon
             pendingIMEAckTimeoutTask?.cancel()
             pendingIMEAckTimeoutTask = nil
-            isSessionParked = false
+            imeSessionState = .activating
             parkedOverlayText = ""
-            uiState = .pending(session, imeConfirmed: false)
+            hotkeyState = .held(session)
             startPendingTimer(session: session)
             startIMEAckTimeoutIfNeeded(session: session)
             let config = TranscriptionService.SessionConfig(
@@ -181,7 +188,7 @@ final class AppState {
             return false  // not swallowed
 
         case .locked(let session):
-            uiState = .lockedOptionHeld(session)
+            hotkeyState = .lockedOptionHeld(session)
             return true  // swallowed
 
         default:
@@ -195,17 +202,17 @@ final class AppState {
             return true  // swallowed (after RCmd → Locked transition)
         }
 
-        switch uiState {
-        case .pending(let session, imeConfirmed: false):
-            beeLog("SESSION: ROpt up while IME unconfirmed, waiting")
-            uiState = .pendingLockRequested(session)
-            startIMEAckTimeoutIfNeeded(session: session)
-            return false
-
-        case .pending(let session, imeConfirmed: true):
-            pendingTimer?.cancel()
-            uiState = .locked(session)
-            playRecordingStartedSound()
+        switch hotkeyState {
+        case .held(let session):
+            if imeSessionState == .active {
+                pendingTimer?.cancel()
+                hotkeyState = .locked(session)
+                playRecordingStartedSound()
+            } else {
+                beeLog("SESSION: ROpt up while IME unconfirmed, waiting")
+                hotkeyState = .released(session)
+                startIMEAckTimeoutIfNeeded(session: session)
+            }
             return false
 
         case .pushToTalk(let session):
@@ -224,9 +231,9 @@ final class AppState {
     }
 
     func handleRCmdDown() -> Bool {
-        switch uiState {
+        switch hotkeyState {
         case .pushToTalk(let session):
-            uiState = .locked(session)
+            hotkeyState = .locked(session)
             consumeNextROptUp = true
             return true  // swallowed
 
@@ -236,8 +243,8 @@ final class AppState {
     }
 
     func handleEscape() -> Bool {
-        switch uiState {
-        case .pending(let session, _), .pendingLockRequested(let session):
+        switch hotkeyState {
+        case .held(let session), .released(let session):
             pendingTimer?.cancel()
             transitionToIdle()
             Task { await session.abort() }
@@ -262,7 +269,7 @@ final class AppState {
     }
 
     func handleEnter() -> Bool {
-        switch uiState {
+        switch hotkeyState {
         case .locked(let session):
             transitionToIdle()
             Task { await session.commit(submit: true) }
@@ -274,8 +281,8 @@ final class AppState {
     }
 
     func handleOtherKey(keyCode: UInt16) -> Bool {
-        switch uiState {
-        case .pending(let session, _), .pendingLockRequested(let session):
+        switch hotkeyState {
+        case .held(let session), .released(let session):
             pendingTimer?.cancel()
             transitionToIdle()
 
@@ -301,12 +308,12 @@ final class AppState {
         pendingTimer = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(300))
             while !Task.isCancelled {
-                guard case .pending(let s, let confirmed) = uiState, s.id == session.id else { return }
-                guard confirmed else {
+                guard case .held(let s) = hotkeyState, s.id == session.id else { return }
+                guard imeSessionState == .active else {
                     try? await Task.sleep(for: .milliseconds(100))
                     continue
                 }
-                uiState = .pushToTalk(s)
+                hotkeyState = .pushToTalk(s)
                 playRecordingStartedSound()
                 return
             }
@@ -324,9 +331,9 @@ final class AppState {
                 try? await Task.sleep(for: retryInterval)
                 guard let self else { return }
 
-                switch self.uiState {
-                case .pending(let s, imeConfirmed: false) where s.id == session.id: break
-                case .pendingLockRequested(let s) where s.id == session.id: break
+                switch self.hotkeyState {
+                case .held(let s) where s.id == session.id && self.imeSessionState != .active: break
+                case .released(let s) where s.id == session.id: break
                 default:
                     // Session confirmed or cancelled — stop retrying
                     self.pendingIMEAckTimeoutTask = nil
@@ -424,7 +431,7 @@ final class AppState {
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(300))
             guard !Task.isCancelled else { return }
-            if uiState.session?.id == session.id {
+            if hotkeyState.session?.id == session.id {
                 transitionToIdle()
                 await session.commit(submit: false)
             }
@@ -478,7 +485,7 @@ final class AppState {
             }
         }
 
-        if uiState.session?.id == resultID {
+        if hotkeyState.session?.id == resultID {
             transitionToIdle()
             activeSessionTargetPID = nil
             activeSessionTargetAppName = nil
@@ -670,8 +677,8 @@ final class AppState {
 
     private func handleIMESubmit(sessionID: UUID?) {
         guard isNotificationForActiveSession(sessionID) else { return }
-        switch uiState {
-        case .pending(let session, _), .pendingLockRequested(let session):
+        switch hotkeyState {
+        case .held(let session), .released(let session):
             pendingTimer?.cancel()
             transitionToIdle()
             Task { await session.abort() }
@@ -685,8 +692,8 @@ final class AppState {
 
     private func handleIMECancel(sessionID: UUID?) {
         guard isNotificationForActiveSession(sessionID) else { return }
-        switch uiState {
-        case .pending(let session, _), .pendingLockRequested(let session):
+        switch hotkeyState {
+        case .held(let session), .released(let session):
             pendingTimer?.cancel()
             transitionToIdle()
             Task { await session.abort() }
@@ -700,8 +707,8 @@ final class AppState {
 
     private func handleIMEUserTyped(sessionID: UUID?) {
         guard isNotificationForActiveSession(sessionID) else { return }
-        switch uiState {
-        case .pending(let session, _), .pendingLockRequested(let session):
+        switch hotkeyState {
+        case .held(let session), .released(let session):
             pendingTimer?.cancel()
             transitionToIdle()
             Task { await session.abort() }
@@ -715,16 +722,16 @@ final class AppState {
 
     private func handleIMEContextLost(sessionID: UUID?, hadMarkedText: Bool?) {
         guard isNotificationForActiveSession(sessionID) else { return }
-        if isSessionParked {
+        if imeSessionState == .parked {
             return
         }
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         beeLog(
-            "SESSION: imeContextLost id=\(uiState.session?.id?.uuidString.prefix(8) ?? "nil") targetPID=\(activeSessionTargetPID.map(String.init) ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil") hadMarkedText=\(hadMarkedText.map(String.init) ?? "nil")"
+            "SESSION: imeContextLost id=\(hotkeyState.session?.id?.uuidString.prefix(8) ?? "nil") targetPID=\(activeSessionTargetPID.map(String.init) ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil") hadMarkedText=\(hadMarkedText.map(String.init) ?? "nil")"
         )
 
-        switch uiState {
-        case .pending(let session, _), .pendingLockRequested(let session):
+        switch hotkeyState {
+        case .held(let session), .released(let session):
             pendingTimer?.cancel()
             transitionToIdle()
             Task { await session.abort() }
@@ -740,24 +747,25 @@ final class AppState {
 
     private func handleIMESessionStarted(sessionID: UUID?) {
         guard isNotificationForActiveSession(sessionID) else { return }
-        if isSessionParked, let session = uiState.session {
+        if imeSessionState == .parked, let session = hotkeyState.session {
             beeLog("SESSION: IME route restored id=\(session.id.uuidString.prefix(8))")
-            isSessionParked = false
+            imeSessionState = .active
             hideParkedOverlay()
             Task { await session.routeDidBecomeActive() }
             return
         }
 
-        switch uiState {
-        case .pending(let session, imeConfirmed: false):
+        switch hotkeyState {
+        case .held(let session):
             beeLog("SESSION: IME confirmed id=\(session.id.uuidString.prefix(8))")
-            uiState = .pending(session, imeConfirmed: true)
+            imeSessionState = .active
             Task { await session.routeDidBecomeActive() }
 
-        case .pendingLockRequested(let session):
+        case .released(let session):
             beeLog("SESSION: IME confirmed id=\(session.id.uuidString.prefix(8)), locking")
+            imeSessionState = .active
             pendingTimer?.cancel()
-            uiState = .locked(session)
+            hotkeyState = .locked(session)
             Task { await session.routeDidBecomeActive() }
             playRecordingStartedSound()
 
@@ -768,7 +776,7 @@ final class AppState {
 
     private func handleDidActivateApplication(processIdentifier: pid_t?, bundleIdentifier: String?)
     {
-        guard let session = uiState.session else { return }
+        guard let session = hotkeyState.session else { return }
         guard let targetPID = activeSessionTargetPID else { return }
         guard let processIdentifier else { return }
 
@@ -781,13 +789,13 @@ final class AppState {
         }
 
         if processIdentifier == targetPID {
-            if isSessionParked {
+            if imeSessionState == .parked {
                 beeLog("SESSION: resume requested targetPID=\(targetPID)")
                 Task {
                     let resumed = await session.requestResumeActivation()
                     if !resumed {
                         await MainActor.run {
-                            guard self.uiState.session?.id == session.id else { return }
+                            guard self.hotkeyState.session?.id == session.id else { return }
                             beeLog(
                                 "SESSION: resume activation failed id=\(session.id.uuidString.prefix(8))"
                             )
@@ -800,8 +808,8 @@ final class AppState {
             return
         }
 
-        switch uiState {
-        case .pending(let session, _), .pendingLockRequested(let session):
+        switch hotkeyState {
+        case .held(let session), .released(let session):
             pendingTimer?.cancel()
             transitionToIdle()
             Task { await session.abort() }
@@ -817,7 +825,7 @@ final class AppState {
 
     private func handleDidTerminateApplication(processIdentifier: pid_t?) {
         guard let processIdentifier else { return }
-        guard let session = uiState.session else { return }
+        guard let session = hotkeyState.session else { return }
         guard processIdentifier == activeSessionTargetPID else { return }
 
         beeLog("SESSION: target terminated pid=\(processIdentifier)")
@@ -826,15 +834,15 @@ final class AppState {
     }
 
     private func parkSession(_ session: Session, reason: String) {
-        guard !isSessionParked else { return }
-        isSessionParked = true
+        guard imeSessionState != .parked else { return }
+        imeSessionState = .parked
         beeLog("SESSION: parked id=\(session.id.uuidString.prefix(8)) reason=\(reason)")
         showParkedOverlay(for: session)
         Task { await session.park() }
     }
 
     private func isNotificationForActiveSession(_ sessionID: UUID?) -> Bool {
-        guard let currentID = uiState.session?.id, let sessionID else { return false }
+        guard let currentID = hotkeyState.session?.id, let sessionID else { return false }
         return sessionID == currentID
     }
 
@@ -852,11 +860,11 @@ final class AppState {
     }
 
     private func transitionToIdle() {
-        uiState = .idle
+        hotkeyState = .idle
         pendingTimer?.cancel()
         pendingIMEAckTimeoutTask?.cancel()
         pendingIMEAckTimeoutTask = nil
-        isSessionParked = false
+        imeSessionState = .inactive
         hideParkedOverlay()
     }
 
@@ -896,8 +904,8 @@ final class AppState {
         parkedOverlayPollTask = Task { @MainActor [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
-                guard self.isSessionParked,
-                    self.uiState.session?.id == session.id
+                guard self.imeSessionState == .parked,
+                    self.hotkeyState.session?.id == session.id
                 else { return }
                 self.parkedOverlayText = await session.liveText()
                 try? await Task.sleep(for: .milliseconds(80))
@@ -953,8 +961,8 @@ final class AppState {
 
     private func applyWarmPolicyForCurrentState() {
         guard modelStatus == .loaded else { return }
-        guard uiState.session == nil else { return }
-        if uiState.isRecording { return }
+        guard hotkeyState.session == nil else { return }
+        if hotkeyState.isRecording { return }
 
         if activeInputDeviceKeepWarm {
             if !audioEngine.isWarm {
@@ -1062,7 +1070,7 @@ final class AppState {
 
     private func reconfigureAudioEngineIfNeeded(forceRestart: Bool) {
         guard modelStatus == .loaded else { return }
-        if uiState.isRecording {
+        if hotkeyState.isRecording {
             if forceRestart {
                 pendingAudioReconfigureAfterSession = true
             }
