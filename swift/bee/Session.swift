@@ -386,8 +386,7 @@ actor Session {
 
                             steps += 1
                             let delayMs = steps > 20 ? 8 : (steps > 10 ? 15 : 25)
-                            do { try await Task.sleep(for: .milliseconds(delayMs)) }
-                            catch { break }
+                            do { try await Task.sleep(for: .milliseconds(delayMs)) } catch { break }
                         }
 
                         // Snap to target in case animation was interrupted
@@ -669,8 +668,9 @@ actor Session {
     // MARK: - IME Finalization
 
     private func bestEffortSleep(ms: Int, label: String) async {
-        do { try await Task.sleep(for: .milliseconds(ms)) }
-        catch { beeLog("SESSION: \(label) sleep cancelled") }
+        do { try await Task.sleep(for: .milliseconds(ms)) } catch {
+            beeLog("SESSION: \(label) sleep cancelled")
+        }
     }
 
     private func finishIME(text: String, mode: EndMode) async {
@@ -737,13 +737,13 @@ extension Session {
     }
 
     enum IMEState: Sendable, CustomStringConvertible {
-        case inactive       // not yet activated
-        case activating     // activate() called, waiting for confirmation
-        case active         // confirmed, text can flow
-        case parked         // target app lost focus, waiting for return
-        case committed      // final text inserted
-        case cleared        // marked text cleared (cancel)
-        case tornDown       // abort, no cleanup
+        case inactive  // not yet activated
+        case activating  // activate() called, waiting for confirmation
+        case active  // confirmed, text can flow
+        case parked  // target app lost focus, waiting for return
+        case committed  // final text inserted
+        case cleared  // marked text cleared (cancel)
+        case tornDown  // abort, no cleanup
 
         var description: String {
             switch self {
