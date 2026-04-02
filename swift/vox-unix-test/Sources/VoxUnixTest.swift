@@ -92,6 +92,7 @@ final class BeeIpcDispatcherAdapter: ServiceDispatcher, @unchecked Sendable {
 @main
 struct VoxUnixTest {
     static func main() async throws {
+        setbuf(stdout, nil)
         let socketPath = "/tmp/bee-vox-test.sock"
         unlink(socketPath)
         print("[test] Starting...")
@@ -105,6 +106,10 @@ struct VoxUnixTest {
                 print("[test] Accepted connection")
                 let dispatcher = BeeIpcDispatcherAdapter(handler: BeeIpcService())
                 do {
+                    // Perform transport prologue (initiator sends hello, we accept)
+                    _ = try await performAcceptorTransportPrologue(
+                        transport: link, supportedConduit: .bare
+                    )
                     let session = try await Session.acceptorOn(
                         link, transport: .bare,
                         dispatcher: dispatcher, resumable: false
