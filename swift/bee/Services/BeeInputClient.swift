@@ -160,51 +160,22 @@ final class BeeInputClient: Sendable {
 
     @MainActor
     static func stealthFocusCycle() {
-        let previousApp = NSWorkspace.shared.frontmostApplication
-        let appName = previousApp?.localizedName ?? "?"
-        let appPID = previousApp?.processIdentifier ?? 0
-        beeLog("IME ACTIVATE: stealth focus cycle start frontmost=\(appName) pid=\(appPID)")
+        beeLog("IME ACTIVATE: stealth focus cycle — creating temp window")
 
-        let panel = NSPanel(
+        let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
             styleMask: [],
             backing: .buffered,
             defer: false
         )
-        panel.isFloatingPanel = true
-        panel.level = .floating
-        panel.alphaValue = 0.0
+        window.level = .floating
+        window.alphaValue = 0.0
+        window.makeKeyAndOrderFront(nil)
 
-        // Add a text field so the text input system fully engages
-        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
-        panel.contentView?.addSubview(textField)
-
-        beeLog("IME ACTIVATE: stealth focus cycle activating bee + panel")
-        NSApp.activate()
-        panel.makeKeyAndOrderFront(nil)
-        panel.makeFirstResponder(textField)
-
-        if let beeSource = findBeeInputSource() {
-            let r = TISSelectInputSource(beeSource)
-            beeLog("TIS SELECT: \(inputSourceID(beeSource)) (stealth panel activate) result=\(r)")
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            beeLog("IME ACTIVATE: stealth focus cycle ordering panel out")
-            panel.orderOut(nil)
-
-            if let previousApp {
-                beeLog(
-                    "IME ACTIVATE: stealth focus cycle reactivating app name=\(previousApp.localizedName ?? "?") pid=\(previousApp.processIdentifier)"
-                )
-                previousApp.activate()
-                if let beeSource = Self.findBeeInputSource() {
-                    let r = TISSelectInputSource(beeSource)
-                    beeLog("TIS SELECT: \(Self.inputSourceID(beeSource)) (stealth panel reactivate) result=\(r)")
-                }
-            } else {
-                beeLog("IME ACTIVATE: stealth focus cycle no previous app to reactivate")
-            }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            beeLog("IME ACTIVATE: stealth focus cycle — closing temp window")
+            window.close()
+            // OS automatically restores focus to previous app → triggers activateServer
         }
     }
 
