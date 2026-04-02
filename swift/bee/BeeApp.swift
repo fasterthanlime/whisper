@@ -6,6 +6,39 @@ extension Notification.Name {
 }
 
 final class BeeLifecycleDelegate: NSObject, NSApplicationDelegate {
+    private var windowObservers: [NSObjectProtocol] = []
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        windowObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification,
+                object: nil,
+                queue: .main
+            ) { note in
+                guard let window = note.object as? NSWindow, !(window is NSPanel) else { return }
+                NSApp.setActivationPolicy(.regular)
+            }
+        )
+
+        windowObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: nil,
+                queue: .main
+            ) { note in
+                guard let window = note.object as? NSWindow, !(window is NSPanel) else { return }
+                DispatchQueue.main.async {
+                    let hasOtherNormalWindows = NSApp.windows.contains { w in
+                        w !== window && w.isVisible && !(w is NSPanel)
+                    }
+                    if !hasOtherNormalWindows {
+                        NSApp.setActivationPolicy(.accessory)
+                    }
+                }
+            }
+        )
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
     }
 
@@ -65,6 +98,17 @@ struct BeeApp: App {
             BeeSettingsView(appState: appState)
         }
         .commands {
+            CommandGroup(after: .windowArrangement) {
+                Button("Toggle Debug Overlay") {
+                    appState.debugEnabled.toggle()
+                    if appState.debugEnabled {
+                        DebugPanel.shared.show(appState: appState)
+                    } else {
+                        DebugPanel.shared.hide()
+                    }
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+            }
             CommandGroup(replacing: .appTermination) {
                 Button("Close bee window") {
                     if let keyWindow = NSApp.keyWindow, !(keyWindow is NSPanel) {

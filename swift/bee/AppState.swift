@@ -56,6 +56,33 @@ final class AppState {
     // Model
     var modelStatus: ModelStatus = .notLoaded
 
+    var loadedModelDisplayName: String? {
+        if case .loaded = modelStatus {
+            return Self.defaultModel.displayName
+        }
+        return nil
+    }
+
+    struct PipelineComponent: Identifiable {
+        let role: String
+        let name: String
+        let url: URL
+        var id: String { name }
+    }
+
+    static let pipelineComponents: [PipelineComponent] = [
+        PipelineComponent(
+            role: "Aligner",
+            name: "Qwen3 Forced Aligner 0.6B",
+            url: URL(string: "https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B")!
+        ),
+        PipelineComponent(
+            role: "VAD",
+            name: "Silero VAD v5",
+            url: URL(string: "https://huggingface.co/aitytech/Silero-VAD-v5-MLX")!
+        ),
+    ]
+
     // IME readiness
     var imeReady: Bool = false
 
@@ -107,6 +134,15 @@ final class AppState {
         }
         reconfigureAudioEngineIfNeeded(forceRestart: pendingAudioReconfigureAfterSession)
         pendingAudioReconfigureAfterSession = false
+    }
+
+    func setDeviceWarmPolicy(uid: String, warm: Bool) {
+        audioEngine.deviceWarmPolicy[uid] = warm
+        if uid == activeInputDeviceUID {
+            activeInputDeviceKeepWarm = warm
+        }
+        persistAudioPreferences()
+        reconfigureAudioEngineIfNeeded(forceRestart: false)
     }
 
     init(

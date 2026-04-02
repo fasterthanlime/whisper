@@ -8,27 +8,31 @@ struct MenuBarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("CURRENT STATE")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(stateColor)
+                    .frame(width: 8, height: 8)
+                Text(currentStateLabel)
+                    .font(.body.weight(.semibold))
+            }
+            .padding(.horizontal, 6)
 
-            Text(currentStateLabel)
-                .font(.body.weight(.medium))
-                .padding(.horizontal, 6)
-
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: "mic.fill")
-                    .symbolRenderingMode(.monochrome)
-                    .foregroundStyle(.primary)
-                    .font(.caption)
-                Text(appState.activeInputDeviceName ?? "No input")
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .foregroundStyle(.primary)
+            VStack(alignment: .leading, spacing: 4) {
+                menuInfoRow(icon: "cpu", text: modelInfoLabel)
+                menuInfoRow(icon: "mic.fill", text: appState.activeInputDeviceName ?? "No input")
             }
             .font(.caption)
+            .foregroundStyle(.secondary)
             .padding(.horizontal, 6)
+
+            if let last = appState.transcriptionHistory.first {
+                Divider().padding(.horizontal, 2)
+                Text(last.text)
+                    .font(.caption)
+                    .lineLimit(2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+            }
 
             Divider().padding(.horizontal, 2)
 
@@ -61,7 +65,38 @@ struct MenuBarView: View {
             .keyboardShortcut("q", modifiers: [.command])
         }
         .padding(10)
-        .frame(width: 240)
+        .frame(width: 260)
+    }
+
+    private func menuInfoRow(icon: String, text: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.caption2)
+            Text(text)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    private var stateColor: Color {
+        switch appState.hotkeyState {
+        case .idle:
+            return appState.modelStatus == .loaded ? .green : .gray
+        case .held, .released:
+            return .orange
+        case .pushToTalk, .locked, .lockedOptionHeld:
+            return .red
+        }
+    }
+
+    private var modelInfoLabel: String {
+        switch appState.modelStatus {
+        case .loaded: return AppState.defaultModel.displayName
+        case .loading: return "Loading model..."
+        case .downloading(let p): return "Downloading (\(Int(p * 100))%)..."
+        case .notLoaded: return "No model"
+        case .error(let e): return "Error: \(e.prefix(20))"
+        }
     }
 
     private var currentStateLabel: String {
@@ -165,39 +200,48 @@ private struct BeeOverviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 12) {
-                    Image("BeeColor")
-                        .resizable()
-                        .frame(width: 34, height: 34)
-                    Text("bee")
-                        .font(.title2.weight(.semibold))
+                SettingsCard("Status") {
+                    StatusRow(label: "State", value: statusLabel, color: stateColor)
+                    StatusRow(label: "Model", value: modelLabel, color: modelColor)
+                    KeyValueRow(label: "Input", value: appState.activeInputDeviceName ?? "None")
                 }
 
-                SettingsCard("Status") {
-                    KeyValueRow(label: "State", value: statusLabel)
-                    KeyValueRow(label: "Model", value: modelLabel)
-                    KeyValueRow(label: "Input", value: appState.activeInputDeviceName ?? "None")
+                if appState.loadedModelDisplayName != nil {
+                    SettingsCard("Pipeline") {
+                        PipelineRow(
+                            label: "ASR",
+                            value: AppState.defaultModel.displayName,
+                            url: URL(string: "https://huggingface.co/\(AppState.defaultModel.repoID)")!
+                        )
+                        ForEach(AppState.pipelineComponents, id: \.name) { component in
+                            PipelineRow(
+                                label: component.role,
+                                value: component.name,
+                                url: component.url
+                            )
+                        }
+                    }
                 }
 
                 SettingsCard("Last transcript") {
                     if let last = appState.transcriptionHistory.first {
-                        TranscriptRow(text: last.text)
+                        TranscriptRow(text: last.text, timestamp: last.timestamp)
                     } else {
                         Text("No transcript yet")
                             .foregroundStyle(.secondary)
                     }
                 }
 
-                SettingsCard("App") {
-                    Button("Quit bee") {
-                        BeeInputClient.restoreInputSourceIfNeeded()
-                        NSApp.terminate(nil)
-                    }
-                    .buttonStyle(.borderedProminent)
+                Button("Quit bee") {
+                    BeeInputClient.restoreInputSourceIfNeeded()
+                    NSApp.terminate(nil)
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
             }
             .padding(24)
-            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: 600, alignment: .leading)
         }
         .navigationTitle("bee")
     }
@@ -212,13 +256,33 @@ private struct BeeOverviewView: View {
         }
     }
 
+    private var stateColor: Color {
+        switch appState.hotkeyState {
+        case .idle:
+            return appState.modelStatus == .loaded ? .green : .gray
+        case .held, .released:
+            return .orange
+        case .pushToTalk, .locked, .lockedOptionHeld:
+            return .red
+        }
+    }
+
     private var modelLabel: String {
         switch appState.modelStatus {
         case .notLoaded: return "Not loaded"
         case .downloading(let progress): return "Downloading (\(Int(progress * 100))%)"
         case .loading: return "Loading"
-        case .loaded: return "Loaded"
+        case .loaded: return AppState.defaultModel.displayName
         case .error(let message): return "Error: \(message)"
+        }
+    }
+
+    private var modelColor: Color {
+        switch appState.modelStatus {
+        case .loaded: return .green
+        case .loading, .downloading: return .orange
+        case .error: return .red
+        case .notLoaded: return .gray
         }
     }
 }
@@ -229,22 +293,19 @@ private struct BeeHistoryView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("History")
-                    .font(.title2.weight(.semibold))
-
                 SettingsCard("Recent transcripts") {
                     if appState.transcriptionHistory.isEmpty {
                         Text("No transcripts yet")
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(appState.transcriptionHistory.prefix(50)) { item in
-                            TranscriptRow(text: item.text)
+                            TranscriptRow(text: item.text, timestamp: item.timestamp)
                         }
                     }
                 }
             }
             .padding(24)
-            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: 600, alignment: .leading)
         }
         .navigationTitle("History")
     }
@@ -254,19 +315,22 @@ private struct HowBeeWorksView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("How bee works")
-                    .font(.title2.weight(.semibold))
-
-                SettingsCard("Core flow") {
-                    ShortcutRow(action: "Start listening", keys: ["⌥", "→"])
-                    ShortcutRow(action: "Lock listening", keys: ["⌘", "→"])
+                SettingsCard("Shortcuts") {
+                    ShortcutRow(action: "Push-to-talk", keys: ["Right ⌥"], gesture: "hold")
+                    ShortcutRow(action: "Hands-free mode", keys: ["Right ⌥"], gesture: "tap")
+                    ShortcutRow(action: "Lock (while PTT)", keys: ["Right ⌘"])
                     ShortcutRow(action: "Submit", keys: ["↩"])
-                    ShortcutRow(action: "Cancel", keys: ["esc"])
+                    ShortcutRow(action: "Cancel", keys: ["⎋"])
                 }
+
+                Text("Hold Right Option to record while held (push-to-talk). Tap it quickly to start hands-free mode — press Return to submit or Escape to cancel.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: 600, alignment: .leading)
             .padding(24)
         }
+        .navigationTitle("How bee works")
     }
 }
 
@@ -298,16 +362,25 @@ private struct AdvancedSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Advanced")
-                    .font(.title2.weight(.semibold))
-
                 SettingsCard("Audio") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        inputDevicePicker
-                        Toggle("Keep active input warm", isOn: Binding(
-                            get: { appState.activeInputDeviceKeepWarm },
-                            set: { _ in appState.toggleActiveInputDeviceKeepWarm() }
-                        ))
+                    VStack(alignment: .leading, spacing: 0) {
+                        if appState.availableInputDevices.isEmpty {
+                            Text("No input devices")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(Array(appState.availableInputDevices.enumerated()), id: \.element.uid) { index, device in
+                                AudioDeviceRow(
+                                    device: device,
+                                    isActive: device.uid == appState.activeInputDeviceUID,
+                                    isWarm: appState.audioEngine.deviceWarmPolicy[device.uid] ?? false,
+                                    onSelect: { appState.selectInputDevice(uid: device.uid) },
+                                    onToggleWarm: { appState.setDeviceWarmPolicy(uid: device.uid, warm: $0) }
+                                )
+                                if index < appState.availableInputDevices.count - 1 {
+                                    Divider().padding(.vertical, 4)
+                                }
+                            }
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -356,9 +429,10 @@ private struct AdvancedSettingsView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: 600, alignment: .leading)
             .padding(24)
         }
+        .navigationTitle("Advanced")
         .onAppear {
             if appState.debugEnabled {
                 DebugPanel.shared.show(appState: appState)
@@ -366,22 +440,6 @@ private struct AdvancedSettingsView: View {
         }
     }
 
-    private var inputDevicePicker: some View {
-        Picker("Input device", selection: Binding(
-            get: { appState.activeInputDeviceUID ?? "" },
-            set: { appState.selectInputDevice(uid: $0) }
-        )) {
-            if appState.availableInputDevices.isEmpty {
-                Text("No input devices")
-                    .tag("")
-            } else {
-                ForEach(appState.availableInputDevices, id: \.uid) { device in
-                    Text(device.name).tag(device.uid)
-                }
-            }
-        }
-        .pickerStyle(.menu)
-    }
 
     private var chunkSizePicker: some View {
         Picker("Chunk size", selection: Binding(
@@ -428,17 +486,53 @@ private struct SettingsCard<Content: View>: View {
                 .font(.headline)
             content
         }
-        .padding(14)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor))
+                .fill(Color(nsColor: .controlBackgroundColor))
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
                 )
                 .shadow(color: .black.opacity(0.05), radius: 4, x: 0, y: 1)
         )
+    }
+}
+
+private struct StatusRow: View {
+    let label: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+            Text(value)
+                .fontWeight(.medium)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+}
+
+private struct PipelineRow: View {
+    let label: String
+    let value: String
+    let url: URL
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Link(value, destination: url)
+                .fontWeight(.medium)
+        }
     }
 }
 
@@ -448,9 +542,11 @@ private struct KeyValueRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(label)
-                .foregroundStyle(.secondary)
-            Spacer()
+            if !label.isEmpty {
+                Text(label)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
             Text(value)
                 .fontWeight(.medium)
                 .multilineTextAlignment(.trailing)
@@ -460,21 +556,29 @@ private struct KeyValueRow: View {
 
 private struct TranscriptRow: View {
     let text: String
+    var timestamp: Date? = nil
 
     var body: some View {
         Button {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
         } label: {
-            Text(text)
-                .lineLimit(3)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.08))
-                )
+            VStack(alignment: .leading, spacing: 4) {
+                if let timestamp {
+                    Text(timestamp, style: .relative)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                Text(text)
+                    .lineLimit(3)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.08))
+            )
         }
         .buttonStyle(.plain)
         .help("Click to copy")
@@ -484,6 +588,7 @@ private struct TranscriptRow: View {
 private struct ShortcutRow: View {
     let action: String
     let keys: [String]
+    var gesture: String? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -494,8 +599,53 @@ private struct ShortcutRow: View {
                 ForEach(Array(keys.enumerated()), id: \.offset) { _, key in
                     ShortcutKeycap(text: key)
                 }
+                if let gesture {
+                    Text(gesture)
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundStyle(.tertiary)
+                        .italic()
+                }
             }
         }
+    }
+}
+
+private struct AudioDeviceRow: View {
+    let device: AppState.InputDeviceInfo
+    let isActive: Bool
+    let isWarm: Bool
+    let onSelect: () -> Void
+    let onToggleWarm: (Bool) -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isActive ? .orange : .secondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(device.name)
+                    .fontWeight(isActive ? .medium : .regular)
+                if device.isBuiltIn {
+                    Text("Built-in")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            Spacer()
+
+            Toggle("Keep warm", isOn: Binding(
+                get: { isWarm },
+                set: { onToggleWarm($0) }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .controlSize(.small)
+            .help("Keep this device's audio engine running for instant start")
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect() }
     }
 }
 
