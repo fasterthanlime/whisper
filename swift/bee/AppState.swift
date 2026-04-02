@@ -350,7 +350,7 @@ final class AppState {
             // Schedule abort after another 1s
             let abortWork = DispatchWorkItem { [weak self] in
                 guard let self else { return }
-                guard self.imeSessionState != .active else {
+                guard self.imeSessionState != .active, self.imeSessionState != .parked else {
                     self.pendingIMEAckWorkItem = nil
                     return
                 }
@@ -359,7 +359,7 @@ final class AppState {
                     return
                 }
                 beeLog(
-                    "SESSION: IME confirm timeout id=\(sessionID.uuidString.prefix(8)), aborting")
+                    "SESSION: IME confirm timeout id=\(sessionID.uuidString.prefix(8)) imeState=\(self.imeSessionState), aborting")
                 self.playStartFailureSound()
                 self.pendingTimer?.cancel()
                 self.transitionToIdle()
