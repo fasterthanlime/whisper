@@ -221,6 +221,7 @@ actor Session {
                         "\(sessionID.uuidString.prefix(8)).wav")
                     try? WavWriter.write(samples: allSamples, to: wavURL)
                     diagRef.update { $0.audioWavPath = wavURL.path }
+                    Self.pruneDebugRecordings(dir: debugDir)
 
                     // Send end on Channel 1, stop Channel 0
                     ch1.send(.end(mode))
@@ -250,6 +251,7 @@ actor Session {
             let wavURL = debugDir.appendingPathComponent("\(sessionID.uuidString.prefix(8)).wav")
             try? WavWriter.write(samples: allSamples, to: wavURL)
             diagRef.update { $0.audioWavPath = wavURL.path }
+            Self.pruneDebugRecordings(dir: debugDir)
         }
 
         // --- ASR Task ---
@@ -679,6 +681,23 @@ actor Session {
         }
         ops.reverse()
         return ops
+    }
+
+    static func pruneDebugRecordings(dir: URL, keep: Int = 10) {
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.creationDateKey],
+            options: .skipsHiddenFiles
+        ) else { return }
+        let wavs = files.filter { $0.pathExtension == "wav" }
+        guard wavs.count > keep else { return }
+        let sorted = wavs.sorted {
+            let d0 = (try? $0.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+            let d1 = (try? $1.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+            return d0 < d1
+        }
+        for file in sorted.dropLast(keep) {
+            try? FileManager.default.removeItem(at: file)
+        }
     }
 
     static func computeRMS(_ samples: [Float]) -> Float {
