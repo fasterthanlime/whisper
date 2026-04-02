@@ -178,6 +178,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bee-rpc"
+version = "0.1.0"
+dependencies = [
+ "vox",
+ "vox-codegen",
+]
+
+[[package]]
 name = "bee-transcribe"
 version = "0.1.0"
 dependencies = [
@@ -2361,10 +2369,12 @@ dependencies = [
  "facet",
  "facet-pretty",
  "facet-reflect",
+ "tokio",
  "tracing",
  "vox-core",
  "vox-postcard",
  "vox-service-macros",
+ "vox-stream",
  "vox-types",
 ]
 
@@ -2444,6 +2454,16 @@ version = "0.3.1"
 dependencies = [
  "proc-macro2",
  "vox-macros-core",
+]
+
+[[package]]
+name = "vox-stream"
+version = "0.3.1"
+dependencies = [
+ "moire",
+ "tokio",
+ "vox-core",
+ "vox-types",
 ]
 
 [[package]]

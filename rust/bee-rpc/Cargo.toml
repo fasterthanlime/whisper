@@ -1,0 +1,15 @@
+[package]
+name = "bee-rpc"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "bee-rpc-codegen"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+vox = { path = "../../../vox/rust/vox" }
+vox-codegen = { path = "../../../vox/rust/vox-codegen" }
