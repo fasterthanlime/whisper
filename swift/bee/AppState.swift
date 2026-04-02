@@ -41,7 +41,9 @@ final class AppState {
     private static let imeActivationRevokedName = NSNotification.Name(
         "fasterthanlime.bee.imeActivationRevoked")
 
-    private(set) var hotkeyState: HotkeyState = .idle
+    private(set) var hotkeyState: HotkeyState = .idle {
+        didSet { NotificationCenter.default.post(name: Self.stateChangedNotification, object: nil) }
+    }
     private(set) var imeSessionState: IMESessionState = .inactive
     private var pendingTimer: Task<Void, Never>?
     private var consumeNextROptUp = false

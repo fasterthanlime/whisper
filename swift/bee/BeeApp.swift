@@ -56,6 +56,7 @@ final class BeeLifecycleDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+
 @MainActor
 final class StatusBarController: NSObject {
     private let statusItem: NSStatusItem
@@ -63,10 +64,14 @@ final class StatusBarController: NSObject {
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private weak var appState: AppState?
+    private var animationProgress: CGFloat = 0  // 0 = idle, 1 = recording
+    private var animationTimer: Timer?
+
+    private static let itemWidth: CGFloat = 26
 
     init(appState: AppState) {
         self.appState = appState
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: Self.itemWidth)
         popover = NSPopover()
         popover.contentSize = NSSize(width: 260, height: 10)
         popover.behavior = .transient
@@ -78,6 +83,8 @@ final class StatusBarController: NSObject {
         if let button = statusItem.button {
             button.image = NSImage(named: "MenuBarIcon")
             button.image?.isTemplate = true
+            button.imagePosition = .imageOnly
+            button.contentTintColor = nil
         }
 
         // Intercept mouseDown on the status item button before drag detection
@@ -130,9 +137,94 @@ final class StatusBarController: NSObject {
     @objc func updateIcon() {
         guard let appState, let button = statusItem.button else { return }
         let isReady = appState.imeReady && appState.modelStatus == .loaded
+        let isActive: Bool = switch appState.hotkeyState {
+        case .held, .released, .pushToTalk, .locked, .lockedOptionHeld: true
+        case .idle: false
+        }
+
         button.alphaValue = isReady ? 1.0 : 0.4
-        button.image = NSImage(named: "MenuBarIcon")
-        button.image?.isTemplate = true
+
+        let target: CGFloat = isActive ? 1 : 0
+        guard abs(animationProgress - target) > 0.01 else { return }
+
+        animationTimer?.invalidate()
+        let startProgress = animationProgress
+        let startTime = CACurrentMediaTime()
+        let duration: CFTimeInterval = 0.15
+
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            let elapsed = CACurrentMediaTime() - startTime
+            let t = min(1, Float(elapsed / duration))
+            let smooth = CGFloat(t * t * (3 - 2 * t))
+            self.animationProgress = startProgress + (target - startProgress) * smooth
+
+            self.renderIcon()
+
+            if t >= 1 {
+                timer.invalidate()
+                self.animationProgress = target
+                self.renderIcon()
+            }
+        }
+    }
+
+    private func renderIcon() {
+        guard let button = statusItem.button,
+              let baseIcon = NSImage(named: "MenuBarIcon") else { return }
+
+        let p = animationProgress
+        if p < 0.01 {
+            baseIcon.isTemplate = true
+            button.image = baseIcon
+            return
+        }
+
+        let iconSize = baseIcon.size
+        let canvasSize = NSSize(width: Self.itemWidth, height: iconSize.height)
+        let dotSize: CGFloat = 6
+        let shrinkFactor: CGFloat = 1.0 - (0.2 * p)  // shrink to 80% at most
+        let beeW = iconSize.width * shrinkFactor
+        let beeH = iconSize.height * shrinkFactor
+
+        // Detect menu bar appearance for icon color
+        let isDark = button.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let iconColor: NSColor = isDark ? .white : .black
+
+        // Tint the base icon
+        let tinted = baseIcon.copy() as! NSImage
+        tinted.lockFocus()
+        iconColor.set()
+        NSRect(origin: .zero, size: tinted.size).fill(using: .sourceAtop)
+        tinted.unlockFocus()
+
+        let composed = NSImage(size: canvasSize, flipped: false) { rect in
+            // Bee: centered when idle, shifts left when recording
+            let beeCenterX = rect.midX - (5 * p)  // shift left up to 5pt
+            let beeRect = NSRect(
+                x: beeCenterX - beeW / 2,
+                y: (rect.height - beeH) / 2,
+                width: beeW,
+                height: beeH
+            )
+            tinted.draw(in: beeRect)
+
+            // Orange dot to the right of the bee
+            if p > 0.1 {
+                let dotOpacity = min(1, (p - 0.1) / 0.5)
+                NSColor.systemOrange.withAlphaComponent(CGFloat(dotOpacity)).setFill()
+                let dotRect = NSRect(
+                    x: beeRect.maxX + 2,
+                    y: (rect.height - dotSize) / 2,
+                    width: dotSize,
+                    height: dotSize
+                )
+                NSBezierPath(ovalIn: dotRect).fill()
+            }
+            return true
+        }
+        composed.isTemplate = false
+        button.image = composed
     }
 
     @objc private func handleOpenMainWindow() {
