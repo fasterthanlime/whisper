@@ -56,11 +56,97 @@ final class BeeLifecycleDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+@MainActor
+final class StatusBarController: NSObject {
+    private let statusItem: NSStatusItem
+    private let popover: NSPopover
+    private var eventMonitor: Any?
+    private weak var appState: AppState?
+
+    init(appState: AppState) {
+        self.appState = appState
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        popover = NSPopover()
+        popover.contentSize = NSSize(width: 260, height: 10) // height auto-sizes
+        popover.behavior = .transient
+        popover.animates = true
+        popover.contentViewController = NSHostingController(rootView: MenuBarView(appState: appState))
+
+        super.init()
+
+        if let button = statusItem.button {
+            button.image = NSImage(named: "MenuBarIcon")
+            button.image?.isTemplate = true
+            button.action = #selector(handleClick)
+            button.target = self
+            button.sendAction(on: [.leftMouseDown, .rightMouseDown])
+        }
+
+        // Close popover when clicking outside
+        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            self?.closePopover()
+        }
+
+        // Update icon state
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(updateIcon),
+            name: AppState.stateChangedNotification, object: nil
+        )
+
+        // Handle open-main-window requests
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleOpenMainWindow),
+            name: .beeOpenMainWindowRequest, object: nil
+        )
+
+        updateIcon()
+    }
+
+    @objc private func handleClick() {
+        if popover.isShown {
+            closePopover()
+        } else {
+            showPopover()
+        }
+    }
+
+    private func showPopover() {
+        guard let button = statusItem.button else { return }
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+    }
+
+    private func closePopover() {
+        popover.performClose(nil)
+    }
+
+    @objc func updateIcon() {
+        guard let appState, let button = statusItem.button else { return }
+        let isReady = appState.imeReady && appState.modelStatus == .loaded
+        button.alphaValue = isReady ? 1.0 : 0.4
+        button.image = NSImage(named: "MenuBarIcon")
+        button.image?.isTemplate = true
+    }
+
+    @objc private func handleOpenMainWindow() {
+        closePopover()
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        DispatchQueue.main.async {
+            let normalWindow = NSApp.windows.first { window in
+                !(window is NSPanel) && window.isVisible
+            }
+            normalWindow?.makeKeyAndOrderFront(nil)
+        }
+    }
+}
+
 @main
 struct BeeApp: App {
     @NSApplicationDelegateAdaptor(BeeLifecycleDelegate.self) private var lifecycleDelegate
     @State private var appState: AppState
     @State private var hotkeyMonitor = HotkeyMonitor()
+    @State private var statusBar: StatusBarController?
 
     init() {
         let audioEngine = AudioEngine()
@@ -84,16 +170,11 @@ struct BeeApp: App {
         if state.debugEnabled {
             DebugPanel.shared.show(appState: state)
         }
+
+        _statusBar = State(initialValue: StatusBarController(appState: state))
     }
 
     var body: some Scene {
-        MenuBarExtra {
-            MenuBarView(appState: appState)
-        } label: {
-            MenuBarLabelView(appState: appState)
-        }
-        .menuBarExtraStyle(.window)
-
         Settings {
             BeeSettingsView(appState: appState)
         }
@@ -123,52 +204,6 @@ struct BeeApp: App {
                 }
                 .keyboardShortcut("q", modifiers: [.command])
             }
-        }
-    }
-}
-
-private struct MenuBarLabelView: View {
-    @Bindable var appState: AppState
-    @Environment(\.openSettings) private var openSettings
-
-    var body: some View {
-        Image("MenuBarIcon")
-            .renderingMode(.template)
-            .opacity(isReady ? 1.0 : 0.4)
-            .overlay(alignment: .bottomTrailing) {
-                if isSessionActive {
-                    Circle()
-                        .fill(.red)
-                        .frame(width: 6, height: 6)
-                        .overlay {
-                            Circle()
-                                .stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 1)
-                        }
-                        .offset(x: 1, y: 1)
-                }
-            }
-        .onReceive(NotificationCenter.default.publisher(for: .beeOpenMainWindowRequest)) { _ in
-            NSApp.activate(ignoringOtherApps: true)
-            openSettings()
-            DispatchQueue.main.async {
-                let normalWindow = NSApp.orderedWindows.first { window in
-                    !(window is NSPanel)
-                }
-                normalWindow?.makeKeyAndOrderFront(nil)
-            }
-        }
-    }
-
-    private var isReady: Bool {
-        appState.imeReady && appState.modelStatus == .loaded
-    }
-
-    private var isSessionActive: Bool {
-        switch appState.hotkeyState {
-        case .held, .released, .pushToTalk, .locked, .lockedOptionHeld:
-            return true
-        case .idle:
-            return false
         }
     }
 }

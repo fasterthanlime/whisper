@@ -59,7 +59,11 @@ final class AppState {
     let inputClient: BeeInputClient
 
     // Model
-    var modelStatus: ModelStatus = .notLoaded
+    static let stateChangedNotification = NSNotification.Name("fasterthanlime.bee.stateChanged")
+
+    var modelStatus: ModelStatus = .notLoaded {
+        didSet { NotificationCenter.default.post(name: Self.stateChangedNotification, object: nil) }
+    }
 
     var loadedModelDisplayName: String? {
         if case .loaded = modelStatus {
@@ -89,7 +93,9 @@ final class AppState {
     ]
 
     // IME readiness
-    var imeReady: Bool = false
+    var imeReady: Bool = false {
+        didSet { NotificationCenter.default.post(name: Self.stateChangedNotification, object: nil) }
+    }
 
     // Input devices
     var availableInputDevices: [InputDeviceInfo] = []

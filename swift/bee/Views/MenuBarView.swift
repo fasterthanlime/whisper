@@ -7,31 +7,18 @@ struct MenuBarView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(stateColor)
-                    .frame(width: 8, height: 8)
-                Text(currentStateLabel)
-                    .font(.body.weight(.semibold))
-            }
-            .padding(.horizontal, 6)
+        VStack(alignment: .leading, spacing: 6) {
+            InputDevicePicker(appState: appState)
+                .padding(.horizontal, 6)
 
-            VStack(alignment: .leading, spacing: 4) {
-                menuInfoRow(icon: "cpu", text: modelInfoLabel)
-                menuInfoRow(icon: "mic.fill", text: appState.activeInputDeviceName ?? "No input")
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6)
-
-            if let last = appState.transcriptionHistory.first {
+            if !appState.transcriptionHistory.isEmpty {
                 Divider().padding(.horizontal, 2)
-                Text(last.text)
-                    .font(.caption)
-                    .lineLimit(2)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
+                VStack(spacing: 4) {
+                    ForEach(appState.transcriptionHistory.prefix(3)) { item in
+                        TranscriptRow(text: item.text, timestamp: item.timestamp)
+                    }
+                }
+                .padding(.horizontal, 6)
             }
 
             Divider().padding(.horizontal, 2)
@@ -68,37 +55,6 @@ struct MenuBarView: View {
         .frame(width: 260)
     }
 
-    private func menuInfoRow(icon: String, text: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.caption2)
-            Text(text)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-    }
-
-    private var stateColor: Color {
-        switch appState.hotkeyState {
-        case .idle:
-            return appState.modelStatus == .loaded ? .green : .gray
-        case .held, .released:
-            return .orange
-        case .pushToTalk, .locked, .lockedOptionHeld:
-            return .red
-        }
-    }
-
-    private var modelInfoLabel: String {
-        switch appState.modelStatus {
-        case .loaded: return AppState.defaultModel.displayName
-        case .loading: return "Loading model..."
-        case .downloading(let p): return "Downloading (\(Int(p * 100))%)..."
-        case .notLoaded: return "No model"
-        case .error(let e): return "Error: \(e.prefix(20))"
-        }
-    }
-
     private var currentStateLabel: String {
         switch appState.hotkeyState {
         case .idle:
@@ -126,6 +82,8 @@ private struct MenuActionRow: View {
     let title: String
     let shortcut: String
 
+    @State private var isHovered = false
+
     var body: some View {
         HStack(spacing: 8) {
             Text(title)
@@ -134,9 +92,14 @@ private struct MenuActionRow: View {
                 .font(.system(.body, design: .rounded))
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isHovered ? Color.primary.opacity(0.08) : .clear)
+        )
         .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
     }
 }
 
@@ -245,21 +208,7 @@ private struct BeeOverviewView: View {
 
                 // Input device + status
                 HStack(spacing: 12) {
-                    Picker(selection: Binding(
-                        get: { appState.activeInputDeviceUID ?? "" },
-                        set: { appState.selectInputDevice(uid: $0) }
-                    )) {
-                        if appState.availableInputDevices.isEmpty {
-                            Text("No input devices").tag("")
-                        } else {
-                            ForEach(appState.availableInputDevices, id: \.uid) { device in
-                                Text(device.name).tag(device.uid)
-                            }
-                        }
-                    } label: {
-                        Label("Input", systemImage: "mic.fill")
-                    }
-                    .pickerStyle(.menu)
+                    InputDevicePicker(appState: appState)
 
                     Spacer()
 
@@ -274,15 +223,17 @@ private struct BeeOverviewView: View {
                 }
 
                 // Last transcript
-                SettingsCard("Last transcript") {
-                    if let last = appState.transcriptionHistory.first {
-                        TranscriptRow(text: last.text, timestamp: last.timestamp)
-                    } else {
+                SettingsCard("Recent") {
+                    if appState.transcriptionHistory.isEmpty {
                         HStack(spacing: 8) {
                             Image(systemName: "text.bubble")
                                 .foregroundStyle(.quaternary)
-                            Text("No transcript yet")
+                            Text("No transcripts yet")
                                 .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        ForEach(appState.transcriptionHistory.prefix(3)) { item in
+                            TranscriptRow(text: item.text, timestamp: item.timestamp)
                         }
                     }
                 }
@@ -424,6 +375,9 @@ private struct AdvancedSettingsView: View {
     @Binding var runOnStartupEnabled: Bool
     @Binding var pauseMediaEnabled: Bool
 
+    @State private var showDiagSheet = false
+    @State private var diagOutput = ""
+
     private static let chunkSizeOptions: [(label: String, value: Float)] = [
         ("0.2s", 0.2),
         ("0.35s", 0.35),
@@ -547,6 +501,15 @@ private struct AdvancedSettingsView: View {
                 Text("Startup/media toggles are UI scaffolding for now and still need backend wiring.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+
+                SettingsCard("Diagnostics") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button("Dump audio device info") {
+                            diagOutput = AudioDiagnostics.dumpAllDevices()
+                            showDiagSheet = true
+                        }
+                    }
+                }
             }
             .frame(maxWidth: 600, alignment: .leading)
             .padding(24)
@@ -556,6 +519,35 @@ private struct AdvancedSettingsView: View {
             if appState.debugEnabled {
                 DebugPanel.shared.show(appState: appState)
             }
+        }
+        .sheet(isPresented: $showDiagSheet) {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Audio Device Info")
+                        .font(.headline)
+                    Spacer()
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(diagOutput, forType: .string)
+                    }
+                    Button("Close") { showDiagSheet = false }
+                        .keyboardShortcut(.cancelAction)
+                }
+                .padding()
+
+                Divider()
+
+                ScrollView {
+                    Text(diagOutput)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.primary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                }
+                .background(Color(nsColor: .textBackgroundColor))
+            }
+            .frame(width: 600, height: 500)
         }
     }
 
@@ -637,6 +629,28 @@ private struct SettingsCard<Content: View>: View {
     }
 }
 
+private struct InputDevicePicker: View {
+    @Bindable var appState: AppState
+
+    var body: some View {
+        Picker(selection: Binding(
+            get: { appState.activeInputDeviceUID ?? "" },
+            set: { appState.selectInputDevice(uid: $0) }
+        )) {
+            if appState.availableInputDevices.isEmpty {
+                Text("No input devices").tag("")
+            } else {
+                ForEach(appState.availableInputDevices, id: \.uid) { device in
+                    Label(device.name, systemImage: device.iconName).tag(device.uid)
+                }
+            }
+        } label: {
+            EmptyView()
+        }
+        .pickerStyle(.menu)
+    }
+}
+
 private struct StatusRow: View {
     let label: String
     let value: String
@@ -702,6 +716,17 @@ private struct TranscriptRow: View {
     var timestamp: Date? = nil
 
     @State private var copied = false
+    @State private var isHovered = false
+
+    private var tailText: String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Show the last ~120 characters if longer
+        if trimmed.count > 120 {
+            let start = trimmed.index(trimmed.endIndex, offsetBy: -120)
+            return "…" + trimmed[start...]
+        }
+        return trimmed
+    }
 
     var body: some View {
         Button {
@@ -712,31 +737,41 @@ private struct TranscriptRow: View {
                 copied = false
             }
         } label: {
-            HStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 4) {
                     if let timestamp {
                         Text(timestamp, style: .relative)
-                            .font(.caption2)
+                            .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
-                    Text(text)
+                    Text(tailText)
                         .lineLimit(3)
+                        .truncationMode(.head)
                 }
-                Spacer()
-                Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.caption)
-                    .foregroundColor(copied ? .green : .gray)
-                    .animation(.easeInOut(duration: 0.2), value: copied)
+                Spacer(minLength: 4)
+                Image(systemName: copied ? "checkmark.circle.fill" : "doc.on.doc")
+                    .font(.body)
+                    .foregroundColor(copied ? .green : .secondary)
+                    .opacity(copied || isHovered ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.15), value: copied)
+                    .animation(.easeInOut(duration: 0.15), value: isHovered)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.08))
+                    .fill(isHovered
+                        ? Color.primary.opacity(0.06)
+                        : Color(nsColor: .quaternaryLabelColor).opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(isHovered ? 0.1 : 0), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
         .help("Click to copy")
     }
 }
