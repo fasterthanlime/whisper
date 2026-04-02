@@ -11,23 +11,8 @@ struct MenuBarView: View {
                 InputDeviceList(appState: appState)
                     .padding(.horizontal, 6)
 
-                HStack(spacing: 8) {
-                    InputVolumeSlider(audioEngine: appState.audioEngine)
-
-                    Button {
-                        if appState.audioEngine.echoEnabled {
-                            appState.audioEngine.stopEcho()
-                        } else {
-                            appState.audioEngine.startEcho()
-                        }
-                    } label: {
-                        Image(systemName: appState.audioEngine.echoEnabled ? "ear.fill" : "ear")
-                            .foregroundStyle(appState.audioEngine.echoEnabled ? .orange : .secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Listen to yourself (1s delay)")
-                }
-                .padding(.horizontal, 10)
+                InputVolumeSlider(audioEngine: appState.audioEngine)
+                    .padding(.horizontal, 10)
 
                 Divider().padding(.horizontal, 2)
                 if appState.transcriptionHistory.isEmpty {
@@ -79,9 +64,25 @@ struct MenuBarView: View {
             Divider()
                 .padding(.vertical, 8)
 
-            VerticalLevelMeter(audioEngine: appState.audioEngine)
-                .padding(.vertical, 12)
-                .padding(.trailing, 10)
+            VStack(spacing: 6) {
+                Button {
+                    if appState.audioEngine.echoEnabled {
+                        appState.audioEngine.stopEcho()
+                    } else {
+                        appState.audioEngine.startEcho()
+                    }
+                } label: {
+                    Image(systemName: appState.audioEngine.echoEnabled ? "ear.fill" : "ear")
+                        .font(.caption)
+                        .foregroundStyle(appState.audioEngine.echoEnabled ? .orange : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Listen to yourself (1s delay)")
+
+                VerticalLevelMeter(audioEngine: appState.audioEngine)
+            }
+            .padding(.vertical, 10)
+            .padding(.trailing, 8)
         }
         .frame(width: 390)
         .background(.ultraThinMaterial)

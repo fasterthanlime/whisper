@@ -53,9 +53,11 @@ final class AudioEngine: @unchecked Sendable {
     private(set) var echoEnabled = false
     private var echoEngine: AVAudioEngine?
     private var echoPlayerNode: AVAudioPlayerNode?
-    private var echoBuffer: [Float] = []
-    private var echoWriteIndex = 0
-    private let echoDelaySamples = 16000  // 1 second at 16kHz
+    private var echoDelayBuffer: [Float] = []   // circular delay line
+    private var echoDelayWriteIdx = 0
+    private var echoAccum: [Float] = []         // accumulate before scheduling
+    private let echoDelaySamples = 16000        // 1 second at 16kHz
+    private let echoScheduleSize = 2048         // schedule in larger chunks
     private var echoFormat: AVAudioFormat?
 
     // Audio level & stats (updated from audio callback)
@@ -418,8 +420,10 @@ final class AudioEngine: @unchecked Sendable {
         lock.lock()
         echoEngine = engine
         echoPlayerNode = player
-        echoBuffer = [Float](repeating: 0, count: echoDelaySamples)
-        echoWriteIndex = 0
+        echoDelayBuffer = [Float](repeating: 0, count: echoDelaySamples)
+        echoDelayWriteIdx = 0
+        echoAccum.removeAll()
+        echoAccum.reserveCapacity(echoScheduleSize)
         echoEnabled = true
         lock.unlock()
     }
@@ -432,35 +436,46 @@ final class AudioEngine: @unchecked Sendable {
         let player = echoPlayerNode
         echoEngine = nil
         echoPlayerNode = nil
-        echoBuffer.removeAll()
+        echoDelayBuffer.removeAll()
+        echoAccum.removeAll()
         lock.unlock()
 
         player?.stop()
         engine?.stop()
     }
 
-    /// Called from the audio callback (under lock) to feed echo buffer.
+    /// Called from the audio callback (under lock) to feed echo delay line.
     private func feedEcho(_ samples: [Float]) {
         guard echoEnabled, let player = echoPlayerNode, let format = echoFormat else { return }
 
-        // Write to delay buffer
+        // Write incoming samples to delay line
         for sample in samples {
-            echoBuffer[echoWriteIndex % echoDelaySamples] = sample
-            echoWriteIndex += 1
+            echoDelayBuffer[echoDelayWriteIdx % echoDelaySamples] = sample
+            echoDelayWriteIdx += 1
         }
 
-        // Read delayed samples
-        guard echoWriteIndex >= echoDelaySamples else { return }
-        let readStart = (echoWriteIndex - echoDelaySamples + samples.count) % echoDelaySamples
-        let count = samples.count
+        // Not enough delay built up yet
+        guard echoDelayWriteIdx >= echoDelaySamples else { return }
 
-        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)) else { return }
+        // Read delayed samples into accumulator
+        let readStart = (echoDelayWriteIdx - echoDelaySamples) % echoDelaySamples
+        for i in 0..<samples.count {
+            echoAccum.append(echoDelayBuffer[(readStart + i) % echoDelaySamples])
+        }
+
+        // Schedule when we have enough
+        guard echoAccum.count >= echoScheduleSize else { return }
+
+        let count = echoAccum.count
+        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)) else {
+            echoAccum.removeAll(keepingCapacity: true)
+            return
+        }
         pcmBuffer.frameLength = AVAudioFrameCount(count)
         if let cd = pcmBuffer.floatChannelData {
-            for i in 0..<count {
-                cd[0][i] = echoBuffer[(readStart + i) % echoDelaySamples]
-            }
+            echoAccum.withUnsafeBufferPointer { cd[0].update(from: $0.baseAddress!, count: count) }
         }
+        echoAccum.removeAll(keepingCapacity: true)
         player.scheduleBuffer(pcmBuffer, completionHandler: nil)
     }
 
@@ -507,16 +522,24 @@ final class AudioEngine: @unchecked Sendable {
 
     // MARK: - Input Volume
 
-    /// Find the element that has input volume for this device (master=0 or channel=1).
-    private static func inputVolumeElement(deviceID: AudioDeviceID) -> UInt32? {
-        for element: UInt32 in [0, 1] {
-            var address = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyVolumeScalar,
-                mScope: kAudioDevicePropertyScopeInput,
-                mElement: element
-            )
-            if AudioObjectHasProperty(deviceID, &address) {
-                return element
+    /// Selectors to try for input volume, in order of preference.
+    private static let volumeSelectors: [AudioObjectPropertySelector] = [
+        kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+        kAudioDevicePropertyVolumeScalar,
+    ]
+
+    /// Find a working (selector, element) pair for input volume on this device.
+    private static func inputVolumeAddress(deviceID: AudioDeviceID) -> AudioObjectPropertyAddress? {
+        for selector in volumeSelectors {
+            for element: UInt32 in [0, 1] {
+                var address = AudioObjectPropertyAddress(
+                    mSelector: selector,
+                    mScope: kAudioDevicePropertyScopeInput,
+                    mElement: element
+                )
+                if AudioObjectHasProperty(deviceID, &address) {
+                    return address
+                }
             }
         }
         return nil
@@ -524,16 +547,10 @@ final class AudioEngine: @unchecked Sendable {
 
     /// Get the input volume (0..1) for a device. Returns nil if the device doesn't support it.
     static func getInputVolume(deviceID: AudioDeviceID) -> Float? {
-        guard let element = inputVolumeElement(deviceID: deviceID) else { return nil }
+        guard var address = inputVolumeAddress(deviceID: deviceID) else { return nil }
 
         var volume: Float32 = 0
         var size = UInt32(MemoryLayout<Float32>.size)
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyVolumeScalar,
-            mScope: kAudioDevicePropertyScopeInput,
-            mElement: element
-        )
-
         let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &volume)
         return status == noErr ? volume : nil
     }
@@ -541,20 +558,14 @@ final class AudioEngine: @unchecked Sendable {
     /// Set the input volume (0..1) for a device. Returns true if successful.
     @discardableResult
     static func setInputVolume(deviceID: AudioDeviceID, volume: Float) -> Bool {
-        guard let element = inputVolumeElement(deviceID: deviceID) else { return false }
-
-        var vol = max(0, min(1, volume))
-        let size = UInt32(MemoryLayout<Float32>.size)
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyVolumeScalar,
-            mScope: kAudioDevicePropertyScopeInput,
-            mElement: element
-        )
+        guard var address = inputVolumeAddress(deviceID: deviceID) else { return false }
 
         var settable: DarwinBoolean = false
         AudioObjectIsPropertySettable(deviceID, &address, &settable)
         guard settable.boolValue else { return false }
 
+        var vol = max(0, min(1, volume))
+        let size = UInt32(MemoryLayout<Float32>.size)
         let status = AudioObjectSetPropertyData(deviceID, &address, 0, nil, size, &vol)
         return status == noErr
     }
