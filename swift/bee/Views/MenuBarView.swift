@@ -4,7 +4,6 @@ import SwiftUI
 
 struct MenuBarView: View {
     @Bindable var appState: AppState
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -30,7 +29,7 @@ struct MenuBarView: View {
             Divider().padding(.horizontal, 2)
 
             Button {
-                dismiss()
+                NSApp.keyWindow?.orderOut(nil)
                 SettingsOpener.action?()
                 NSApp.activate(ignoringOtherApps: true)
                 DispatchQueue.main.async {
@@ -47,7 +46,6 @@ struct MenuBarView: View {
             .keyboardShortcut(",", modifiers: [.command])
 
             Button {
-                dismiss()
                 BeeInputClient.restoreInputSourceIfNeeded()
                 NSApplication.shared.terminate(nil)
             }
@@ -59,15 +57,30 @@ struct MenuBarView: View {
         }
         .padding(10)
         .frame(width: 340)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(.primary.opacity(0.1), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
         .onAppear {
             // Warm up audio engine for the level meter
             if !appState.audioEngine.isWarm {
-                try? appState.audioEngine.warmUp()
+                beeLog("MENUBAR: warming up audio engine for level meter")
+                do {
+                    try appState.audioEngine.warmUp()
+                    beeLog("MENUBAR: audio engine warm")
+                } catch {
+                    beeLog("MENUBAR: warmUp failed: \(error)")
+                }
             }
         }
         .onDisappear {
+            beeLog("MENUBAR: view disappearing")
             // Cool down if no active session needs the engine
             if !appState.hotkeyState.isRecording && !appState.activeInputDeviceKeepWarm {
+                beeLog("MENUBAR: cooling down audio engine")
                 appState.audioEngine.coolDown()
             }
         }
@@ -234,41 +247,18 @@ private struct BeeOverviewView: View {
                 // Input device + status
                 HStack(spacing: 12) {
                     if let activeDevice = appState.availableInputDevices.first(where: { $0.uid == appState.activeInputDeviceUID }) {
-                        Picker(selection: Binding(
-                            get: { appState.activeInputDeviceUID ?? "" },
-                            set: { appState.selectInputDevice(uid: $0) }
-                        )) {
-                            ForEach(appState.availableInputDevices, id: \.uid) { device in
-                                Label {
-                                    VStack(alignment: .leading) {
-                                        Text(device.name)
-                                        if let sub = device.subtitle {
-                                            Text(sub).font(.caption2).foregroundStyle(.secondary)
-                                        }
-                                    }
-                                } icon: {
-                                    DeviceIcon(device: device)
-                                }
-                                .tag(device.uid)
-                            }
-                        } label: {
-                            Label {
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(activeDevice.name)
-                                    if let sub = activeDevice.subtitle {
-                                        Text(sub)
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            } icon: {
-                                DeviceIcon(device: activeDevice)
-                                    .foregroundStyle(.orange)
-                                    .font(.title3)
-                                    .frame(width: 20, height: 20)
+                        DeviceIcon(device: activeDevice)
+                            .foregroundStyle(.orange)
+                            .font(.title3)
+                            .frame(width: 20, height: 20)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(activeDevice.name)
+                            if let sub = activeDevice.subtitle {
+                                Text(sub)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
                             }
                         }
-                        .pickerStyle(.menu)
                     }
 
                     Spacer()

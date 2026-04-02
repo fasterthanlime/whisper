@@ -67,25 +67,44 @@ final class BeeLifecycleDelegate: NSObject, NSApplicationDelegate {
 }
 
 
+/// Borderless panel that closes when it loses focus — replaces NSPopover
+/// for reliable positioning when content resizes.
+private class MenuBarPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+
+    init(contentView: NSView) {
+        super.init(
+            contentRect: .zero,
+            styleMask: [.nonactivatingPanel, .fullSizeContentView],
+            backing: .buffered,
+            defer: true
+        )
+        self.contentView = contentView
+        isOpaque = false
+        backgroundColor = .clear
+        level = .popUpMenu
+        isMovableByWindowBackground = false
+        hidesOnDeactivate = false
+    }
+}
+
 @MainActor
 final class StatusBarController: NSObject {
     private let statusItem: NSStatusItem
-    private let popover: NSPopover
+    private var panel: MenuBarPanel?
     private var globalMonitor: Any?
+    private var localMonitor: Any?
     private weak var appState: AppState?
     private var animationProgress: CGFloat = 0  // 0 = idle, 1 = recording
     private var animationTimer: Timer?
+    private var frameObserver: NSObjectProtocol?
 
     private static let itemWidth: CGFloat = 26
+    private static let panelWidth: CGFloat = 340
 
     init(appState: AppState) {
         self.appState = appState
         statusItem = NSStatusBar.system.statusItem(withLength: Self.itemWidth)
-        popover = NSPopover()
-        popover.contentSize = NSSize(width: 340, height: 10)
-        popover.behavior = .transient
-        popover.animates = false
-        popover.contentViewController = NSHostingController(rootView: MenuBarView(appState: appState))
 
         super.init()
 
@@ -96,11 +115,6 @@ final class StatusBarController: NSObject {
             button.contentTintColor = nil
             button.action = #selector(handleClick)
             button.target = self
-        }
-
-        // Close popover when clicking outside
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            self?.closePopover()
         }
 
         // Update icon state
@@ -119,21 +133,93 @@ final class StatusBarController: NSObject {
     }
 
     @objc private func handleClick() {
-        if popover.isShown {
-            closePopover()
+        if panel?.isVisible == true {
+            beeLog("MENUBAR: click → closing panel")
+            closePanel()
         } else {
-            showPopover()
+            beeLog("MENUBAR: click → opening panel")
+            showPanel()
         }
     }
 
-    private func showPopover() {
-        guard let button = statusItem.button else { return }
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        popover.contentViewController?.view.window?.makeKey()
+    private func showPanel() {
+        guard let appState, let button = statusItem.button, let buttonWindow = button.window else {
+            beeLog("MENUBAR: showPanel guard failed (appState=\(appState != nil), button=\(statusItem.button != nil))")
+            return
+        }
+
+        let hostingView = NSHostingView(rootView: MenuBarView(appState: appState))
+        hostingView.wantsLayer = true
+        hostingView.layer?.cornerRadius = 10
+        hostingView.layer?.masksToBounds = true
+
+        let panel = MenuBarPanel(contentView: hostingView)
+        self.panel = panel
+
+        // Position below the button, right-aligned
+        positionPanel(panel, relativeTo: button, in: buttonWindow)
+
+        beeLog("MENUBAR: panel created, making visible")
+        panel.makeKeyAndOrderFront(nil)
+
+        // Reposition when content resizes
+        hostingView.postsFrameChangedNotifications = true
+        frameObserver = NotificationCenter.default.addObserver(
+            forName: NSView.frameDidChangeNotification,
+            object: hostingView,
+            queue: .main
+        ) { [weak self, weak panel, weak button, weak buttonWindow] _ in
+            guard let self, let panel, let button, let buttonWindow else { return }
+            self.positionPanel(panel, relativeTo: button, in: buttonWindow)
+        }
+
+        // Close when clicking outside
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            self?.closePanel()
+        }
+
+        // Close on Escape
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 { // Escape
+                self?.closePanel()
+                return nil
+            }
+            return event
+        }
     }
 
-    private func closePopover() {
-        popover.performClose(nil)
+    private func positionPanel(_ panel: NSPanel, relativeTo button: NSStatusBarButton, in buttonWindow: NSWindow) {
+        let buttonRect = button.convert(button.bounds, to: nil)
+        let screenRect = buttonWindow.convertToScreen(buttonRect)
+        let contentSize = panel.contentView?.fittingSize ?? NSSize(width: Self.panelWidth, height: 200)
+
+        let x = screenRect.midX - contentSize.width / 2
+        let y = screenRect.minY - contentSize.height - 4 // 4pt gap
+
+        panel.setContentSize(contentSize)
+        panel.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
+    private func closePanel() {
+        panel?.orderOut(nil)
+        panel = nil
+
+        if let obs = frameObserver {
+            NotificationCenter.default.removeObserver(obs)
+            frameObserver = nil
+        }
+        if let monitor = globalMonitor {
+            NSEvent.removeMonitor(monitor)
+            globalMonitor = nil
+        }
+        if let monitor = localMonitor {
+            NSEvent.removeMonitor(monitor)
+            localMonitor = nil
+        }
+    }
+
+    var isPanelVisible: Bool {
+        panel?.isVisible == true
     }
 
     @objc func updateIcon() {
@@ -230,7 +316,7 @@ final class StatusBarController: NSObject {
     }
 
     @objc private func handleOpenMainWindow() {
-        closePopover()
+        closePanel()
         openSettingsWindow()
     }
 
