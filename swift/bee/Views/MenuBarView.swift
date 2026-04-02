@@ -4,8 +4,6 @@ import SwiftUI
 
 struct MenuBarView: View {
     @Bindable var appState: AppState
-    @State private var echoActive = false
-
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
@@ -65,20 +63,20 @@ struct MenuBarView: View {
 
             VStack(spacing: 6) {
                 Button {
-                    if echoActive {
+                    if appState.echoActive {
                         appState.audioEngine.stopEcho()
                     } else {
                         appState.audioEngine.startEcho()
                     }
-                    echoActive = appState.audioEngine.echoEnabled
+                    appState.echoActive = appState.audioEngine.echoEnabled
                 } label: {
-                    Image(systemName: echoActive ? "ear.fill" : "ear")
+                    Image(systemName: appState.echoActive ? "ear.fill" : "ear")
                         .font(.body)
-                        .foregroundStyle(echoActive ? .orange : .secondary)
+                        .foregroundStyle(appState.echoActive ? .orange : .secondary)
                         .frame(width: 28, height: 28)
                         .background(
                             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(echoActive ? Color.orange.opacity(0.15) : .clear)
+                                .fill(appState.echoActive ? Color.orange.opacity(0.15) : .clear)
                         )
                 }
                 .buttonStyle(.plain)
@@ -121,9 +119,9 @@ struct MenuBarView: View {
         .onDisappear {
             beeLog("MENUBAR: panel closed")
             appState.menuBarPanelOpen = false
-            if echoActive {
+            if appState.echoActive {
                 appState.audioEngine.stopEcho()
-                echoActive = false
+                appState.echoActive = false
             }
             // Grace period: keep engine warm for 5 seconds after closing
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak appState] in
@@ -462,8 +460,6 @@ private struct BeeHistoryView: View {
 
 private struct AudioSettingsView: View {
     @Bindable var appState: AppState
-    @State private var echoActive = false
-
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 8) {
@@ -499,7 +495,7 @@ private struct AudioSettingsView: View {
             // Level meter + controls
             VStack(spacing: 12) {
                 Button {
-                    if echoActive {
+                    if appState.echoActive {
                         appState.audioEngine.stopEcho()
                     } else {
                         if !appState.audioEngine.isWarm {
@@ -507,15 +503,15 @@ private struct AudioSettingsView: View {
                         }
                         appState.audioEngine.startEcho()
                     }
-                    echoActive = appState.audioEngine.echoEnabled
+                    appState.echoActive = appState.audioEngine.echoEnabled
                 } label: {
-                    Image(systemName: echoActive ? "ear.fill" : "ear")
+                    Image(systemName: appState.echoActive ? "ear.fill" : "ear")
                         .font(.title3)
-                        .foregroundStyle(echoActive ? .orange : .secondary)
+                        .foregroundStyle(appState.echoActive ? .orange : .secondary)
                         .frame(width: 36, height: 36)
                         .background(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(echoActive ? Color.orange.opacity(0.15) : Color.primary.opacity(0.04))
+                                .fill(appState.echoActive ? Color.orange.opacity(0.15) : Color.primary.opacity(0.04))
                         )
                 }
                 .buttonStyle(.plain)
@@ -544,9 +540,9 @@ private struct AudioSettingsView: View {
         }
         .onDisappear {
             appState.audioSettingsOpen = false
-            if echoActive {
+            if appState.echoActive {
                 appState.audioEngine.stopEcho()
-                echoActive = false
+                appState.echoActive = false
             }
             // Grace period before cooling down
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak appState] in

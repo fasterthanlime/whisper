@@ -146,6 +146,7 @@ final class AppState {
     // Debug
     var menuBarPanelOpen = false
     var audioSettingsOpen = false
+    var echoActive = false
     var debugEnabled = false {
         didSet {
             UserDefaults.standard.set(debugEnabled, forKey: DefaultsKey.debugOverlayEnabled)
