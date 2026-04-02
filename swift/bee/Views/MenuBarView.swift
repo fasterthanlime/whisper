@@ -246,23 +246,8 @@ private struct BeeOverviewView: View {
 
                 // Input device + status
                 HStack(spacing: 12) {
-                    if let activeDevice = appState.availableInputDevices.first(where: { $0.uid == appState.activeInputDeviceUID }) {
-                        DeviceIcon(device: activeDevice)
-                            .foregroundStyle(.orange)
-                            .font(.title3)
-                            .frame(width: 20, height: 20)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(activeDevice.name)
-                            if let sub = activeDevice.subtitle {
-                                Text(sub)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-
+                    DeviceDropdown(appState: appState)
                     Spacer()
-
                     HStack(spacing: 6) {
                         Circle()
                             .fill(stateColor)
@@ -767,6 +752,92 @@ private struct VerticalLevelMeter: View {
         }
         .onDisappear {
             timer?.invalidate()
+        }
+    }
+}
+
+/// A dropdown button that looks like a Picker but shows rich device rows in a popover.
+private struct DeviceDropdown: View {
+    @Bindable var appState: AppState
+    @State private var isOpen = false
+
+    var body: some View {
+        let activeDevice = appState.availableInputDevices.first { $0.uid == appState.activeInputDeviceUID }
+
+        Button {
+            isOpen.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                if let device = activeDevice {
+                    DeviceIcon(device: device)
+                        .foregroundStyle(.orange)
+                        .font(.title3)
+                        .frame(width: 20, height: 20)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(device.name)
+                        if let sub = device.subtitle {
+                            Text(sub)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } else {
+                    Text("No device")
+                        .foregroundStyle(.secondary)
+                }
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+            VStack(spacing: 2) {
+                ForEach(appState.availableInputDevices, id: \.uid) { device in
+                    Button {
+                        appState.selectInputDevice(uid: device.uid)
+                        isOpen = false
+                    } label: {
+                        HStack(spacing: 8) {
+                            DeviceIcon(device: device)
+                                .font(.title3)
+                                .foregroundStyle(device.uid == appState.activeInputDeviceUID ? .orange : .secondary)
+                                .frame(width: 24)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(device.name)
+                                    .fontWeight(device.uid == appState.activeInputDeviceUID ? .medium : .regular)
+                                if let sub = device.subtitle {
+                                    Text(sub)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                            if device.uid == appState.activeInputDeviceUID {
+                                Image(systemName: "checkmark")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(6)
+            .frame(minWidth: 280)
         }
     }
 }
