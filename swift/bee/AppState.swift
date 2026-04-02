@@ -415,7 +415,7 @@ final class AppState {
         let status = AXUIElementCopyAttributeValue(element, attr, &value)
         guard status == .success, let value else { return nil }
         guard CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        return unsafeBitCast(value, to: AXUIElement.self)
+        return (value as! AXUIElement)
     }
 
     private func axAttributeSettable(_ element: AXUIElement, _ attr: CFString) -> Bool {

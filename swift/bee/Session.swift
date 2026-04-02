@@ -621,12 +621,7 @@ actor Session {
         let m = a.count
         let n = b.count
 
-        // DP table for LCS lengths
-        // Use a rolling two-row approach for memory efficiency
-        var prev = [Int](repeating: 0, count: n + 1)
-        var curr = [Int](repeating: 0, count: n + 1)
-
-        // We need the full table to backtrace, so build it
+        // DP table for LCS lengths — full table needed for backtrace
         // For strings up to ~500 chars this is fine
         var dp = [[Int]](repeating: [Int](repeating: 0, count: n + 1), count: m + 1)
         for i in 1...max(m, 1) {

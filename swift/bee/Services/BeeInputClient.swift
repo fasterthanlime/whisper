@@ -264,7 +264,6 @@ final class BeeInputClient: Sendable {
 
         let uid = getuid()
         let domain = "gui/\(uid)"
-        let service = "\(domain)/\(brokerLaunchLabel)"
 
         // // First try to kickstart an already-bootstrapped service.
         // let kickStatus = runLaunchctl(args: ["kickstart", "-k", service])
