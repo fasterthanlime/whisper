@@ -20,6 +20,15 @@ class BeeInputController: IMKInputController {
 
     override func deactivateServer(_ sender: Any!) {
         let bridge = BeeIMEBridgeState.shared
+
+        // Only act on the session if WE are the active controller.
+        // A stale controller's deactivateServer must not touch the new session.
+        guard bridge.activeController === self else {
+            beeInputLog("deactivateServer: stale controller, ignoring")
+            super.deactivateServer(sender)
+            return
+        }
+
         let session = bridge.currentSession
         let isDictating = bridge.isDictating
         let sessionID = bridge.activeSessionID
@@ -90,8 +99,10 @@ class BeeInputController: IMKInputController {
 
     func switchToNextInputSource() {
         let properties: [CFString: Any] = [kTISPropertyInputSourceIsSelectCapable: true]
-        guard let sources = TISCreateInputSourceList(properties as CFDictionary, false)?
-            .takeRetainedValue() as? [TISInputSource] else { return }
+        guard
+            let sources = TISCreateInputSourceList(properties as CFDictionary, false)?
+                .takeRetainedValue() as? [TISInputSource]
+        else { return }
 
         let candidate = sources.first { source in
             guard let bundleID = TISGetInputSourceProperty(source, kTISPropertyBundleID) else {
