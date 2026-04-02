@@ -464,30 +464,32 @@ private struct AudioSettingsView: View {
             VStack(spacing: 20) {
                 // Device priority list with level meter
                 HStack(alignment: .top, spacing: 16) {
-                    SettingsCard("Input Devices") {
-                        Text("Drag to set priority. When a higher-priority device becomes available, bee switches to it automatically.")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Input Devices")
+                            .font(.headline)
+                        Text("Drag to set priority. bee auto-switches to the highest-priority available device.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .padding(.bottom, 4)
 
-                        VStack(spacing: 0) {
-                            ForEach(Array(prioritySortedDevices.enumerated()), id: \.element.uid) { index, device in
+                        List {
+                            ForEach(Array(orderedDevices.enumerated()), id: \.element.uid) { index, device in
                                 AudioSettingsDeviceRow(
                                     device: device,
                                     rank: index + 1,
                                     isActive: device.uid == appState.activeInputDeviceUID,
                                     isWarm: appState.audioEngine.deviceWarmPolicy[device.uid] ?? false,
                                     onSelect: { appState.selectInputDevice(uid: device.uid) },
-                                    onToggleWarm: { appState.setDeviceWarmPolicy(uid: device.uid, warm: $0) },
-                                    onMoveUp: index > 0 ? { moveDevice(at: index, by: -1) } : nil,
-                                    onMoveDown: index < prioritySortedDevices.count - 1 ? { moveDevice(at: index, by: 1) } : nil
+                                    onToggleWarm: { appState.setDeviceWarmPolicy(uid: device.uid, warm: $0) }
                                 )
-
-                                if index < prioritySortedDevices.count - 1 {
-                                    Divider().padding(.leading, 44)
-                                }
+                            }
+                            .onMove { source, destination in
+                                var uids = orderedDevices.map(\.uid)
+                                uids.move(fromOffsets: source, toOffset: destination)
+                                appState.setDevicePriority(orderedUIDs: uids)
                             }
                         }
+                        .listStyle(.bordered(alternatesRowBackgrounds: false))
+                        .frame(minHeight: 200)
                     }
 
                     // Level meter + controls
@@ -562,7 +564,7 @@ private struct AudioSettingsView: View {
         }
     }
 
-    private var prioritySortedDevices: [AppState.InputDeviceInfo] {
+    private var orderedDevices: [AppState.InputDeviceInfo] {
         let devices = appState.availableInputDevices
         let priority = appState.devicePriorityList
 
@@ -575,14 +577,6 @@ private struct AudioSettingsView: View {
             if lhs.isBuiltIn != rhs.isBuiltIn { return lhs.isBuiltIn && !rhs.isBuiltIn }
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
-    }
-
-    private func moveDevice(at index: Int, by offset: Int) {
-        var sorted = prioritySortedDevices.map(\.uid)
-        let target = index + offset
-        guard target >= 0 && target < sorted.count else { return }
-        sorted.swapAt(index, target)
-        appState.setDevicePriority(orderedUIDs: sorted)
     }
 
     // Reuse from AdvancedSettingsView
@@ -619,8 +613,6 @@ private struct AudioSettingsDeviceRow: View {
     let isWarm: Bool
     let onSelect: () -> Void
     let onToggleWarm: (Bool) -> Void
-    let onMoveUp: (() -> Void)?
-    let onMoveDown: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -629,25 +621,6 @@ private struct AudioSettingsDeviceRow: View {
                 .font(.system(size: 11, weight: .bold, design: .rounded))
                 .foregroundStyle(isActive ? .orange : .secondary)
                 .frame(width: 18)
-
-            // Move buttons
-            VStack(spacing: 0) {
-                Button { onMoveUp?() } label: {
-                    Image(systemName: "chevron.up")
-                        .font(.system(size: 8, weight: .bold))
-                }
-                .buttonStyle(.plain)
-                .disabled(onMoveUp == nil)
-
-                Button { onMoveDown?() } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .bold))
-                }
-                .buttonStyle(.plain)
-                .disabled(onMoveDown == nil)
-            }
-            .foregroundStyle(.secondary)
-            .frame(width: 14)
 
             // Device icon
             DeviceIcon(device: device)
@@ -690,8 +663,7 @@ private struct AudioSettingsDeviceRow: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
     }
 }
 
