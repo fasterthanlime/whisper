@@ -185,12 +185,9 @@ final class BeeInputClient: Sendable {
 
         NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
         window.makeKeyAndOrderFront(nil)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            beeLog("IME ACTIVATE: stealth focus cycle — closing, reactivating \(targetApp.localizedName ?? "?") pid=\(targetPID)")
-            window.close()
-            targetApp.activate(options: [.activateIgnoringOtherApps])
-        }
+        window.close()
+        beeLog("IME ACTIVATE: stealth focus cycle — reactivating \(targetApp.localizedName ?? "?") pid=\(targetPID)")
+        targetApp.activate(options: [.activateIgnoringOtherApps])
     }
 
     /// Cycle input sources: select a non-bee source, then re-select bee.
