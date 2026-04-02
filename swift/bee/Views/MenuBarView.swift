@@ -140,56 +140,61 @@ private struct MenuActionRow: View {
     }
 }
 
+enum SidebarItem: Hashable {
+    case overview, history, howBeeWorks, advanced
+}
+
 struct BeeSettingsView: View {
     @Bindable var appState: AppState
 
+    @State private var selection: SidebarItem = .overview
     @State private var runOnStartupEnabled = false
     @State private var pauseMediaEnabled = false
 
     var body: some View {
-        NavigationSplitView {
-            List {
+        HStack(spacing: 0) {
+            List(selection: $selection) {
                 Section("bee") {
-                    NavigationLink {
-                        BeeOverviewView(appState: appState)
-                    } label: {
-                        Label("Overview", systemImage: "sparkles")
-                    }
-
-                    NavigationLink {
-                        BeeHistoryView(appState: appState)
-                    } label: {
-                        Label("History", systemImage: "clock.arrow.circlepath")
-                    }
+                    Label("Overview", systemImage: "sparkles")
+                        .tag(SidebarItem.overview)
+                    Label("History", systemImage: "clock.arrow.circlepath")
+                        .tag(SidebarItem.history)
                 }
 
                 Section("guide") {
-                    NavigationLink {
-                        HowBeeWorksView()
-                    } label: {
-                        Label("How bee works", systemImage: "keyboard")
-                    }
+                    Label("How bee works", systemImage: "keyboard")
+                        .tag(SidebarItem.howBeeWorks)
                 }
 
                 Section("settings") {
-                    NavigationLink {
-                        AdvancedSettingsView(
-                            appState: appState,
-                            runOnStartupEnabled: $runOnStartupEnabled,
-                            pauseMediaEnabled: $pauseMediaEnabled
-                        )
-                    } label: {
-                        Label("Advanced", systemImage: "slider.horizontal.3")
-                    }
+                    Label("Advanced", systemImage: "slider.horizontal.3")
+                        .tag(SidebarItem.advanced)
                 }
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 220)
-        } detail: {
-            BeeOverviewView(appState: appState)
+            .frame(width: 200)
+
+            Divider()
+
+            Group {
+                switch selection {
+                case .overview:
+                    BeeOverviewView(appState: appState)
+                case .history:
+                    BeeHistoryView(appState: appState)
+                case .howBeeWorks:
+                    HowBeeWorksView()
+                case .advanced:
+                    AdvancedSettingsView(
+                        appState: appState,
+                        runOnStartupEnabled: $runOnStartupEnabled,
+                        pauseMediaEnabled: $pauseMediaEnabled
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .toolbar(removing: .sidebarToggle)
-        .frame(minWidth: 820, minHeight: 560)
+        .frame(minWidth: 780, minHeight: 520)
         .tint(.orange)
     }
 }
@@ -199,20 +204,60 @@ private struct BeeOverviewView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                SettingsCard("Status") {
-                    StatusRow(label: "State", value: statusLabel, color: stateColor)
-                    StatusRow(label: "Model", value: modelLabel, color: modelColor)
-                    KeyValueRow(label: "Input", value: appState.activeInputDeviceName ?? "None")
+            VStack(spacing: 24) {
+                // Hero
+                VStack(spacing: 8) {
+                    Image("BeeColor")
+                        .resizable()
+                        .frame(width: 64, height: 64)
+
+                    Text("bee")
+                        .font(.title.weight(.bold))
+
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(stateColor)
+                            .frame(width: 8, height: 8)
+                        Text(statusLabel)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+                        Text("v\(version)")
+                            .font(.caption2)
+                            .foregroundStyle(.quaternary)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 8)
+
+                // Stats
+                if appState.totalSessions > 0 {
+                    HStack(spacing: 12) {
+                        StatCard(
+                            icon: "waveform",
+                            value: "\(appState.totalSessions)",
+                            label: appState.totalSessions == 1 ? "session" : "sessions"
+                        )
+                        StatCard(
+                            icon: "text.word.spacing",
+                            value: formatNumber(appState.totalWords),
+                            label: appState.totalWords == 1 ? "word" : "words"
+                        )
+                        StatCard(
+                            icon: "character.cursor.ibeam",
+                            value: formatNumber(appState.totalCharacters),
+                            label: "characters"
+                        )
+                    }
                 }
 
-                if appState.loadedModelDisplayName != nil {
-                    SettingsCard("Pipeline") {
-                        PipelineRow(
-                            label: "ASR",
-                            value: AppState.defaultModel.displayName,
-                            url: URL(string: "https://huggingface.co/\(AppState.defaultModel.repoID)")!
-                        )
+                // Model & pipeline
+                SettingsCard("Pipeline") {
+                    StatusRow(label: "ASR", value: modelLabel, color: modelColor)
+
+                    if appState.loadedModelDisplayName != nil {
                         ForEach(AppState.pipelineComponents, id: \.name) { component in
                             PipelineRow(
                                 label: component.role,
@@ -221,38 +266,73 @@ private struct BeeOverviewView: View {
                             )
                         }
                     }
-                }
 
-                SettingsCard("Last transcript") {
-                    if let last = appState.transcriptionHistory.first {
-                        TranscriptRow(text: last.text, timestamp: last.timestamp)
-                    } else {
-                        Text("No transcript yet")
+                    Divider()
+
+                    HStack(spacing: 10) {
+                        Image(systemName: "mic.fill")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                        Text(appState.activeInputDeviceName ?? "No input device")
                             .foregroundStyle(.secondary)
                     }
                 }
 
-                Button("Quit bee") {
-                    BeeInputClient.restoreInputSourceIfNeeded()
-                    NSApp.terminate(nil)
+                // Last transcript
+                SettingsCard("Last transcript") {
+                    if let last = appState.transcriptionHistory.first {
+                        TranscriptRow(text: last.text, timestamp: last.timestamp)
+                    } else {
+                        HStack(spacing: 8) {
+                            Image(systemName: "text.bubble")
+                                .foregroundStyle(.quaternary)
+                            Text("No transcript yet")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+
+                // Footer
+                VStack(spacing: 6) {
+                    Link("fasterthanlime/bee on GitHub", destination: URL(string: "https://github.com/fasterthanlime/bee")!)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Quit bee") {
+                        BeeInputClient.restoreInputSourceIfNeeded()
+                        NSApp.terminate(nil)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.quaternary)
+                }
                 .padding(.top, 4)
             }
             .padding(24)
-            .frame(maxWidth: 600, alignment: .leading)
+            .frame(maxWidth: 600)
         }
-        .navigationTitle("bee")
+    }
+
+    private func formatNumber(_ n: Int) -> String {
+        if n >= 1000 {
+            return String(format: "%.1fk", Double(n) / 1000)
+        }
+        return "\(n)"
     }
 
     private var statusLabel: String {
         switch appState.hotkeyState {
-        case .idle: return "Idle"
-        case .held, .released: return "Pending"
-        case .pushToTalk: return "Push to talk"
-        case .locked: return "Locked"
-        case .lockedOptionHeld: return "Locked (option held)"
+        case .idle:
+            switch appState.modelStatus {
+            case .loaded: return "Ready"
+            case .loading: return "Loading model..."
+            case .downloading(let p): return "Downloading (\(Int(p * 100))%)..."
+            case .notLoaded: return "No model loaded"
+            case .error(let e): return "Error: \(e)"
+            }
+        case .held, .released: return "Starting session..."
+        case .pushToTalk: return "Listening"
+        case .locked: return "Listening (locked)"
+        case .lockedOptionHeld: return "Listening (option held)"
         }
     }
 
@@ -271,7 +351,7 @@ private struct BeeOverviewView: View {
         switch appState.modelStatus {
         case .notLoaded: return "Not loaded"
         case .downloading(let progress): return "Downloading (\(Int(progress * 100))%)"
-        case .loading: return "Loading"
+        case .loading: return "Loading..."
         case .loaded: return AppState.defaultModel.displayName
         case .error(let message): return "Error: \(message)"
         }
@@ -284,6 +364,35 @@ private struct BeeOverviewView: View {
         case .error: return .red
         case .notLoaded: return .gray
         }
+    }
+}
+
+private struct StatCard: View {
+    let icon: String
+    let value: String
+    let label: String
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(.orange)
+            Text(value)
+                .font(.title2.weight(.bold).monospacedDigit())
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+        )
     }
 }
 
@@ -307,7 +416,7 @@ private struct BeeHistoryView: View {
             .padding(24)
             .frame(maxWidth: 600, alignment: .leading)
         }
-        .navigationTitle("History")
+
     }
 }
 
@@ -330,7 +439,7 @@ private struct HowBeeWorksView: View {
             .frame(maxWidth: 600, alignment: .leading)
             .padding(24)
         }
-        .navigationTitle("How bee works")
+
     }
 }
 
@@ -432,7 +541,7 @@ private struct AdvancedSettingsView: View {
             .frame(maxWidth: 600, alignment: .leading)
             .padding(24)
         }
-        .navigationTitle("Advanced")
+
         .onAppear {
             if appState.debugEnabled {
                 DebugPanel.shared.show(appState: appState)

@@ -21,6 +21,9 @@ final class AppState {
         static let selectedInputDeviceUID = "audio.selectedInputDeviceUID"
         static let deviceWarmPolicy = "audio.deviceWarmPolicy"
         static let debugOverlayEnabled = "ui.debugOverlayEnabled"
+        static let totalSessions = "stats.totalSessions"
+        static let totalWords = "stats.totalWords"
+        static let totalCharacters = "stats.totalCharacters"
     }
 
     private static let imeSubmitName = NSNotification.Name("fasterthanlime.bee.imeSubmit")
@@ -95,6 +98,11 @@ final class AppState {
     // History
     var transcriptionHistory: [TranscriptionHistoryItem] = []
 
+    // Stats (persisted)
+    var totalSessions: Int = 0
+    var totalWords: Int = 0
+    var totalCharacters: Int = 0
+
     // ASR settings
     var chunkSizeSec: Float = 0.5
     var maxNewTokensStreaming: UInt32 = 0  // 0 = Rust default (32)
@@ -154,6 +162,10 @@ final class AppState {
         self.transcriptionService = transcriptionService
         self.inputClient = inputClient
         self.debugEnabled = UserDefaults.standard.bool(forKey: DefaultsKey.debugOverlayEnabled)
+        let defaults = UserDefaults.standard
+        self.totalSessions = defaults.integer(forKey: DefaultsKey.totalSessions)
+        self.totalWords = defaults.integer(forKey: DefaultsKey.totalWords)
+        self.totalCharacters = defaults.integer(forKey: DefaultsKey.totalCharacters)
         restoreAudioPreferences()
         installExternalObservers()
         installCaptureDeviceObservers()
@@ -545,6 +557,16 @@ final class AppState {
         if transcriptionHistory.count > 20 {
             transcriptionHistory = Array(transcriptionHistory.prefix(20))
         }
+
+        // Update persistent stats
+        let words = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+        totalSessions += 1
+        totalWords += words
+        totalCharacters += text.count
+        let defaults = UserDefaults.standard
+        defaults.set(totalSessions, forKey: DefaultsKey.totalSessions)
+        defaults.set(totalWords, forKey: DefaultsKey.totalWords)
+        defaults.set(totalCharacters, forKey: DefaultsKey.totalCharacters)
     }
 
     // MARK: - Model Loading

@@ -97,6 +97,7 @@ struct BeeApp: App {
         Settings {
             BeeSettingsView(appState: appState)
         }
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(after: .windowArrangement) {
                 Button("Toggle Debug Overlay") {
