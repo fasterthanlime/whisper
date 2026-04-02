@@ -29,6 +29,7 @@ final class AppState {
         static let totalSessions = "stats.totalSessions"
         static let totalWords = "stats.totalWords"
         static let totalCharacters = "stats.totalCharacters"
+        static let soundEffectsEnabled = "audio.soundEffectsEnabled"
         static let lowerVolumeDuringDictation = "audio.lowerVolumeDuringDictation"
         static let dictationVolumeLevel = "audio.dictationVolumeLevel"
         static let chunkSizeSec = "transcription.chunkSizeSec"
@@ -135,6 +136,9 @@ final class AppState {
     }
 
     // Volume ducking
+    var soundEffectsEnabled: Bool = true {
+        didSet { UserDefaults.standard.set(soundEffectsEnabled, forKey: DefaultsKey.soundEffectsEnabled) }
+    }
     var lowerVolumeDuringDictation: Bool = false {
         didSet { UserDefaults.standard.set(lowerVolumeDuringDictation, forKey: DefaultsKey.lowerVolumeDuringDictation) }
     }
@@ -382,6 +386,10 @@ final class AppState {
         self.totalSessions = defaults.integer(forKey: DefaultsKey.totalSessions)
         self.totalWords = defaults.integer(forKey: DefaultsKey.totalWords)
         self.totalCharacters = defaults.integer(forKey: DefaultsKey.totalCharacters)
+        // soundEffectsEnabled defaults to true if key not set
+        self.soundEffectsEnabled = defaults.object(forKey: DefaultsKey.soundEffectsEnabled) == nil
+            ? true
+            : defaults.bool(forKey: DefaultsKey.soundEffectsEnabled)
         self.lowerVolumeDuringDictation = defaults.bool(forKey: DefaultsKey.lowerVolumeDuringDictation)
         let savedLevel = defaults.float(forKey: DefaultsKey.dictationVolumeLevel)
         if savedLevel > 0 { self.dictationVolumeLevel = savedLevel }
@@ -749,16 +757,18 @@ final class AppState {
             break  // no trace
         case .cancelled(let id, let text):
             resultID = id
-            SoundEffects.shared.playCancel()
+            if soundEffectsEnabled { SoundEffects.shared.playCancel() }
             if !text.isEmpty {
                 addHistoryEntry(text: text)
             }
         case .committed(let id, let text, let submitted):
             resultID = id
-            if submitted {
-                SoundEffects.shared.playCommitSubmit()
-            } else {
-                SoundEffects.shared.playCommit()
+            if soundEffectsEnabled {
+                if submitted {
+                    SoundEffects.shared.playCommitSubmit()
+                } else {
+                    SoundEffects.shared.playCommit()
+                }
             }
             if !text.isEmpty {
                 addHistoryEntry(text: text)
@@ -868,10 +878,12 @@ final class AppState {
     }
 
     private func playRecordingStartedSound() {
+        guard soundEffectsEnabled else { return }
         SoundEffects.shared.playRecordingStarted()
     }
 
     private func playStartFailureSound() {
+        guard soundEffectsEnabled else { return }
         SoundEffects.shared.playStartFailure()
     }
 

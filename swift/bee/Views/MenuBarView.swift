@@ -773,6 +773,11 @@ private struct GeneralSettingsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 SettingsCard("Behavior") {
                     VStack(alignment: .leading, spacing: 12) {
+                        Toggle("Sound effects", isOn: Binding(
+                            get: { appState.soundEffectsEnabled },
+                            set: { appState.soundEffectsEnabled = $0 }
+                        ))
+
                         Toggle("Run on startup", isOn: Binding(
                             get: { SMAppService.mainApp.status == .enabled },
                             set: { enable in
