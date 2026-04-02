@@ -123,6 +123,8 @@ run_step "Writing broker LaunchAgent plist" "mkdir -p \"$LAUNCH_AGENTS_DIR\" && 
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>ThrottleInterval</key>
+  <integer>0</integer>
   <key>StandardOutPath</key>
   <string>/tmp/bee-broker.out</string>
   <key>StandardErrorPath</key>
