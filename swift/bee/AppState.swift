@@ -33,6 +33,8 @@ final class AppState {
         static let lowerVolumeDuringDictation = "audio.lowerVolumeDuringDictation"
         static let dictationVolumeLevel = "audio.dictationVolumeLevel"
         static let chunkSizeSec = "transcription.chunkSizeSec"
+        static let commitTokenCount = "transcription.commitTokenCount"
+        static let rollbackTokenNum = "transcription.rollbackTokenNum"
         static let maxNewTokensStreaming = "transcription.maxNewTokensStreaming"
         static let maxNewTokensFinal = "transcription.maxNewTokensFinal"
     }
@@ -125,6 +127,12 @@ final class AppState {
     // ASR settings
     var chunkSizeSec: Float = 0.5 {
         didSet { UserDefaults.standard.set(chunkSizeSec, forKey: DefaultsKey.chunkSizeSec) }
+    }
+    var commitTokenCount: UInt32 = 0 {  // 0 = Rust default (12)
+        didSet { UserDefaults.standard.set(Int(commitTokenCount), forKey: DefaultsKey.commitTokenCount) }
+    }
+    var rollbackTokenNum: UInt32 = 0 {  // 0 = Rust default (5)
+        didSet { UserDefaults.standard.set(Int(rollbackTokenNum), forKey: DefaultsKey.rollbackTokenNum) }
     }
     var maxNewTokensStreaming: UInt32 = 0 {  // 0 = Rust default (32)
         didSet { UserDefaults.standard.set(Int(maxNewTokensStreaming), forKey: DefaultsKey.maxNewTokensStreaming) }
@@ -393,6 +401,10 @@ final class AppState {
         if savedLevel > 0 { self.dictationVolumeLevel = savedLevel }
         let savedChunk = defaults.float(forKey: DefaultsKey.chunkSizeSec)
         if savedChunk > 0 { self.chunkSizeSec = savedChunk }
+        let savedCommit = defaults.integer(forKey: DefaultsKey.commitTokenCount)
+        self.commitTokenCount = UInt32(savedCommit)
+        let savedRollback = defaults.integer(forKey: DefaultsKey.rollbackTokenNum)
+        self.rollbackTokenNum = UInt32(savedRollback)
         let savedStreaming = defaults.integer(forKey: DefaultsKey.maxNewTokensStreaming)
         self.maxNewTokensStreaming = UInt32(savedStreaming)
         let savedFinal = defaults.integer(forKey: DefaultsKey.maxNewTokensFinal)
@@ -462,6 +474,8 @@ final class AppState {
             startIMEAckTimeoutIfNeeded(session: session)
             let config = TranscriptionService.SessionConfig(
                 chunkSizeSec: chunkSizeSec,
+                commitTokenCount: commitTokenCount,
+                rollbackTokenNum: rollbackTokenNum,
                 maxNewTokensStreaming: maxNewTokensStreaming,
                 maxNewTokensFinal: maxNewTokensFinal
             )
@@ -735,6 +749,21 @@ final class AppState {
         )
 
         Task {
+            await session.setOnFinalizing { [weak self] mode in
+                Task { @MainActor in
+                    guard let self, self.soundEffectsEnabled else { return }
+                    switch mode {
+                    case .commit(let submit):
+                        if submit {
+                            SoundEffects.shared.playCommitSubmit()
+                        } else {
+                            SoundEffects.shared.playCommit()
+                        }
+                    case .cancel:
+                        SoundEffects.shared.playCancel()
+                    }
+                }
+            }
             await session.setOnComplete { [weak self] result in
                 Task { @MainActor in
                     guard let self else { return }
@@ -755,19 +784,11 @@ final class AppState {
             break  // no trace
         case .cancelled(let id, let text):
             resultID = id
-            if soundEffectsEnabled { SoundEffects.shared.playCancel() }
             if !text.isEmpty {
                 addHistoryEntry(text: text)
             }
-        case .committed(let id, let text, let submitted):
+        case .committed(let id, let text, _):
             resultID = id
-            if soundEffectsEnabled {
-                if submitted {
-                    SoundEffects.shared.playCommitSubmit()
-                } else {
-                    SoundEffects.shared.playCommit()
-                }
-            }
             if !text.isEmpty {
                 addHistoryEntry(text: text)
             }
