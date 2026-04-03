@@ -699,6 +699,18 @@ private struct TranscriptionSettingsView: View {
                             }
                         }
 
+                        Picker("Commit tokens", selection: $appState.commitTokenCount) {
+                            ForEach([0, 8, 12, 16, 24, 32] as [UInt32], id: \.self) { val in
+                                Text(val == 0 ? "Default" : "\(val)").tag(val)
+                            }
+                        }
+
+                        Picker("Rollback tokens", selection: $appState.rollbackTokenNum) {
+                            ForEach([0, 2, 3, 5, 8, 12] as [UInt32], id: \.self) { val in
+                                Text(val == 0 ? "Default" : "\(val)").tag(val)
+                            }
+                        }
+
                         Picker("Streaming tokens", selection: $appState.maxNewTokensStreaming) {
                             ForEach([0, 16, 32, 64, 128] as [UInt32], id: \.self) { val in
                                 Text(val == 0 ? "Default" : "\(val)").tag(val)

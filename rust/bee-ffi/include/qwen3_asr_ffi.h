@@ -18,10 +18,11 @@ typedef struct {
     float session_duration_sec;     /* e.g. 10.0 — auto-rotates after this */
     const char *language;           /* e.g. "english", "french", or NULL for auto-detect */
     const char *prompt;             /* vocabulary hint text, or NULL for none */
-    unsigned int unfixed_chunk_num;       /* 0 = use default (2) */
-    unsigned int unfixed_token_num;       /* 0 = use default (12) */
+    unsigned int unfixed_chunk_num;        /* 0 = use default (2) */
+    unsigned int unfixed_token_num;        /* 0 = use default (12) — commit_token_count */
+    unsigned int rollback_token_num;       /* 0 = use default (5)  — rollback_tokens */
     unsigned int max_new_tokens_streaming; /* 0 = use default (32) */
-    unsigned int max_new_tokens_final;    /* 0 = use default (512) */
+    unsigned int max_new_tokens_final;     /* 0 = use default (512) */
 } AsrSessionOptions;
 
 /* Result from a feed call. Check text != NULL for new transcript. */

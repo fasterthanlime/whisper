@@ -53,6 +53,7 @@ pub struct AsrSessionOptions {
     pub prompt: *const c_char,
     pub unfixed_chunk_num: c_uint,
     pub unfixed_token_num: c_uint,
+    pub rollback_token_num: c_uint,
     pub max_new_tokens_streaming: c_uint,
     pub max_new_tokens_final: c_uint,
 }
@@ -330,8 +331,21 @@ pub unsafe extern "C" fn asr_session_create(
         Language::default()
     };
 
+    let commit_token_count = if opts.unfixed_token_num > 0 {
+        opts.unfixed_token_num as usize
+    } else {
+        12
+    };
+    let rollback_tokens = if opts.rollback_token_num > 0 {
+        opts.rollback_token_num as usize
+    } else {
+        5
+    };
+
     let session_opts = SessionOptions {
         chunk_duration,
+        commit_token_count,
+        rollback_tokens,
         max_tokens_streaming: max_streaming,
         max_tokens_final: max_final,
         language,

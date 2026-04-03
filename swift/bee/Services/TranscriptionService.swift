@@ -63,8 +63,10 @@ final class TranscriptionService: @unchecked Sendable {
         var chunkSizeSec: Float = 0.5
         var sessionDurationSec: Float = 120.0
         var language: String? = nil
-        var maxNewTokensStreaming: UInt32 = 0  // 0 = use Rust default
-        var maxNewTokensFinal: UInt32 = 0      // 0 = use Rust default
+        var commitTokenCount: UInt32 = 0       // 0 = use Rust default (12)
+        var rollbackTokenNum: UInt32 = 0       // 0 = use Rust default (5)
+        var maxNewTokensStreaming: UInt32 = 0  // 0 = use Rust default (32)
+        var maxNewTokensFinal: UInt32 = 0      // 0 = use Rust default (512)
     }
 
     func createSession(_ config: SessionConfig = SessionConfig()) -> StreamingSession? {
@@ -82,7 +84,8 @@ final class TranscriptionService: @unchecked Sendable {
                 language: langPtr,
                 prompt: nil,
                 unfixed_chunk_num: 0,
-                unfixed_token_num: 0,
+                unfixed_token_num: config.commitTokenCount,
+                rollback_token_num: config.rollbackTokenNum,
                 max_new_tokens_streaming: config.maxNewTokensStreaming,
                 max_new_tokens_final: config.maxNewTokensFinal
             )
