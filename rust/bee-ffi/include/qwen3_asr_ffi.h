@@ -25,11 +25,12 @@ typedef struct {
     unsigned int max_new_tokens_final;     /* 0 = use default (512) */
 } AsrSessionOptions;
 
-/* Runtime engine statistics (CPU, GPU, VRAM). */
+/* Runtime engine statistics (CPU, GPU, VRAM, RAM). All values are EMA-smoothed. */
 typedef struct {
     float cpu_percent;     /* CPU usage 0–100 */
     float gpu_percent;     /* GPU device utilization 0–100 */
     float vram_used_mb;    /* GPU memory in use (MB) */
+    float ram_used_mb;     /* Process resident set size (MB) */
 } AsrEngineStats;
 
 /* Result from a feed call. Check text != NULL for new transcript. */

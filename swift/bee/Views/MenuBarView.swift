@@ -654,6 +654,7 @@ private struct TranscriptionSettingsView: View {
     @State private var mockCPU: Double = 18
     @State private var mockGPU: Double = 61
     @State private var mockMemMB: Double = 387
+    @State private var mockRamMB: Double = 512
 
     var body: some View {
         ScrollView {
@@ -677,12 +678,13 @@ private struct TranscriptionSettingsView: View {
                         VStack(spacing: 8) {
                             MockStatRow(label: "CPU", value: mockCPU, max: 100, unit: "%", color: statColor(mockCPU, hi: 60, crit: 85))
                             MockStatRow(label: "GPU", value: mockGPU, max: 100, unit: "%", color: statColor(mockGPU, hi: 60, crit: 85))
-                            MockStatRow(label: "VRAM", value: mockMemMB, max: 16384, unit: "MB", color: .blue)
+                            MockStatRow(label: "VRAM", value: mockMemMB, max: 16384, unit: "MB", color: statColor(mockMemMB, hi: 8192, crit: 14336))
+                            MockStatRow(label: "RAM", value: mockRamMB, max: 16384, unit: "MB", color: statColor(mockRamMB, hi: 4096, crit: 10240))
                         }
                         .frame(width: 90)
                         .onAppear {
                             updateStats()
-                            Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+                            Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
                                 updateStats()
                             }
                         }
@@ -798,6 +800,7 @@ private struct TranscriptionSettingsView: View {
             mockCPU = Double(s.cpu_percent)
             mockGPU = Double(s.gpu_percent)
             mockMemMB = Double(s.vram_used_mb)
+            mockRamMB = Double(s.ram_used_mb)
         }
     }
 

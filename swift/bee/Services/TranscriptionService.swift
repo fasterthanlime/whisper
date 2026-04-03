@@ -50,7 +50,7 @@ final class TranscriptionService: @unchecked Sendable {
 
     func getStats() -> AsrEngineStats {
         guard let e = lock.withLock({ engine }) else {
-            return AsrEngineStats(cpu_percent: 0, gpu_percent: 0, vram_used_mb: 0)
+            return AsrEngineStats(cpu_percent: 0, gpu_percent: 0, vram_used_mb: 0, ram_used_mb: 0)
         }
         return asr_engine_get_stats(e)
     }

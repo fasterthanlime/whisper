@@ -24,11 +24,12 @@ pub struct AsrEngineStats {
     pub cpu_percent: c_float,
     pub gpu_percent: c_float,
     pub vram_used_mb: c_float,
+    pub ram_used_mb: c_float,
 }
 
 impl Default for AsrEngineStats {
     fn default() -> Self {
-        Self { cpu_percent: 0.0, gpu_percent: 0.0, vram_used_mb: 0.0 }
+        Self { cpu_percent: 0.0, gpu_percent: 0.0, vram_used_mb: 0.0, ram_used_mb: 0.0 }
     }
 }
 
@@ -37,6 +38,9 @@ struct StatsSampler {
 }
 
 impl StatsSampler {
+    // EMA smoothing factor: α=0.25 at 400ms → time constant ~1.4s
+    const ALPHA: f32 = 0.25;
+
     fn new() -> Self {
         let latest = Arc::new(Mutex::new(AsrEngineStats::default()));
         let shared = Arc::clone(&latest);
@@ -45,14 +49,21 @@ impl StatsSampler {
             .spawn(move || {
                 let mut last_cpu_us: u64 = 0;
                 let mut last_wall = Instant::now();
+                let mut smooth = AsrEngineStats::default();
+                // GPU is expensive (subprocess), sample it less often.
+                let mut gpu_tick: u32 = 0;
+                let mut last_gpu_percent = 0.0f32;
+                let mut last_vram_mb = 0.0f32;
+
                 loop {
-                    std::thread::sleep(Duration::from_millis(900));
+                    std::thread::sleep(Duration::from_millis(400));
                     let now = Instant::now();
                     let wall_us = now.duration_since(last_wall).as_micros() as u64;
                     last_wall = now;
 
+                    // CPU: cheap, every tick
                     let cpu_us = process_cpu_us();
-                    let cpu_percent = if wall_us > 0 && last_cpu_us > 0 {
+                    let cpu_raw = if wall_us > 0 && last_cpu_us > 0 {
                         let delta = cpu_us.saturating_sub(last_cpu_us);
                         ((delta as f32 / wall_us as f32) * 100.0).min(100.0)
                     } else {
@@ -60,12 +71,27 @@ impl StatsSampler {
                     };
                     last_cpu_us = cpu_us;
 
-                    let (gpu_percent, vram_used_mb) = sample_gpu_ioreg().unwrap_or((0.0, 0.0));
+                    // RAM: cheap, every tick
+                    let ram_raw = process_ram_mb();
+
+                    // GPU/VRAM: expensive subprocess, every ~2s (every 5th tick)
+                    gpu_tick += 1;
+                    if gpu_tick >= 5 {
+                        gpu_tick = 0;
+                        if let Some((g, v)) = sample_gpu_ioreg() {
+                            last_gpu_percent = g;
+                            last_vram_mb = v;
+                        }
+                    }
+
+                    let a = Self::ALPHA;
+                    smooth.cpu_percent  = a * cpu_raw          + (1.0 - a) * smooth.cpu_percent;
+                    smooth.gpu_percent  = a * last_gpu_percent + (1.0 - a) * smooth.gpu_percent;
+                    smooth.vram_used_mb = a * last_vram_mb     + (1.0 - a) * smooth.vram_used_mb;
+                    smooth.ram_used_mb  = a * ram_raw          + (1.0 - a) * smooth.ram_used_mb;
 
                     if let Ok(mut s) = shared.lock() {
-                        s.cpu_percent = cpu_percent;
-                        s.gpu_percent = gpu_percent;
-                        s.vram_used_mb = vram_used_mb;
+                        *s = smooth;
                     }
                 }
             })
@@ -85,6 +111,40 @@ fn process_cpu_us() -> u64 {
         let user = usage.ru_utime.tv_sec as u64 * 1_000_000 + usage.ru_utime.tv_usec as u64;
         let sys  = usage.ru_stime.tv_sec as u64 * 1_000_000 + usage.ru_stime.tv_usec as u64;
         user + sys
+    }
+}
+
+fn process_ram_mb() -> f32 {
+    // mach task_basic_info gives current resident set size without shelling out.
+    #[repr(C)]
+    struct TaskBasicInfo {
+        suspend_count: u32,
+        virtual_size: usize,
+        resident_size: usize,
+        user_time: [i32; 2],
+        system_time: [i32; 2],
+        policy: i32,
+    }
+    extern "C" {
+        static mach_task_self_: u32;
+        fn task_info(
+            target_task: u32,
+            flavor: u32,
+            task_info_out: *mut std::ffi::c_void,
+            task_info_out_cnt: *mut u32,
+        ) -> i32;
+    }
+    const TASK_BASIC_INFO: u32 = 5;
+    unsafe {
+        let mut info: TaskBasicInfo = std::mem::zeroed();
+        let mut count = (std::mem::size_of::<TaskBasicInfo>() / 4) as u32;
+        let kr = task_info(
+            mach_task_self_,
+            TASK_BASIC_INFO,
+            &mut info as *mut _ as *mut std::ffi::c_void,
+            &mut count,
+        );
+        if kr == 0 { info.resident_size as f32 / (1024.0 * 1024.0) } else { 0.0 }
     }
 }
 
