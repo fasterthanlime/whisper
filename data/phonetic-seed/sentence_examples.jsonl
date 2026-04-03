@@ -1,0 +1,251 @@
+{"term":"AArch64","text":"We should build the release binary for AArch64 so it runs natively on the ARM server.","kind":"term","surface_form":null}
+{"term":"AArch64","text":"The crash only shows up on AArch64, so I want to reproduce it in a container first.","kind":"term","surface_form":null}
+{"term":"AArch64","text":"If the CI matrix includes AArch64, we'll catch those endianness bugs earlier.","kind":"term","surface_form":null}
+{"term":"AArch64","text":"Our CI builds both x86_64 and AArch64 images to cover server and ARM runners.","kind":"term","surface_form":null}
+{"term":"AArch64","text":"We should add AArch64 to the matrix so the tests run on ARM64 runners.","kind":"term","surface_form":null}
+{"term":"AArch64","text":"The Dockerfile needs multiarch support to produce AArch64-compatible binaries.","kind":"term","surface_form":null}
+{"term":"AArch64","text":"When targeting AArch64 make sure you're using the correct CPU feature flags.","kind":"term","surface_form":null}
+{"term":"arborium","text":"We could go to the aquarium. That's always a nice time.","kind":"counterexample","surface_form":"Aquarium"}
+{"term":"arborium","text":"People always get an aquarium that's too small for their fishes.","kind":"counterexample","surface_form":"Aquarium"}
+{"term":"bearcove","text":"In the bearcove directory under my home directory","kind":"term","surface_form":null}
+{"term":"bearcove","text":"My company is bearcove.","kind":"term","surface_form":null}
+{"term":"bearcove","text":"On GitHub, in the bearcove org","kind":"term","surface_form":null}
+{"term":"bearcove","text":"It's a bearcove project, so we can adjust it if needed.","kind":"term","surface_form":null}
+{"term":"bearcove","text":"bearcove has been up since 2024 you know.","kind":"term","surface_form":null}
+{"term":"clap","text":"We can use Clap to handle command line arguments easily.","kind":"term","surface_form":null}
+{"term":"DWARF","text":"I think the debugger is missing DWARF symbols, which is why the stack trace looks useless.","kind":"term","surface_form":null}
+{"term":"DWARF","text":"Can you check whether the compiler is emitting DWARF info in the optimized build?","kind":"term","surface_form":null}
+{"term":"DWARF","text":"Without DWARF, it's really hard to step through this function in lldb.","kind":"term","surface_form":null}
+{"term":"DWARF","text":"Strip the DWARF from release artifacts to reduce size when we ship binaries.","kind":"term","surface_form":null}
+{"term":"DWARF","text":"GDB prints DWARF backtraces that are invaluable when debugging optimized code.","kind":"term","surface_form":null}
+{"term":"DWARF","text":"The compiler emitted malformed DWARF for that closure and the debugger couldn't find symbols.","kind":"term","surface_form":null}
+{"term":"fasterthanlime","text":"fasterthanlime writes fun blog articles","kind":"term","surface_form":null}
+{"term":"fasterthanlime","text":"fasterthanlime wrote about it earlier","kind":"term","surface_form":null}
+{"term":"fasterthanlime","text":"There's a fasterthanlime article for everything","kind":"term","surface_form":null}
+{"term":"fasterthanlime","text":"I remember reading that same trick on fasterthanlime a while back.","kind":"term","surface_form":null}
+{"term":"fasterthanlime","text":"fasterthanlime had a great write-up on this exact debugging pattern.","kind":"term","surface_form":null}
+{"term":"fasterthanlime","text":"If you're stuck, check fasterthanlime first because there's probably a post about it.","kind":"term","surface_form":null}
+{"term":"fasterthanlime","text":"We haven't even covered faster than light travel.","kind":"counterexample","surface_form":"faster than light"}
+{"term":"fasterthanlime","text":"You can travel faster than light if you need to. Usually, you do that in space.","kind":"counterexample","surface_form":"faster than light"}
+{"term":"fasterthanlime","text":"Faster than light travel is in an unexplored topic.","kind":"counterexample","surface_form":"faster than light"}
+{"term":"fasterthanlime","text":"Don't tell me you ate all the cereal.","kind":"counterexample","surface_form":"you ate"}
+{"term":"fasterthanlime","text":"The important part in faster than light travel.","kind":"counterexample","surface_form":"Faster than light"}
+{"term":"fasterthanlime","text":"It's pretty hard to go faster than light, but if you try, you can.","kind":"counterexample","surface_form":"Faster than light"}
+{"term":"fasterthanlime","text":"We are now entering the realm of the faster than light.","kind":"counterexample","surface_form":"Faster than light"}
+{"term":"kajit","text":"Well kajit is an optimizing compiler backend","kind":"term","surface_form":null}
+{"term":"kajit","text":"In the kajit codebase, you'll find a minimizer","kind":"term","surface_form":null}
+{"term":"kajit","text":"I'm excited to switch to kajit for better serialization and deserialization performance","kind":"term","surface_form":null}
+{"term":"kajit","text":"The big question is: will kajit be faster than serde?","kind":"term","surface_form":null}
+{"term":"kajit","text":"Kajit isn't ready yet but it's getting there: it has some of the best debugging infrastructure with its IR, etc.","kind":"term","surface_form":null}
+{"term":"kajit","text":"Hmm. I'm not sure about that.","kind":"counterexample","surface_form":"Hmm"}
+{"term":"MachO","text":"On macOS, the linker is producing a MachO binary, so the tooling path is a little different.","kind":"term","surface_form":null}
+{"term":"MachO","text":"We need to inspect the MachO headers before we can figure out why the app won't launch.","kind":"term","surface_form":null}
+{"term":"MachO","text":"That symbol table issue only happens in the MachO build, not on Linux.","kind":"term","surface_form":null}
+{"term":"MachO","text":"On macOS the loader expects a MachO binary, so our linker flags must be adjusted.","kind":"term","surface_form":null}
+{"term":"MachO","text":"I found a section alignment bug that only shows up in MachO executables.","kind":"term","surface_form":null}
+{"term":"MachO","text":"Packaging the app as a MachO bundle made it easier to run on older macOS versions.","kind":"term","surface_form":null}
+{"term":"MachO","text":"I was talking to Marco the other day.","kind":"counterexample","surface_form":"Marco"}
+{"term":"MachO","text":"I've never worked with Michael, but I hear they're good.","kind":"counterexample","surface_form":"Michael"}
+{"term":"MachO","text":"That herb is medicinal. It's gonna cure your ailments.","kind":"counterexample","surface_form":"Medicinal"}
+{"term":"MachO","text":"Yeah, I smoke weed, but it's medicinal.","kind":"counterexample","surface_form":"Medicinal"}
+{"term":"MIR","text":"I was looking at MIR to figure out where the borrow checker is getting confused.","kind":"term","surface_form":null}
+{"term":"MIR","text":"The optimization should show up in MIR before it gets lowered any further.","kind":"term","surface_form":null}
+{"term":"MIR","text":"If you dump MIR, you can usually see the control flow more clearly.","kind":"term","surface_form":null}
+{"term":"MIR","text":"I inspected the MIR to understand why rustc was inserting an extra temporary.","kind":"term","surface_form":null}
+{"term":"MIR","text":"Optimizations that operate on MIR can dramatically reduce codegen bloat.","kind":"term","surface_form":null}
+{"term":"MIR","text":"If you dump MIR for that function you can see the borrow checker behavior more clearly.","kind":"term","surface_form":null}
+{"term":"MIR","text":"Yeah, I don't think that's an issue.","kind":"counterexample","surface_form":"Yeah"}
+{"term":"MIR","text":"I would say yeah, but I'm not sure.","kind":"counterexample","surface_form":"Yeah"}
+{"term":"MIR","text":"That's not something you say no to. That's something you say yeah to.","kind":"counterexample","surface_form":"Yeah"}
+{"term":"MIR","text":"Yeah, we could do that.","kind":"counterexample","surface_form":"Yeah"}
+{"term":"MIR","text":"Yeah, that's not a bad idea.","kind":"counterexample","surface_form":"Yeah"}
+{"term":"MIR","text":"I mean, if you want, yeah.","kind":"counterexample","surface_form":"Yeah"}
+{"term":"MIR","text":"Hmm. I'm not sure about that.","kind":"counterexample","surface_form":"Hmm"}
+{"term":"miri","text":"Oooh we should run it under miri! Then we'd find memory unsafety","kind":"term","surface_form":null}
+{"term":"miri","text":"Well, we can't really use miri here because network connections are involved","kind":"term","surface_form":null}
+{"term":"miri","text":"If there's memory unsafety I would run it through miri, see what fails","kind":"term","surface_form":null}
+{"term":"miri","text":"I don't think this syscall is supported by miri.","kind":"term","surface_form":null}
+{"term":"miri","text":"It's you, me, and Marie.","kind":"counterexample","surface_form":"Me"}
+{"term":"miri","text":"Don't blame me. Blame the game.","kind":"counterexample","surface_form":"Me"}
+{"term":"miri","text":"I didn't know you were talking about me.","kind":"counterexample","surface_form":"Me"}
+{"term":"QEMU","text":"I usually boot the arm image in QEMU before I try it on real hardware.","kind":"term","surface_form":null}
+{"term":"QEMU","text":"Can we use QEMU to run the test suite for the other architecture tonight?","kind":"term","surface_form":null}
+{"term":"QEMU","text":"The fix looks good locally, but I want to confirm it under QEMU as well.","kind":"term","surface_form":null}
+{"term":"QEMU","text":"I booted the test image under QEMU to validate cross-architecture behavior before pushing.","kind":"term","surface_form":null}
+{"term":"QEMU","text":"QEMU's user-mode emulation is handy for running ARM binaries on an x86_64 CI worker.","kind":"term","surface_form":null}
+{"term":"QEMU","text":"Performance in QEMU is slow, but it's fast enough for basic integration tests.","kind":"term","surface_form":null}
+{"term":"QEMU","text":"You are wonderful.","kind":"counterexample","surface_form":"You"}
+{"term":"QEMU","text":"I don't think you understand what it entails.","kind":"counterexample","surface_form":"You"}
+{"term":"QEMU","text":"There's you and me in a boat.","kind":"counterexample","surface_form":"You"}
+{"term":"QEMU","text":"Pew pew pew! The gun went.","kind":"counterexample","surface_form":"Pew"}
+{"term":"QEMU","text":"Or we can always send them an email.","kind":"counterexample","surface_form":"Email"}
+{"term":"QEMU","text":"Can you email it to me, please?","kind":"counterexample","surface_form":"Email"}
+{"term":"qwen","text":"Hmm. I'm not sure about that.","kind":"counterexample","surface_form":"Hmm"}
+{"term":"qwen","text":"Yeah, I like beef and chicken.","kind":"counterexample","surface_form":"And"}
+{"term":"qwen","text":"Yes and no.","kind":"counterexample","surface_form":"And"}
+{"term":"qwen","text":"There's no reason why I would do something and then not brag about it.","kind":"counterexample","surface_form":"And"}
+{"term":"qwen","text":"And then what?","kind":"counterexample","surface_form":"And"}
+{"term":"qwen","text":"Oh, I used to have a friend named Quinn.","kind":"counterexample","surface_form":"Quinn"}
+{"term":"qwen","text":"Quinn can take care of that later.","kind":"counterexample","surface_form":"Quinn"}
+{"term":"qwen","text":"I asked Quinn to drive us to the theater.","kind":"counterexample","surface_form":"Quinn"}
+{"term":"regalloc","text":"Our regalloc is probably slower than regalloc2","kind":"term","surface_form":null}
+{"term":"regalloc","text":"A regalloc is not that hard - a good one however...","kind":"term","surface_form":null}
+{"term":"regalloc","text":"our regalloc isn't the best but at least we don't have that buggy adapter code anymore","kind":"term","surface_form":null}
+{"term":"regalloc","text":"The backend is using regalloc2 now, so we should see better register allocation.","kind":"term","surface_form":null}
+{"term":"regalloc","text":"I need to check whether regalloc2 is spilling too much in this hot path.","kind":"term","surface_form":null}
+{"term":"regalloc","text":"If regalloc2 regresses, the compiler team will probably want a minimal repro.","kind":"term","surface_form":null}
+{"term":"regalloc","text":"Okay, I'm doing a sample sentence now.","kind":"counterexample","surface_form":"Okay"}
+{"term":"regalloc","text":"That looks okay to me.","kind":"counterexample","surface_form":"Okay"}
+{"term":"regalloc","text":"No, those performance numbers are not okay.","kind":"counterexample","surface_form":"Okay"}
+{"term":"regalloc","text":"I guess if you feel okay with it.","kind":"counterexample","surface_form":"Okay"}
+{"term":"repr","text":"they need to be repr u8 — it's a requirement of facet (and by extension kajit)","kind":"term","surface_form":null}
+{"term":"repr","text":"if you want your structs to have a stable layout you need repr(C)","kind":"term","surface_form":null}
+{"term":"repr","text":"it depends on the repr - I think we can get away with u8 for this enum","kind":"term","surface_form":null}
+{"term":"repr","text":"unfortunately the Rust repr isn't stable","kind":"term","surface_form":null}
+{"term":"repr","text":"If we seed proptest the same way in CI, the failure should be easier to reproduce.","kind":"term","surface_form":null}
+{"term":"repr","text":"If regalloc2 regresses, the compiler team will probably want a minimal repro.","kind":"term","surface_form":null}
+{"term":"repr","text":"The crash only shows up on AArch64, so I want to reproduce it in a container first.","kind":"term","surface_form":null}
+{"term":"repr","text":"That enum needs to be repr(u8) so it matches the C ABI we talk to over the wire.","kind":"term","surface_form":null}
+{"term":"repr","text":"The crash only reproduces on x86_64, which suggests an architecture-specific bug.","kind":"term","surface_form":null}
+{"term":"repr","text":"Okay, I'm doing a sample sentence now.","kind":"counterexample","surface_form":"Okay"}
+{"term":"repr","text":"That looks okay to me.","kind":"counterexample","surface_form":"Okay"}
+{"term":"repr","text":"No, those performance numbers are not okay.","kind":"counterexample","surface_form":"Okay"}
+{"term":"repr","text":"I guess if you feel okay with it.","kind":"counterexample","surface_form":"Okay"}
+{"term":"reqwest","text":"We should use reqwest for making HTTP requests in our application.","kind":"term","surface_form":null}
+{"term":"reqwest","text":"Have you tried using reqwest for the API calls?","kind":"term","surface_form":null}
+{"term":"reqwest","text":"I'm having some issues with reqwest, the responses seem delayed..","kind":"term","surface_form":null}
+{"term":"reqwest","text":"I put in a request for a continuance.","kind":"counterexample","surface_form":"request"}
+{"term":"reqwest","text":"I request that you stop annoying me.","kind":"counterexample","surface_form":"request"}
+{"term":"reqwest","text":"The integration test downloads a fixture with reqwest and writes it to a temp file.","kind":"term","surface_form":null}
+{"term":"reqwest","text":"If you don't need async complexity, the blocking API in reqwest is perfectly fine for a small script.","kind":"term","surface_form":null}
+{"term":"reqwest","text":"You are wonderful.","kind":"counterexample","surface_form":"You"}
+{"term":"reqwest","text":"I don't think you understand what it entails.","kind":"counterexample","surface_form":"You"}
+{"term":"reqwest","text":"There's you and me in a boat.","kind":"counterexample","surface_form":"You"}
+{"term":"reqwest","text":"We're gonna get it right this time.","kind":"counterexample","surface_form":"Right"}
+{"term":"reqwest","text":"It's neither left nor right.","kind":"counterexample","surface_form":"Right"}
+{"term":"reqwest","text":"I think you're right.","kind":"counterexample","surface_form":"Right"}
+{"term":"ripgrep","text":"I used ripgrep to find every place we call that helper.","kind":"term","surface_form":null}
+{"term":"ripgrep","text":"Can you run ripgrep for the old config key and see what still depends on it?","kind":"term","surface_form":null}
+{"term":"ripgrep","text":"ripgrep is usually faster than grep when I'm searching through the whole repo.","kind":"term","surface_form":null}
+{"term":"ripgrep","text":"I used ripgrep to find all TODO comments mentioning the legacy API.","kind":"term","surface_form":null}
+{"term":"ripgrep","text":"ripgrep blew through the repo in a few seconds and pointed me to the offending file.","kind":"term","surface_form":null}
+{"term":"ripgrep","text":"If you want to search from the root, run ripgrep with --hidden to include dotfiles.","kind":"term","surface_form":null}
+{"term":"ripgrep","text":"Well, that's a load of crap.","kind":"counterexample","surface_form":"Crap"}
+{"term":"ripgrep","text":"Oh, we're gonna program the crap out of this.","kind":"counterexample","surface_form":"Crap"}
+{"term":"ripgrep","text":"Crap! I forgot about this.","kind":"counterexample","surface_form":"Crap"}
+{"term":"ripgrep","text":"Be right back. I need to take a crap.","kind":"counterexample","surface_form":"Crap"}
+{"term":"rustc","text":"It's cargo which invokes rustc, which in turn compile crates","kind":"term","surface_form":null}
+{"term":"rustc","text":"I think the problem is rustc is not modular enough","kind":"term","surface_form":null}
+{"term":"rustc","text":"Well, I would remake cargo but I wouldn't remake rustc, it's too much code","kind":"term","surface_form":null}
+{"term":"rustc","text":"I think rustc is SIGBUS'ing","kind":"term","surface_form":null}
+{"term":"rustc","text":"My English is pretty rusty.","kind":"counterexample","surface_form":"rusty"}
+{"term":"rustc","text":"This nail is rusty, and that one isn't.","kind":"counterexample","surface_form":"rusty"}
+{"term":"rustc","text":"You can get diseases from rusty things.","kind":"counterexample","surface_form":"rusty"}
+{"term":"rustc","text":"I inspected the MIR to understand why rustc was inserting an extra temporary.","kind":"term","surface_form":null}
+{"term":"rustc","text":"Sometimes I use the C programming language, even though it's not advised.","kind":"counterexample","surface_form":"C"}
+{"term":"rustc","text":"So it's a it's a Rust port of a C code base.","kind":"counterexample","surface_form":"C"}
+{"term":"rustc","text":"There's really no reason to use C nowadays to make a fresh code base.","kind":"counterexample","surface_form":"C"}
+{"term":"rustc","text":"Unfortunately, my ruby is a little rusty.","kind":"counterexample","surface_form":"Rusty"}
+{"term":"rustc","text":"I'm never going to talk about rusty nails in the context of programming.","kind":"counterexample","surface_form":"Rusty"}
+{"term":"rustc","text":"Yeah, we're a little rusty, but I think we can do that marathon.","kind":"counterexample","surface_form":"Rusty"}
+{"term":"rustc","text":"Russia is in a war against Ukraine.","kind":"counterexample","surface_form":"Russia"}
+{"term":"rustc","text":"That's the beauty of Mother Russia.","kind":"counterexample","surface_form":"Russia"}
+{"term":"rustc","text":"I would honestly not like to live in Russia.","kind":"counterexample","surface_form":"Russia"}
+{"term":"serde","text":"We don't use serde for serialization or deserialization in this codebase","kind":"term","surface_form":null}
+{"term":"serde","text":"serde leans hard on monomorphization which is a different approach","kind":"term","surface_form":null}
+{"term":"serde","text":"For JSON there's serde but we could also use facet","kind":"term","surface_form":null}
+{"term":"serde","text":"We can derive serde for this struct instead of writing the boilerplate by hand.","kind":"term","surface_form":null}
+{"term":"serde","text":"serde makes the config parsing a lot less painful in Rust.","kind":"term","surface_form":null}
+{"term":"serde","text":"I added a serde annotation so the field name matches the API response.","kind":"term","surface_form":null}
+{"term":"serde","text":"serde_json should be fine for this payload since it's just a small config blob.","kind":"term","surface_form":null}
+{"term":"serde","text":"I used serde_json to print the response before sending it to the client.","kind":"term","surface_form":null}
+{"term":"serde","text":"If the schema changes, serde_json will fail pretty loudly during parsing.","kind":"term","surface_form":null}
+{"term":"serde","text":"And on the third day, Jesus rose.","kind":"counterexample","surface_form":"third day"}
+{"term":"serde","text":"I think it was on the second or third day.","kind":"counterexample","surface_form":"third day"}
+{"term":"serde","text":"I think the third day is the hardest.","kind":"counterexample","surface_form":"third day"}
+{"term":"serde","text":"Yeah, his sister is a Third Day Adventist.","kind":"counterexample","surface_form":"third day"}
+{"term":"serde","text":"So, are we doing this today? Are we doing this tomorrow?","kind":"counterexample","surface_form":"Today"}
+{"term":"serde","text":"I wasn't sure about it yesterday, but today I feel good.","kind":"counterexample","surface_form":"Yesterday"}
+{"term":"serde","text":"Yesterday is a song by the Beatles.","kind":"counterexample","surface_form":"Yesterday"}
+{"term":"serde","text":"There's no telling whether it's going to be tomorrow or yesterday.","kind":"counterexample","surface_form":"Yesterday"}
+{"term":"serde","text":"I don't think they mind.","kind":"counterexample","surface_form":"They"}
+{"term":"serde","text":"They are not here today.","kind":"counterexample","surface_form":"They"}
+{"term":"serde","text":"Well, don't tell me. I don't know what they want.","kind":"counterexample","surface_form":"They"}
+{"term":"serde_json","text":"Let's use serde_json to serialize our data to JSON.","kind":"term","surface_form":null}
+{"term":"serde_json","text":"The serde_json crate will simplify our data parsing.","kind":"term","surface_form":null}
+{"term":"serde_json","text":"I need to check how to handle errors with serde_json.","kind":"term","surface_form":null}
+{"term":"serde_json","text":"serde_json should be fine for this payload since it's just a small config blob.","kind":"term","surface_form":null}
+{"term":"serde_json","text":"I used serde_json to print the response before sending it to the client.","kind":"term","surface_form":null}
+{"term":"serde_json","text":"If the schema changes, serde_json will fail pretty loudly during parsing.","kind":"term","surface_form":null}
+{"term":"SQLite","text":"Postgres is nice but sqlite is probably enough for this","kind":"term","surface_form":null}
+{"term":"SQLite","text":"the SQLite database is more than enough for such a workload","kind":"term","surface_form":null}
+{"term":"SQLite","text":"I'd trust a small SQLite database more than the jsonl file","kind":"term","surface_form":null}
+{"term":"SQLite","text":"There's a Rust port of SQLite called turso","kind":"term","surface_form":null}
+{"term":"tokio","text":"We should consider using Tokio for the async runtime.","kind":"term","surface_form":null}
+{"term":"tokio","text":"Tokio makes it easier to handle concurrent tasks in Rust.","kind":"term","surface_form":null}
+{"term":"tokio","text":"If we're going async, we definitely need to integrate with Tokio.","kind":"term","surface_form":null}
+{"term":"tokio","text":"We're already on tokio, so let's make this handler async instead of blocking.","kind":"term","surface_form":null}
+{"term":"tokio","text":"I think tokio is spawning too many tasks here, which is why memory spikes.","kind":"term","surface_form":null}
+{"term":"tokio","text":"The server uses tokio for networking and timer support.","kind":"term","surface_form":null}
+{"term":"tokio","text":"I have been to Paris, but I've never been to Tokyo.","kind":"counterexample","surface_form":"Tokyo"}
+{"term":"tokio","text":"Tokyo Ghoul is a great anime.","kind":"counterexample","surface_form":"Tokyo"}
+{"term":"tokio","text":"I hear the architecture in Tokyo is out of this world.","kind":"counterexample","surface_form":"Tokyo"}
+{"term":"tokio","text":"Well, the Go language is not my favorite.","kind":"counterexample","surface_form":"Go"}
+{"term":"tokio","text":"You can go now.","kind":"counterexample","surface_form":"Go"}
+{"term":"tokio","text":"Let's go to the polls.","kind":"counterexample","surface_form":"Go"}
+{"term":"tokio","text":"We are the champions, my friend.","kind":"counterexample","surface_form":"We"}
+{"term":"tokio","text":"There's nothing we can do about it.","kind":"counterexample","surface_form":"We"}
+{"term":"tokio","text":"I'm not sure why this is an example. To be honest.","kind":"counterexample","surface_form":"I'm"}
+{"term":"tokio","text":"There is no way that I'm responsible for this.","kind":"counterexample","surface_form":"I'm"}
+{"term":"tokio","text":"If you were to tell me that I'm going to be a dad, I would not believe it.","kind":"counterexample","surface_form":"I'm"}
+{"term":"u32","text":"The checksum fits in a u32, so we don't need a bigger type here.","kind":"term","surface_form":null}
+{"term":"u32","text":"I changed the counter to u32 because the old type was overkill.","kind":"term","surface_form":null}
+{"term":"u32","text":"If we serialize that as a u32, the wire format stays compact.","kind":"term","surface_form":null}
+{"term":"u32","text":"If you only need values up to 255, use u8 to save memory compared to u32.","kind":"term","surface_form":null}
+{"term":"u32","text":"The protocol specifies a 32-bit length field, so parse it as a u32.","kind":"term","surface_form":null}
+{"term":"u32","text":"I changed the index type from usize to u32 to match the on-disk format.","kind":"term","surface_form":null}
+{"term":"u32","text":"Watch out for overflows when converting from u64 to u32 in tight loops.","kind":"term","surface_form":null}
+{"term":"u32","text":"They're giving you thirty-two days to deal with that.","kind":"counterexample","surface_form":"You thirty two"}
+{"term":"u32","text":"So Martin gets four, and you thirty-two.","kind":"counterexample","surface_form":"You thirty two"}
+{"term":"u8","text":"This field is just a u8, so we only need values from zero to 255.","kind":"term","surface_form":null}
+{"term":"u8","text":"We can pack the flags into a u8 instead of using a whole integer array.","kind":"term","surface_form":null}
+{"term":"u8","text":"That buffer is a Vec of u8, so it's basically raw bytes.","kind":"term","surface_form":null}
+{"term":"u8","text":"I think you ate things that belonged to me.","kind":"counterexample","surface_form":"you ate"}
+{"term":"u8","text":"We store the pixel data in a Vec<u8> and then memcpy it into the GPU buffer.","kind":"term","surface_form":null}
+{"term":"u8","text":"That enum needs to be repr(u8) so it matches the C ABI we talk to over the wire.","kind":"term","surface_form":null}
+{"term":"u8","text":"If you only need values up to 255, use u8 to save memory compared to u32.","kind":"term","surface_form":null}
+{"term":"u8","text":"You ate all the cereal again. I'm really tired of this.","kind":"counterexample","surface_form":"You ate"}
+{"term":"u8","text":"It's not like you ate a kid.","kind":"counterexample","surface_form":"You ate"}
+{"term":"u8","text":"I don't think you ate anything specific.","kind":"counterexample","surface_form":"You ate"}
+{"term":"u8","text":"I've seen you eat disgusting things.","kind":"counterexample","surface_form":"You eat"}
+{"term":"u8","text":"I owe you eight pieces of advice.","kind":"counterexample","surface_form":"You eight"}
+{"term":"u8","text":"I gave him four, and I gave you eight.","kind":"counterexample","surface_form":"You eight"}
+{"term":"u8","text":"Unless they're telling you eight is enough, then you should do more.","kind":"counterexample","surface_form":"You eight"}
+{"term":"Vec","text":"we have a Vec of u8, that's just bytes","kind":"term","surface_form":null}
+{"term":"Vec","text":"we can probably put it all in a Vec, no need for a HashSet","kind":"term","surface_form":null}
+{"term":"Vec","text":"We can reduce allocations by replacing Vec with smallvec","kind":"term","surface_form":null}
+{"term":"Vec","text":"and then we pass a Vec of u32","kind":"term","surface_form":null}
+{"term":"Vec","text":"If we use smallvec for the path components, we should shave off a bit of overhead.","kind":"term","surface_form":null}
+{"term":"Vec","text":"That buffer is a Vec of u8, so it's basically raw bytes.","kind":"term","surface_form":null}
+{"term":"Vec","text":"We store the pixel data in a Vec<u8> and then memcpy it into the GPU buffer.","kind":"term","surface_form":null}
+{"term":"Vec","text":"Okay, I'm doing a sample sentence now.","kind":"counterexample","surface_form":"Okay"}
+{"term":"Vec","text":"That looks okay to me.","kind":"counterexample","surface_form":"Okay"}
+{"term":"Vec","text":"No, those performance numbers are not okay.","kind":"counterexample","surface_form":"Okay"}
+{"term":"Vec","text":"I guess if you feel okay with it.","kind":"counterexample","surface_form":"Okay"}
+{"term":"Vec","text":"One of the actresses playing in Dropout stuff is Vic Michaelis.","kind":"counterexample","surface_form":"Vic"}
+{"term":"Vec","text":"Oh, don't tell me that.","kind":"counterexample","surface_form":"That"}
+{"term":"Vec","text":"That's none of your concern.","kind":"counterexample","surface_form":"That"}
+{"term":"Vec","text":"A little bit of this, a little bit of that.","kind":"counterexample","surface_form":"That"}
+{"term":"wasm","text":"We should look into compiling our code to WebAssembly, or wasm.","kind":"term","surface_form":null}
+{"term":"wasm","text":"If we deploy with wasm, it could run in the browser.","kind":"term","surface_form":null}
+{"term":"wasm","text":"WebAssembly or wasm will help us achieve better performance on the web.","kind":"term","surface_form":null}
+{"term":"wasm","text":"We're compiling this to wasm so it can run in the browser.","kind":"term","surface_form":null}
+{"term":"wasm","text":"The wasm build is smaller, but we lose access to a few native APIs.","kind":"term","surface_form":null}
+{"term":"wasm","text":"I had to change the filesystem code because wasm doesn't support it the same way.","kind":"term","surface_form":null}
+{"term":"x86_64","text":"This build target is x86_64, so the assembly should match our usual Linux servers.","kind":"term","surface_form":null}
+{"term":"x86_64","text":"I only tested it on x86_64 so far, not on ARM.","kind":"term","surface_form":null}
+{"term":"x86_64","text":"The issue seems specific to x86_64 because the calling convention is different there.","kind":"term","surface_form":null}
+{"term":"x86_64","text":"Cross-compiling for x86_64-unknown-linux-gnu worked after I installed the target toolchain.","kind":"term","surface_form":null}
+{"term":"x86_64","text":"Our CI builds both x86_64 and AArch64 images to cover server and ARM runners.","kind":"term","surface_form":null}
+{"term":"x86_64","text":"The crash only reproduces on x86_64, which suggests an architecture-specific bug.","kind":"term","surface_form":null}
+{"term":"x86_64","text":"QEMU's user-mode emulation is handy for running ARM binaries on an x86_64 CI worker.","kind":"term","surface_form":null}

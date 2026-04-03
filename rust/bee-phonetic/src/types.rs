@@ -28,3 +28,20 @@ pub struct ReviewedConfusionSurfaceRow {
     pub created_at: String,
     pub updated_at: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthoredSentenceRow {
+    pub term: String,
+    pub sentence: String,
+    pub kind: String,
+    pub surface_form: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthoredRecordingRow {
+    pub term: String,
+    pub sentence: String,
+    pub take_no: i64,
+    pub wav_path: String,
+    pub qwen_clean: Option<String>,
+}

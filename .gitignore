@@ -35,6 +35,13 @@ target/
 voices/*.wav
 voices/*.m4a
 data/
+!data/
+data/*
+!data/phonetic-seed/
+!data/phonetic-seed/README.md
+!data/phonetic-seed/*.jsonl
+!data/phonetic-seed/audio/
+!data/phonetic-seed/audio/*.ogg
 training/data/
 training/adapters/
 scripts/__pycache__/

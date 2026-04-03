@@ -1,3 +1,4 @@
+pub mod dataset;
 pub mod phonetic_index;
 pub mod phonetic_lexicon;
 pub mod phonetic_verify;
@@ -6,6 +7,10 @@ pub mod region_proposal;
 pub mod types;
 pub mod word_split;
 
+pub use dataset::{
+    RecordingExampleRow, SeedDataset, SeedDatasetError, SeedDatasetValidationError, SeedTermRow,
+    SentenceExampleRow,
+};
 pub use phonetic_index::{
     build_index, query_index, IndexView, PhoneticIndex, RetrievalCandidate, RetrievalQuery,
 };
