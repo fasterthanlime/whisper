@@ -4,45 +4,30 @@
 import Foundation
 import VoxRuntime
 
-// MARK: - BeeIpc Method IDs
+// MARK: - App Method IDs
 
-public enum BeeIpcMethodId {
-    public static let imeHello: UInt64 = 0x5405ec6a2547d7b4
-    public static let prepareSession: UInt64 = 0xe54931ecf2f8c4fc
-    public static let claimSession: UInt64 = 0x3073313afa900f60
-    public static let imeAttach: UInt64 = 0xc612be0db6c55fb9
-    public static let setMarkedText: UInt64 = 0xa9a37aa50a4a4d49
-    public static let commitText: UInt64 = 0xd91aab7dcebafc3c
-    public static let stopDictating: UInt64 = 0x1356e68787bcdbec
-    public static let imeActivationRevoked: UInt64 = 0x7618c5ad6101b475
-    public static let imeContextLost: UInt64 = 0x830cea78a75853b8
-    public static let imeKeyEvent: UInt64 = 0xad031f167de4ccb6
+public enum AppMethodId {
+    public static let imeHello: UInt64 = 0x75699685b1a93d32
+    public static let claimSession: UInt64 = 0xa450881492adee30
+    public static let imeAttach: UInt64 = 0x8a60f92280588cd0
+    public static let imeActivationRevoked: UInt64 = 0x069f4682025f282c
+    public static let imeContextLost: UInt64 = 0xf05b46d1538b1ac3
+    public static let imeKeyEvent: UInt64 = 0x70404de7bbc58de7
 }
 
-// MARK: - BeeIpc Types
+// MARK: - App Types
 
-// MARK: - BeeIpc Client
+// MARK: - App Client
 
-///  RPC service between the bee app and the beeInput IME.
-/// 
-///  The app is the server (acceptor), the IME is the client (initiator).
-public protocol BeeIpcCaller {
-    ///  IME says hello, returns its instance ID.
+///  Methods the app exposes — IME calls into app.
+public protocol AppCaller {
+    ///  IME says hello, returns app instance ID.
     func imeHello() async throws -> String
-    ///  App prepares a dictation session. The IME should claim it
-    ///  when activateServer fires for the matching PID.
-    func prepareSession(sessionId: String, targetPid: Int32) async throws -> Bool
-    ///  IME claims the prepared session. Returns the session ID if one
+    ///  IME claims the prepared session. Returns session ID if one
     ///  was waiting, or empty string if none.
     func claimSession() async throws -> String
     ///  IME attached to the session (activateServer confirmed).
     func imeAttach(sessionId: String) async throws -> Bool
-    ///  App sends marked text to the IME for display.
-    func setMarkedText(sessionId: String, text: String) async throws -> Bool
-    ///  App tells IME to commit text and end the session.
-    func commitText(sessionId: String, text: String) async throws -> Bool
-    ///  App tells IME to stop dictating (cancel/abort).
-    func stopDictating(sessionId: String) async throws -> Bool
     ///  IME notifies app that activation was revoked (spurious deactivate).
     func imeActivationRevoked() async throws -> Bool
     ///  IME notifies app that it lost context (deactivateServer with no session).
@@ -51,7 +36,7 @@ public protocol BeeIpcCaller {
     func imeKeyEvent(sessionId: String, eventType: String, keyCode: UInt32, characters: String) async throws -> Bool
 }
 
-public final class BeeIpcClient: BeeIpcCaller, Sendable {
+public final class AppClient: AppCaller, Sendable {
     private let connection: VoxConnection
     private let timeout: TimeInterval?
 
@@ -62,8 +47,8 @@ public final class BeeIpcClient: BeeIpcCaller, Sendable {
 
     public func imeHello() async throws -> String {
         let payload = Data()
-        let schemaInfo = ClientSchemaInfo(methodInfo: beeIpc_method_schemas[0x5405ec6a2547d7b4]!, schemaRegistry: beeIpc_schema_registry)
-        let response = try await connection.call(methodId: 0x5405ec6a2547d7b4, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
+        let schemaInfo = ClientSchemaInfo(methodInfo: app_method_schemas[0x75699685b1a93d32]!, schemaRegistry: app_schema_registry)
+        let response = try await connection.call(methodId: 0x75699685b1a93d32, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
         var cursor = 0
         let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
         switch _cursor_resultDisc {
@@ -91,44 +76,10 @@ public final class BeeIpcClient: BeeIpcCaller, Sendable {
         }
     }
 
-    public func prepareSession(sessionId: String, targetPid: Int32) async throws -> Bool {
-        var payloadBytes: [UInt8] = []
-        payloadBytes += encodeString(sessionId)
-        payloadBytes += encodeI32(targetPid)
-        let payload = Data(payloadBytes)
-        let schemaInfo = ClientSchemaInfo(methodInfo: beeIpc_method_schemas[0xe54931ecf2f8c4fc]!, schemaRegistry: beeIpc_schema_registry)
-        let response = try await connection.call(methodId: 0xe54931ecf2f8c4fc, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
-        var cursor = 0
-        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
-        switch _cursor_resultDisc {
-        case 0:
-            let result = try decodeBool(from: response, offset: &cursor)
-            return result
-        case 1:
-            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
-            switch _cursor_errorCode {
-            case 0:
-                throw VoxError.decodeError("unexpected user error for infallible method")
-            case 1:
-                throw VoxError.unknownMethod
-            case 2:
-                throw VoxError.decodeError("invalid payload")
-            case 3:
-                throw VoxError.cancelled
-            case 4:
-                throw VoxError.indeterminate
-            default:
-                throw VoxError.decodeError("invalid VoxError discriminant: \(_cursor_errorCode)")
-            }
-        default:
-            throw VoxError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
-        }
-    }
-
     public func claimSession() async throws -> String {
         let payload = Data()
-        let schemaInfo = ClientSchemaInfo(methodInfo: beeIpc_method_schemas[0x3073313afa900f60]!, schemaRegistry: beeIpc_schema_registry)
-        let response = try await connection.call(methodId: 0x3073313afa900f60, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
+        let schemaInfo = ClientSchemaInfo(methodInfo: app_method_schemas[0xa450881492adee30]!, schemaRegistry: app_schema_registry)
+        let response = try await connection.call(methodId: 0xa450881492adee30, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
         var cursor = 0
         let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
         switch _cursor_resultDisc {
@@ -160,109 +111,8 @@ public final class BeeIpcClient: BeeIpcCaller, Sendable {
         var payloadBytes: [UInt8] = []
         payloadBytes += encodeString(sessionId)
         let payload = Data(payloadBytes)
-        let schemaInfo = ClientSchemaInfo(methodInfo: beeIpc_method_schemas[0xc612be0db6c55fb9]!, schemaRegistry: beeIpc_schema_registry)
-        let response = try await connection.call(methodId: 0xc612be0db6c55fb9, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
-        var cursor = 0
-        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
-        switch _cursor_resultDisc {
-        case 0:
-            let result = try decodeBool(from: response, offset: &cursor)
-            return result
-        case 1:
-            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
-            switch _cursor_errorCode {
-            case 0:
-                throw VoxError.decodeError("unexpected user error for infallible method")
-            case 1:
-                throw VoxError.unknownMethod
-            case 2:
-                throw VoxError.decodeError("invalid payload")
-            case 3:
-                throw VoxError.cancelled
-            case 4:
-                throw VoxError.indeterminate
-            default:
-                throw VoxError.decodeError("invalid VoxError discriminant: \(_cursor_errorCode)")
-            }
-        default:
-            throw VoxError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
-        }
-    }
-
-    public func setMarkedText(sessionId: String, text: String) async throws -> Bool {
-        var payloadBytes: [UInt8] = []
-        payloadBytes += encodeString(sessionId)
-        payloadBytes += encodeString(text)
-        let payload = Data(payloadBytes)
-        let schemaInfo = ClientSchemaInfo(methodInfo: beeIpc_method_schemas[0xa9a37aa50a4a4d49]!, schemaRegistry: beeIpc_schema_registry)
-        let response = try await connection.call(methodId: 0xa9a37aa50a4a4d49, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
-        var cursor = 0
-        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
-        switch _cursor_resultDisc {
-        case 0:
-            let result = try decodeBool(from: response, offset: &cursor)
-            return result
-        case 1:
-            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
-            switch _cursor_errorCode {
-            case 0:
-                throw VoxError.decodeError("unexpected user error for infallible method")
-            case 1:
-                throw VoxError.unknownMethod
-            case 2:
-                throw VoxError.decodeError("invalid payload")
-            case 3:
-                throw VoxError.cancelled
-            case 4:
-                throw VoxError.indeterminate
-            default:
-                throw VoxError.decodeError("invalid VoxError discriminant: \(_cursor_errorCode)")
-            }
-        default:
-            throw VoxError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
-        }
-    }
-
-    public func commitText(sessionId: String, text: String) async throws -> Bool {
-        var payloadBytes: [UInt8] = []
-        payloadBytes += encodeString(sessionId)
-        payloadBytes += encodeString(text)
-        let payload = Data(payloadBytes)
-        let schemaInfo = ClientSchemaInfo(methodInfo: beeIpc_method_schemas[0xd91aab7dcebafc3c]!, schemaRegistry: beeIpc_schema_registry)
-        let response = try await connection.call(methodId: 0xd91aab7dcebafc3c, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
-        var cursor = 0
-        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
-        switch _cursor_resultDisc {
-        case 0:
-            let result = try decodeBool(from: response, offset: &cursor)
-            return result
-        case 1:
-            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
-            switch _cursor_errorCode {
-            case 0:
-                throw VoxError.decodeError("unexpected user error for infallible method")
-            case 1:
-                throw VoxError.unknownMethod
-            case 2:
-                throw VoxError.decodeError("invalid payload")
-            case 3:
-                throw VoxError.cancelled
-            case 4:
-                throw VoxError.indeterminate
-            default:
-                throw VoxError.decodeError("invalid VoxError discriminant: \(_cursor_errorCode)")
-            }
-        default:
-            throw VoxError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
-        }
-    }
-
-    public func stopDictating(sessionId: String) async throws -> Bool {
-        var payloadBytes: [UInt8] = []
-        payloadBytes += encodeString(sessionId)
-        let payload = Data(payloadBytes)
-        let schemaInfo = ClientSchemaInfo(methodInfo: beeIpc_method_schemas[0x1356e68787bcdbec]!, schemaRegistry: beeIpc_schema_registry)
-        let response = try await connection.call(methodId: 0x1356e68787bcdbec, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
+        let schemaInfo = ClientSchemaInfo(methodInfo: app_method_schemas[0x8a60f92280588cd0]!, schemaRegistry: app_schema_registry)
+        let response = try await connection.call(methodId: 0x8a60f92280588cd0, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
         var cursor = 0
         let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
         switch _cursor_resultDisc {
@@ -292,8 +142,8 @@ public final class BeeIpcClient: BeeIpcCaller, Sendable {
 
     public func imeActivationRevoked() async throws -> Bool {
         let payload = Data()
-        let schemaInfo = ClientSchemaInfo(methodInfo: beeIpc_method_schemas[0x7618c5ad6101b475]!, schemaRegistry: beeIpc_schema_registry)
-        let response = try await connection.call(methodId: 0x7618c5ad6101b475, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
+        let schemaInfo = ClientSchemaInfo(methodInfo: app_method_schemas[0x069f4682025f282c]!, schemaRegistry: app_schema_registry)
+        let response = try await connection.call(methodId: 0x069f4682025f282c, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
         var cursor = 0
         let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
         switch _cursor_resultDisc {
@@ -325,8 +175,8 @@ public final class BeeIpcClient: BeeIpcCaller, Sendable {
         var payloadBytes: [UInt8] = []
         payloadBytes += encodeBool(hadMarkedText)
         let payload = Data(payloadBytes)
-        let schemaInfo = ClientSchemaInfo(methodInfo: beeIpc_method_schemas[0x830cea78a75853b8]!, schemaRegistry: beeIpc_schema_registry)
-        let response = try await connection.call(methodId: 0x830cea78a75853b8, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
+        let schemaInfo = ClientSchemaInfo(methodInfo: app_method_schemas[0xf05b46d1538b1ac3]!, schemaRegistry: app_schema_registry)
+        let response = try await connection.call(methodId: 0xf05b46d1538b1ac3, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
         var cursor = 0
         let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
         switch _cursor_resultDisc {
@@ -361,8 +211,8 @@ public final class BeeIpcClient: BeeIpcCaller, Sendable {
         payloadBytes += encodeU32(keyCode)
         payloadBytes += encodeString(characters)
         let payload = Data(payloadBytes)
-        let schemaInfo = ClientSchemaInfo(methodInfo: beeIpc_method_schemas[0xad031f167de4ccb6]!, schemaRegistry: beeIpc_schema_registry)
-        let response = try await connection.call(methodId: 0xad031f167de4ccb6, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
+        let schemaInfo = ClientSchemaInfo(methodInfo: app_method_schemas[0x70404de7bbc58de7]!, schemaRegistry: app_schema_registry)
+        let response = try await connection.call(methodId: 0x70404de7bbc58de7, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
         var cursor = 0
         let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
         switch _cursor_resultDisc {
@@ -391,28 +241,17 @@ public final class BeeIpcClient: BeeIpcCaller, Sendable {
     }
 }
 
-// MARK: - BeeIpc Server
+// MARK: - App Server
 
-///  RPC service between the bee app and the beeInput IME.
-/// 
-///  The app is the server (acceptor), the IME is the client (initiator).
-public protocol BeeIpcHandler {
-    ///  IME says hello, returns its instance ID.
+///  Methods the app exposes — IME calls into app.
+public protocol AppHandler: Sendable {
+    ///  IME says hello, returns app instance ID.
     func imeHello() async throws -> String
-    ///  App prepares a dictation session. The IME should claim it
-    ///  when activateServer fires for the matching PID.
-    func prepareSession(sessionId: String, targetPid: Int32) async throws -> Bool
-    ///  IME claims the prepared session. Returns the session ID if one
+    ///  IME claims the prepared session. Returns session ID if one
     ///  was waiting, or empty string if none.
     func claimSession() async throws -> String
     ///  IME attached to the session (activateServer confirmed).
     func imeAttach(sessionId: String) async throws -> Bool
-    ///  App sends marked text to the IME for display.
-    func setMarkedText(sessionId: String, text: String) async throws -> Bool
-    ///  App tells IME to commit text and end the session.
-    func commitText(sessionId: String, text: String) async throws -> Bool
-    ///  App tells IME to stop dictating (cancel/abort).
-    func stopDictating(sessionId: String) async throws -> Bool
     ///  IME notifies app that activation was revoked (spurious deactivate).
     func imeActivationRevoked() async throws -> Bool
     ///  IME notifies app that it lost context (deactivateServer with no session).
@@ -421,69 +260,51 @@ public protocol BeeIpcHandler {
     func imeKeyEvent(sessionId: String, eventType: String, keyCode: UInt32, characters: String) async throws -> Bool
 }
 
-public final class BeeIpcChannelingDispatcher {
-    private let handler: BeeIpcHandler
-    private let registry: IncomingChannelRegistry
-    private let taskSender: TaskSender
+public final class AppChannelingDispatcher: ServiceDispatcher {
+    private let handler: AppHandler
     private let schemaRegistry: [UInt64: Schema]
     private let methodSchemas: [UInt64: MethodSchemaInfo]
 
-    public init(handler: BeeIpcHandler, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender, schemaSendTracker _: SchemaSendTracker, schemaRegistry: [UInt64: Schema] = beeIpc_schema_registry, methodSchemas: [UInt64: MethodSchemaInfo] = beeIpc_method_schemas) {
+    public init(handler: AppHandler, schemaRegistry: [UInt64: Schema] = app_schema_registry, methodSchemas: [UInt64: MethodSchemaInfo] = app_method_schemas) {
         self.handler = handler
-        self.registry = registry
-        self.taskSender = taskSender
         self.schemaRegistry = schemaRegistry
         self.methodSchemas = methodSchemas
     }
 
-    public func dispatch(methodId: UInt64, requestId: UInt64, payload: Data) async {
+    public func dispatch(methodId: UInt64, payload: [UInt8], requestId: UInt64, registry: ChannelRegistry, schemaSendTracker _: SchemaSendTracker, taskTx: @escaping @Sendable (TaskMessage) -> Void) async {
+        let payload = Data(payload)
+        let taskSender: TaskSender = taskTx
         switch methodId {
-        case 0x5405ec6a2547d7b4:
-            await dispatch_imeHello(methodId: methodId, requestId: requestId, payload: payload)
-        case 0xe54931ecf2f8c4fc:
-            await dispatch_prepareSession(methodId: methodId, requestId: requestId, payload: payload)
-        case 0x3073313afa900f60:
-            await dispatch_claimSession(methodId: methodId, requestId: requestId, payload: payload)
-        case 0xc612be0db6c55fb9:
-            await dispatch_imeAttach(methodId: methodId, requestId: requestId, payload: payload)
-        case 0xa9a37aa50a4a4d49:
-            await dispatch_setMarkedText(methodId: methodId, requestId: requestId, payload: payload)
-        case 0xd91aab7dcebafc3c:
-            await dispatch_commitText(methodId: methodId, requestId: requestId, payload: payload)
-        case 0x1356e68787bcdbec:
-            await dispatch_stopDictating(methodId: methodId, requestId: requestId, payload: payload)
-        case 0x7618c5ad6101b475:
-            await dispatch_imeActivationRevoked(methodId: methodId, requestId: requestId, payload: payload)
-        case 0x830cea78a75853b8:
-            await dispatch_imeContextLost(methodId: methodId, requestId: requestId, payload: payload)
-        case 0xad031f167de4ccb6:
-            await dispatch_imeKeyEvent(methodId: methodId, requestId: requestId, payload: payload)
+        case 0x75699685b1a93d32:
+            await dispatch_imeHello(methodId: methodId, requestId: requestId, payload: payload, registry: registry, taskSender: taskSender)
+        case 0xa450881492adee30:
+            await dispatch_claimSession(methodId: methodId, requestId: requestId, payload: payload, registry: registry, taskSender: taskSender)
+        case 0x8a60f92280588cd0:
+            await dispatch_imeAttach(methodId: methodId, requestId: requestId, payload: payload, registry: registry, taskSender: taskSender)
+        case 0x069f4682025f282c:
+            await dispatch_imeActivationRevoked(methodId: methodId, requestId: requestId, payload: payload, registry: registry, taskSender: taskSender)
+        case 0xf05b46d1538b1ac3:
+            await dispatch_imeContextLost(methodId: methodId, requestId: requestId, payload: payload, registry: registry, taskSender: taskSender)
+        case 0x70404de7bbc58de7:
+            await dispatch_imeKeyEvent(methodId: methodId, requestId: requestId, payload: payload, registry: registry, taskSender: taskSender)
         default:
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
         }
     }
 
-    public static func retryPolicy(methodId: UInt64) -> RetryPolicy {
+    public func retryPolicy(methodId: UInt64) -> RetryPolicy {
         switch methodId {
-        case 0x5405ec6a2547d7b4:
+        case 0x75699685b1a93d32:
             return .volatile
-        case 0xe54931ecf2f8c4fc:
+        case 0xa450881492adee30:
             return .volatile
-        case 0x3073313afa900f60:
+        case 0x8a60f92280588cd0:
             return .volatile
-        case 0xc612be0db6c55fb9:
+        case 0x069f4682025f282c:
             return .volatile
-        case 0xa9a37aa50a4a4d49:
+        case 0xf05b46d1538b1ac3:
             return .volatile
-        case 0xd91aab7dcebafc3c:
-            return .volatile
-        case 0x1356e68787bcdbec:
-            return .volatile
-        case 0x7618c5ad6101b475:
-            return .volatile
-        case 0x830cea78a75853b8:
-            return .volatile
-        case 0xad031f167de4ccb6:
+        case 0x70404de7bbc58de7:
             return .volatile
         default:
             return .volatile
@@ -493,14 +314,15 @@ public final class BeeIpcChannelingDispatcher {
     /// Pre-register Rx channel IDs from request payloads.
     /// Call this synchronously before spawning the dispatch task to avoid
     /// race conditions where Data arrives before channels are registered.
-    public static func preregisterChannels(methodId: UInt64, payload: Data, registry: ChannelRegistry) async {
+    public func preregister(methodId: UInt64, payload: [UInt8], registry: ChannelRegistry) async {
+        let payload = Data(payload)
         switch methodId {
         default:
             break
         }
     }
 
-    private func dispatch_imeHello(methodId: UInt64, requestId: UInt64, payload: Data) async {
+    private func dispatch_imeHello(methodId: UInt64, requestId: UInt64, payload: Data, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
         guard let methodInfo = methodSchemas[methodId] else {
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
             return
@@ -518,28 +340,7 @@ public final class BeeIpcChannelingDispatcher {
         }
     }
 
-    private func dispatch_prepareSession(methodId: UInt64, requestId: UInt64, payload: Data) async {
-        guard let methodInfo = methodSchemas[methodId] else {
-            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
-            return
-        }
-        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-        do {
-            var cursor = 0
-            let sessionId = try decodeString(from: payload, offset: &cursor)
-            let targetPid = try decodeI32(from: payload, offset: &cursor)
-            do {
-                let result = try await handler.prepareSession(sessionId: sessionId, targetPid: targetPid)
-                taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: { encodeBool($0) }), methodId: methodId, schemaPayload: responseSchemaPayload))
-            } catch {
-                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
-            }
-        } catch {
-            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
-        }
-    }
-
-    private func dispatch_claimSession(methodId: UInt64, requestId: UInt64, payload: Data) async {
+    private func dispatch_claimSession(methodId: UInt64, requestId: UInt64, payload: Data, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
         guard let methodInfo = methodSchemas[methodId] else {
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
             return
@@ -557,7 +358,7 @@ public final class BeeIpcChannelingDispatcher {
         }
     }
 
-    private func dispatch_imeAttach(methodId: UInt64, requestId: UInt64, payload: Data) async {
+    private func dispatch_imeAttach(methodId: UInt64, requestId: UInt64, payload: Data, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
         guard let methodInfo = methodSchemas[methodId] else {
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
             return
@@ -577,69 +378,7 @@ public final class BeeIpcChannelingDispatcher {
         }
     }
 
-    private func dispatch_setMarkedText(methodId: UInt64, requestId: UInt64, payload: Data) async {
-        guard let methodInfo = methodSchemas[methodId] else {
-            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
-            return
-        }
-        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-        do {
-            var cursor = 0
-            let sessionId = try decodeString(from: payload, offset: &cursor)
-            let text = try decodeString(from: payload, offset: &cursor)
-            do {
-                let result = try await handler.setMarkedText(sessionId: sessionId, text: text)
-                taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: { encodeBool($0) }), methodId: methodId, schemaPayload: responseSchemaPayload))
-            } catch {
-                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
-            }
-        } catch {
-            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
-        }
-    }
-
-    private func dispatch_commitText(methodId: UInt64, requestId: UInt64, payload: Data) async {
-        guard let methodInfo = methodSchemas[methodId] else {
-            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
-            return
-        }
-        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-        do {
-            var cursor = 0
-            let sessionId = try decodeString(from: payload, offset: &cursor)
-            let text = try decodeString(from: payload, offset: &cursor)
-            do {
-                let result = try await handler.commitText(sessionId: sessionId, text: text)
-                taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: { encodeBool($0) }), methodId: methodId, schemaPayload: responseSchemaPayload))
-            } catch {
-                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
-            }
-        } catch {
-            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
-        }
-    }
-
-    private func dispatch_stopDictating(methodId: UInt64, requestId: UInt64, payload: Data) async {
-        guard let methodInfo = methodSchemas[methodId] else {
-            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
-            return
-        }
-        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-        do {
-            var cursor = 0
-            let sessionId = try decodeString(from: payload, offset: &cursor)
-            do {
-                let result = try await handler.stopDictating(sessionId: sessionId)
-                taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: { encodeBool($0) }), methodId: methodId, schemaPayload: responseSchemaPayload))
-            } catch {
-                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
-            }
-        } catch {
-            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
-        }
-    }
-
-    private func dispatch_imeActivationRevoked(methodId: UInt64, requestId: UInt64, payload: Data) async {
+    private func dispatch_imeActivationRevoked(methodId: UInt64, requestId: UInt64, payload: Data, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
         guard let methodInfo = methodSchemas[methodId] else {
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
             return
@@ -657,7 +396,7 @@ public final class BeeIpcChannelingDispatcher {
         }
     }
 
-    private func dispatch_imeContextLost(methodId: UInt64, requestId: UInt64, payload: Data) async {
+    private func dispatch_imeContextLost(methodId: UInt64, requestId: UInt64, payload: Data, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
         guard let methodInfo = methodSchemas[methodId] else {
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
             return
@@ -677,7 +416,7 @@ public final class BeeIpcChannelingDispatcher {
         }
     }
 
-    private func dispatch_imeKeyEvent(methodId: UInt64, requestId: UInt64, payload: Data) async {
+    private func dispatch_imeKeyEvent(methodId: UInt64, requestId: UInt64, payload: Data, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
         guard let methodInfo = methodSchemas[methodId] else {
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
             return
@@ -702,93 +441,63 @@ public final class BeeIpcChannelingDispatcher {
 
 }
 
-// MARK: - BeeIpc Schemas
+// MARK: - App Schemas
 
-public let beeIpc_schemas: [String: MethodBindingSchema] = [
+public let app_schemas: [String: MethodBindingSchema] = [
     "imeHello": MethodBindingSchema(args: []),
-    "prepareSession": MethodBindingSchema(args: [.string, .i32]),
     "claimSession": MethodBindingSchema(args: []),
     "imeAttach": MethodBindingSchema(args: [.string]),
-    "setMarkedText": MethodBindingSchema(args: [.string, .string]),
-    "commitText": MethodBindingSchema(args: [.string, .string]),
-    "stopDictating": MethodBindingSchema(args: [.string]),
     "imeActivationRevoked": MethodBindingSchema(args: []),
     "imeContextLost": MethodBindingSchema(args: [.bool]),
     "imeKeyEvent": MethodBindingSchema(args: [.string, .string, .u32, .string]),
 ]
 
 /// Global schema registry containing all schemas for this service.
-public let beeIpc_schema_registry: [UInt64: Schema] = [
+nonisolated(unsafe) public let app_schema_registry: [UInt64: Schema] = [
     0x178367a87f66fb46: Schema(id: 0x178367a87f66fb46, typeParams: [], kind: .primitive(.bool)),
     0x281c5be4f2ee63b4: Schema(id: 0x281c5be4f2ee63b4, typeParams: [], kind: .primitive(.u32)),
-    0x361f4536eee9f991: Schema(id: 0x361f4536eee9f991, typeParams: [], kind: .primitive(.i32)),
     0x42046de663beeef0: Schema(id: 0x42046de663beeef0, typeParams: ["T", "E"], kind: .enum(name: "Result", variants: [VariantSchema(name: "Ok", index: 0, payload: .newtype(typeRef: .var(name: "T"))), VariantSchema(name: "Err", index: 1, payload: .newtype(typeRef: .var(name: "E")))])),
     0x4cf4b2aeb98a1939: Schema(id: 0x4cf4b2aeb98a1939, typeParams: ["E"], kind: .enum(name: "VoxError", variants: [VariantSchema(name: "User", index: 0, payload: .newtype(typeRef: .var(name: "E"))), VariantSchema(name: "UnknownMethod", index: 1, payload: .unit), VariantSchema(name: "InvalidPayload", index: 2, payload: .newtype(typeRef: .concrete(0x6d7dce914ee150e8))), VariantSchema(name: "Cancelled", index: 3, payload: .unit), VariantSchema(name: "ConnectionClosed", index: 4, payload: .unit), VariantSchema(name: "SessionShutdown", index: 5, payload: .unit), VariantSchema(name: "SendFailed", index: 6, payload: .unit), VariantSchema(name: "Indeterminate", index: 7, payload: .unit)])),
     0x5db70a394660f3e6: Schema(id: 0x5db70a394660f3e6, typeParams: [], kind: .primitive(.never)),
     0x6847ab90feda71c1: Schema(id: 0x6847ab90feda71c1, typeParams: ["T0"], kind: .tuple(elements: [.var(name: "T0")])),
     0x6d7dce914ee150e8: Schema(id: 0x6d7dce914ee150e8, typeParams: [], kind: .primitive(.string)),
     0x915c6fb5b64f270b: Schema(id: 0x915c6fb5b64f270b, typeParams: ["T0", "T1", "T2", "T3"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2"), .var(name: "T3")])),
-    0xba0496aa8cee7a4c: Schema(id: 0xba0496aa8cee7a4c, typeParams: ["T0", "T1"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1")])),
     0xbc5c33249a2dc720: Schema(id: 0xbc5c33249a2dc720, typeParams: [], kind: .primitive(.unit)),
 ]
 
 /// Per-method schema information for wire protocol.
-public let beeIpc_method_schemas: [UInt64: MethodSchemaInfo] = [
-    0x5405ec6a2547d7b4: MethodSchemaInfo(
+nonisolated(unsafe) public let app_method_schemas: [UInt64: MethodSchemaInfo] = [
+    0x75699685b1a93d32: MethodSchemaInfo(
         argsSchemaIds: [0xbc5c33249a2dc720],
         argsRoot: .concrete(0xbc5c33249a2dc720),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6d7dce914ee150e8), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),
-    0xe54931ecf2f8c4fc: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0x361f4536eee9f991, 0xba0496aa8cee7a4c],
-        argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x361f4536eee9f991)]),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
-        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
-    ),
-    0x3073313afa900f60: MethodSchemaInfo(
+    0xa450881492adee30: MethodSchemaInfo(
         argsSchemaIds: [0xbc5c33249a2dc720],
         argsRoot: .concrete(0xbc5c33249a2dc720),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6d7dce914ee150e8), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),
-    0xc612be0db6c55fb9: MethodSchemaInfo(
+    0x8a60f92280588cd0: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0x6847ab90feda71c1],
         argsRoot: .generic(0x6847ab90feda71c1, args: [.concrete(0x6d7dce914ee150e8)]),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),
-    0xa9a37aa50a4a4d49: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0xba0496aa8cee7a4c],
-        argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8)]),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
-        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
-    ),
-    0xd91aab7dcebafc3c: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0xba0496aa8cee7a4c],
-        argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8)]),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
-        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
-    ),
-    0x1356e68787bcdbec: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0x6847ab90feda71c1],
-        argsRoot: .generic(0x6847ab90feda71c1, args: [.concrete(0x6d7dce914ee150e8)]),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
-        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
-    ),
-    0x7618c5ad6101b475: MethodSchemaInfo(
+    0x069f4682025f282c: MethodSchemaInfo(
         argsSchemaIds: [0xbc5c33249a2dc720],
         argsRoot: .concrete(0xbc5c33249a2dc720),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),
-    0x830cea78a75853b8: MethodSchemaInfo(
+    0xf05b46d1538b1ac3: MethodSchemaInfo(
         argsSchemaIds: [0x178367a87f66fb46, 0x6847ab90feda71c1],
         argsRoot: .generic(0x6847ab90feda71c1, args: [.concrete(0x178367a87f66fb46)]),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),
-    0xad031f167de4ccb6: MethodSchemaInfo(
+    0x70404de7bbc58de7: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0x281c5be4f2ee63b4, 0x915c6fb5b64f270b],
         argsRoot: .generic(0x915c6fb5b64f270b, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8), .concrete(0x281c5be4f2ee63b4), .concrete(0x6d7dce914ee150e8)]),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
@@ -796,7 +505,7 @@ public let beeIpc_method_schemas: [UInt64: MethodSchemaInfo] = [
     ),
 ]
 
-public struct BeeIpcSerializers: BindingSerializers {
+public struct AppSerializers: BindingSerializers {
     public init() {}
 
     public func txSerializer(for schema: BindingSchema) -> @Sendable (Any) -> [UInt8] {

@@ -11,7 +11,6 @@ final class BeeIMESession {
     let pid: pid_t?
     let clientID: String?
 
-    // State that used to live on the controller
     var currentMarkedText: String = ""
     var autoCommittedPrefix: String = ""
 
@@ -19,37 +18,6 @@ final class BeeIMESession {
         self.controller = controller
         self.pid = pid
         self.clientID = clientID
-    }
-
-    // MARK: - Claim
-
-    func performClaim() {
-        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
-        let expectedPID = BeeBrokerIMEClient.shared.expectedTargetPID
-
-        if expectedPID != 0 && frontmostPID != pid_t(expectedPID) {
-            beeInputLog(
-                "activateServer: PID mismatch (frontmost=\(frontmostPID) expected=\(expectedPID)), skipping claim"
-            )
-            return
-        }
-
-        beeInputLog("performClaim: claimPreparedSessionSync start")
-        let claim = BeeBrokerIMEClient.shared.claimPreparedSessionSync()
-        beeInputLog("performClaim: claimPreparedSessionSync done")
-        guard let sessionID = claim.sessionID else {
-            beeInputLog("activateServer: no session (palette mode, staying active)")
-            return
-        }
-
-        beeInputLog(
-            "activateServer: claimed session=\(sessionID.uuidString.prefix(8)) pid=\(frontmostPID)")
-        let bridge = BeeIMEBridgeState.shared
-        bridge.attachSession(sessionID: sessionID)
-        bridge.flushPending()
-        beeInputLog("performClaim: imeAttach start session=\(sessionID.uuidString.prefix(8))")
-        BeeBrokerIMEClient.shared.imeAttach(sessionID: sessionID)
-        beeInputLog("performClaim: imeAttach dispatched session=\(sessionID.uuidString.prefix(8))")
     }
 
     // MARK: - Text handling
@@ -76,9 +44,7 @@ final class BeeIMESession {
 
         let attributed = NSAttributedString(
             string: displayText,
-            attributes: [
-                .markedClauseSegment: 0
-            ])
+            attributes: [.markedClauseSegment: 0])
 
         client.setMarkedText(
             attributed,
@@ -126,8 +92,6 @@ final class BeeIMESession {
         )
     }
 
-    /// Clear any marked text still showing. Called from deactivateServer
-    /// as a last-gasp cleanup before the controller goes away.
     func clearOrphanedMarkedText() {
         guard !currentMarkedText.isEmpty, let client = controller?.client() else { return }
         beeInputLog("deactivateServer: clearing orphaned marked text")
@@ -142,7 +106,8 @@ final class BeeIMESession {
 
 // MARK: - Bridge State
 
-/// Tracks which session is active and routes XPC callbacks to it.
+/// Tracks which session is active and routes Vox callbacks to it.
+@MainActor
 final class BeeIMEBridgeState: NSObject {
     static let shared = BeeIMEBridgeState()
 
@@ -182,8 +147,6 @@ final class BeeIMEBridgeState: NSObject {
 
     func activate(_ controller: BeeInputController, pid: pid_t?, clientID: String?) {
         if case .serving(let session, let sessionID, let pending) = state {
-            // A spurious activateServer (e.g. from a focus cycle) must not
-            // destroy an active serving session. Just update the controller ref.
             beeInputLog(
                 "activate: already serving session=\(sessionID.uuidString.prefix(8)), updating controller"
             )
@@ -194,7 +157,7 @@ final class BeeIMEBridgeState: NSObject {
         let session = BeeIMESession(controller: controller, pid: pid, clientID: clientID)
         state = .activated(session)
         beeInputLog("state → activated pid=\(pid.map(String.init) ?? "nil")")
-        session.performClaim()
+        Task { await self.performAsyncClaim() }
     }
 
     func deactivate(_ controller: BeeInputController) {
@@ -218,6 +181,44 @@ final class BeeIMEBridgeState: NSObject {
         }
         state = .activated(session)
         beeInputLog("state → activated (session \(sessionID.uuidString.prefix(8)) cleared)")
+    }
+
+    // MARK: - Session claim (async — called via Task from activate, or pushed by BeeVoxIMEClient)
+
+    func performAsyncClaim() async {
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+        let expectedPID = BeeVoxIMEClient.shared.expectedTargetPID
+
+        if expectedPID != 0 && frontmostPID != pid_t(expectedPID) {
+            beeInputLog(
+                "performAsyncClaim: PID mismatch (frontmost=\(frontmostPID) expected=\(expectedPID)), skipping"
+            )
+            return
+        }
+
+        beeInputLog("performAsyncClaim: claimSession start")
+        guard let sessionIDString = await BeeVoxIMEClient.shared.claimSession() else {
+            beeInputLog("performAsyncClaim: no session (palette mode or not ready)")
+            return
+        }
+        guard let sessionID = UUID(uuidString: sessionIDString) else {
+            beeInputLog("performAsyncClaim: invalid session ID: \(sessionIDString)")
+            return
+        }
+
+        // Check we're still in activated state (could have been deactivated while waiting)
+        guard currentSession != nil else {
+            beeInputLog(
+                "performAsyncClaim: deactivated while waiting for claim, dropping session=\(sessionID.uuidString.prefix(8))"
+            )
+            return
+        }
+
+        beeInputLog(
+            "performAsyncClaim: claimed session=\(sessionID.uuidString.prefix(8)) pid=\(frontmostPID)")
+        attachSession(sessionID: sessionID)
+        flushPending()
+        BeeVoxIMEClient.shared.imeAttach(sessionId: sessionID.uuidString)
     }
 
     // MARK: - Text routing

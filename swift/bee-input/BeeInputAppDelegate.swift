@@ -33,6 +33,6 @@ class BeeInputAppDelegate: NSObject, NSApplicationDelegate {
             bundleIdentifier: bundleIdentifier
         )
         beeInputLog("IMK server started")
-        BeeBrokerIMEClient.shared.start()
+        BeeVoxIMEClient.shared.start()
     }
 }

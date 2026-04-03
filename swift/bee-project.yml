@@ -13,6 +13,11 @@ settings:
     DEVELOPMENT_TEAM: B2N6FSRTPV
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
+packages:
+  vox:
+    url: https://github.com/bearcove/vox.git
+    revision: db2174adc245a8f5467c5e6d34f9e8f7e80d1b76
+
 targets:
   bee:
     type: application
@@ -22,6 +27,7 @@ targets:
         excludes:
           - bee-Bridging-Header.h
       - path: shared
+      - path: vox-shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: fasterthanlime.bee
@@ -57,6 +63,8 @@ targets:
       - target: beeInput
         embed: false
         link: false
+      - package: vox
+        product: VoxRuntime
     postBuildScripts:
       - name: "Embed beeInput Input Method"
         basedOnDependencyAnalysis: false
@@ -77,16 +85,18 @@ targets:
     sources:
       - path: bee-input
       - path: shared
+      - path: vox-shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: fasterthanlime.inputmethod.bee
         PRODUCT_NAME: beeInput
         INFOPLIST_FILE: bee-input/Info.plist
         GENERATE_INFOPLIST_FILE: NO
-        SWIFT_VERSION: "5.0"
+        SWIFT_VERSION: "6.0"
         SWIFT_APPROACHABLE_CONCURRENCY: YES
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
         SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
+        LIBRARY_SEARCH_PATHS: "$(PROJECT_DIR)/../target/release"
         ENABLE_APP_SANDBOX: YES
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_ENTITLEMENTS: bee-input/beeInput.entitlements
@@ -98,6 +108,8 @@ targets:
           - group.fasterthanlime.bee
     dependencies:
       - sdk: InputMethodKit.framework
+      - package: vox
+        product: VoxRuntime
 
   beeBroker:
     type: tool

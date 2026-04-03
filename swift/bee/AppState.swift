@@ -872,16 +872,8 @@ final class AppState {
 
     func warmUpIME() {
         Task {
-            // Launch the IME app so it connects to the broker.
-            let imeAppURL = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Input Methods/beeInput.app")
-            let config = NSWorkspace.OpenConfiguration()
-            config.activates = false
-            do {
-                try await NSWorkspace.shared.openApplication(at: imeAppURL, configuration: config)
-            } catch {
-                beeLog("IME WARMUP: failed to launch IME app: \(error)")
-            }
+            // beeInput is embedded in bee.app and launched automatically by the OS
+            // via TIS when registered. Just wait for it to connect via Vox IPC.
             let ready = await BeeInputClient.waitForIMEReady()
             await MainActor.run {
                 self.imeReady = ready

@@ -2,84 +2,92 @@ import Carbon
 import Cocoa
 import InputMethodKit
 
-/// Pure pass-through layer. All state lives in BeeIMESession (on the bridge).
-/// Per the macOS Input Method Development Guidelines 2026:
-/// "IMKInputController must not hold any objects."
+/// Pure pass-through layer. All state lives in BeeIMEBridgeState (on the bridge).
 @objc(BeeInputController)
 class BeeInputController: IMKInputController {
 
-    override func activateServer(_ sender: Any!) {
-        beeInputLog("activateServer: entry")
-        super.activateServer(sender)
-        let bridge = BeeIMEBridgeState.shared
-        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let clientIdentity = currentClientIdentity()
-        // Creates a BeeIMESession and queues the claim for next run loop turn
-        bridge.activate(self, pid: frontmostPID, clientID: clientIdentity)
+    nonisolated override init!(server: IMKServer!, delegate: Any!, client: Any!) {
+        super.init(server: server, delegate: delegate, client: client)
     }
 
-    override func deactivateServer(_ sender: Any!) {
-        let bridge = BeeIMEBridgeState.shared
+    nonisolated override init() {
+        super.init()
+    }
 
-        // Only act on the session if WE are the active controller.
-        // A stale controller's deactivateServer must not touch the new session.
-        guard bridge.activeController === self else {
-            beeInputLog("deactivateServer: stale controller, ignoring")
-            super.deactivateServer(sender)
-            return
+    nonisolated override func activateServer(_ sender: Any!) {
+        super.activateServer(sender)
+        MainActor.assumeIsolated {
+            beeInputLog("activateServer: entry")
+            let bridge = BeeIMEBridgeState.shared
+            let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            let clientIdentity = currentClientIdentity()
+            bridge.activate(self, pid: frontmostPID, clientID: clientIdentity)
         }
+    }
 
-        let session = bridge.currentSession
-        let isDictating = bridge.isDictating
-        let sessionID = bridge.activeSessionID
+    nonisolated override func deactivateServer(_ sender: Any!) {
+        MainActor.assumeIsolated {
+            let bridge = BeeIMEBridgeState.shared
 
-        let hadMarkedText = !(session?.currentMarkedText.isEmpty ?? true)
-        beeInputLog(
-            "deactivateServer: session=\(sessionID?.uuidString.prefix(8) ?? "none") hadMarkedText=\(hadMarkedText)"
-        )
-
-        // Clear orphaned marked text before deactivating
-        session?.clearOrphanedMarkedText()
-
-        bridge.deactivate(self)
-
-        if isDictating, let sessionID {
-            if let session {
-                session.autoCommittedPrefix = session.currentMarkedText
+            guard bridge.activeController === self else {
+                beeInputLog("deactivateServer: stale controller, ignoring")
+                return
             }
-            BeeBrokerIMEClient.shared.imeContextLost(
-                sessionID: sessionID,
-                hadMarkedText: hadMarkedText
+
+            let session = bridge.currentSession
+            let isDictating = bridge.isDictating
+            let sessionID = bridge.activeSessionID
+
+            let hadMarkedText = !(session?.currentMarkedText.isEmpty ?? true)
+            beeInputLog(
+                "deactivateServer: session=\(sessionID?.uuidString.prefix(8) ?? "none") hadMarkedText=\(hadMarkedText)"
             )
+
+            session?.clearOrphanedMarkedText()
+            bridge.deactivate(self)
+
+            if isDictating {
+                if let session {
+                    session.autoCommittedPrefix = session.currentMarkedText
+                }
+                BeeVoxIMEClient.shared.imeContextLost(hadMarkedText: hadMarkedText)
+            }
         }
         super.deactivateServer(sender)
     }
 
-    override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
+    nonisolated override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
         guard let event, event.type == .keyDown else {
             return false
         }
-        let bridge = BeeIMEBridgeState.shared
-        guard let sessionID = bridge.activeSessionID else {
-            return false
-        }
+        let keyCode = event.keyCode
+        let characters = event.characters
+        return MainActor.assumeIsolated {
+            let bridge = BeeIMEBridgeState.shared
+            guard let sessionID = bridge.activeSessionID else {
+                return false
+            }
+            let sessionIdStr = sessionID.uuidString
 
-        switch Int(event.keyCode) {
-        case kVK_Return, kVK_ANSI_KeypadEnter:
-            BeeBrokerIMEClient.shared.imeSubmit(sessionID: sessionID)
-            return true
+            switch Int(keyCode) {
+            case kVK_Return, kVK_ANSI_KeypadEnter:
+                BeeVoxIMEClient.shared.imeKeyEvent(
+                    sessionId: sessionIdStr, eventType: "submit",
+                    keyCode: UInt32(keyCode), characters: "")
+                return true
 
-        case kVK_Escape:
-            BeeBrokerIMEClient.shared.imeCancel(sessionID: sessionID)
-            return true
+            case kVK_Escape:
+                BeeVoxIMEClient.shared.imeKeyEvent(
+                    sessionId: sessionIdStr, eventType: "cancel",
+                    keyCode: UInt32(keyCode), characters: "")
+                return true
 
-        default:
-            BeeBrokerIMEClient.shared.imeUserTyped(
-                sessionID: sessionID,
-                keyCode: event.keyCode,
-                characters: event.characters ?? ""
-            )
-            return false
+            default:
+                BeeVoxIMEClient.shared.imeKeyEvent(
+                    sessionId: sessionIdStr, eventType: "typed",
+                    keyCode: UInt32(keyCode), characters: characters ?? "")
+                return false
+            }
         }
     }
 

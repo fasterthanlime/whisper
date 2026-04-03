@@ -5,12 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$PROJECT_ROOT/build-bee-release"
 INPUT_METHOD_DIR="$HOME/Library/Input Methods"
-BROKER_DIR="$HOME/Library/Application Support/bee"
-BROKER_BINARY="$BROKER_DIR/beeBroker"
-LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
-BROKER_LABEL="fasterthanlime.bee.broker"
-BROKER_PLIST="$LAUNCH_AGENTS_DIR/$BROKER_LABEL.plist"
-USER_DOMAIN="gui/$(id -u)"
+
 SWIFT_DIR="$PROJECT_ROOT/swift"
 XCODE_PROJECT="$SWIFT_DIR/bee.xcodeproj"
 XCODE_SPEC="$SWIFT_DIR/bee-project.yml"
@@ -71,10 +66,11 @@ run_step() {
 
 run_step "Building MLX Rust FFI (release)" "cd \"$PROJECT_ROOT/rust\" && cargo build --release -p bee-ffi"
 run_step "Generating Xcode project" "cd \"$SWIFT_DIR\" && xcodegen generate --spec \"$XCODE_SPEC\""
-banner "Building bee + beeInput + beeBroker (Release, parallel)"
+banner "Building bee (+ embedded beeInput) (Release)"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
-schemes=(bee beeInput beeBroker)
+# beeInput is a dependency of bee and gets embedded automatically; no separate scheme needed.
+schemes=(bee)
 pids=()
 logs=()
 for scheme in "${schemes[@]}"; do
@@ -101,45 +97,11 @@ fi
 printf '%s\n' "${GREEN}${BOLD}All Swift targets built${RESET}"
 
 run_step "Installing bee to /Applications/bee.app" "rsync -a --delete \"$BUILD_DIR/bee.app/\" /Applications/bee.app/"
-run_step "Installing beeInput to $INPUT_METHOD_DIR/beeInput.app" "mkdir -p \"$INPUT_METHOD_DIR\" && rsync -a --delete \"$BUILD_DIR/beeInput.app/\" \"$INPUT_METHOD_DIR/beeInput.app/\""
-run_step "Installing beeBroker binary" "mkdir -p \"$BROKER_DIR\" && install -m 755 \"$BUILD_DIR/beeBroker\" \"$BROKER_BINARY\""
-run_step "Writing broker LaunchAgent plist" "mkdir -p \"$LAUNCH_AGENTS_DIR\" && cat > \"$BROKER_PLIST\" <<PLIST
-<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
-<plist version=\"1.0\">
-<dict>
-  <key>Label</key>
-  <string>$BROKER_LABEL</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$BROKER_BINARY</string>
-  </array>
-  <key>MachServices</key>
-  <dict>
-    <key>$BROKER_LABEL</key>
-    <true/>
-  </dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>ThrottleInterval</key>
-  <integer>0</integer>
-  <key>StandardOutPath</key>
-  <string>/tmp/bee-broker.out</string>
-  <key>StandardErrorPath</key>
-  <string>/tmp/bee-broker.err</string>
-</dict>
-</plist>
-PLIST"
-run_step "Reloading broker LaunchAgent" "
-if launchctl print \"$USER_DOMAIN/$BROKER_LABEL\" >/dev/null 2>&1; then
-  launchctl kickstart -k \"$USER_DOMAIN/$BROKER_LABEL\"
-else
-  launchctl bootstrap \"$USER_DOMAIN\" \"$BROKER_PLIST\"
-  launchctl kickstart -k \"$USER_DOMAIN/$BROKER_LABEL\"
-fi
-"
+# beeInput is now embedded in bee.app/Contents/Library/Input Methods/ and registered
+# by bee on first launch. Remove the old standalone installation if present.
+run_step "Removing old standalone beeInput from ~/Library/Input Methods" \
+  "rm -rf \"$INPUT_METHOD_DIR/beeInput.app\""
+
 run_step "Restarting beeInput" "pkill beeInput || true"
 run_step "Killing running bee" "pkill bee || true"
 sleep 1
