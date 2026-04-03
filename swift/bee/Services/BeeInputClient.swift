@@ -14,24 +14,25 @@ final class BeeInputClient: Sendable {
 
     @discardableResult
     func activate(sessionID: UUID, targetPID: pid_t?) async -> Bool {
-        beeLog("IME ACTIVATE: prepareSession start id=\(sessionID.uuidString.prefix(8))")
-        await BeeIPCServer.shared.prepareDictationSession(
-            sessionId: sessionID.uuidString,
-            targetPid: Int32(targetPID ?? 0)
-        )
-
         if await !MainActor.run(body: { BeeIPCServer.shared.isIMEConnected }) {
             let installedIME = FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Input Methods/beeInput.app")
             await Self.launchBeeInputIfNeeded(at: installedIME)
         }
 
+        // Select first so the OS sends activateServer to beeInput before prepareSession arrives.
         beeLog("IME ACTIVATE: TIS SELECT start id=\(sessionID.uuidString.prefix(8))")
         let selected = await Self.selectBeeInputSource()
         guard selected else {
             beeLog("IME ACTIVATE: TIS SELECT failed id=\(sessionID.uuidString.prefix(8))")
             return false
         }
+
+        beeLog("IME ACTIVATE: prepareSession start id=\(sessionID.uuidString.prefix(8))")
+        await BeeIPCServer.shared.prepareDictationSession(
+            sessionId: sessionID.uuidString,
+            targetPid: Int32(targetPID ?? 0)
+        )
 
         beeLog("IME ACTIVATE: done id=\(sessionID.uuidString.prefix(8)), waiting for imeAttach")
         return true
@@ -50,10 +51,8 @@ final class BeeInputClient: Sendable {
 
     func deactivate(caller: String = #function, file: String = #fileID, line: Int = #line) {
         beeLog("IME DEACTIVATE called from \(file):\(line) \(caller)")
-        if let source = Self.findBeeInputSource() {
-            let result = TISDeselectInputSource(source)
-            beeLog("TIS DESELECT: \(Self.inputSourceID(source)) result=\(result)")
-        }
+        // Don't deselect — keeping beeInput selected preserves its controller state
+        // so the next session can start immediately without waiting for re-activation.
     }
 
     static func waitForIMEReady() async -> Bool {
@@ -122,6 +121,10 @@ final class BeeInputClient: Sendable {
                 beeLog("IME REGISTER: source disabled, enabling")
                 TISEnableInputSource(source)
             }
+            // Pre-select so activateServer fires on the next text-field focus,
+            // before the user ever presses the dictation hotkey.
+            let selectResult = TISSelectInputSource(source)
+            beeLog("IME REGISTER: pre-selected beeInput result=\(selectResult)")
             await launchBeeInputIfNeeded(at: installedIME)
             return true
         }
