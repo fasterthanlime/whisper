@@ -59,9 +59,11 @@ final class BeeInputClient: Sendable {
     }
 
     func deactivate(caller: String = #function, file: String = #fileID, line: Int = #line) {
-        // Palette IMEs stay selected permanently — deselecting breaks the next session
-        // because activateServer won't fire again for terminal apps like iTerm2.
-        beeLog("IME DEACTIVATE called from \(file):\(line) \(caller) (palette: no TIS deselect)")
+        beeLog("IME DEACTIVATE called from \(file):\(line) \(caller)")
+        if let source = Self.findBeeInputSource() {
+            let result = TISDeselectInputSource(source)
+            beeLog("TIS DESELECT: \(Self.inputSourceID(source)) result=\(result)")
+        }
     }
 
     static func waitForIMEReady() async -> Bool {
@@ -132,10 +134,6 @@ final class BeeInputClient: Sendable {
                 beeLog("IME REGISTER: source disabled, enabling")
                 TISEnableInputSource(source)
             }
-            // Pre-select the palette IME so activateServer fires immediately when any
-            // app is focused — this ensures a controller is ready before the first hotkey.
-            let selectResult = TISSelectInputSource(source)
-            beeLog("IME REGISTER: TISSelectInputSource result=\(selectResult)")
             await launchBeeInputIfNeeded(at: installedIME)
             return true
         }
@@ -150,8 +148,6 @@ final class BeeInputClient: Sendable {
         beeLog("IME REGISTER: after registration, found \(newSources.count) source(s)")
         if let source = newSources.first {
             TISEnableInputSource(source)
-            let selectResult = TISSelectInputSource(source)
-            beeLog("IME REGISTER: TISSelectInputSource (new) result=\(selectResult)")
             await launchBeeInputIfNeeded(at: installedIME)
             return true
         }
