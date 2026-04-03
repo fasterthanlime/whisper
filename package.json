@@ -1,6 +1,8 @@
 {
   "private": true,
   "scripts": {
-    "dev": "pnpm --dir beeml-web dev"
+    "dev": "node scripts/dev-beeml.mjs",
+    "dev:web": "pnpm --dir beeml-web dev",
+    "dev:server": "zsh -lc 'source .envrc && cargo watch -w rust -w data/phonetic-seed -x \"run -p beeml\"'"
   }
 }

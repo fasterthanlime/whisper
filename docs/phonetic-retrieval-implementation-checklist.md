@@ -1,5 +1,9 @@
 # Phonetic Retrieval Implementation Checklist
 
+Related system doc:
+
+- [beeml-correction-system.md](/Users/amos/bearcove/bee/docs/beeml-correction-system.md)
+
 This document turns the roadmap into concrete backend work for this repo.
 
 Primary reference:

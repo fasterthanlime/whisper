@@ -63,9 +63,14 @@ function resampleMonoLinear(
   return out;
 }
 
-export function TranscribeDemoPanel() {
+export function TranscribeDemoPanel({
+  wsUrl,
+  setWsUrl,
+}: {
+  wsUrl: string;
+  setWsUrl: (value: string) => void;
+}) {
   const recorder = useAudioRecorder();
-  const [wsUrl, setWsUrl] = useState("ws://127.0.0.1:9944");
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inspectorData, setInspectorData] = useState<EvalInspectorData | null>(null);
@@ -217,7 +222,8 @@ export function TranscribeDemoPanel() {
         <button
           className={streaming ? "danger" : "primary"}
           onClick={handleStream}
-          disabled={recorder.state === "recording"}
+          disabled={true}
+          title="Temporarily unavailable while beeml migrates to the correction RPC surface"
         >
           {streaming ? "STOP STREAM" : "STREAM"}
         </button>

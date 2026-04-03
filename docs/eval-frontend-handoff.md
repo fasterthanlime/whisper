@@ -1,5 +1,9 @@
 # Eval Frontend Handoff
 
+Related system doc:
+
+- [beeml-correction-system.md](/Users/amos/bearcove/bee/docs/beeml-correction-system.md)
+
 This is the minimum contract for rebuilding the eval UI outside the monolithic
 `index.html`, ideally as a small Vite/TypeScript app.
 

@@ -1,5 +1,9 @@
 # Phonetic Retrieval Roadmap
 
+Related system doc:
+
+- [beeml-correction-system.md](/Users/amos/bearcove/bee/docs/beeml-correction-system.md)
+
 ## Goal
 
 Replace the current brute-force span proposal path with an indexed phonetic retrieval pipeline that:

@@ -10,11 +10,22 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@bearcove/vox-core": "^0.2.0",
-    "@bearcove/vox-postcard": "^0.2.0",
-    "@bearcove/vox-ws": "^0.2.0",
+    "@bearcove/vox-core": "link:/Users/amos/bearcove/vox/typescript/packages/vox-core",
+    "@bearcove/vox-postcard": "link:/Users/amos/bearcove/vox/typescript/packages/vox-postcard",
+    "@bearcove/vox-tcp": "link:/Users/amos/bearcove/vox/typescript/packages/vox-tcp",
+    "@bearcove/vox-wire": "link:/Users/amos/bearcove/vox/typescript/packages/vox-wire",
+    "@bearcove/vox-ws": "link:/Users/amos/bearcove/vox/typescript/packages/vox-ws",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
+  },
+  "pnpm": {
+    "overrides": {
+      "@bearcove/vox-core": "link:/Users/amos/bearcove/vox/typescript/packages/vox-core",
+      "@bearcove/vox-postcard": "link:/Users/amos/bearcove/vox/typescript/packages/vox-postcard",
+      "@bearcove/vox-wire": "link:/Users/amos/bearcove/vox/typescript/packages/vox-wire",
+      "@bearcove/vox-tcp": "link:/Users/amos/bearcove/vox/typescript/packages/vox-tcp",
+      "@bearcove/vox-ws": "link:/Users/amos/bearcove/vox/typescript/packages/vox-ws"
+    }
   },
   "devDependencies": {
     "@types/react": "^19.2.14",

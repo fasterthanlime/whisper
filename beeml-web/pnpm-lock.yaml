@@ -4,19 +4,32 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  '@bearcove/vox-core': link:/Users/amos/bearcove/vox/typescript/packages/vox-core
+  '@bearcove/vox-postcard': link:/Users/amos/bearcove/vox/typescript/packages/vox-postcard
+  '@bearcove/vox-wire': link:/Users/amos/bearcove/vox/typescript/packages/vox-wire
+  '@bearcove/vox-tcp': link:/Users/amos/bearcove/vox/typescript/packages/vox-tcp
+  '@bearcove/vox-ws': link:/Users/amos/bearcove/vox/typescript/packages/vox-ws
+
 importers:
 
   .:
     dependencies:
       '@bearcove/vox-core':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: link:/Users/amos/bearcove/vox/typescript/packages/vox-core
+        version: link:../../vox/typescript/packages/vox-core
       '@bearcove/vox-postcard':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: link:/Users/amos/bearcove/vox/typescript/packages/vox-postcard
+        version: link:../../vox/typescript/packages/vox-postcard
+      '@bearcove/vox-tcp':
+        specifier: link:/Users/amos/bearcove/vox/typescript/packages/vox-tcp
+        version: link:../../vox/typescript/packages/vox-tcp
+      '@bearcove/vox-wire':
+        specifier: link:/Users/amos/bearcove/vox/typescript/packages/vox-wire
+        version: link:../../vox/typescript/packages/vox-wire
       '@bearcove/vox-ws':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: link:/Users/amos/bearcove/vox/typescript/packages/vox-ws
+        version: link:../../vox/typescript/packages/vox-ws
       react:
         specifier: ^19.2.4
         version: 19.2.4
@@ -41,21 +54,6 @@ importers:
         version: 8.0.3(@emnapi/core@1.9.1)(@emnapi/runtime@1.9.1)
 
 packages:
-
-  '@bearcove/vox-core@0.2.0':
-    resolution: {integrity: sha512-h4ArGIrQXt+B9RCV1jrlp9NPpvGTqYV499BngwO3UOJeOKG5e7InuJEKWkmmhoyWC1rPW+oNI+vY+fO39OuSow==}
-
-  '@bearcove/vox-postcard@0.2.0':
-    resolution: {integrity: sha512-luWf21Ji0Rvvklin6WuMyTVIjpWBSXZNHonqrcpQlVo8d8xm5GYe8MogIQJy63lyr6AHdvYGSXfudSh3j59BFA==}
-
-  '@bearcove/vox-tcp@0.2.0':
-    resolution: {integrity: sha512-vBupFvxm3uyK/P1bPX5c66ImSkE31W5jRs1DcNld59BwjwixFfIgist7+JD0CJAFUr8SO6/qEfMLGjrQM6/z3A==}
-
-  '@bearcove/vox-wire@0.2.0':
-    resolution: {integrity: sha512-PPDUW7pwhjJkIRmYyA6giaOWdjiCofmdiuZ3G/scJOTjZDqVOSkj3Q2gt5P7TKTripsyJONpN31YvFY+tZQQ+A==}
-
-  '@bearcove/vox-ws@0.2.0':
-    resolution: {integrity: sha512-qrsAXfgzFDgTuhCbQhat0NglmzxdDMwsd6q+ZDK/iTQASwSROs5kdlHr6FhIKwaGK8RxwzXx/wElp0+3CavQyw==}
 
   '@emnapi/core@1.9.1':
     resolution: {integrity: sha512-mukuNALVsoix/w1BJwFzwXBN/dHeejQtuVzcDsfOEsdpCumXb/E9j8w11h5S54tT1xhifGfbbSm/ICrObRb3KA==}
@@ -388,26 +386,6 @@ packages:
         optional: true
 
 snapshots:
-
-  '@bearcove/vox-core@0.2.0':
-    dependencies:
-      '@bearcove/vox-postcard': 0.2.0
-      '@bearcove/vox-wire': 0.2.0
-
-  '@bearcove/vox-postcard@0.2.0': {}
-
-  '@bearcove/vox-tcp@0.2.0':
-    dependencies:
-      '@bearcove/vox-core': 0.2.0
-
-  '@bearcove/vox-wire@0.2.0':
-    dependencies:
-      '@bearcove/vox-postcard': 0.2.0
-
-  '@bearcove/vox-ws@0.2.0':
-    dependencies:
-      '@bearcove/vox-core': 0.2.0
-      '@bearcove/vox-tcp': 0.2.0
 
   '@emnapi/core@1.9.1':
     dependencies:

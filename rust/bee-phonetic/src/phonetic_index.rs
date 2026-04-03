@@ -41,16 +41,21 @@ pub struct RetrievalCandidate {
     pub alias_source: AliasSource,
     pub matched_view: IndexView,
     pub qgram_overlap: u16,
+    pub total_qgram_overlap: u16,
+    pub best_view_score: f32,
+    pub cross_view_support: u8,
     pub token_count_match: bool,
     pub phone_count_delta: i16,
+    pub token_bonus: f32,
+    pub phone_bonus: f32,
+    pub extra_length_penalty: f32,
     pub coarse_score: f32,
 }
 
 #[derive(Debug, Default, Clone)]
 struct CandidateAccumulator {
-    overlap: u16,
-    matched_view: Option<IndexView>,
-    best_score: f32,
+    total_overlap: u16,
+    overlaps_by_view: HashMap<IndexView, u16>,
 }
 
 pub fn build_index(aliases: Vec<LexiconAlias>) -> PhoneticIndex {
@@ -100,36 +105,21 @@ pub fn query_index(
     limit: usize,
 ) -> Vec<RetrievalCandidate> {
     let query_phone_count = query.ipa_tokens.len().min(u8::MAX as usize) as u8;
+    let query_grams_by_view = [
+        (IndexView::RawIpa2, qgrams(&query.ipa_tokens, 2)),
+        (IndexView::RawIpa3, qgrams(&query.ipa_tokens, 3)),
+        (IndexView::ReducedIpa2, qgrams(&query.reduced_ipa_tokens, 2)),
+        (IndexView::ReducedIpa3, qgrams(&query.reduced_ipa_tokens, 3)),
+    ];
     let mut accum: HashMap<u32, CandidateAccumulator> = HashMap::new();
 
-    for (view, grams, alias_tokens) in [
-        (
-            IndexView::RawIpa2,
-            qgrams(&query.ipa_tokens, 2),
-            &query.ipa_tokens,
-        ),
-        (
-            IndexView::RawIpa3,
-            qgrams(&query.ipa_tokens, 3),
-            &query.ipa_tokens,
-        ),
-        (
-            IndexView::ReducedIpa2,
-            qgrams(&query.reduced_ipa_tokens, 2),
-            &query.reduced_ipa_tokens,
-        ),
-        (
-            IndexView::ReducedIpa3,
-            qgrams(&query.reduced_ipa_tokens, 3),
-            &query.reduced_ipa_tokens,
-        ),
-    ] {
+    for (view, grams) in &query_grams_by_view {
         let mut unique_query_grams = HashSet::new();
         for gram in grams {
             if !unique_query_grams.insert(gram.clone()) {
                 continue;
             }
-            let Some(postings) = index.postings.get(&(view, gram.clone())) else {
+            let Some(postings) = index.postings.get(&(*view, gram.clone())) else {
                 continue;
             };
             for posting in postings {
@@ -138,13 +128,8 @@ pub fn query_index(
                     continue;
                 }
                 let overlap = accum.entry(posting.alias_id).or_default();
-                overlap.overlap = overlap.overlap.saturating_add(1);
-                let denom = qgrams(alias_tokens, q_from_view(view)).len().max(1) as f32;
-                let score = overlap.overlap as f32 / denom;
-                if score >= overlap.best_score {
-                    overlap.best_score = score;
-                    overlap.matched_view = Some(view);
-                }
+                overlap.total_overlap = overlap.total_overlap.saturating_add(1);
+                *overlap.overlaps_by_view.entry(*view).or_default() += 1;
             }
         }
     }
@@ -153,21 +138,42 @@ pub fn query_index(
         .into_iter()
         .filter_map(|(alias_id, hit)| {
             let alias = index.aliases.get(alias_id as usize)?;
-            let matched_view = hit.matched_view?;
+            let (matched_view, best_view_overlap) = hit
+                .overlaps_by_view
+                .iter()
+                .max_by(|a, b| {
+                    let a_score = normalized_view_overlap(a.1, &query_grams_by_view, a.0);
+                    let b_score = normalized_view_overlap(b.1, &query_grams_by_view, b.0);
+                    a_score.total_cmp(&b_score).then_with(|| a.1.cmp(b.1))
+                })
+                .map(|(view, overlap)| (*view, *overlap))?;
+            let best_view_score =
+                normalized_view_overlap(&best_view_overlap, &query_grams_by_view, &matched_view);
+            let cross_view_support = hit.overlaps_by_view.len() as u8;
+            let token_bonus = token_bonus(alias.token_count, query.token_count);
+            let phone_bonus = phone_bonus(alias.phone_count, query_phone_count);
+            let extra_length_penalty = extra_length_penalty(alias.phone_count, query_phone_count);
             Some(RetrievalCandidate {
                 alias_id,
                 term: alias.term.clone(),
                 alias_text: alias.alias_text.clone(),
                 alias_source: alias.alias_source,
                 matched_view,
-                qgram_overlap: hit.overlap,
+                qgram_overlap: best_view_overlap,
+                total_qgram_overlap: hit.total_overlap,
+                best_view_score,
+                cross_view_support,
                 token_count_match: alias.token_count == query.token_count,
                 phone_count_delta: alias.phone_count as i16 - query_phone_count as i16,
+                token_bonus,
+                phone_bonus,
+                extra_length_penalty,
                 coarse_score: coarse_score(
-                    hit.best_score,
-                    alias,
-                    query_phone_count,
-                    query.token_count,
+                    best_view_score,
+                    cross_view_support,
+                    token_bonus,
+                    phone_bonus,
+                    extra_length_penalty,
                 ),
             })
         })
@@ -202,39 +208,63 @@ pub fn qgrams(tokens: &[String], q: usize) -> Vec<String> {
     bounded.windows(q).map(|window| window.join(" ")).collect()
 }
 
-fn q_from_view(view: IndexView) -> usize {
-    match view {
-        IndexView::RawIpa2 | IndexView::ReducedIpa2 => 2,
-        IndexView::RawIpa3 | IndexView::ReducedIpa3 => 3,
-    }
-}
-
 fn phone_count_compatible(query: u8, candidate: u8) -> bool {
     let delta = query.abs_diff(candidate);
     delta <= 3 || delta * 2 <= query.max(candidate)
 }
 
-fn coarse_score(
-    normalized_overlap: f32,
-    alias: &LexiconAlias,
-    query_phone_count: u8,
-    query_token_count: u8,
+fn normalized_view_overlap(
+    overlap: &u16,
+    query_grams_by_view: &[(IndexView, Vec<String>); 4],
+    view: &IndexView,
 ) -> f32 {
-    let token_bonus = if alias.token_count == query_token_count {
+    let denom = query_grams_by_view
+        .iter()
+        .find(|(candidate_view, _)| candidate_view == view)
+        .map(|(_, grams)| grams.len().max(1) as f32)
+        .unwrap_or(1.0);
+    *overlap as f32 / denom
+}
+
+fn token_bonus(alias_token_count: u8, query_token_count: u8) -> f32 {
+    if alias_token_count == query_token_count {
         0.15
-    } else if alias.token_count.abs_diff(query_token_count) <= 1 {
+    } else if alias_token_count.abs_diff(query_token_count) <= 1 {
         0.05
     } else {
         -0.08
-    };
-    let phone_bonus = if alias.phone_count.abs_diff(query_phone_count) <= 1 {
-        0.12
-    } else if alias.phone_count.abs_diff(query_phone_count) <= 3 {
-        0.04
+    }
+}
+
+fn phone_bonus(alias_phone_count: u8, query_phone_count: u8) -> f32 {
+    match alias_phone_count.abs_diff(query_phone_count) {
+        0 => 0.15,
+        1 => 0.08,
+        2 => 0.02,
+        3 => -0.04,
+        _ => -0.12,
+    }
+}
+
+fn extra_length_penalty(alias_phone_count: u8, query_phone_count: u8) -> f32 {
+    if alias_phone_count > query_phone_count {
+        -0.08 * (alias_phone_count - query_phone_count) as f32
+    } else if alias_phone_count < query_phone_count {
+        -0.03 * (query_phone_count - alias_phone_count) as f32
     } else {
-        -0.10
-    };
-    normalized_overlap + token_bonus + phone_bonus
+        0.0
+    }
+}
+
+fn coarse_score(
+    best_view_score: f32,
+    cross_view_support: u8,
+    token_bonus: f32,
+    phone_bonus: f32,
+    extra_length_penalty: f32,
+) -> f32 {
+    let support_bonus = 0.05 * cross_view_support.saturating_sub(1) as f32;
+    best_view_score + support_bonus + token_bonus + phone_bonus + extra_length_penalty
 }
 
 #[cfg(test)]
@@ -362,5 +392,32 @@ mod tests {
 
         let shortlist = query_index(&index, &query, 5);
         assert_eq!(shortlist[0].term, "reqwest", "{shortlist:#?}");
+    }
+
+    #[test]
+    fn query_index_prefers_serde_over_serde_json_for_sirday() {
+        let vocab = vec![
+            row_with_reviewed_ipa("serde", "sirday", "sˈɜːdeɪ"),
+            row_with_reviewed_ipa("serde_json", "sirday jason", "sˈɜːdeɪ dʒˈeɪsən"),
+        ];
+        let aliases = build_phonetic_lexicon(&vocab, &HashMap::new());
+        let index = build_index(aliases);
+
+        let query = RetrievalQuery {
+            text: "sirday".to_string(),
+            ipa_tokens: crate::prototype::parse_reviewed_ipa("s ɜː d e ɪ"),
+            reduced_ipa_tokens: crate::phonetic_lexicon::reduce_ipa_tokens(
+                &crate::prototype::parse_reviewed_ipa("s ɜː d e ɪ"),
+            ),
+            token_count: 1,
+        };
+
+        let shortlist = query_index(&index, &query, 5);
+        assert_eq!(shortlist[0].term, "serde", "{shortlist:#?}");
+        let serde_json = shortlist
+            .iter()
+            .find(|candidate| candidate.term == "serde_json")
+            .expect("serde_json candidate");
+        assert!(shortlist[0].coarse_score > serde_json.coarse_score);
     }
 }

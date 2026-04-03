@@ -5,7 +5,7 @@
 // DO NOT EDIT - regenerate with `cargo xtask codegen --typescript`
 
 import type { Caller, MethodDescriptor, ServiceDescriptor, VoxCall, Dispatcher, RequestContext, SessionTransportOptions } from "@bearcove/vox-core";
-import { session } from "@bearcove/vox-core";
+import { session, voxServiceMetadata } from "@bearcove/vox-core";
 import { wsConnector } from "@bearcove/vox-ws";
 import { RpcError } from "@bearcove/vox-core";
 import { Tx, Rx, argElementRefsForMethod, bindChannelsForTypeRefs, finalizeBoundChannelsForTypeRefs } from "@bearcove/vox-core";
@@ -28,6 +28,204 @@ export interface Update {
   alignments: AlignedWord[];
 }
 
+export interface CorrectionRequest {
+  transcript: string;
+  words: AlignedWord[];
+  max_span_words: number;
+  shortlist_limit: number;
+  verify_limit: number;
+  reranker_candidate_limit: number;
+  include_debug_trace: boolean;
+}
+
+export interface AcceptedEdit {
+  token_start: number;
+  token_end: number;
+  char_start: number;
+  char_end: number;
+  original_text: string;
+  replacement_text: string;
+  term: string;
+  score: number;
+  phonetic_score: number;
+}
+
+export interface CorrectionResult {
+  original_transcript: string;
+  corrected_transcript: string;
+  accepted_edits: AcceptedEdit[];
+}
+
+export interface SpanDebugView {
+  token_start: number;
+  token_end: number;
+  char_start: number;
+  char_end: number;
+  start_sec: number;
+  end_sec: number;
+  text: string;
+  ipa_tokens: string[];
+  reduced_ipa_tokens: string[];
+  feature_tokens: string[];
+}
+
+export type AliasSource =
+  | { tag: 'Canonical' }
+  | { tag: 'Spoken' }
+  | { tag: 'Identifier' }
+  | { tag: 'Confusion' }
+  | { tag: 'G2p' };
+
+export type RetrievalIndexView =
+  | { tag: 'RawIpa2' }
+  | { tag: 'RawIpa3' }
+  | { tag: 'ReducedIpa2' }
+  | { tag: 'ReducedIpa3' }
+  | { tag: 'Feature2' }
+  | { tag: 'Feature3' }
+  | { tag: 'ShortQueryFallback' };
+
+export interface RetrievalLaneHit {
+  view: RetrievalIndexView;
+  qgram_overlap: number;
+  boundary_overlap: number;
+}
+
+export interface FilterDecision {
+  name: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface RetrievalCandidateDebug {
+  alias_id: number;
+  term: string;
+  alias_text: string;
+  alias_source: AliasSource;
+  lane_hits: RetrievalLaneHit[];
+  coarse_score: number;
+  best_view_score: number;
+  cross_view_support: number;
+  token_bonus: number;
+  phone_bonus: number;
+  extra_length_penalty: number;
+  phonetic_score: number;
+  token_count_match: boolean;
+  phone_count_delta: number;
+  total_qgram_overlap: number;
+  filter_decisions: FilterDecision[];
+  reached_reranker: boolean;
+  accepted: boolean;
+}
+
+export interface SpanDebugTrace {
+  span: SpanDebugView;
+  candidates: RetrievalCandidateDebug[];
+}
+
+export interface RerankerCandidateDebug {
+  index: number;
+  text: string;
+  is_keep_original: boolean;
+  heuristic_score: number;
+  model_score: number;
+  chosen: boolean;
+}
+
+export interface RerankerDebugTrace {
+  region_index: number;
+  left_context: string;
+  original_span: string;
+  right_context: string;
+  candidates: RerankerCandidateDebug[];
+}
+
+export interface TimingBreakdown {
+  span_enumeration_ms: number;
+  retrieval_ms: number;
+  verify_ms: number;
+  rerank_ms: number;
+  total_ms: number;
+}
+
+export interface CorrectionDebugResult {
+  result: CorrectionResult;
+  spans: SpanDebugTrace[];
+  reranker_regions: RerankerDebugTrace[];
+  timings: TimingBreakdown;
+}
+
+export interface RetrievalPrototypeProbeRequest {
+  transcript: string;
+  words: AlignedWord[];
+  max_span_words: number;
+  shortlist_limit: number;
+  verify_limit: number;
+}
+
+export interface RetrievalPrototypeProbeResult {
+  transcript: string;
+  spans: SpanDebugTrace[];
+  timings: TimingBreakdown;
+}
+
+export interface TermInspectionRequest {
+  term: string;
+}
+
+export interface IdentifierFlags {
+  acronym_like: boolean;
+  has_digits: boolean;
+  snake_like: boolean;
+  camel_like: boolean;
+  symbol_like: boolean;
+}
+
+export interface TermAliasView {
+  alias_text: string;
+  alias_source: AliasSource;
+  ipa_tokens: string[];
+  reduced_ipa_tokens: string[];
+  feature_tokens: string[];
+  identifier_flags: IdentifierFlags;
+}
+
+export interface TermInspectionResult {
+  term: string;
+  aliases: TermAliasView[];
+}
+
+export interface RetrievalPrototypeEvalRequest {
+  limit: number;
+  max_span_words: number;
+  shortlist_limit: number;
+  verify_limit: number;
+}
+
+export interface RetrievalEvalMiss {
+  recording_id: number;
+  term: string;
+  transcript: string;
+  best_span_text: string;
+}
+
+export interface RetrievalEvalTermSummary {
+  term: string;
+  cases: number;
+  top1_hits: number;
+  top3_hits: number;
+  top10_hits: number;
+}
+
+export interface RetrievalPrototypeEvalResult {
+  evaluated_cases: number;
+  top1_hits: number;
+  top3_hits: number;
+  top10_hits: number;
+  misses: RetrievalEvalMiss[];
+  per_term: RetrievalEvalTermSummary[];
+}
+
 // Request/Response type aliases
 export type TranscribeWavRequest = [Uint8Array];
 export type TranscribeWavResponse = { ok: true; value: TranscribeWavResult } | { ok: false; error: string };
@@ -38,11 +236,31 @@ export type StreamTranscribeRequest = [
 ];
 export type StreamTranscribeResponse = { ok: true; value: void } | { ok: false; error: string };
 
+export type CorrectTranscriptRequest = [CorrectionRequest];
+export type CorrectTranscriptResponse = { ok: true; value: CorrectionResult } | { ok: false; error: string };
+
+export type DebugCorrectionRequest = [CorrectionRequest];
+export type DebugCorrectionResponse = { ok: true; value: CorrectionDebugResult } | { ok: false; error: string };
+
+export type ProbeRetrievalPrototypeRequest = [RetrievalPrototypeProbeRequest];
+export type ProbeRetrievalPrototypeResponse = { ok: true; value: RetrievalPrototypeProbeResult } | { ok: false; error: string };
+
+export type InspectTermRequest = [TermInspectionRequest];
+export type InspectTermResponse = { ok: true; value: TermInspectionResult } | { ok: false; error: string };
+
+export type RunRetrievalPrototypeEvalRequest = [RetrievalPrototypeEvalRequest];
+export type RunRetrievalPrototypeEvalResponse = { ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string };
+
 // Caller interface for BeeMl
 export interface BeeMlCaller {
   transcribeWav(wavBytes: Uint8Array): Promise<{ ok: true; value: TranscribeWavResult } | { ok: false; error: string }>;
   /** Stream audio chunks (16kHz mono f32) and receive incremental transcription updates. */
   streamTranscribe(audioIn: Rx<number[]>, updatesOut: Tx<Update>): Promise<{ ok: true; value: void } | { ok: false; error: string }>;
+  correctTranscript(request: CorrectionRequest): Promise<{ ok: true; value: CorrectionResult } | { ok: false; error: string }>;
+  debugCorrection(request: CorrectionRequest): Promise<{ ok: true; value: CorrectionDebugResult } | { ok: false; error: string }>;
+  probeRetrievalPrototype(request: RetrievalPrototypeProbeRequest): Promise<{ ok: true; value: RetrievalPrototypeProbeResult } | { ok: false; error: string }>;
+  inspectTerm(request: TermInspectionRequest): Promise<{ ok: true; value: TermInspectionResult } | { ok: false; error: string }>;
+  runRetrievalPrototypeEval(request: RetrievalPrototypeEvalRequest): Promise<{ ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string }>;
 }
 
 // Client implementation for BeeMl
@@ -108,6 +326,101 @@ export class BeeMlClient implements BeeMlCaller {
       }
   }
 
+  async correctTranscript(request: CorrectionRequest): Promise<{ ok: true; value: CorrectionResult } | { ok: false; error: string }> {
+    const descriptor = beeMl_correctTranscript_method;
+    const sendSchemas = beeMl_descriptor.send_schemas;
+      try {
+        const value = await this.caller.call({
+          method: "BeeMl.correctTranscript",
+          args: { request },
+          descriptor,
+          sendSchemas,
+        });
+        return { ok: true, value } as { ok: true; value: CorrectionResult } | { ok: false; error: string };
+      } catch (e: any) {
+        if (e instanceof RpcError && e.isUserError()) {
+          return { ok: false, error: e.userError } as { ok: true; value: CorrectionResult } | { ok: false; error: string };
+        }
+        throw e;
+      }
+  }
+
+  async debugCorrection(request: CorrectionRequest): Promise<{ ok: true; value: CorrectionDebugResult } | { ok: false; error: string }> {
+    const descriptor = beeMl_debugCorrection_method;
+    const sendSchemas = beeMl_descriptor.send_schemas;
+      try {
+        const value = await this.caller.call({
+          method: "BeeMl.debugCorrection",
+          args: { request },
+          descriptor,
+          sendSchemas,
+        });
+        return { ok: true, value } as { ok: true; value: CorrectionDebugResult } | { ok: false; error: string };
+      } catch (e: any) {
+        if (e instanceof RpcError && e.isUserError()) {
+          return { ok: false, error: e.userError } as { ok: true; value: CorrectionDebugResult } | { ok: false; error: string };
+        }
+        throw e;
+      }
+  }
+
+  async probeRetrievalPrototype(request: RetrievalPrototypeProbeRequest): Promise<{ ok: true; value: RetrievalPrototypeProbeResult } | { ok: false; error: string }> {
+    const descriptor = beeMl_probeRetrievalPrototype_method;
+    const sendSchemas = beeMl_descriptor.send_schemas;
+      try {
+        const value = await this.caller.call({
+          method: "BeeMl.probeRetrievalPrototype",
+          args: { request },
+          descriptor,
+          sendSchemas,
+        });
+        return { ok: true, value } as { ok: true; value: RetrievalPrototypeProbeResult } | { ok: false; error: string };
+      } catch (e: any) {
+        if (e instanceof RpcError && e.isUserError()) {
+          return { ok: false, error: e.userError } as { ok: true; value: RetrievalPrototypeProbeResult } | { ok: false; error: string };
+        }
+        throw e;
+      }
+  }
+
+  async inspectTerm(request: TermInspectionRequest): Promise<{ ok: true; value: TermInspectionResult } | { ok: false; error: string }> {
+    const descriptor = beeMl_inspectTerm_method;
+    const sendSchemas = beeMl_descriptor.send_schemas;
+      try {
+        const value = await this.caller.call({
+          method: "BeeMl.inspectTerm",
+          args: { request },
+          descriptor,
+          sendSchemas,
+        });
+        return { ok: true, value } as { ok: true; value: TermInspectionResult } | { ok: false; error: string };
+      } catch (e: any) {
+        if (e instanceof RpcError && e.isUserError()) {
+          return { ok: false, error: e.userError } as { ok: true; value: TermInspectionResult } | { ok: false; error: string };
+        }
+        throw e;
+      }
+  }
+
+  async runRetrievalPrototypeEval(request: RetrievalPrototypeEvalRequest): Promise<{ ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string }> {
+    const descriptor = beeMl_runRetrievalPrototypeEval_method;
+    const sendSchemas = beeMl_descriptor.send_schemas;
+      try {
+        const value = await this.caller.call({
+          method: "BeeMl.runRetrievalPrototypeEval",
+          args: { request },
+          descriptor,
+          sendSchemas,
+        });
+        return { ok: true, value } as { ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string };
+      } catch (e: any) {
+        if (e instanceof RpcError && e.isUserError()) {
+          return { ok: false, error: e.userError } as { ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string };
+        }
+        throw e;
+      }
+  }
+
 }
 
 /**
@@ -119,7 +432,7 @@ export async function connectBeeMl(
   url: string,
   options: SessionTransportOptions = {},
 ): Promise<BeeMlClient> {
-  const established = await session.initiator(wsConnector(url), options);
+  const established = await session.initiator(wsConnector(url), { ...options, metadata: voxServiceMetadata("BeeMl") });
   return new BeeMlClient(established.rootConnection().caller());
 }
 
@@ -127,6 +440,11 @@ export async function connectBeeMl(
 export interface BeeMlHandler {
   transcribeWav(wavBytes: Uint8Array): Promise<{ ok: true; value: TranscribeWavResult } | { ok: false; error: string }> | { ok: true; value: TranscribeWavResult } | { ok: false; error: string };
   streamTranscribe(audioIn: Rx<number[]>, updatesOut: Tx<Update>): Promise<{ ok: true; value: void } | { ok: false; error: string }> | { ok: true; value: void } | { ok: false; error: string };
+  correctTranscript(request: CorrectionRequest): Promise<{ ok: true; value: CorrectionResult } | { ok: false; error: string }> | { ok: true; value: CorrectionResult } | { ok: false; error: string };
+  debugCorrection(request: CorrectionRequest): Promise<{ ok: true; value: CorrectionDebugResult } | { ok: false; error: string }> | { ok: true; value: CorrectionDebugResult } | { ok: false; error: string };
+  probeRetrievalPrototype(request: RetrievalPrototypeProbeRequest): Promise<{ ok: true; value: RetrievalPrototypeProbeResult } | { ok: false; error: string }> | { ok: true; value: RetrievalPrototypeProbeResult } | { ok: false; error: string };
+  inspectTerm(request: TermInspectionRequest): Promise<{ ok: true; value: TermInspectionResult } | { ok: false; error: string }> | { ok: true; value: TermInspectionResult } | { ok: false; error: string };
+  runRetrievalPrototypeEval(request: RetrievalPrototypeEvalRequest): Promise<{ ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string }> | { ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string };
 }
 
 // Dispatcher for BeeMl
@@ -153,6 +471,41 @@ export class BeeMlDispatcher implements Dispatcher {
       try {
         const result = await this.handler.streamTranscribe(args[0] as Rx<number[]>, args[1] as Tx<Update>);
         (args[1] as { close(): void }).close(); // close updatesOut before reply
+        if (result.ok) call.reply(result.value); else call.replyErr(result.error);
+      } catch (error) {
+        call.replyInternalError(error instanceof Error ? error.message : String(error));
+      }
+    } else if (method.id === 0x8f72a9b158960cb7n) {
+      try {
+        const result = await this.handler.correctTranscript(args[0] as CorrectionRequest);
+        if (result.ok) call.reply(result.value); else call.replyErr(result.error);
+      } catch (error) {
+        call.replyInternalError(error instanceof Error ? error.message : String(error));
+      }
+    } else if (method.id === 0x4b0c0068b927eaa5n) {
+      try {
+        const result = await this.handler.debugCorrection(args[0] as CorrectionRequest);
+        if (result.ok) call.reply(result.value); else call.replyErr(result.error);
+      } catch (error) {
+        call.replyInternalError(error instanceof Error ? error.message : String(error));
+      }
+    } else if (method.id === 0xdf81825cb50e19f4n) {
+      try {
+        const result = await this.handler.probeRetrievalPrototype(args[0] as RetrievalPrototypeProbeRequest);
+        if (result.ok) call.reply(result.value); else call.replyErr(result.error);
+      } catch (error) {
+        call.replyInternalError(error instanceof Error ? error.message : String(error));
+      }
+    } else if (method.id === 0x9b8e8592673c696an) {
+      try {
+        const result = await this.handler.inspectTerm(args[0] as TermInspectionRequest);
+        if (result.ok) call.reply(result.value); else call.replyErr(result.error);
+      } catch (error) {
+        call.replyInternalError(error instanceof Error ? error.message : String(error));
+      }
+    } else if (method.id === 0x7c4338a1cfc670d5n) {
+      try {
+        const result = await this.handler.runRetrievalPrototypeEval(args[0] as RetrievalPrototypeEvalRequest);
         if (result.ok) call.reply(result.value); else call.replyErr(result.error);
       } catch (error) {
         call.replyInternalError(error instanceof Error ? error.message : String(error));
@@ -184,10 +537,42 @@ export const beeMl_send_schemas: import("@bearcove/vox-core").ServiceSendSchemas
     [0xc886545a493d06ebn, { id: 0xc886545a493d06ebn, type_params: ['T'], kind: { tag: 'channel', direction: 'tx', element: { tag: 'var', name: 'T' } } }],
     [0xba0496aa8cee7a4cn, { id: 0xba0496aa8cee7a4cn, type_params: ['T0', 'T1'], kind: { tag: 'tuple', elements: [{ tag: 'var', name: 'T0' }, { tag: 'var', name: 'T1' }] } }],
     [0xbc5c33249a2dc720n, { id: 0xbc5c33249a2dc720n, type_params: [], kind: { tag: 'primitive', primitive_type: 'unit' } }],
+    [0x2c8d54f2314d0f20n, { id: 0x2c8d54f2314d0f20n, type_params: [], kind: { tag: 'primitive', primitive_type: 'u8' } }],
+    [0x1be6c8d0625ea876n, { id: 0x1be6c8d0625ea876n, type_params: [], kind: { tag: 'primitive', primitive_type: 'u16' } }],
+    [0x855b7365a884faban, { id: 0x855b7365a884faban, type_params: [], kind: { tag: 'struct', name: 'CorrectionRequest', fields: [{ name: 'transcript', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'words', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x82fe1c941f431583n, args: [] }] }, required: true }, { name: 'max_span_words', type_ref: { tag: 'concrete', type_id: 0x2c8d54f2314d0f20n, args: [] }, required: true }, { name: 'shortlist_limit', type_ref: { tag: 'concrete', type_id: 0x1be6c8d0625ea876n, args: [] }, required: true }, { name: 'verify_limit', type_ref: { tag: 'concrete', type_id: 0x1be6c8d0625ea876n, args: [] }, required: true }, { name: 'reranker_candidate_limit', type_ref: { tag: 'concrete', type_id: 0x1be6c8d0625ea876n, args: [] }, required: true }, { name: 'include_debug_trace', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }] } }],
+    [0x2430410970049f0fn, { id: 0x2430410970049f0fn, type_params: [], kind: { tag: 'struct', name: 'AcceptedEdit', fields: [{ name: 'token_start', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'token_end', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'char_start', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'char_end', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'original_text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'replacement_text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'score', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }, { name: 'phonetic_score', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }] } }],
+    [0xde239f251f44c0aan, { id: 0xde239f251f44c0aan, type_params: [], kind: { tag: 'struct', name: 'CorrectionResult', fields: [{ name: 'original_transcript', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'corrected_transcript', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'accepted_edits', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x2430410970049f0fn, args: [] }] }, required: true }] } }],
+    [0x08f09d588ecff920n, { id: 0x08f09d588ecff920n, type_params: [], kind: { tag: 'struct', name: 'SpanDebugView', fields: [{ name: 'token_start', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'token_end', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'char_start', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'char_end', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'start_sec', type_ref: { tag: 'concrete', type_id: 0x3f2e589db81e95bfn, args: [] }, required: true }, { name: 'end_sec', type_ref: { tag: 'concrete', type_id: 0x3f2e589db81e95bfn, args: [] }, required: true }, { name: 'text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'ipa_tokens', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'reduced_ipa_tokens', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'feature_tokens', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }] } }],
+    [0x42c248e144532fd0n, { id: 0x42c248e144532fd0n, type_params: [], kind: { tag: 'enum', name: 'AliasSource', variants: [{ name: 'Canonical', index: 0, payload: { tag: 'unit' } }, { name: 'Spoken', index: 1, payload: { tag: 'unit' } }, { name: 'Identifier', index: 2, payload: { tag: 'unit' } }, { name: 'Confusion', index: 3, payload: { tag: 'unit' } }, { name: 'G2p', index: 4, payload: { tag: 'unit' } }] } }],
+    [0x2d098d6b18ab143cn, { id: 0x2d098d6b18ab143cn, type_params: [], kind: { tag: 'enum', name: 'RetrievalIndexView', variants: [{ name: 'RawIpa2', index: 0, payload: { tag: 'unit' } }, { name: 'RawIpa3', index: 1, payload: { tag: 'unit' } }, { name: 'ReducedIpa2', index: 2, payload: { tag: 'unit' } }, { name: 'ReducedIpa3', index: 3, payload: { tag: 'unit' } }, { name: 'Feature2', index: 4, payload: { tag: 'unit' } }, { name: 'Feature3', index: 5, payload: { tag: 'unit' } }, { name: 'ShortQueryFallback', index: 6, payload: { tag: 'unit' } }] } }],
+    [0xaacfb969c59c5e56n, { id: 0xaacfb969c59c5e56n, type_params: [], kind: { tag: 'struct', name: 'RetrievalLaneHit', fields: [{ name: 'view', type_ref: { tag: 'concrete', type_id: 0x2d098d6b18ab143cn, args: [] }, required: true }, { name: 'qgram_overlap', type_ref: { tag: 'concrete', type_id: 0x1be6c8d0625ea876n, args: [] }, required: true }, { name: 'boundary_overlap', type_ref: { tag: 'concrete', type_id: 0x1be6c8d0625ea876n, args: [] }, required: true }] } }],
+    [0x269c2efb67f8a4c7n, { id: 0x269c2efb67f8a4c7n, type_params: [], kind: { tag: 'primitive', primitive_type: 'i16' } }],
+    [0x7c750a03f402772dn, { id: 0x7c750a03f402772dn, type_params: [], kind: { tag: 'struct', name: 'FilterDecision', fields: [{ name: 'name', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'passed', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }, { name: 'detail', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }] } }],
+    [0xe7d3b81d5f5233afn, { id: 0xe7d3b81d5f5233afn, type_params: [], kind: { tag: 'struct', name: 'RetrievalCandidateDebug', fields: [{ name: 'alias_id', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'alias_text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'alias_source', type_ref: { tag: 'concrete', type_id: 0x42c248e144532fd0n, args: [] }, required: true }, { name: 'lane_hits', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0xaacfb969c59c5e56n, args: [] }] }, required: true }, { name: 'coarse_score', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }, { name: 'best_view_score', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }, { name: 'cross_view_support', type_ref: { tag: 'concrete', type_id: 0x2c8d54f2314d0f20n, args: [] }, required: true }, { name: 'token_bonus', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }, { name: 'phone_bonus', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }, { name: 'extra_length_penalty', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }, { name: 'phonetic_score', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }, { name: 'token_count_match', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }, { name: 'phone_count_delta', type_ref: { tag: 'concrete', type_id: 0x269c2efb67f8a4c7n, args: [] }, required: true }, { name: 'total_qgram_overlap', type_ref: { tag: 'concrete', type_id: 0x1be6c8d0625ea876n, args: [] }, required: true }, { name: 'filter_decisions', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x7c750a03f402772dn, args: [] }] }, required: true }, { name: 'reached_reranker', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }, { name: 'accepted', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }] } }],
+    [0x0e63decca253b339n, { id: 0x0e63decca253b339n, type_params: [], kind: { tag: 'struct', name: 'SpanDebugTrace', fields: [{ name: 'span', type_ref: { tag: 'concrete', type_id: 0x08f09d588ecff920n, args: [] }, required: true }, { name: 'candidates', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0xe7d3b81d5f5233afn, args: [] }] }, required: true }] } }],
+    [0x32012aa37d149100n, { id: 0x32012aa37d149100n, type_params: [], kind: { tag: 'struct', name: 'RerankerCandidateDebug', fields: [{ name: 'index', type_ref: { tag: 'concrete', type_id: 0x1be6c8d0625ea876n, args: [] }, required: true }, { name: 'text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'is_keep_original', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }, { name: 'heuristic_score', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }, { name: 'model_score', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }, { name: 'chosen', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }] } }],
+    [0x281bf573976f7985n, { id: 0x281bf573976f7985n, type_params: [], kind: { tag: 'struct', name: 'RerankerDebugTrace', fields: [{ name: 'region_index', type_ref: { tag: 'concrete', type_id: 0x1be6c8d0625ea876n, args: [] }, required: true }, { name: 'left_context', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'original_span', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'right_context', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'candidates', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x32012aa37d149100n, args: [] }] }, required: true }] } }],
+    [0x053bf20b91144aefn, { id: 0x053bf20b91144aefn, type_params: [], kind: { tag: 'struct', name: 'TimingBreakdown', fields: [{ name: 'span_enumeration_ms', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'retrieval_ms', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'verify_ms', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'rerank_ms', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'total_ms', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }] } }],
+    [0xd117ad28c27bc98cn, { id: 0xd117ad28c27bc98cn, type_params: [], kind: { tag: 'struct', name: 'CorrectionDebugResult', fields: [{ name: 'result', type_ref: { tag: 'concrete', type_id: 0xde239f251f44c0aan, args: [] }, required: true }, { name: 'spans', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x0e63decca253b339n, args: [] }] }, required: true }, { name: 'reranker_regions', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x281bf573976f7985n, args: [] }] }, required: true }, { name: 'timings', type_ref: { tag: 'concrete', type_id: 0x053bf20b91144aefn, args: [] }, required: true }] } }],
+    [0x5e7364ffe0ccb143n, { id: 0x5e7364ffe0ccb143n, type_params: [], kind: { tag: 'struct', name: 'RetrievalPrototypeProbeRequest', fields: [{ name: 'transcript', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'words', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x82fe1c941f431583n, args: [] }] }, required: true }, { name: 'max_span_words', type_ref: { tag: 'concrete', type_id: 0x2c8d54f2314d0f20n, args: [] }, required: true }, { name: 'shortlist_limit', type_ref: { tag: 'concrete', type_id: 0x1be6c8d0625ea876n, args: [] }, required: true }, { name: 'verify_limit', type_ref: { tag: 'concrete', type_id: 0x1be6c8d0625ea876n, args: [] }, required: true }] } }],
+    [0x414bbd27131fd022n, { id: 0x414bbd27131fd022n, type_params: [], kind: { tag: 'struct', name: 'RetrievalPrototypeProbeResult', fields: [{ name: 'transcript', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'spans', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x0e63decca253b339n, args: [] }] }, required: true }, { name: 'timings', type_ref: { tag: 'concrete', type_id: 0x053bf20b91144aefn, args: [] }, required: true }] } }],
+    [0x9875a7e9df5cfe4en, { id: 0x9875a7e9df5cfe4en, type_params: [], kind: { tag: 'struct', name: 'TermInspectionRequest', fields: [{ name: 'term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }] } }],
+    [0x85aa81894de2d5a3n, { id: 0x85aa81894de2d5a3n, type_params: [], kind: { tag: 'struct', name: 'IdentifierFlags', fields: [{ name: 'acronym_like', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }, { name: 'has_digits', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }, { name: 'snake_like', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }, { name: 'camel_like', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }, { name: 'symbol_like', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }] } }],
+    [0x0c27a88a926856cbn, { id: 0x0c27a88a926856cbn, type_params: [], kind: { tag: 'struct', name: 'TermAliasView', fields: [{ name: 'alias_text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'alias_source', type_ref: { tag: 'concrete', type_id: 0x42c248e144532fd0n, args: [] }, required: true }, { name: 'ipa_tokens', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'reduced_ipa_tokens', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'feature_tokens', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'identifier_flags', type_ref: { tag: 'concrete', type_id: 0x85aa81894de2d5a3n, args: [] }, required: true }] } }],
+    [0x1584ce53f45edf00n, { id: 0x1584ce53f45edf00n, type_params: [], kind: { tag: 'struct', name: 'TermInspectionResult', fields: [{ name: 'term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'aliases', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x0c27a88a926856cbn, args: [] }] }, required: true }] } }],
+    [0x0499f4e57d8267ecn, { id: 0x0499f4e57d8267ecn, type_params: [], kind: { tag: 'struct', name: 'RetrievalPrototypeEvalRequest', fields: [{ name: 'limit', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'max_span_words', type_ref: { tag: 'concrete', type_id: 0x2c8d54f2314d0f20n, args: [] }, required: true }, { name: 'shortlist_limit', type_ref: { tag: 'concrete', type_id: 0x1be6c8d0625ea876n, args: [] }, required: true }, { name: 'verify_limit', type_ref: { tag: 'concrete', type_id: 0x1be6c8d0625ea876n, args: [] }, required: true }] } }],
+    [0xd9b29e2003d124e7n, { id: 0xd9b29e2003d124e7n, type_params: [], kind: { tag: 'struct', name: 'RetrievalEvalMiss', fields: [{ name: 'recording_id', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'transcript', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'best_span_text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }] } }],
+    [0xeafb2138aac2425en, { id: 0xeafb2138aac2425en, type_params: [], kind: { tag: 'struct', name: 'RetrievalEvalTermSummary', fields: [{ name: 'term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'cases', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'top1_hits', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'top3_hits', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'top10_hits', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }] } }],
+    [0xa143619a8d421617n, { id: 0xa143619a8d421617n, type_params: [], kind: { tag: 'struct', name: 'RetrievalPrototypeEvalResult', fields: [{ name: 'evaluated_cases', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'top1_hits', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'top3_hits', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'top10_hits', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'misses', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0xd9b29e2003d124e7n, args: [] }] }, required: true }, { name: 'per_term', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0xeafb2138aac2425en, args: [] }] }, required: true }] } }],
   ]),
   methods: new Map<bigint, import("@bearcove/vox-core").MethodSendSchemas>([
     [0x5769301e350ea60bn, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xba8125876d6388b4n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xdf4236220e4a3571n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
     [0xfe3e747dc31b0b64n, { argsRootRef: { tag: 'concrete', type_id: 0xba0496aa8cee7a4cn, args: [{ tag: 'concrete', type_id: 0x967a48ac345e2f5en, args: [{ tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }] }, { tag: 'concrete', type_id: 0xc886545a493d06ebn, args: [{ tag: 'concrete', type_id: 0xb395b47b1ae4be84n, args: [] }] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xbc5c33249a2dc720n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
+    [0x8f72a9b158960cb7n, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0x855b7365a884faban, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xde239f251f44c0aan, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
+    [0x4b0c0068b927eaa5n, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0x855b7365a884faban, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xd117ad28c27bc98cn, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
+    [0xdf81825cb50e19f4n, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0x5e7364ffe0ccb143n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x414bbd27131fd022n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
+    [0x9b8e8592673c696an, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0x9875a7e9df5cfe4en, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x1584ce53f45edf00n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
+    [0x7c4338a1cfc670d5n, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0x0499f4e57d8267ecn, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xa143619a8d421617n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
   ]),
 };
 
@@ -203,6 +588,36 @@ export const beeMl_streamTranscribe_method: MethodDescriptor = {
   retry: { persist: false, idem: false },
 };
 
+export const beeMl_correctTranscript_method: MethodDescriptor = {
+  name: 'correctTranscript',
+  id: 0x8f72a9b158960cb7n,
+  retry: { persist: false, idem: false },
+};
+
+export const beeMl_debugCorrection_method: MethodDescriptor = {
+  name: 'debugCorrection',
+  id: 0x4b0c0068b927eaa5n,
+  retry: { persist: false, idem: false },
+};
+
+export const beeMl_probeRetrievalPrototype_method: MethodDescriptor = {
+  name: 'probeRetrievalPrototype',
+  id: 0xdf81825cb50e19f4n,
+  retry: { persist: false, idem: false },
+};
+
+export const beeMl_inspectTerm_method: MethodDescriptor = {
+  name: 'inspectTerm',
+  id: 0x9b8e8592673c696an,
+  retry: { persist: false, idem: false },
+};
+
+export const beeMl_runRetrievalPrototypeEval_method: MethodDescriptor = {
+  name: 'runRetrievalPrototypeEval',
+  id: 0x7c4338a1cfc670d5n,
+  retry: { persist: false, idem: false },
+};
+
 // Service descriptor for runtime dispatch metadata
 export const beeMl_descriptor: ServiceDescriptor = {
   service_name: 'BeeMl',
@@ -210,6 +625,11 @@ export const beeMl_descriptor: ServiceDescriptor = {
   methods: new Map<bigint, MethodDescriptor>([
     [beeMl_transcribeWav_method.id, beeMl_transcribeWav_method],
     [beeMl_streamTranscribe_method.id, beeMl_streamTranscribe_method],
+    [beeMl_correctTranscript_method.id, beeMl_correctTranscript_method],
+    [beeMl_debugCorrection_method.id, beeMl_debugCorrection_method],
+    [beeMl_probeRetrievalPrototype_method.id, beeMl_probeRetrievalPrototype_method],
+    [beeMl_inspectTerm_method.id, beeMl_inspectTerm_method],
+    [beeMl_runRetrievalPrototypeEval_method.id, beeMl_runRetrievalPrototypeEval_method],
   ]),
 };
 
