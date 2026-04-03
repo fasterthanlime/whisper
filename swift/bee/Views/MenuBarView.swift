@@ -660,10 +660,10 @@ private struct TranscriptionSettingsView: View {
         ScrollView {
             VStack(spacing: 20) {
                 SettingsCard("Try it out") {
-                    HStack(alignment: .top, spacing: 12) {
+                    VStack(spacing: 10) {
                         TextEditor(text: $tryMeText)
                             .font(.body)
-                            .frame(minHeight: 100)
+                            .frame(height: 52)
                             .scrollContentBackground(.hidden)
                             .overlay(alignment: .topLeading) {
                                 if tryMeText.isEmpty {
@@ -675,13 +675,12 @@ private struct TranscriptionSettingsView: View {
                                 }
                             }
 
-                        VStack(spacing: 8) {
+                        HStack(spacing: 12) {
                             MockStatRow(label: "CPU", value: mockCPU, max: 100, unit: "%", color: statColor(mockCPU, hi: 60, crit: 85))
                             MockStatRow(label: "GPU", value: mockGPU, max: 100, unit: "%", color: statColor(mockGPU, hi: 60, crit: 85))
                             MockStatRow(label: "VRAM", value: mockMemMB, max: 16384, unit: "MB", color: statColor(mockMemMB, hi: 8192, crit: 14336))
                             MockStatRow(label: "RAM", value: mockRamMB, max: 16384, unit: "MB", color: statColor(mockRamMB, hi: 4096, crit: 10240))
                         }
-                        .frame(width: 90)
                         .onAppear {
                             updateStats()
                             Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
