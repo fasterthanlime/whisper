@@ -174,12 +174,9 @@ impl BeeMlService {
                         feature_tokens: bee_phonetic::feature_tokens_for_ipa(&span.ipa_tokens),
                         token_count: (span.token_end - span.token_start) as u8,
                     },
-                    request.shortlist_limit as usize,
+                    request.shortlist_limit.max(50) as usize,
                 );
-                let scored_rows = score_shortlist(&span, &shortlist, &self.inner.index)
-                    .into_iter()
-                    .take(request.verify_limit as usize)
-                    .collect::<Vec<_>>();
+                let scored_rows = score_shortlist(&span, &shortlist, &self.inner.index);
                 let judge_input = scored_rows
                     .iter()
                     .map(|row| {
@@ -1080,16 +1077,27 @@ fn build_sentence_hypothesis(
         .flat_map(|component| component.edits.iter().cloned())
         .collect::<Vec<_>>();
     let sentence = apply_atomic_edits(transcript, &edits);
-    let component_scores = components.iter().map(|component| component.score).collect::<Vec<_>>();
-    let component_probabilities = components
-        .iter()
-        .map(|component| component.probability)
-        .collect::<Vec<_>>();
+    // Score by the weakest component (min, not average). This way a sentence
+    // with two good edits (0.59, 0.55) scores 0.55 — which beats a sentence
+    // with one good edit + keep (0.59, 0.82 keep → min 0.59, but the keep
+    // component contributes no edits so its score is just the keep probability).
+    // A sentence with no edits (all keep) gets probability 1.0.
+    let num_edits = components.iter().filter(|c| !c.choose_keep_original).count();
+    let probability = if num_edits == 0 {
+        0.0 // all-keep is lowest priority in the choice list
+    } else {
+        // Min of edit component scores — weakest link
+        components
+            .iter()
+            .filter(|c| !c.choose_keep_original)
+            .map(|c| c.probability)
+            .fold(f32::INFINITY, f32::min)
+    };
     SentenceHypothesis {
         components,
         sentence,
-        score: average_or_zero(&component_scores),
-        probability: average_or_zero(&component_probabilities),
+        score: probability,
+        probability,
     }
 }
 
