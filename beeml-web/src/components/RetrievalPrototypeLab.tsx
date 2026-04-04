@@ -1,25 +1,16 @@
 import { useCallback, useMemo, useState } from "react";
 import { connectBeeMl } from "../beeml.generated";
 import type {
-  AlignedWord,
   CandidateFeatureDebug,
+  JudgeOptionDebug,
   RetrievalCandidateDebug,
   RetrievalPrototypeProbeResult,
   TermInspectionResult,
 } from "../beeml.generated";
-
-function makeApproximateWords(transcript: string): AlignedWord[] {
-  const words = transcript
-    .trim()
-    .split(/\s+/)
-    .map((word) => word.trim())
-    .filter(Boolean);
-  return words.map((word, index) => ({
-    word,
-    start: index * 0.4,
-    end: index * 0.4 + 0.35,
-  }));
-}
+import {
+  dedupeJudgeOptions,
+  makeApproximateWords,
+} from "./retrievalPrototypeUtils";
 
 function formatAliasSource(source: { tag: string }) {
   return source.tag;
@@ -54,6 +45,15 @@ function dedupeCandidatesByTerm(candidates: RetrievalCandidateDebug[]) {
   return [...bestByTerm.values()].sort(
     (a, b) => candidateSortKey(b) - candidateSortKey(a),
   );
+}
+
+function rangesOverlap(
+  aStart: number,
+  aEnd: number,
+  bStart: number,
+  bEnd: number,
+) {
+  return aStart < bEnd && bStart < aEnd;
 }
 
 function renderFeatureSummary(features: CandidateFeatureDebug) {
@@ -130,10 +130,8 @@ function renderGuards(features: CandidateFeatureDebug) {
 
 export function RetrievalPrototypeLab({
   wsUrl,
-  setWsUrl,
 }: {
   wsUrl: string;
-  setWsUrl: (value: string) => void;
 }) {
   const [term, setTerm] = useState("AArch64");
   const [transcript, setTranscript] = useState("arc sixty four");
@@ -144,6 +142,7 @@ export function RetrievalPrototypeLab({
   const [error, setError] = useState<string | null>(null);
   const [termResult, setTermResult] = useState<TermInspectionResult | null>(null);
   const [probeResult, setProbeResult] = useState<RetrievalPrototypeProbeResult | null>(null);
+  const [teachingKey, setTeachingKey] = useState<string | null>(null);
 
   const runInspect = useCallback(async () => {
     try {
@@ -182,35 +181,132 @@ export function RetrievalPrototypeLab({
     }
   }, [maxSpanWords, shortlistLimit, transcript, verifyLimit, wsUrl]);
 
+  const teachJudge = useCallback(
+    async (
+      spanTokenStart: number,
+      spanTokenEnd: number,
+      option: JudgeOptionDebug,
+    ) => {
+      try {
+        const key = `${spanTokenStart}:${spanTokenEnd}:${option.alias_id ?? "keep"}`;
+        setTeachingKey(key);
+        setStatus("Teaching judge...");
+        setError(null);
+        const client = await connectBeeMl(wsUrl);
+        const words = makeApproximateWords(transcript);
+        const result = await client.teachRetrievalPrototypeJudge({
+          probe: {
+            transcript,
+            words,
+            max_span_words: maxSpanWords,
+            shortlist_limit: shortlistLimit,
+            verify_limit: verifyLimit,
+          },
+          span_token_start: spanTokenStart,
+          span_token_end: spanTokenEnd,
+          choose_keep_original: option.is_keep_original,
+          chosen_alias_id: option.is_keep_original ? null : option.alias_id,
+        });
+        if (!result.ok) throw new Error(result.error);
+        setProbeResult(result.value);
+        setStatus(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setStatus(null);
+      } finally {
+        setTeachingKey(null);
+      }
+    },
+    [maxSpanWords, shortlistLimit, transcript, verifyLimit, wsUrl],
+  );
+
   const interestingSpans = useMemo(() => {
     if (!probeResult) return [];
     return probeResult.spans
       .map((span) => ({
         ...span,
         candidates: dedupeCandidatesByTerm(span.candidates),
+        judge_options: dedupeJudgeOptions(span.judge_options),
       }))
       .sort((a, b) => {
-        const aBest = Math.max(...a.candidates.map(candidateSortKey), -Infinity);
-        const bBest = Math.max(...b.candidates.map(candidateSortKey), -Infinity);
+        const aBest = Math.max(
+          ...a.judge_options
+            .filter((option) => !option.is_keep_original)
+            .map((option) => option.probability * 1000 + option.score),
+          -Infinity,
+        );
+        const bBest = Math.max(
+          ...b.judge_options
+            .filter((option) => !option.is_keep_original)
+            .map((option) => option.probability * 1000 + option.score),
+          -Infinity,
+        );
         return bBest - aBest;
+      })
+      .slice(0, 16);
+  }, [probeResult]);
+
+  const assembledSuggestions = useMemo(() => {
+    const proposed = interestingSpans
+      .map((span) => {
+        const keep = span.judge_options.find((option) => option.is_keep_original);
+        const replacement = span.judge_options.find((option) => !option.is_keep_original);
+        if (!replacement || !keep) return null;
+        const margin = replacement.probability - keep.probability;
+        if (margin < 0.08) return null;
+        return {
+          span,
+          replacement,
+          keep,
+          margin,
+        };
+      })
+      .filter((entry) => entry !== null)
+      .sort((a, b) => {
+        return (
+          b.margin - a.margin ||
+          b.replacement.probability - a.replacement.probability
+        );
       });
+
+    const chosen: typeof proposed = [];
+    for (const entry of proposed) {
+      if (
+        chosen.some((existing) =>
+          rangesOverlap(
+            existing.span.span.token_start,
+            existing.span.span.token_end,
+            entry.span.span.token_start,
+            entry.span.span.token_end,
+          ),
+        )
+      ) {
+        continue;
+      }
+      chosen.push(entry);
+    }
+    return chosen;
+  }, [interestingSpans]);
+
+  const topWeights = useMemo(() => {
+    if (!probeResult) return [];
+    return probeResult.judge_state.feature_names
+      .map((name, index) => ({
+        name,
+        value: probeResult.judge_state.weights[index] ?? 0,
+      }))
+      .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+      .slice(0, 8);
   }, [probeResult]);
 
   return (
     <div className="prototype-lab">
-      <div className="prototype-toolbar">
-        <label className="ws-label">
-          <span>ws</span>
-          <input
-            className="ws-input"
-            value={wsUrl}
-            onChange={(e) => setWsUrl(e.target.value)}
-            placeholder="ws://127.0.0.1:9944"
-          />
-        </label>
-        {status && <span className="status">{status}</span>}
-        {error && <span className="error">{error}</span>}
-      </div>
+      {(status || error) && (
+        <div className="notice-row">
+          {status ? <span className="status-pill">{status}</span> : null}
+          {error ? <span className="error-pill">{error}</span> : null}
+        </div>
+      )}
 
       <div className="prototype-grid">
         <section className="prototype-card">
@@ -311,7 +407,37 @@ export function RetrievalPrototypeLab({
                   with candidates{" "}
                   {probeResult.spans.filter((span) => span.candidates.length > 0).length}
                 </span>
+                <span>assembled {assembledSuggestions.length}</span>
+                <span>judge updates {probeResult.judge_state.update_count}</span>
+                <span>judge lr {probeResult.judge_state.learning_rate.toFixed(2)}</span>
               </div>
+              {topWeights.length > 0 ? (
+                <div className="candidate-meta">
+                  {topWeights.map((weight) => (
+                    <span key={weight.name}>
+                      {weight.name} {weight.value.toFixed(3)}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              {assembledSuggestions.length > 0 ? (
+                <div className="candidate-list">
+                  <div className="candidate-card">
+                    <div className="candidate-title-row">
+                      <strong>Assembled Suggestions</strong>
+                      <span className="mini-badge">non-overlapping</span>
+                    </div>
+                    <div className="candidate-meta">
+                      {assembledSuggestions.map((entry) => (
+                        <span key={`${entry.span.span.token_start}:${entry.span.span.token_end}`}>
+                          {entry.span.span.text} {"->"} {entry.replacement.term} margin{" "}
+                          {entry.margin.toFixed(3)}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
               {interestingSpans.map((span) => (
                 <article
                   key={`${span.span.token_start}-${span.span.token_end}-${span.span.text}`}
@@ -324,6 +450,41 @@ export function RetrievalPrototypeLab({
                     </span>
                   </div>
                   <div className="token-row">{span.span.ipa_tokens.join(" ")}</div>
+                  {span.judge_options.length > 0 ? (
+                    <div className="candidate-list">
+                      <div className="candidate-card">
+                        <div className="candidate-title-row">
+                          <strong>Judge</strong>
+                          <span className="mini-badge">pick one to teach</span>
+                        </div>
+                        <div className="candidate-meta">
+                          {span.judge_options.map((option) => {
+                            const key = `${span.span.token_start}:${span.span.token_end}:${
+                              option.alias_id ?? "keep"
+                            }`;
+                            return (
+                              <button
+                                key={key}
+                                className="primary"
+                                disabled={teachingKey === key}
+                                onClick={() =>
+                                  void teachJudge(
+                                    span.span.token_start,
+                                    span.span.token_end,
+                                    option,
+                                  )
+                                }
+                              >
+                                {option.is_keep_original ? "keep original" : option.term}{" "}
+                                {option.probability.toFixed(3)}
+                                {option.chosen ? " current" : ""}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                   {span.candidates.length > 0 ? (
                     <div className="candidate-list">
                       {span.candidates.map((candidate) => (

@@ -68,6 +68,11 @@ Later we can add:
 - user priors
 - session recency priors
 
+Streaming-specific feature to explore:
+- keep some record of early streaming ASR hypotheses, not just the final stabilized text
+- sometimes the model hears the term correctly first and then "fixes" it into a worse context-driven word later
+- the judge may need features like first-hit token, revision count, or earliest stable hypothesis for the span
+
 ## What "Online Learning" Means Here
 
 For v1, online learning means:

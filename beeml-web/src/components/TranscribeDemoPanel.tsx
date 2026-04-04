@@ -65,10 +65,8 @@ function resampleMonoLinear(
 
 export function TranscribeDemoPanel({
   wsUrl,
-  setWsUrl,
 }: {
   wsUrl: string;
-  setWsUrl: (value: string) => void;
 }) {
   const recorder = useAudioRecorder();
   const [status, setStatus] = useState<string | null>(null);
@@ -227,17 +225,6 @@ export function TranscribeDemoPanel({
         >
           {streaming ? "STOP STREAM" : "STREAM"}
         </button>
-
-        <label className="ws-label">
-          <span>ws</span>
-          <input
-            className="ws-input"
-            value={wsUrl}
-            onChange={(e) => setWsUrl(e.target.value)}
-            placeholder="ws://127.0.0.1:9944"
-            disabled={recorder.state === "recording" || streaming}
-          />
-        </label>
 
         {status && <span className="status">{status}</span>}
         {error && <span className="error">{error}</span>}

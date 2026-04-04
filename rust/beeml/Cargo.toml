@@ -23,6 +23,9 @@ bee-transcribe = { path = "../bee-transcribe" }
 anyhow = { workspace = true }
 espeak-ng = { version = "0.1.0", features = ["bundled-data-en"] }
 facet = "0.44.3"
+linfa = "0.8.1"
+linfa-ftrl = "0.8.1"
+ndarray = "0.16.1"
 rayon = "1.10.0"
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -173,6 +173,25 @@ pub struct RetrievalCandidateDebug {
 pub struct SpanDebugTrace {
     pub span: SpanDebugView,
     pub candidates: Vec<RetrievalCandidateDebug>,
+    pub judge_options: Vec<JudgeOptionDebug>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct JudgeOptionDebug {
+    pub alias_id: Option<u32>,
+    pub term: String,
+    pub is_keep_original: bool,
+    pub score: f32,
+    pub probability: f32,
+    pub chosen: bool,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct JudgeStateDebug {
+    pub update_count: u32,
+    pub learning_rate: f32,
+    pub feature_names: Vec<String>,
+    pub weights: Vec<f32>,
 }
 
 #[derive(Clone, Debug, Facet)]
@@ -225,6 +244,40 @@ pub struct RetrievalPrototypeProbeResult {
     pub transcript: String,
     pub spans: Vec<SpanDebugTrace>,
     pub timings: TimingBreakdown,
+    pub judge_state: JudgeStateDebug,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct TeachRetrievalPrototypeJudgeRequest {
+    pub probe: RetrievalPrototypeProbeRequest,
+    pub span_token_start: u32,
+    pub span_token_end: u32,
+    pub choose_keep_original: bool,
+    pub chosen_alias_id: Option<u32>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct RetrievalPrototypeTeachingDeckRequest {
+    pub limit: u32,
+    pub include_counterexamples: bool,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct RetrievalPrototypeTeachingCase {
+    pub case_id: String,
+    pub suite: String,
+    pub target_term: String,
+    pub source_text: String,
+    pub transcript: String,
+    pub should_abstain: bool,
+    pub take: Option<i64>,
+    pub audio_path: Option<String>,
+    pub surface_form: Option<String>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct RetrievalPrototypeTeachingDeckResult {
+    pub cases: Vec<RetrievalPrototypeTeachingCase>,
 }
 
 #[derive(Clone, Debug, Facet)]
@@ -247,9 +300,22 @@ pub struct RetrievalEvalTermSummary {
 #[derive(Clone, Debug, Facet)]
 pub struct RetrievalEvalMiss {
     pub recording_id: u32,
+    pub suite: String,
     pub term: String,
     pub transcript: String,
     pub best_span_text: String,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct JudgeEvalFailure {
+    pub case_id: String,
+    pub suite: String,
+    pub target_term: String,
+    pub transcript: String,
+    pub expected_action: String,
+    pub chosen_action: String,
+    pub chosen_span_text: String,
+    pub chosen_probability: f32,
 }
 
 #[derive(Clone, Debug, Facet)]
@@ -258,7 +324,11 @@ pub struct RetrievalPrototypeEvalResult {
     pub top1_hits: u32,
     pub top3_hits: u32,
     pub top10_hits: u32,
+    pub judge_correct: u32,
+    pub judge_replace_correct: u32,
+    pub judge_abstain_correct: u32,
     pub misses: Vec<RetrievalEvalMiss>,
+    pub judge_failures: Vec<JudgeEvalFailure>,
     pub per_term: Vec<RetrievalEvalTermSummary>,
 }
 
@@ -287,6 +357,16 @@ pub trait BeeMl {
         &self,
         request: RetrievalPrototypeProbeRequest,
     ) -> Result<RetrievalPrototypeProbeResult, String>;
+
+    async fn teach_retrieval_prototype_judge(
+        &self,
+        request: TeachRetrievalPrototypeJudgeRequest,
+    ) -> Result<RetrievalPrototypeProbeResult, String>;
+
+    async fn load_retrieval_prototype_teaching_deck(
+        &self,
+        request: RetrievalPrototypeTeachingDeckRequest,
+    ) -> Result<RetrievalPrototypeTeachingDeckResult, String>;
 
     async fn inspect_term(
         &self,
