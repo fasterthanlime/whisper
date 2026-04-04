@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
+import { channel } from "@bearcove/vox-core";
 import { connectBeeMl } from "../beeml.generated";
 import type {
   RapidFireChoice,
   RapidFireEdit,
+  RetrievalPrototypeEvalProgress,
   RetrievalPrototypeEvalResult,
   RetrievalPrototypeProbeResult,
   RetrievalPrototypeTeachingCase,
@@ -66,6 +68,7 @@ export function JudgeRapidFirePanel({
   const [evalResult, setEvalResult] = useState<RetrievalPrototypeEvalResult | null>(null);
   const [prevEvalResult, setPrevEvalResult] = useState<RetrievalPrototypeEvalResult | null>(null);
   const [evalRunning, setEvalRunning] = useState(false);
+  const [evalProgress, setEvalProgress] = useState<RetrievalPrototypeEvalProgress | null>(null);
   const [teachCount, setTeachCount] = useState(0);
 
   const currentCase = cases[caseIndex] ?? null;
@@ -73,13 +76,26 @@ export function JudgeRapidFirePanel({
   const runEval = useCallback(async () => {
     try {
       setEvalRunning(true);
+      setEvalProgress(null);
       const client = await connectBeeMl(wsUrl);
+      const [progressTx, progressRx] = channel<RetrievalPrototypeEvalProgress>();
+
+      // Receive progress updates in background
+      const progressLoop = (async () => {
+        while (true) {
+          const val = await progressRx.recv();
+          if (val === null) break;
+          setEvalProgress(val);
+        }
+      })();
+
       const response = await client.runRetrievalPrototypeEval({
         limit: 500,
         max_span_words: maxSpanWords,
         shortlist_limit: 50,
         verify_limit: 50,
-      });
+      }, progressTx);
+      await progressLoop;
       if (!response.ok) return;
       setEvalResult((prev) => {
         setPrevEvalResult(prev);
@@ -87,6 +103,7 @@ export function JudgeRapidFirePanel({
       });
     } finally {
       setEvalRunning(false);
+      setEvalProgress(null);
     }
   }, [wsUrl, maxSpanWords]);
 
@@ -250,18 +267,29 @@ export function JudgeRapidFirePanel({
                 : null;
               return (
                 <span style={{ fontVariantNumeric: "tabular-nums", fontSize: "1.1rem", fontWeight: 700, letterSpacing: "-0.01em" }}>
-                  {evalRunning ? <span style={{ opacity: 0.5 }}>eval...</span> : <>
+                  {evalRunning && evalProgress ? (
+                    <span style={{ opacity: 0.7 }}>
+                      {evalProgress.judge_correct}/{evalProgress.evaluated} <span style={{ opacity: 0.4, fontSize: "0.85rem" }}>({evalProgress.total})</span>
+                    </span>
+                  ) : evalRunning ? (
+                    <span style={{ opacity: 0.5 }}>eval...</span>
+                  ) : (<>
                     {evalResult.judge_correct}/{evalResult.evaluated_cases} ({pct}%)
                     {delta !== null && delta !== 0 && (
                       <span style={{ color: delta > 0 ? "var(--green, #22c55e)" : "var(--red, #ef4444)", marginLeft: "0.25rem" }}>
                         {delta > 0 ? `+${delta}` : delta}
                       </span>
                     )}
-                  </>}
+                  </>)}
                 </span>
               );
             })()}
-            {evalRunning && !evalResult && <span className="status-pill">eval...</span>}
+            {evalRunning && !evalResult && evalProgress && (
+              <span style={{ fontVariantNumeric: "tabular-nums", fontSize: "1.1rem", fontWeight: 700, opacity: 0.7 }}>
+                {evalProgress.judge_correct}/{evalProgress.evaluated} <span style={{ opacity: 0.4, fontSize: "0.85rem" }}>({evalProgress.total})</span>
+              </span>
+            )}
+            {evalRunning && !evalResult && !evalProgress && <span className="status-pill">eval...</span>}
             {status && <span className="status-pill">{status}</span>}
             {error && <span className="error-pill">{error}</span>}
           </div>

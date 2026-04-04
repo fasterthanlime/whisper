@@ -347,6 +347,12 @@ export interface RetrievalPrototypeEvalRequest {
   verify_limit: number;
 }
 
+export interface RetrievalPrototypeEvalProgress {
+  evaluated: number;
+  total: number;
+  judge_correct: number;
+}
+
 export interface RetrievalEvalMiss {
   recording_id: number;
   suite: string;
@@ -414,7 +420,10 @@ export type LoadRetrievalPrototypeTeachingDeckResponse = { ok: true; value: Retr
 export type InspectTermRequest = [TermInspectionRequest];
 export type InspectTermResponse = { ok: true; value: TermInspectionResult } | { ok: false; error: string };
 
-export type RunRetrievalPrototypeEvalRequest = [RetrievalPrototypeEvalRequest];
+export type RunRetrievalPrototypeEvalRequest = [
+  RetrievalPrototypeEvalRequest, // request
+  Tx<RetrievalPrototypeEvalProgress>, // progress
+];
 export type RunRetrievalPrototypeEvalResponse = { ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string };
 
 // Caller interface for BeeMl
@@ -428,7 +437,7 @@ export interface BeeMlCaller {
   teachRetrievalPrototypeJudge(request: TeachRetrievalPrototypeJudgeRequest): Promise<{ ok: true; value: RetrievalPrototypeProbeResult } | { ok: false; error: string }>;
   loadRetrievalPrototypeTeachingDeck(request: RetrievalPrototypeTeachingDeckRequest): Promise<{ ok: true; value: RetrievalPrototypeTeachingDeckResult } | { ok: false; error: string }>;
   inspectTerm(request: TermInspectionRequest): Promise<{ ok: true; value: TermInspectionResult } | { ok: false; error: string }>;
-  runRetrievalPrototypeEval(request: RetrievalPrototypeEvalRequest): Promise<{ ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string }>;
+  runRetrievalPrototypeEval(request: RetrievalPrototypeEvalRequest, progress: Tx<RetrievalPrototypeEvalProgress>): Promise<{ ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string }>;
 }
 
 // Client implementation for BeeMl
@@ -608,15 +617,31 @@ export class BeeMlClient implements BeeMlCaller {
       }
   }
 
-  async runRetrievalPrototypeEval(request: RetrievalPrototypeEvalRequest): Promise<{ ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string }> {
+  async runRetrievalPrototypeEval(request: RetrievalPrototypeEvalRequest, progress: Tx<RetrievalPrototypeEvalProgress>): Promise<{ ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string }> {
     const descriptor = beeMl_runRetrievalPrototypeEval_method;
     const sendSchemas = beeMl_descriptor.send_schemas;
+    const argTypeRefs = argElementRefsForMethod(descriptor.id, sendSchemas);
+    const prepareRetry = () => {
+      const channels = bindChannelsForTypeRefs(
+        argTypeRefs,
+        [request, progress],
+        this.caller.getChannelAllocator(),
+        this.caller.getChannelRegistry(),
+        sendSchemas.schemas,
+      );
+      const payload = new Uint8Array(0);
+      return { payload, channels };
+    };
+    const { channels } = prepareRetry();
       try {
         const value = await this.caller.call({
           method: "BeeMl.runRetrievalPrototypeEval",
-          args: { request },
+          args: { request, progress },
           descriptor,
           sendSchemas,
+          channels,
+          prepareRetry,
+          finalizeChannels: () => finalizeBoundChannelsForTypeRefs(argTypeRefs, [request, progress], sendSchemas.schemas),
         });
         return { ok: true, value } as { ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string };
       } catch (e: any) {
@@ -652,7 +677,7 @@ export interface BeeMlHandler {
   teachRetrievalPrototypeJudge(request: TeachRetrievalPrototypeJudgeRequest): Promise<{ ok: true; value: RetrievalPrototypeProbeResult } | { ok: false; error: string }> | { ok: true; value: RetrievalPrototypeProbeResult } | { ok: false; error: string };
   loadRetrievalPrototypeTeachingDeck(request: RetrievalPrototypeTeachingDeckRequest): Promise<{ ok: true; value: RetrievalPrototypeTeachingDeckResult } | { ok: false; error: string }> | { ok: true; value: RetrievalPrototypeTeachingDeckResult } | { ok: false; error: string };
   inspectTerm(request: TermInspectionRequest): Promise<{ ok: true; value: TermInspectionResult } | { ok: false; error: string }> | { ok: true; value: TermInspectionResult } | { ok: false; error: string };
-  runRetrievalPrototypeEval(request: RetrievalPrototypeEvalRequest): Promise<{ ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string }> | { ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string };
+  runRetrievalPrototypeEval(request: RetrievalPrototypeEvalRequest, progress: Tx<RetrievalPrototypeEvalProgress>): Promise<{ ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string }> | { ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string };
 }
 
 // Dispatcher for BeeMl
@@ -727,7 +752,8 @@ export class BeeMlDispatcher implements Dispatcher {
       }
     } else if (method.id === 0x7c4338a1cfc670d5n) {
       try {
-        const result = await this.handler.runRetrievalPrototypeEval(args[0] as RetrievalPrototypeEvalRequest);
+        const result = await this.handler.runRetrievalPrototypeEval(args[0] as RetrievalPrototypeEvalRequest, args[1] as Tx<RetrievalPrototypeEvalProgress>);
+        (args[1] as { close(): void }).close(); // close progress before reply
         if (result.ok) call.reply(result.value); else call.replyErr(result.error);
       } catch (error) {
         call.replyInternalError(error instanceof Error ? error.message : String(error));
@@ -798,6 +824,7 @@ export const beeMl_send_schemas: import("@bearcove/vox-core").ServiceSendSchemas
     [0x0c27a88a926856cbn, { id: 0x0c27a88a926856cbn, type_params: [], kind: { tag: 'struct', name: 'TermAliasView', fields: [{ name: 'alias_text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'alias_source', type_ref: { tag: 'concrete', type_id: 0x42c248e144532fd0n, args: [] }, required: true }, { name: 'ipa_tokens', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'reduced_ipa_tokens', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'feature_tokens', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'identifier_flags', type_ref: { tag: 'concrete', type_id: 0x85aa81894de2d5a3n, args: [] }, required: true }] } }],
     [0x1584ce53f45edf00n, { id: 0x1584ce53f45edf00n, type_params: [], kind: { tag: 'struct', name: 'TermInspectionResult', fields: [{ name: 'term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'aliases', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x0c27a88a926856cbn, args: [] }] }, required: true }] } }],
     [0x0499f4e57d8267ecn, { id: 0x0499f4e57d8267ecn, type_params: [], kind: { tag: 'struct', name: 'RetrievalPrototypeEvalRequest', fields: [{ name: 'limit', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'max_span_words', type_ref: { tag: 'concrete', type_id: 0x2c8d54f2314d0f20n, args: [] }, required: true }, { name: 'shortlist_limit', type_ref: { tag: 'concrete', type_id: 0x1be6c8d0625ea876n, args: [] }, required: true }, { name: 'verify_limit', type_ref: { tag: 'concrete', type_id: 0x1be6c8d0625ea876n, args: [] }, required: true }] } }],
+    [0x1086c03fce9d4f24n, { id: 0x1086c03fce9d4f24n, type_params: [], kind: { tag: 'struct', name: 'RetrievalPrototypeEvalProgress', fields: [{ name: 'evaluated', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'total', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'judge_correct', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }] } }],
     [0xb9034846259905aen, { id: 0xb9034846259905aen, type_params: [], kind: { tag: 'struct', name: 'RetrievalEvalMiss', fields: [{ name: 'recording_id', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'suite', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'transcript', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'best_span_text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }] } }],
     [0x26b367651aeaeb01n, { id: 0x26b367651aeaeb01n, type_params: [], kind: { tag: 'struct', name: 'JudgeEvalFailure', fields: [{ name: 'case_id', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'suite', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'target_term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'transcript', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'expected_action', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'chosen_action', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'chosen_span_text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'chosen_probability', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }] } }],
     [0xeafb2138aac2425en, { id: 0xeafb2138aac2425en, type_params: [], kind: { tag: 'struct', name: 'RetrievalEvalTermSummary', fields: [{ name: 'term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'cases', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'top1_hits', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'top3_hits', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'top10_hits', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }] } }],
@@ -812,7 +839,7 @@ export const beeMl_send_schemas: import("@bearcove/vox-core").ServiceSendSchemas
     [0x48124408b578d2a2n, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0x7676feeab5afddben, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x733880a97f0617c5n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
     [0x87d50612ab4e972an, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0x955b64510f778889n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xca2ce6ea389d9bcbn, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
     [0x9b8e8592673c696an, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0x9875a7e9df5cfe4en, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x1584ce53f45edf00n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
-    [0x7c4338a1cfc670d5n, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0x0499f4e57d8267ecn, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x684678abd2a51a1bn, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
+    [0x7c4338a1cfc670d5n, { argsRootRef: { tag: 'concrete', type_id: 0xba0496aa8cee7a4cn, args: [{ tag: 'concrete', type_id: 0x0499f4e57d8267ecn, args: [] }, { tag: 'concrete', type_id: 0xc886545a493d06ebn, args: [{ tag: 'concrete', type_id: 0x1086c03fce9d4f24n, args: [] }] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x684678abd2a51a1bn, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
   ]),
 };
 

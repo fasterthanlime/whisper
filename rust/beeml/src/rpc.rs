@@ -397,6 +397,13 @@ pub struct JudgeEvalFailure {
 }
 
 #[derive(Clone, Debug, Facet)]
+pub struct RetrievalPrototypeEvalProgress {
+    pub evaluated: u32,
+    pub total: u32,
+    pub judge_correct: u32,
+}
+
+#[derive(Clone, Debug, Facet)]
 pub struct RetrievalPrototypeEvalResult {
     pub evaluated_cases: u32,
     pub top1_hits: u32,
@@ -454,5 +461,6 @@ pub trait BeeMl {
     async fn run_retrieval_prototype_eval(
         &self,
         request: RetrievalPrototypeEvalRequest,
+        progress: Tx<RetrievalPrototypeEvalProgress>,
     ) -> Result<RetrievalPrototypeEvalResult, String>;
 }

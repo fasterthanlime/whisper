@@ -19,7 +19,8 @@ use beeml::rpc::{
     JudgeEvalFailure, JudgeOptionDebug, JudgeStateDebug, RapidFireChoice, RapidFireComponent,
     RapidFireComponentChoice, RapidFireDecisionSet, RapidFireEdit,
     RejectedGroupSpan,
-    RetrievalEvalMiss, RetrievalEvalTermSummary, RetrievalPrototypeTeachingCase,
+    RetrievalEvalMiss, RetrievalEvalTermSummary, RetrievalPrototypeEvalProgress,
+    RetrievalPrototypeTeachingCase,
     RetrievalPrototypeTeachingDeckRequest, RetrievalPrototypeTeachingDeckResult,
     RetrievalCandidateDebug, RetrievalIndexView, RetrievalPrototypeEvalRequest,
     RetrievalPrototypeEvalResult, RetrievalPrototypeProbeRequest,
@@ -1346,6 +1347,7 @@ impl BeeMl for BeeMlService {
     async fn run_retrieval_prototype_eval(
         &self,
         request: RetrievalPrototypeEvalRequest,
+        progress: Tx<RetrievalPrototypeEvalProgress>,
     ) -> Result<RetrievalPrototypeEvalResult, String> {
         let cases = self.teaching_cases(request.limit as usize, true);
         {
@@ -1370,6 +1372,7 @@ impl BeeMl for BeeMlService {
         let mut judge_failures = Vec::new();
         let mut per_term = HashMap::<String, RetrievalEvalTermSummary>::new();
 
+        let total = cases.len() as u32;
         for (recording_id, case) in cases.iter().enumerate() {
             let result = self.evaluate_case(case, &request)?;
             let entry = per_term
@@ -1438,6 +1441,12 @@ impl BeeMl for BeeMlService {
                     chosen_probability: result.judge_choice.probability,
                 });
             }
+
+            let _ = progress.send(RetrievalPrototypeEvalProgress {
+                evaluated: recording_id as u32 + 1,
+                total,
+                judge_correct,
+            }).await;
         }
 
         let mut per_term = per_term.into_values().collect::<Vec<_>>();
