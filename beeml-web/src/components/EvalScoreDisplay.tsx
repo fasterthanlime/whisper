@@ -148,25 +148,23 @@ export const EvalScoreDisplay = memo(function EvalScoreDisplay({
   const delta = evalResult && prevEvalResult
     ? evalResult.judge_correct - prevEvalResult.judge_correct
     : null;
+  const bestPct = history.length > 0 ? Math.max(...history.map(h => h.pct)) : null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.25rem", padding: "0.5rem 0" }}>
-      {/* Big score */}
-      <div style={{ fontVariantNumeric: "tabular-nums", fontSize: "2rem", fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1 }}>
+      {/* Big percentage */}
+      <div style={{ fontVariantNumeric: "tabular-nums", fontSize: "2.5rem", fontWeight: 800, letterSpacing: "-0.03em", lineHeight: 1 }}>
         {evalRunning && evalProgress ? (
           <span style={{ opacity: 0.5 }}>
-            {evalProgress.judge_correct}/{evalProgress.total}
+            {Math.round((evalProgress.judge_correct / evalProgress.total) * 100)}%
           </span>
         ) : evalRunning ? (
           <span style={{ opacity: 0.3 }}>eval...</span>
-        ) : evalResult ? (<>
-          {evalResult.judge_correct}/{evalResult.evaluated_cases}
-          <span style={{ fontSize: "1rem", fontWeight: 600, opacity: 0.5, marginLeft: "0.35rem" }}>
-            ({pct}%)
-          </span>
+        ) : pct !== null ? (<>
+          {pct}%
           {delta !== null && delta !== 0 && (
             <span style={{
-              fontSize: "1rem", fontWeight: 700, marginLeft: "0.35rem",
+              fontSize: "1.2rem", fontWeight: 700, marginLeft: "0.35rem",
               color: delta > 0 ? "var(--green, #22c55e)" : "var(--red, #ef4444)",
             }}>
               {delta > 0 ? `+${delta}` : delta}
@@ -174,6 +172,22 @@ export const EvalScoreDisplay = memo(function EvalScoreDisplay({
           )}
         </>) : null}
       </div>
+      {/* Cases count + best */}
+      {evalResult && (
+        <div style={{ fontSize: "0.8rem", opacity: 0.5, fontVariantNumeric: "tabular-nums" }}>
+          {evalResult.judge_correct}/{evalResult.evaluated_cases} cases
+          {bestPct !== null && bestPct > (pct ?? 0) && (
+            <span style={{ marginLeft: "0.5rem", color: "var(--green, #22c55e)" }}>
+              best {bestPct}%
+            </span>
+          )}
+          {bestPct !== null && bestPct === pct && history.length > 1 && (
+            <span style={{ marginLeft: "0.5rem", color: "var(--green, #22c55e)" }}>
+              best
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Graph */}
       <SparklineGraph history={history} />
