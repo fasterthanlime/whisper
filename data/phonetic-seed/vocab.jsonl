@@ -4,7 +4,7 @@
 {"term":"DWARF","spoken":"dworf","ipa":"dwˈɜːf","description":"A debugging information format used by compilers and debuggers"}
 {"term":"fasterthanlime","spoken":"faster than lime","ipa":"fˈastə ðɐn lˈaɪm","description":"Online handle and tech blog mostly focused on Rust"}
 {"term":"kajit","spoken":"kah-djit","ipa":"k æ d̠ʒ i t","description":"Optimizing compiler backend for Rust serialization and deserialization, with an RVSDG-based IR. Complements facet."}
-{"term":"MachO","spoken":"mach oh","ipa":"m a k o","description":"The Mach-O executable format used on macOS"}
+{"term":"Mach-O","spoken":"mach oh","ipa":"m a k o","description":"The Mach-O executable format used on macOS"}
 {"term":"MIR","spoken":"meer","ipa":"mˈiə","description":"Rust's Mid-level Intermediate Representation in the compiler"}
 {"term":"miri","spoken":"miri","ipa":"mˈiəɹi","description":"Rust interpreter for detecting undefined behavior"}
 {"term":"QEMU","spoken":"Q emu","ipa":"kjˈuː ˈiːmjuː","description":"An emulator and virtualizer often used for cross-architecture testing"}
@@ -22,5 +22,5 @@
 {"term":"u8","spoken":"you eight","ipa":"iu ɛit","description":"An 8-bit unsigned integer type in Rust"}
 {"term":"Vec","spoken":"vec","ipa":"v ɛ k","description":"Growable array type in Rust"}
 {"term":"vox","spoken":"vox","ipa":"vˈɒks","description":"An RPC library made by bearcove that is used in a bunch of Rust projects. It supports retries and everything."}
-{"term":"wasm","spoken":"waz-um","ipa":"w ɑ z ə m","description":"WebAssembly bytecode format"}
+{"term":"WASM","spoken":"waz-um","ipa":"w ɑ z ə m","description":"WebAssembly bytecode format"}
 {"term":"x86_64","spoken":"ex eighty-six sixty-four","ipa":"ɛ ɛ k s e ɪ n t i s ɪ k s s ɪ k s t i f ɔ","description":"A 64-bit x86 architecture target identifier"}

@@ -27,12 +27,12 @@
 {"term": "kajit", "text": "I'm excited to switch to kajit for better serialization and deserialization performance", "kind": "term", "surface_form": null}
 {"term": "kajit", "text": "The big question is: will kajit be faster than serde?", "kind": "term", "surface_form": null}
 {"term": "kajit", "text": "Kajit isn't ready yet but it's getting there: it has some of the best debugging infrastructure with its IR, etc.", "kind": "term", "surface_form": null}
-{"term": "MachO", "text": "On macOS, the linker is producing a MachO binary, so the tooling path is a little different.", "kind": "term", "surface_form": null}
-{"term": "MachO", "text": "We need to inspect the MachO headers before we can figure out why the app won't launch.", "kind": "term", "surface_form": null}
-{"term": "MachO", "text": "That symbol table issue only happens in the MachO build, not on Linux.", "kind": "term", "surface_form": null}
-{"term": "MachO", "text": "On macOS the loader expects a MachO binary, so our linker flags must be adjusted.", "kind": "term", "surface_form": null}
-{"term": "MachO", "text": "I found a section alignment bug that only shows up in MachO executables.", "kind": "term", "surface_form": null}
-{"term": "MachO", "text": "Packaging the app as a MachO bundle made it easier to run on older macOS versions.", "kind": "term", "surface_form": null}
+{"term": "Mach-O", "text": "On macOS, the linker is producing a Mach-O binary, so the tooling path is a little different.", "kind": "term", "surface_form": null}
+{"term": "Mach-O", "text": "We need to inspect the Mach-O headers before we can figure out why the app won't launch.", "kind": "term", "surface_form": null}
+{"term": "Mach-O", "text": "That symbol table issue only happens in the Mach-O build, not on Linux.", "kind": "term", "surface_form": null}
+{"term": "Mach-O", "text": "On macOS the loader expects a Mach-O binary, so our linker flags must be adjusted.", "kind": "term", "surface_form": null}
+{"term": "Mach-O", "text": "I found a section alignment bug that only shows up in Mach-O executables.", "kind": "term", "surface_form": null}
+{"term": "Mach-O", "text": "Packaging the app as a Mach-O bundle made it easier to run on older macOS versions.", "kind": "term", "surface_form": null}
 {"term": "MIR", "text": "I was looking at MIR to figure out where the borrow checker is getting confused.", "kind": "term", "surface_form": null}
 {"term": "MIR", "text": "The optimization should show up in MIR before it gets lowered any further.", "kind": "term", "surface_form": null}
 {"term": "MIR", "text": "If you dump MIR, you can usually see the control flow more clearly.", "kind": "term", "surface_form": null}

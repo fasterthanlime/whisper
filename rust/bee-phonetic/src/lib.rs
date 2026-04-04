@@ -24,7 +24,9 @@ pub use phonetic_lexicon::{
     build_phonetic_lexicon, derive_identifier_flags, reduce_ipa_tokens, AliasSource,
     IdentifierFlags, LexiconAlias,
 };
-pub use phonetic_verify::{verify_shortlist, VerifiedCandidate};
+pub use phonetic_verify::{
+    score_shortlist, verify_shortlist, CandidateFeatureRow, VerifiedCandidate,
+};
 pub use prototype::{
     parse_reviewed_ipa, phoneme_similarity, phoneme_similarity_details, PhonemeSimilarityDetails,
     TokenEditKind, TokenEditOp,

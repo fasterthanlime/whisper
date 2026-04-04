@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { connectBeeMl } from "../beeml.generated";
 import type {
   AlignedWord,
+  CandidateFeatureDebug,
   RetrievalCandidateDebug,
   RetrievalPrototypeProbeResult,
   TermInspectionResult,
@@ -28,8 +29,16 @@ function formatIndexView(view: { tag: string }) {
   return view.tag;
 }
 
+function formatBool(value: boolean) {
+  return value ? "yes" : "no";
+}
+
 function candidateSortKey(candidate: RetrievalCandidateDebug) {
-  return candidate.acceptance_score * 1000 + candidate.phonetic_score * 100;
+  return (
+    candidate.features.acceptance_score * 1000 +
+    candidate.features.phonetic_score * 100 +
+    (candidate.features.verified ? 1 : 0)
+  );
 }
 
 function dedupeCandidatesByTerm(candidates: RetrievalCandidateDebug[]) {
@@ -44,6 +53,78 @@ function dedupeCandidatesByTerm(candidates: RetrievalCandidateDebug[]) {
 
   return [...bestByTerm.values()].sort(
     (a, b) => candidateSortKey(b) - candidateSortKey(a),
+  );
+}
+
+function renderFeatureSummary(features: CandidateFeatureDebug) {
+  return (
+    <>
+      <span>accept {features.acceptance_score.toFixed(3)}</span>
+      <span>phonetic {features.phonetic_score.toFixed(3)}</span>
+      <span>coarse {features.coarse_score.toFixed(3)}</span>
+      <span>lane {formatIndexView(features.matched_view)}</span>
+      <span>q {features.qgram_overlap}</span>
+      <span>q-total {features.total_qgram_overlap}</span>
+      <span>support {features.cross_view_support}</span>
+      <span>verified {formatBool(features.verified)}</span>
+    </>
+  );
+}
+
+function renderTokenFeatures(features: CandidateFeatureDebug) {
+  return (
+    <>
+      <span>token-score {features.token_score.toFixed(3)}</span>
+      <span>token-dist {features.token_distance}</span>
+      <span>token-weighted {features.token_weighted_distance.toFixed(3)}</span>
+      <span>token-boundary {features.token_boundary_penalty.toFixed(2)}</span>
+      <span>token-max {features.token_max_len}</span>
+      <span>token-match {formatBool(features.token_count_match)}</span>
+      <span>phone-delta {features.phone_count_delta}</span>
+    </>
+  );
+}
+
+function renderFeatureDistance(features: CandidateFeatureDebug) {
+  return (
+    <>
+      <span>feature-score {features.feature_score.toFixed(3)}</span>
+      <span>feature-dist {features.feature_distance.toFixed(3)}</span>
+      <span>feature-weighted {features.feature_weighted_distance.toFixed(3)}</span>
+      <span>feature-boundary {features.feature_boundary_penalty.toFixed(2)}</span>
+      <span>feature-max {features.feature_max_len}</span>
+      <span>feature-bonus {features.feature_bonus.toFixed(3)}</span>
+      <span>used-bonus {formatBool(features.used_feature_bonus)}</span>
+    </>
+  );
+}
+
+function renderGuards(features: CandidateFeatureDebug) {
+  return (
+    <>
+      <span>
+        feature-gate {formatBool(
+          features.feature_gate_token_ok &&
+            features.feature_gate_coarse_ok &&
+            features.feature_gate_phone_ok,
+        )}
+      </span>
+      <span>
+        gate-parts {formatBool(features.feature_gate_token_ok)}/
+        {formatBool(features.feature_gate_coarse_ok)}/
+        {formatBool(features.feature_gate_phone_ok)}
+      </span>
+      <span>
+        short-guard {formatBool(features.short_guard_passed)}
+        {features.short_guard_applied ? " applied" : ""}
+      </span>
+      <span>short-onset {formatBool(features.short_guard_onset_match)}</span>
+      <span>
+        low-content {formatBool(features.low_content_guard_passed)}
+        {features.low_content_guard_applied ? " applied" : ""}
+      </span>
+      <span>floor {formatBool(features.acceptance_floor_passed)}</span>
+    </>
   );
 }
 
@@ -258,25 +339,66 @@ export function RetrievalPrototypeLab({
                           </div>
                           <div className="candidate-meta">
                             <span>alias: {candidate.alias_text}</span>
+                            {candidate.identifier_flags.acronym_like && (
+                              <span>acronym</span>
+                            )}
+                            {candidate.identifier_flags.has_digits && (
+                              <span>digits</span>
+                            )}
+                            {candidate.identifier_flags.snake_like && (
+                              <span>snake</span>
+                            )}
+                            {candidate.identifier_flags.camel_like && (
+                              <span>camel</span>
+                            )}
+                            {candidate.identifier_flags.symbol_like && (
+                              <span>symbol</span>
+                            )}
+                          </div>
+                          <div className="candidate-score-row">
+                            {renderFeatureSummary(candidate.features)}
+                          </div>
+                          <div className="token-row muted">
+                            alias ipa: {candidate.alias_ipa_tokens.join(" ")}
+                          </div>
+                          <div className="token-row muted">
+                            alias reduced:{" "}
+                            {candidate.alias_reduced_ipa_tokens.join(" ")}
+                          </div>
+                          <div className="token-row muted">
+                            alias features:{" "}
+                            {candidate.alias_feature_tokens.join(" ")}
+                          </div>
+                          <div className="candidate-score-row">
+                            {renderTokenFeatures(candidate.features)}
+                          </div>
+                          <div className="candidate-score-row">
+                            {renderFeatureDistance(candidate.features)}
+                          </div>
+                          <div className="candidate-score-row">
                             <span>
-                              lane:{" "}
-                              {candidate.lane_hits
-                                .map((lane) => formatIndexView(lane.view))
-                                .join(", ")}
+                              token-bonus {candidate.features.token_bonus.toFixed(2)}
+                            </span>
+                            <span>
+                              phone-bonus {candidate.features.phone_bonus.toFixed(2)}
+                            </span>
+                            <span>
+                              length {candidate.features.extra_length_penalty.toFixed(2)}
+                            </span>
+                            <span>
+                              structure {candidate.features.structure_bonus.toFixed(2)}
                             </span>
                           </div>
                           <div className="candidate-score-row">
-                            <span>coarse {candidate.coarse_score.toFixed(3)}</span>
-                            <span>accept {candidate.acceptance_score.toFixed(3)}</span>
-                            <span>view {candidate.best_view_score.toFixed(3)}</span>
-                            <span>support {candidate.cross_view_support}</span>
-                            <span>token {candidate.token_bonus.toFixed(2)}</span>
-                            <span>phone {candidate.phone_bonus.toFixed(2)}</span>
-                            <span>length {candidate.extra_length_penalty.toFixed(2)}</span>
-                            <span>structure {candidate.structure_bonus.toFixed(2)}</span>
-                            <span>phonetic {candidate.phonetic_score.toFixed(3)}</span>
-                            <span>q {candidate.lane_hits[0]?.qgram_overlap ?? 0}</span>
-                            <span>q-total {candidate.total_qgram_overlap}</span>
+                            {renderGuards(candidate.features)}
+                          </div>
+                          <div className="candidate-meta">
+                            {candidate.filter_decisions.map((decision) => (
+                              <span key={decision.name}>
+                                {decision.name}: {formatBool(decision.passed)} (
+                                {decision.detail})
+                              </span>
+                            ))}
                           </div>
                         </div>
                       ))}

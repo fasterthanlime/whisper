@@ -2631,6 +2631,7 @@ dependencies = [
  "facet",
  "facet-pretty",
  "facet-reflect",
+ "moire",
  "tokio",
  "tracing",
  "vox-core",

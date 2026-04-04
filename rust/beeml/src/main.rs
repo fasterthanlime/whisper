@@ -5,15 +5,15 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use bee_phonetic::{
-    enumerate_transcript_spans_with, query_index, verify_shortlist, PhoneticIndex, RetrievalQuery,
+    enumerate_transcript_spans_with, query_index, score_shortlist, PhoneticIndex, RetrievalQuery,
     SeedDataset, TranscriptAlignmentToken,
 };
 use bee_transcribe::{Engine, EngineConfig, SessionOptions};
 use beeml::g2p::CachedEspeakG2p;
 use beeml::rpc::{
-    AcceptedEdit, AliasSource, BeeMl, CorrectionDebugResult, CorrectionRequest, CorrectionResult,
-    FilterDecision, IdentifierFlags, RerankerDebugTrace, RetrievalCandidateDebug,
-    RetrievalIndexView, RetrievalLaneHit, RetrievalPrototypeEvalRequest,
+    AcceptedEdit, AliasSource, BeeMl, CandidateFeatureDebug, CorrectionDebugResult,
+    CorrectionRequest, CorrectionResult, FilterDecision, IdentifierFlags, RerankerDebugTrace,
+    RetrievalCandidateDebug, RetrievalIndexView, RetrievalPrototypeEvalRequest,
     RetrievalPrototypeEvalResult, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
     SpanDebugTrace, SpanDebugView, TermAliasView, TermInspectionRequest, TermInspectionResult,
     TimingBreakdown, TranscribeWavResult,
@@ -133,77 +133,79 @@ impl BeeMl for BeeMlService {
                     },
                     request.shortlist_limit as usize,
                 );
-                let verified = verify_shortlist(
-                    &span,
-                    &shortlist,
-                    &self.inner.index,
-                    request.verify_limit as usize,
-                );
-                let verified_by_alias = verified
+                let scored = score_shortlist(&span, &shortlist, &self.inner.index);
+                let scored_by_alias = scored
                     .into_iter()
+                    .take(request.verify_limit as usize)
                     .map(|candidate| (candidate.alias_id, candidate))
                     .collect::<HashMap<_, _>>();
 
                 let candidates = shortlist
                     .into_iter()
+                    .filter(|candidate| scored_by_alias.contains_key(&candidate.alias_id))
                     .map(|candidate| {
-                        let verified = verified_by_alias.get(&candidate.alias_id);
+                        let scored = scored_by_alias
+                            .get(&candidate.alias_id)
+                            .expect("scored shortlist should cover retrieval shortlist");
+                        let alias = &self.inner.index.aliases[candidate.alias_id as usize];
                         RetrievalCandidateDebug {
                             alias_id: candidate.alias_id,
                             term: candidate.term,
                             alias_text: candidate.alias_text,
                             alias_source: map_alias_source(candidate.alias_source),
-                            lane_hits: vec![RetrievalLaneHit {
-                                view: map_index_view(candidate.matched_view),
-                                qgram_overlap: candidate.qgram_overlap,
-                                boundary_overlap: 0,
-                            }],
-                            coarse_score: candidate.coarse_score,
-                            best_view_score: candidate.best_view_score,
-                            cross_view_support: candidate.cross_view_support,
-                            token_bonus: candidate.token_bonus,
-                            phone_bonus: candidate.phone_bonus,
-                            extra_length_penalty: candidate.extra_length_penalty,
-                            structure_bonus: candidate.structure_bonus,
-                            phonetic_score: verified.map(|v| v.phonetic_score).unwrap_or(0.0),
-                            acceptance_score: verified
-                                .map(|v| v.acceptance_score)
-                                .unwrap_or(candidate.coarse_score),
-                            token_count_match: candidate.token_count_match,
-                            phone_count_delta: candidate.phone_count_delta,
-                            total_qgram_overlap: candidate.total_qgram_overlap,
+                            alias_ipa_tokens: alias.ipa_tokens.clone(),
+                            alias_reduced_ipa_tokens: alias.reduced_ipa_tokens.clone(),
+                            alias_feature_tokens: alias.feature_tokens.clone(),
+                            identifier_flags: map_identifier_flags(&alias.identifier_flags),
+                            features: map_candidate_features(scored),
                             filter_decisions: vec![
                                 FilterDecision {
-                                    name: "token_count".to_string(),
-                                    passed: candidate.token_count_match,
+                                    name: "feature_gate".to_string(),
+                                    passed: scored.feature_gate_token_ok
+                                        && scored.feature_gate_coarse_ok
+                                        && scored.feature_gate_phone_ok,
                                     detail: format!(
-                                        "token_count_match={}",
-                                        candidate.token_count_match
+                                        "token_ok={} coarse_ok={} phone_ok={}",
+                                        scored.feature_gate_token_ok,
+                                        scored.feature_gate_coarse_ok,
+                                        scored.feature_gate_phone_ok
                                     ),
                                 },
                                 FilterDecision {
-                                    name: "phone_count".to_string(),
-                                    passed: candidate.phone_count_delta.abs() <= 3,
+                                    name: "short_guard".to_string(),
+                                    passed: scored.short_guard_passed,
                                     detail: format!(
-                                        "phone_count_delta={}",
-                                        candidate.phone_count_delta
+                                        "applied={} onset_match={}",
+                                        scored.short_guard_applied, scored.short_guard_onset_match
+                                    ),
+                                },
+                                FilterDecision {
+                                    name: "low_content_guard".to_string(),
+                                    passed: scored.low_content_guard_passed,
+                                    detail: format!("applied={}", scored.low_content_guard_applied),
+                                },
+                                FilterDecision {
+                                    name: "acceptance_floor".to_string(),
+                                    passed: scored.acceptance_floor_passed,
+                                    detail: format!(
+                                        "accept={:.3} phonetic={:.3} coarse={:.3}",
+                                        scored.acceptance_score,
+                                        scored.phonetic_score,
+                                        scored.coarse_score
                                     ),
                                 },
                                 FilterDecision {
                                     name: "verified".to_string(),
-                                    passed: verified.is_some(),
-                                    detail: verified
-                                        .map(|v| {
-                                            format!(
-                                                "phonetic_score={:.3} acceptance_score={:.3}",
-                                                v.phonetic_score, v.acceptance_score
-                                            )
-                                        })
-                                        .unwrap_or_else(|| "not_in_verified_shortlist".to_string()),
+                                    passed: scored.verified,
+                                    detail: if scored.verified {
+                                        "candidate survives verifier".to_string()
+                                    } else {
+                                        "candidate rejected by verifier".to_string()
+                                    },
                                 },
                             ],
                             reached_reranker: false,
-                            accepted: false,
+                            accepted: scored.verified,
                         }
                     })
                     .collect();
@@ -368,6 +370,47 @@ fn map_index_view(view: bee_phonetic::IndexView) -> RetrievalIndexView {
         bee_phonetic::IndexView::Feature2 => RetrievalIndexView::Feature2,
         bee_phonetic::IndexView::Feature3 => RetrievalIndexView::Feature3,
         bee_phonetic::IndexView::ShortQueryFallback => RetrievalIndexView::ShortQueryFallback,
+    }
+}
+
+fn map_candidate_features(candidate: &bee_phonetic::CandidateFeatureRow) -> CandidateFeatureDebug {
+    CandidateFeatureDebug {
+        matched_view: map_index_view(candidate.matched_view),
+        qgram_overlap: candidate.qgram_overlap,
+        total_qgram_overlap: candidate.total_qgram_overlap,
+        best_view_score: candidate.best_view_score,
+        cross_view_support: candidate.cross_view_support,
+        token_count_match: candidate.token_count_match,
+        phone_count_delta: candidate.phone_count_delta,
+        token_bonus: candidate.token_bonus,
+        phone_bonus: candidate.phone_bonus,
+        extra_length_penalty: candidate.extra_length_penalty,
+        structure_bonus: candidate.structure_bonus,
+        coarse_score: candidate.coarse_score,
+        token_distance: candidate.token_distance,
+        token_weighted_distance: candidate.token_weighted_distance,
+        token_boundary_penalty: candidate.token_boundary_penalty,
+        token_max_len: candidate.token_max_len,
+        token_score: candidate.token_score,
+        feature_distance: candidate.feature_distance,
+        feature_weighted_distance: candidate.feature_weighted_distance,
+        feature_boundary_penalty: candidate.feature_boundary_penalty,
+        feature_max_len: candidate.feature_max_len,
+        feature_score: candidate.feature_score,
+        feature_bonus: candidate.feature_bonus,
+        feature_gate_token_ok: candidate.feature_gate_token_ok,
+        feature_gate_coarse_ok: candidate.feature_gate_coarse_ok,
+        feature_gate_phone_ok: candidate.feature_gate_phone_ok,
+        short_guard_applied: candidate.short_guard_applied,
+        short_guard_onset_match: candidate.short_guard_onset_match,
+        short_guard_passed: candidate.short_guard_passed,
+        low_content_guard_applied: candidate.low_content_guard_applied,
+        low_content_guard_passed: candidate.low_content_guard_passed,
+        acceptance_floor_passed: candidate.acceptance_floor_passed,
+        used_feature_bonus: candidate.used_feature_bonus,
+        phonetic_score: candidate.phonetic_score,
+        acceptance_score: candidate.acceptance_score,
+        verified: candidate.verified,
     }
 }
 

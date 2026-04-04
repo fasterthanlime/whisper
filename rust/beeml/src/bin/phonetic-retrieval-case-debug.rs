@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use bee_phonetic::{
-    enumerate_transcript_spans_with, feature_tokens_for_ipa, query_index, verify_shortlist,
-    LexiconAlias, RetrievalQuery, SeedDataset, TranscriptAlignmentToken, TranscriptSpan,
-    VerifiedCandidate,
+    enumerate_transcript_spans_with, feature_tokens_for_ipa, query_index, score_shortlist,
+    CandidateFeatureRow, LexiconAlias, RetrievalQuery, SeedDataset, TranscriptAlignmentToken,
+    TranscriptSpan,
 };
 use beeml::g2p::CachedEspeakG2p;
 use serde::Deserialize;
@@ -55,7 +55,7 @@ struct DebugRecording {
 struct SpanCaseDebug {
     span: TranscriptSpan,
     shortlist: Vec<bee_phonetic::RetrievalCandidate>,
-    verified: Vec<VerifiedCandidate>,
+    scored: Vec<CandidateFeatureRow>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -172,11 +172,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                     config.shortlist_limit,
                 );
-                let verified = verify_shortlist(&span, &shortlist, &index, config.verify_limit);
+                let scored = score_shortlist(&span, &shortlist, &index);
                 SpanCaseDebug {
                     span,
                     shortlist,
-                    verified,
+                    scored,
                 }
             })
             .collect::<Vec<_>>();
@@ -193,9 +193,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn score_case(case: &SpanCaseDebug, term: &str) -> f32 {
     let target_verified = case
-        .verified
+        .scored
         .iter()
-        .find(|candidate| candidate.term.eq_ignore_ascii_case(term))
+        .find(|candidate| candidate.verified && candidate.term.eq_ignore_ascii_case(term))
         .map(|candidate| {
             1000.0 + candidate.acceptance_score * 100.0 + candidate.phonetic_score * 10.0
         });
@@ -212,7 +212,7 @@ fn score_case(case: &SpanCaseDebug, term: &str) -> f32 {
         return score;
     }
 
-    case.verified
+    case.scored
         .first()
         .map(|candidate| candidate.acceptance_score * 100.0 + candidate.phonetic_score * 10.0)
         .or_else(|| {
@@ -229,9 +229,9 @@ fn print_case(case: &SpanCaseDebug, term: &str, aliases: &[LexiconAlias]) {
         .iter()
         .any(|candidate| candidate.term.eq_ignore_ascii_case(term));
     let target_in_verified = case
-        .verified
+        .scored
         .iter()
-        .any(|candidate| candidate.term.eq_ignore_ascii_case(term));
+        .any(|candidate| candidate.verified && candidate.term.eq_ignore_ascii_case(term));
 
     println!("--- span");
     println!(
@@ -249,8 +249,8 @@ fn print_case(case: &SpanCaseDebug, term: &str, aliases: &[LexiconAlias]) {
         feature_tokens_for_ipa(&case.span.ipa_tokens).join(" ")
     );
 
-    let verified_by_alias = case
-        .verified
+    let scored_by_alias = case
+        .scored
         .iter()
         .map(|candidate| (candidate.alias_id, candidate))
         .collect::<HashMap<_, _>>();
@@ -277,9 +277,9 @@ fn print_case(case: &SpanCaseDebug, term: &str, aliases: &[LexiconAlias]) {
             candidate.phone_bonus,
             candidate.extra_length_penalty
         );
-        if let Some(verified) = verified_by_alias.get(&candidate.alias_id) {
+        if let Some(verified) = scored_by_alias.get(&candidate.alias_id) {
             println!(
-                "    verify token={:.3} ({:.3}/{}) feature={:.3} ({:.3}/{}) bonus={:.3} used_feature_bonus={} phonetic={:.3} accept={:.3}",
+                "    verify token={:.3} ({:.3}/{}) feature={:.3} ({:.3}/{}) bonus={:.3} used_feature_bonus={} phonetic={:.3} accept={:.3} verified={}",
                 verified.token_score,
                 verified.token_weighted_distance,
                 verified.token_max_len,
@@ -289,7 +289,8 @@ fn print_case(case: &SpanCaseDebug, term: &str, aliases: &[LexiconAlias]) {
                 verified.feature_bonus,
                 verified.used_feature_bonus,
                 verified.phonetic_score,
-                verified.acceptance_score
+                verified.acceptance_score,
+                verified.verified
             );
             println!(
                 "    token_distance raw={} boundary_penalty={:.2}",
@@ -341,8 +342,6 @@ fn print_case(case: &SpanCaseDebug, term: &str, aliases: &[LexiconAlias]) {
                 "    acceptance_floor passed={} structure_bonus={:.2}",
                 verified.acceptance_floor_passed, verified.structure_bonus
             );
-        } else {
-            println!("    verify <not in verified shortlist>");
         }
     }
 }

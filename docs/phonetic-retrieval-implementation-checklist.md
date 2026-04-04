@@ -9,7 +9,6 @@ This document turns the roadmap into concrete backend work for this repo.
 Primary reference:
 
 - [beeml-correction-system.md](/Users/amos/bearcove/bee/docs/beeml-correction-system.md)
-  Appendix A: `Phonetic Retrieval Roadmap`
 
 ## Current Status
 

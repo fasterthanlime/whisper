@@ -107,17 +107,50 @@ pub struct SpanDebugView {
 }
 
 #[derive(Clone, Debug, Facet)]
-pub struct RetrievalLaneHit {
-    pub view: RetrievalIndexView,
-    pub qgram_overlap: u16,
-    pub boundary_overlap: u16,
-}
-
-#[derive(Clone, Debug, Facet)]
 pub struct FilterDecision {
     pub name: String,
     pub passed: bool,
     pub detail: String,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct CandidateFeatureDebug {
+    pub matched_view: RetrievalIndexView,
+    pub qgram_overlap: u16,
+    pub total_qgram_overlap: u16,
+    pub best_view_score: f32,
+    pub cross_view_support: u8,
+    pub token_count_match: bool,
+    pub phone_count_delta: i16,
+    pub token_bonus: f32,
+    pub phone_bonus: f32,
+    pub extra_length_penalty: f32,
+    pub structure_bonus: f32,
+    pub coarse_score: f32,
+    pub token_distance: u16,
+    pub token_weighted_distance: f32,
+    pub token_boundary_penalty: f32,
+    pub token_max_len: u16,
+    pub token_score: f32,
+    pub feature_distance: f32,
+    pub feature_weighted_distance: f32,
+    pub feature_boundary_penalty: f32,
+    pub feature_max_len: u16,
+    pub feature_score: f32,
+    pub feature_bonus: f32,
+    pub feature_gate_token_ok: bool,
+    pub feature_gate_coarse_ok: bool,
+    pub feature_gate_phone_ok: bool,
+    pub short_guard_applied: bool,
+    pub short_guard_onset_match: bool,
+    pub short_guard_passed: bool,
+    pub low_content_guard_applied: bool,
+    pub low_content_guard_passed: bool,
+    pub acceptance_floor_passed: bool,
+    pub used_feature_bonus: bool,
+    pub phonetic_score: f32,
+    pub acceptance_score: f32,
+    pub verified: bool,
 }
 
 #[derive(Clone, Debug, Facet)]
@@ -126,19 +159,11 @@ pub struct RetrievalCandidateDebug {
     pub term: String,
     pub alias_text: String,
     pub alias_source: AliasSource,
-    pub lane_hits: Vec<RetrievalLaneHit>,
-    pub coarse_score: f32,
-    pub best_view_score: f32,
-    pub cross_view_support: u8,
-    pub token_bonus: f32,
-    pub phone_bonus: f32,
-    pub extra_length_penalty: f32,
-    pub structure_bonus: f32,
-    pub phonetic_score: f32,
-    pub acceptance_score: f32,
-    pub token_count_match: bool,
-    pub phone_count_delta: i16,
-    pub total_qgram_overlap: u16,
+    pub alias_ipa_tokens: Vec<String>,
+    pub alias_reduced_ipa_tokens: Vec<String>,
+    pub alias_feature_tokens: Vec<String>,
+    pub identifier_flags: IdentifierFlags,
+    pub features: CandidateFeatureDebug,
     pub filter_decisions: Vec<FilterDecision>,
     pub reached_reranker: bool,
     pub accepted: bool,

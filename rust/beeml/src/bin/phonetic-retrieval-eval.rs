@@ -1,14 +1,16 @@
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use bee_phonetic::{
-    enumerate_transcript_spans_with, query_index, verify_shortlist, RetrievalQuery, SeedDataset,
+    enumerate_transcript_spans_with, query_index, score_shortlist, RetrievalQuery, SeedDataset,
     TranscriptAlignmentToken, TranscriptSpan, VerifiedCandidate,
 };
 use beeml::g2p::CachedEspeakG2p;
 use rayon::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 struct EvalConfig {
@@ -16,6 +18,7 @@ struct EvalConfig {
     shortlist_limit: usize,
     verify_limit: usize,
     sample_limit: Option<usize>,
+    export_features_path: Option<PathBuf>,
 }
 
 impl Default for EvalConfig {
@@ -25,6 +28,7 @@ impl Default for EvalConfig {
             shortlist_limit: 10,
             verify_limit: 10,
             sample_limit: None,
+            export_features_path: None,
         }
     }
 }
@@ -38,9 +42,21 @@ struct RankedTermHit {
 
 #[derive(Debug, Clone)]
 struct PreparedRecording {
+    suite: EvalSuite,
     term: String,
+    text: String,
     transcript: String,
+    take: Option<i64>,
+    audio_path: Option<String>,
+    surface_form: Option<String>,
     spans: Vec<TranscriptSpan>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum EvalSuite {
+    Canonical,
+    Counterexample,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -97,6 +113,39 @@ struct RecordingTimings {
     recording_total: Duration,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct CandidateFeatureExportRow {
+    suite: EvalSuite,
+    target_term: String,
+    source_text: String,
+    transcript: String,
+    take: Option<i64>,
+    audio_path: Option<String>,
+    surface_form: Option<String>,
+    should_abstain: bool,
+    span_text: String,
+    span_token_start: usize,
+    span_token_end: usize,
+    span_ipa_tokens: Vec<String>,
+    span_reduced_ipa_tokens: Vec<String>,
+    span_feature_tokens: Vec<String>,
+    candidate_rank_in_span: usize,
+    candidate_matches_target_term: bool,
+    alias_ipa_tokens: Vec<String>,
+    alias_reduced_ipa_tokens: Vec<String>,
+    alias_feature_tokens: Vec<String>,
+    #[serde(flatten)]
+    candidate: VerifiedCandidate,
+}
+
+#[derive(Debug)]
+struct EvalRecordingResult {
+    recording: PreparedRecording,
+    ranked: Vec<RankedTermHit>,
+    export_rows: Vec<CandidateFeatureExportRow>,
+    timings: RecordingTimings,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = parse_args()?;
     let dataset = SeedDataset::load_canonical()?;
@@ -109,6 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut timings = EvalTimings::default();
     let mut misses = Vec::new();
     let mut counter_hits = Vec::new();
+    let mut exported_rows = Vec::new();
 
     let mut prepared = Vec::new();
     for row in dataset
@@ -134,10 +184,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|recording| evaluate_prepared_recording(&index, recording, &config))
         .collect::<Vec<_>>();
 
-    for (recording, ranked, recording_timings) in evaluated {
-        timings.query_total += recording_timings.query_total;
-        timings.verify_total += recording_timings.verify_total;
-        timings.recording_total += recording_timings.recording_total;
+    for result in evaluated {
+        timings.query_total += result.timings.query_total;
+        timings.verify_total += result.timings.verify_total;
+        timings.recording_total += result.timings.recording_total;
+        exported_rows.extend(result.export_rows);
+        let recording = result.recording;
+        let ranked = result.ranked;
         let target_rank = ranked
             .iter()
             .position(|hit| hit.term.eq_ignore_ascii_case(&recording.term))
@@ -191,10 +244,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|recording| evaluate_prepared_recording(&index, recording, &config))
         .collect::<Vec<_>>();
 
-    for (recording, ranked, recording_timings) in counter_evaluated {
-        timings.query_total += recording_timings.query_total;
-        timings.verify_total += recording_timings.verify_total;
-        timings.recording_total += recording_timings.recording_total;
+    for result in counter_evaluated {
+        timings.query_total += result.timings.query_total;
+        timings.verify_total += result.timings.verify_total;
+        timings.recording_total += result.timings.recording_total;
+        exported_rows.extend(result.export_rows);
+        let recording = result.recording;
+        let ranked = result.ranked;
         let target_rank = ranked
             .iter()
             .position(|hit| hit.term.eq_ignore_ascii_case(&recording.term))
@@ -316,6 +372,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    if let Some(path) = &config.export_features_path {
+        write_feature_export(path, &exported_rows)?;
+        println!();
+        println!("feature_rows_path={}", path.display());
+        println!("feature_rows={}", exported_rows.len());
+    }
+
     Ok(())
 }
 
@@ -360,8 +423,13 @@ fn prepare_recording(
 
     Ok((
         PreparedRecording {
+            suite: EvalSuite::Canonical,
             term: row.term.clone(),
+            text: row.text.clone(),
             transcript: row.transcript.clone(),
+            take: Some(row.take),
+            audio_path: Some(row.audio_path.clone()),
+            surface_form: None,
             spans,
         },
         timings,
@@ -409,8 +477,13 @@ fn prepare_counterexample_recording(
 
     Ok((
         PreparedRecording {
+            suite: EvalSuite::Counterexample,
             term: row.term.clone(),
+            text: row.text.clone(),
             transcript: row.transcript.clone(),
+            take: Some(row.take),
+            audio_path: Some(row.audio_path.clone()),
+            surface_form: Some(row.surface_form.clone()),
             spans,
         },
         timings,
@@ -421,9 +494,10 @@ fn evaluate_prepared_recording(
     index: &bee_phonetic::PhoneticIndex,
     recording: &PreparedRecording,
     config: &EvalConfig,
-) -> (PreparedRecording, Vec<RankedTermHit>, RecordingTimings) {
+) -> EvalRecordingResult {
     let recording_start = Instant::now();
     let mut best_by_term: HashMap<String, RankedTermHit> = HashMap::new();
+    let mut export_rows = Vec::new();
 
     let mut timings = RecordingTimings::default();
 
@@ -442,8 +516,42 @@ fn evaluate_prepared_recording(
         );
         timings.query_total += query_start.elapsed();
         let verify_start = Instant::now();
-        let verified = verify_shortlist(&span, &shortlist, index, config.verify_limit);
+        let scored = score_shortlist(&span, &shortlist, index);
         timings.verify_total += verify_start.elapsed();
+
+        for (candidate_rank_in_span, candidate) in
+            scored.iter().take(config.verify_limit).cloned().enumerate()
+        {
+            let alias = &index.aliases[candidate.alias_id as usize];
+            export_rows.push(CandidateFeatureExportRow {
+                suite: recording.suite,
+                target_term: recording.term.clone(),
+                source_text: recording.text.clone(),
+                transcript: recording.transcript.clone(),
+                take: recording.take,
+                audio_path: recording.audio_path.clone(),
+                surface_form: recording.surface_form.clone(),
+                should_abstain: matches!(recording.suite, EvalSuite::Counterexample),
+                span_text: span.text.clone(),
+                span_token_start: span.token_start,
+                span_token_end: span.token_end,
+                span_ipa_tokens: span.ipa_tokens.clone(),
+                span_reduced_ipa_tokens: span.reduced_ipa_tokens.clone(),
+                span_feature_tokens: bee_phonetic::feature_tokens_for_ipa(&span.ipa_tokens),
+                candidate_rank_in_span,
+                candidate_matches_target_term: candidate.term.eq_ignore_ascii_case(&recording.term),
+                alias_ipa_tokens: alias.ipa_tokens.clone(),
+                alias_reduced_ipa_tokens: alias.reduced_ipa_tokens.clone(),
+                alias_feature_tokens: alias.feature_tokens.clone(),
+                candidate,
+            });
+        }
+
+        let verified = scored
+            .into_iter()
+            .take(config.verify_limit)
+            .filter(|candidate| candidate.verified)
+            .collect::<Vec<_>>();
 
         for candidate in verified {
             let hit = RankedTermHit {
@@ -463,7 +571,12 @@ fn evaluate_prepared_recording(
     let mut ranked = best_by_term.into_values().collect::<Vec<_>>();
     ranked.sort_by(compare_hits);
     timings.recording_total = recording_start.elapsed();
-    (recording.clone(), ranked, timings)
+    EvalRecordingResult {
+        recording: recording.clone(),
+        ranked,
+        export_rows,
+        timings,
+    }
 }
 
 fn compare_hits(a: &RankedTermHit, b: &RankedTermHit) -> std::cmp::Ordering {
@@ -511,6 +624,13 @@ fn parse_args() -> Result<EvalConfig, Box<dyn std::error::Error>> {
                 config.sample_limit =
                     Some(args.next().ok_or("missing value for --limit")?.parse()?);
             }
+            "--export-features" => {
+                config.export_features_path = Some(
+                    args.next()
+                        .ok_or("missing value for --export-features")
+                        .map(PathBuf::from)?,
+                );
+            }
             other => {
                 return Err(format!("unknown argument: {other}").into());
             }
@@ -552,4 +672,18 @@ fn load_counterexample_recordings(
 fn counterexample_recordings_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../data/phonetic-seed/counterexample_recordings.jsonl")
+}
+
+fn write_feature_export(
+    path: &PathBuf,
+    rows: &[CandidateFeatureExportRow],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let file = File::create(path)?;
+    let mut writer = BufWriter::new(file);
+    for row in rows {
+        serde_json::to_writer(&mut writer, row)?;
+        writer.write_all(b"\n")?;
+    }
+    writer.flush()?;
+    Ok(())
 }

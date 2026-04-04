@@ -9,7 +9,7 @@ pub use crate::feature_view::FeatureEditOp;
 pub use crate::prototype::TokenEditOp;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VerifiedCandidate {
+pub struct CandidateFeatureRow {
     pub alias_id: u32,
     pub term: String,
     pub alias_text: String,
@@ -19,6 +19,7 @@ pub struct VerifiedCandidate {
     pub total_qgram_overlap: u16,
     pub best_view_score: f32,
     pub cross_view_support: u8,
+    pub token_count_match: bool,
     pub phone_count_delta: i16,
     pub token_bonus: f32,
     pub phone_bonus: f32,
@@ -50,6 +51,31 @@ pub struct VerifiedCandidate {
     pub used_feature_bonus: bool,
     pub phonetic_score: f32,
     pub acceptance_score: f32,
+    pub verified: bool,
+}
+
+pub type VerifiedCandidate = CandidateFeatureRow;
+
+pub fn score_shortlist(
+    span: &TranscriptSpan,
+    shortlist: &[RetrievalCandidate],
+    index: &PhoneticIndex,
+) -> Vec<CandidateFeatureRow> {
+    let span_feature_vectors = crate::feature_view::feature_vectors_for_ipa(&span.ipa_tokens);
+    let mut out = shortlist
+        .iter()
+        .filter_map(|candidate| score_candidate(span, candidate, index, &span_feature_vectors))
+        .collect::<Vec<_>>();
+
+    out.sort_by(|a, b| {
+        b.acceptance_score
+            .total_cmp(&a.acceptance_score)
+            .then_with(|| b.phonetic_score.total_cmp(&a.phonetic_score))
+            .then_with(|| b.coarse_score.total_cmp(&a.coarse_score))
+            .then_with(|| b.verified.cmp(&a.verified))
+            .then_with(|| a.phone_count_delta.abs().cmp(&b.phone_count_delta.abs()))
+    });
+    out
 }
 
 pub fn verify_shortlist(
@@ -58,132 +84,125 @@ pub fn verify_shortlist(
     index: &PhoneticIndex,
     limit: usize,
 ) -> Vec<VerifiedCandidate> {
-    let span_feature_vectors = crate::feature_view::feature_vectors_for_ipa(&span.ipa_tokens);
-    let mut out = shortlist
+    let mut out = score_shortlist(span, shortlist, index)
         .iter()
-        .filter_map(|candidate| {
-            let alias = index.aliases.get(candidate.alias_id as usize)?;
-            let token_details =
-                crate::prototype::phoneme_similarity_details(&span.ipa_tokens, &alias.ipa_tokens)?;
-            let feature_gate_token_ok = token_details.similarity >= 0.45;
-            let feature_gate_coarse_ok = candidate.coarse_score >= 0.45;
-            let feature_gate_phone_ok = candidate.phone_count_delta.abs() <= 2;
-            let should_apply_feature_bonus =
-                feature_gate_token_ok && feature_gate_coarse_ok && feature_gate_phone_ok;
-            let feature_details = if should_apply_feature_bonus {
-                crate::feature_view::feature_similarity_details_with_labels(
-                    &span.ipa_tokens,
-                    &span_feature_vectors,
-                    &alias.ipa_tokens,
-                    index
-                        .alias_feature_vectors
-                        .get(candidate.alias_id as usize)?,
-                    span.ipa_tokens.len().max(alias.ipa_tokens.len()),
-                )
-                .unwrap_or(crate::feature_view::FeatureSimilarityDetails {
-                    distance: token_details.distance as f32,
-                    weighted_distance: token_details.weighted_distance,
-                    boundary_penalty: token_details.boundary_penalty,
-                    max_len: token_details.max_len,
-                    similarity: token_details.similarity,
-                    ops: Vec::new(),
-                })
-            } else {
-                crate::feature_view::FeatureSimilarityDetails {
-                    distance: token_details.distance as f32,
-                    weighted_distance: token_details.weighted_distance,
-                    boundary_penalty: token_details.boundary_penalty,
-                    max_len: token_details.max_len,
-                    similarity: token_details.similarity,
-                    ops: Vec::new(),
-                }
-            };
-            let feature_bonus =
-                (feature_details.similarity - token_details.similarity).max(0.0) * 0.25;
-            let phonetic_score = (token_details.similarity + feature_bonus).clamp(0.0, 1.0);
-            let short_guard_applied = (span.token_end - span.token_start) == 1
-                && span.ipa_tokens.len() <= 4
-                && alias.token_count == 1
-                && alias.ipa_tokens.len() <= 5;
-            let short_guard_onset_match = span
-                .reduced_ipa_tokens
-                .first()
-                .zip(alias.reduced_ipa_tokens.first())
-                .is_some_and(|(lhs, rhs)| lhs == rhs);
-            let short_guard_passed = !short_guard_applied
-                || token_details.similarity >= 0.75
-                || (short_guard_onset_match && feature_details.similarity >= 0.65);
-            let low_content_guard_applied = is_low_content_span(&span.text);
-            let low_content_guard_passed = !low_content_guard_applied
-                || token_details.similarity >= 0.75
-                || feature_details.similarity >= 0.85;
-            let acceptance_score = phonetic_score + candidate.structure_bonus;
-            let acceptance_floor_passed = acceptance_score >= 0.35
-                && !(candidate.coarse_score < 0.20 && phonetic_score < 0.50)
-                && !(token_details.similarity < 0.25 && feature_details.similarity < 0.45);
-            if !low_content_guard_passed {
-                return None;
-            }
-            if !short_guard_passed {
-                return None;
-            }
-            if !acceptance_floor_passed {
-                return None;
-            }
-            Some(VerifiedCandidate {
-                alias_id: candidate.alias_id,
-                term: candidate.term.clone(),
-                alias_text: candidate.alias_text.clone(),
-                alias_source: candidate.alias_source,
-                matched_view: candidate.matched_view,
-                qgram_overlap: candidate.qgram_overlap,
-                total_qgram_overlap: candidate.total_qgram_overlap,
-                best_view_score: candidate.best_view_score,
-                cross_view_support: candidate.cross_view_support,
-                phone_count_delta: candidate.phone_count_delta,
-                token_bonus: candidate.token_bonus,
-                phone_bonus: candidate.phone_bonus,
-                extra_length_penalty: candidate.extra_length_penalty,
-                structure_bonus: candidate.structure_bonus,
-                coarse_score: candidate.coarse_score,
-                token_distance: token_details.distance as u16,
-                token_weighted_distance: token_details.weighted_distance,
-                token_boundary_penalty: token_details.boundary_penalty,
-                token_max_len: token_details.max_len as u16,
-                token_score: token_details.similarity,
-                token_ops: token_details.ops,
-                feature_distance: feature_details.distance,
-                feature_weighted_distance: feature_details.weighted_distance,
-                feature_boundary_penalty: feature_details.boundary_penalty,
-                feature_max_len: feature_details.max_len as u16,
-                feature_score: feature_details.similarity,
-                feature_ops: feature_details.ops,
-                feature_bonus,
-                feature_gate_token_ok,
-                feature_gate_coarse_ok,
-                feature_gate_phone_ok,
-                short_guard_applied,
-                short_guard_onset_match,
-                short_guard_passed,
-                low_content_guard_applied,
-                low_content_guard_passed,
-                acceptance_floor_passed,
-                used_feature_bonus: should_apply_feature_bonus && feature_bonus > 0.0,
-                phonetic_score,
-                acceptance_score,
-            })
-        })
+        .filter(|candidate| candidate.verified)
+        .cloned()
         .collect::<Vec<_>>();
-
-    out.sort_by(|a, b| {
-        b.acceptance_score
-            .total_cmp(&a.acceptance_score)
-            .then_with(|| b.phonetic_score.total_cmp(&a.phonetic_score))
-            .then_with(|| b.coarse_score.total_cmp(&a.coarse_score))
-            .then_with(|| a.phone_count_delta.abs().cmp(&b.phone_count_delta.abs()))
-    });
     out.truncate(limit);
     out
+}
+
+fn score_candidate(
+    span: &TranscriptSpan,
+    candidate: &RetrievalCandidate,
+    index: &PhoneticIndex,
+    span_feature_vectors: &[Vec<f32>],
+) -> Option<CandidateFeatureRow> {
+    let alias = index.aliases.get(candidate.alias_id as usize)?;
+    let token_details =
+        crate::prototype::phoneme_similarity_details(&span.ipa_tokens, &alias.ipa_tokens)?;
+    let feature_gate_token_ok = token_details.similarity >= 0.45;
+    let feature_gate_coarse_ok = candidate.coarse_score >= 0.45;
+    let feature_gate_phone_ok = candidate.phone_count_delta.abs() <= 2;
+    let should_apply_feature_bonus =
+        feature_gate_token_ok && feature_gate_coarse_ok && feature_gate_phone_ok;
+    let feature_details = if should_apply_feature_bonus {
+        crate::feature_view::feature_similarity_details_with_labels(
+            &span.ipa_tokens,
+            span_feature_vectors,
+            &alias.ipa_tokens,
+            index
+                .alias_feature_vectors
+                .get(candidate.alias_id as usize)?,
+            span.ipa_tokens.len().max(alias.ipa_tokens.len()),
+        )
+        .unwrap_or(crate::feature_view::FeatureSimilarityDetails {
+            distance: token_details.distance as f32,
+            weighted_distance: token_details.weighted_distance,
+            boundary_penalty: token_details.boundary_penalty,
+            max_len: token_details.max_len,
+            similarity: token_details.similarity,
+            ops: Vec::new(),
+        })
+    } else {
+        crate::feature_view::FeatureSimilarityDetails {
+            distance: token_details.distance as f32,
+            weighted_distance: token_details.weighted_distance,
+            boundary_penalty: token_details.boundary_penalty,
+            max_len: token_details.max_len,
+            similarity: token_details.similarity,
+            ops: Vec::new(),
+        }
+    };
+    let feature_bonus = (feature_details.similarity - token_details.similarity).max(0.0) * 0.25;
+    let phonetic_score = (token_details.similarity + feature_bonus).clamp(0.0, 1.0);
+    let short_guard_applied = (span.token_end - span.token_start) == 1
+        && span.ipa_tokens.len() <= 4
+        && alias.token_count == 1
+        && alias.ipa_tokens.len() <= 5;
+    let short_guard_onset_match = span
+        .reduced_ipa_tokens
+        .first()
+        .zip(alias.reduced_ipa_tokens.first())
+        .is_some_and(|(lhs, rhs)| lhs == rhs);
+    let short_guard_passed = !short_guard_applied
+        || token_details.similarity >= 0.75
+        || (short_guard_onset_match && feature_details.similarity >= 0.65);
+    let low_content_guard_applied = is_low_content_span(&span.text);
+    let low_content_guard_passed = !low_content_guard_applied
+        || token_details.similarity >= 0.75
+        || feature_details.similarity >= 0.85;
+    let acceptance_score = phonetic_score + candidate.structure_bonus;
+    let acceptance_floor_passed = acceptance_score >= 0.35
+        && !(candidate.coarse_score < 0.20 && phonetic_score < 0.50)
+        && !(token_details.similarity < 0.25 && feature_details.similarity < 0.45);
+    let verified = low_content_guard_passed && short_guard_passed && acceptance_floor_passed;
+
+    Some(CandidateFeatureRow {
+        alias_id: candidate.alias_id,
+        term: candidate.term.clone(),
+        alias_text: candidate.alias_text.clone(),
+        alias_source: candidate.alias_source,
+        matched_view: candidate.matched_view,
+        qgram_overlap: candidate.qgram_overlap,
+        total_qgram_overlap: candidate.total_qgram_overlap,
+        best_view_score: candidate.best_view_score,
+        cross_view_support: candidate.cross_view_support,
+        token_count_match: candidate.token_count_match,
+        phone_count_delta: candidate.phone_count_delta,
+        token_bonus: candidate.token_bonus,
+        phone_bonus: candidate.phone_bonus,
+        extra_length_penalty: candidate.extra_length_penalty,
+        structure_bonus: candidate.structure_bonus,
+        coarse_score: candidate.coarse_score,
+        token_distance: token_details.distance as u16,
+        token_weighted_distance: token_details.weighted_distance,
+        token_boundary_penalty: token_details.boundary_penalty,
+        token_max_len: token_details.max_len as u16,
+        token_score: token_details.similarity,
+        token_ops: token_details.ops,
+        feature_distance: feature_details.distance,
+        feature_weighted_distance: feature_details.weighted_distance,
+        feature_boundary_penalty: feature_details.boundary_penalty,
+        feature_max_len: feature_details.max_len as u16,
+        feature_score: feature_details.similarity,
+        feature_ops: feature_details.ops,
+        feature_bonus,
+        feature_gate_token_ok,
+        feature_gate_coarse_ok,
+        feature_gate_phone_ok,
+        short_guard_applied,
+        short_guard_onset_match,
+        short_guard_passed,
+        low_content_guard_applied,
+        low_content_guard_passed,
+        acceptance_floor_passed,
+        used_feature_bonus: should_apply_feature_bonus && feature_bonus > 0.0,
+        phonetic_score,
+        acceptance_score,
+        verified,
+    })
 }
 
 fn is_low_content_span(text: &str) -> bool {
@@ -289,5 +308,40 @@ mod tests {
         assert!(!shortlist.is_empty(), "{shortlist:#?}");
         let verified = verify_shortlist(&span, &shortlist, &index, 5);
         assert!(verified.is_empty(), "{verified:#?}");
+    }
+
+    #[test]
+    fn score_shortlist_marks_rejected_candidates() {
+        let index = build_index(vec![alias(0, "ripgrep", "ripgrep", "r ɪ p ɡ ɹ ɛ p")]);
+        let span = TranscriptSpan {
+            token_start: 0,
+            token_end: 1,
+            char_start: 0,
+            char_end: 5,
+            start_sec: None,
+            end_sec: None,
+            text: "crap".to_string(),
+            ipa_tokens: crate::prototype::parse_reviewed_ipa("k ɹ a p"),
+            reduced_ipa_tokens: crate::phonetic_lexicon::reduce_ipa_tokens(
+                &crate::prototype::parse_reviewed_ipa("k ɹ a p"),
+            ),
+        };
+        let shortlist = query_index(
+            &index,
+            &RetrievalQuery {
+                text: span.text.clone(),
+                ipa_tokens: span.ipa_tokens.clone(),
+                reduced_ipa_tokens: span.reduced_ipa_tokens.clone(),
+                feature_tokens: crate::feature_view::feature_tokens_for_ipa(&span.ipa_tokens),
+                token_count: 1,
+            },
+            5,
+        );
+        let scored = score_shortlist(&span, &shortlist, &index);
+        assert_eq!(scored.len(), shortlist.len());
+        assert!(
+            scored.iter().all(|candidate| !candidate.verified),
+            "{scored:#?}"
+        );
     }
 }
