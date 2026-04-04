@@ -112,12 +112,11 @@ export function JudgeRapidFirePanel({
 
   const hasExactChoice = choiceRows.some((row) => row.isGold);
 
-  // Find the single best judge pick (highest probability among chosen options)
+  // After merging overlapping spans into sentence-level rows, the judge pick
+  // should be the top visible row, not any stale per-span `chosen` flag.
   const judgePickId = useMemo(() => {
-    const chosen = choiceRows.filter((row) => row.option.chosen);
-    if (chosen.length === 0) return null;
-    chosen.sort((a, b) => b.option.probability - a.option.probability);
-    return chosen[0].id;
+    if (choiceRows.length === 0) return null;
+    return choiceRows[0].id;
   }, [choiceRows]);
 
   const teach = useCallback(
@@ -142,6 +141,8 @@ export function JudgeRapidFirePanel({
           span_token_end: span.span.token_end,
           choose_keep_original: option.is_keep_original,
           chosen_alias_id: option.is_keep_original ? null : option.alias_id,
+          reject_group: false,
+          rejected_group_spans: [],
         });
         if (!result.ok) throw new Error(result.error);
         setProbeResult(result.value);
@@ -156,6 +157,10 @@ export function JudgeRapidFirePanel({
     },
     [cases.length, currentCase, maxSpanWords, shortlistLimit, verifyLimit, wsUrl],
   );
+
+  const skipCase = useCallback(() => {
+    setCaseIndex((i) => Math.min(i + 1, Math.max(cases.length - 1, 0)));
+  }, [cases.length]);
 
   // Pre-load: config form
   if (cases.length === 0) {
@@ -228,34 +233,40 @@ export function JudgeRapidFirePanel({
       </section>
 
       {currentCase && (
-        <>
-          {/* Transcript + metadata */}
-          <section className="prototype-card" style={{ gap: "0.35rem" }}>
-            <div className="rapid-fire-transcript">{currentCase.transcript}</div>
-            <div style={{ display: "flex", gap: "0.75rem", fontSize: "12px", color: "var(--text-muted)", flexWrap: "wrap" }}>
-              <span>Expected: <strong style={{ color: "var(--text)" }}>{expected}</strong></span>
-              <span>Source: {currentCase.source_text}</span>
-              {currentCase.surface_form && <span>Surface: {currentCase.surface_form}</span>}
-              <span className="badge">{currentCase.suite}</span>
-            </div>
-          </section>
-
-          {/* Choice rows */}
-          {focusSpan ? (
-            <section className="prototype-card" style={{ gap: "0.35rem", padding: 0 }}>
-              <div style={{ padding: "0.5rem 0.6rem 0.25rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-                  Pick the correct sentence ({choiceRows.length} options)
-                </span>
+          <div className="choice-list">
+            {/* Row: transcript (what we got) */}
+            <div className="choice-row choice-row-context">
+              <div className="choice-row-main">
+                <div className="sentence-preview-line">{currentCase.transcript}</div>
               </div>
-              {!hasExactChoice && (
-                <div className="span-warning" style={{ margin: "0 0.6rem 0.25rem", borderRadius: "3px" }}>
-                  No choice reconstructs the expected sentence exactly.
+              <div className="choice-row-meta">
+                <span className="choice-flags">transcript</span>
+                <span className="badge">{currentCase.suite}</span>
+              </div>
+            </div>
+
+            {/* Row: expected correct sentence */}
+            <div className="choice-row choice-row-context choice-row-expected">
+              <div className="choice-row-main">
+                <div className="sentence-preview-line">{currentCase.source_text}</div>
+              </div>
+              <div className="choice-row-meta">
+                <span className="choice-flags">expected</span>
+              </div>
+            </div>
+
+            {/* Separator + instruction */}
+            {focusSpan ? (
+              <>
+                <div className="choice-row-divider">
+                  <span>{choiceRows.length} candidates — scores are relative judge weights</span>
+                  {!hasExactChoice && (
+                    <span className="choice-row-divider-warn">no exact match</span>
+                  )}
                 </div>
-              )}
-              <div className="choice-list">
+
                 {choiceRows.map((row) => {
-                  const { span, option, preview, isGold } = row;
+                  const { span, option, preview, isGold, candidateFeatures } = row;
                   const isJudgePick = row.id === judgePickId;
                   const key = `${currentCase.case_id}:${row.id}`;
                   const classes = ["choice-button"];
@@ -273,13 +284,20 @@ export function JudgeRapidFirePanel({
                             <span>{span.span.text}</span>
                           ) : (
                             <>
-                              <span className="edit-from">[{span.span.text}]</span>
+                              <span className="edit-from">{span.span.text}</span>
                               <span className="edit-arrow">{" => "}</span>
-                              <span className="edit-to">[{preview.focus}]</span>
+                              <span className="edit-to">{preview.focus}</span>
                             </>
                           )}
                           {preview.after ? <span> {preview.after}</span> : null}
                         </div>
+                        {candidateFeatures && (
+                          <div className="choice-detail">
+                            {candidateFeatures.verified
+                              ? <span className="choice-detail-verified">verified</span>
+                              : <span className="choice-detail-unverified">unverified</span>}
+                          </div>
+                        )}
                       </div>
                       <div className="choice-row-meta">
                         <span className="choice-flags">
@@ -292,14 +310,28 @@ export function JudgeRapidFirePanel({
                     </button>
                   );
                 })}
+
+                <button className="choice-button choice-button-skip"
+                  aria-label="None of these"
+                  onClick={skipCase}>
+                  <div className="choice-row-main">
+                    <div className="sentence-preview-line" style={{ color: "var(--text-muted)" }}>
+                      None of these
+                    </div>
+                  </div>
+                  <div className="choice-row-meta">
+                    <span className="choice-flags">skip</span>
+                  </div>
+                </button>
+              </>
+            ) : (
+              <div className="choice-row choice-row-context">
+                <div className="choice-row-main">
+                  <span style={{ color: "var(--text-muted)" }}>No usable focus span for this case.</span>
+                </div>
               </div>
-            </section>
-          ) : (
-            <section className="prototype-card prototype-card-tight">
-              <div className="prototype-empty">No usable focus span for this case.</div>
-            </section>
-          )}
-        </>
+            )}
+          </div>
       )}
     </div>
   );

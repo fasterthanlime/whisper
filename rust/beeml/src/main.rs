@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::env;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use bee_phonetic::{
@@ -105,6 +107,17 @@ impl BeeMlService {
             .lock()
             .map_err(|_| "judge mutex poisoned".to_string())?;
         let mut taught_span = teach.is_none();
+        let rejected_group_spans = teach
+            .as_ref()
+            .filter(|teach| teach.reject_group)
+            .map(|teach| {
+                teach
+                    .rejected_group_spans
+                    .iter()
+                    .map(|span| (span.token_start as usize, span.token_end as usize))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
 
         let traces = spans
             .into_iter()
@@ -132,16 +145,21 @@ impl BeeMlService {
                     })
                     .collect::<Vec<_>>();
 
-                let should_teach = teach.as_ref().is_some_and(|teach| {
-                    teach.span_token_start as usize == span.token_start
+                let explicitly_chosen_span = teach.as_ref().is_some_and(|teach| {
+                    !teach.reject_group
+                        && teach.span_token_start as usize == span.token_start
                         && teach.span_token_end as usize == span.token_end
                 });
+                let rejected_group_match = rejected_group_spans
+                    .iter()
+                    .any(|(start, end)| *start == span.token_start && *end == span.token_end);
+                let should_teach = explicitly_chosen_span || rejected_group_match;
                 if should_teach {
                     taught_span = true;
                 }
 
                 let chosen_alias_id = teach.as_ref().and_then(|teach| {
-                    if should_teach && !teach.choose_keep_original {
+                    if explicitly_chosen_span && !teach.choose_keep_original {
                         teach.chosen_alias_id
                     } else {
                         None
@@ -248,8 +266,13 @@ impl BeeMlService {
             })
             .collect::<Vec<_>>();
 
-        if teach.is_some() && !taught_span {
-            return Err("requested span was not present in the probe result".to_string());
+        if let Some(teach) = &teach {
+            if !taught_span {
+                return Err("requested span was not present in the probe result".to_string());
+            }
+            if teach.reject_group && rejected_group_spans.is_empty() {
+                return Err("reject_group requested without any rejected_group_spans".to_string());
+            }
         }
 
         Ok(RetrievalPrototypeProbeResult {
@@ -314,6 +337,12 @@ impl BeeMlService {
                     }),
             );
         }
+
+        let random_seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos() as u64)
+            .unwrap_or(0);
+        cases.sort_by_key(|case| randomish_case_key(case, random_seed));
 
         if limit == 0 || limit >= cases.len() {
             cases
@@ -681,6 +710,15 @@ impl BeeMl for BeeMlService {
             per_term,
         })
     }
+}
+
+fn randomish_case_key(case: &EvalCase, seed: u64) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    seed.hash(&mut hasher);
+    case.case_id.hash(&mut hasher);
+    case.target_term.hash(&mut hasher);
+    case.transcript.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[tokio::main(flavor = "multi_thread")]

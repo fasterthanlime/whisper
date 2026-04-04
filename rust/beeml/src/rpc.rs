@@ -254,6 +254,14 @@ pub struct TeachRetrievalPrototypeJudgeRequest {
     pub span_token_end: u32,
     pub choose_keep_original: bool,
     pub chosen_alias_id: Option<u32>,
+    pub reject_group: bool,
+    pub rejected_group_spans: Vec<RejectedGroupSpan>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct RejectedGroupSpan {
+    pub token_start: u32,
+    pub token_end: u32,
 }
 
 #[derive(Clone, Debug, Facet)]

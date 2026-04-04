@@ -206,6 +206,8 @@ export function RetrievalPrototypeLab({
           span_token_end: spanTokenEnd,
           choose_keep_original: option.is_keep_original,
           chosen_alias_id: option.is_keep_original ? null : option.alias_id,
+          reject_group: false,
+          rejected_group_spans: [],
         });
         if (!result.ok) throw new Error(result.error);
         setProbeResult(result.value);

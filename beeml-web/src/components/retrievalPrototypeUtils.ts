@@ -1,5 +1,6 @@
 import type {
   AlignedWord,
+  CandidateFeatureDebug,
   JudgeOptionDebug,
   RetrievalPrototypeTeachingCase,
   SpanDebugTrace,
@@ -16,6 +17,8 @@ export interface TeachingChoiceRow {
     full: string;
   };
   isGold: boolean;
+  /** Retrieval candidate features, if a matching candidate was found */
+  candidateFeatures: CandidateFeatureDebug | null;
 }
 
 function transcriptTokens(transcript: string) {
@@ -129,6 +132,9 @@ export function buildTeachingChoices(
         option.is_keep_original ? span.span.text : option.term,
       );
       const normalized = normalizeComparableText(preview.full);
+      const matchingCandidate = option.alias_id != null
+        ? span.candidates.find((c) => c.alias_id === option.alias_id)
+        : null;
       const candidate: TeachingChoiceRow = {
         id: `${span.span.token_start}:${span.span.token_end}:${option.alias_id ?? "keep"}`,
         span,
@@ -140,6 +146,7 @@ export function buildTeachingChoices(
           option,
           teachingCase,
         ),
+        candidateFeatures: matchingCandidate?.features ?? null,
       };
       const existing = bestBySentence.get(normalized);
       if (
