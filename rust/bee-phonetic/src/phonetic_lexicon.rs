@@ -388,6 +388,40 @@ pub fn derive_identifier_flags(text: &str) -> IdentifierFlags {
     }
 }
 
+pub fn is_identifier_like(flags: &IdentifierFlags) -> bool {
+    flags.acronym_like
+        || flags.has_digits
+        || flags.snake_like
+        || flags.camel_like
+        || flags.symbol_like
+}
+
+pub fn looks_like_name(text: &str) -> bool {
+    let mut parts = text.split_whitespace();
+    let Some(token) = parts.next() else {
+        return false;
+    };
+    if parts.next().is_some() {
+        return false;
+    }
+
+    let mut chars = token.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_uppercase() {
+        return false;
+    }
+    let mut saw_lower = false;
+    for ch in chars {
+        if !ch.is_ascii_lowercase() {
+            return false;
+        }
+        saw_lower = true;
+    }
+    saw_lower
+}
+
 fn reduce_ipa_token(token: &str) -> String {
     let mut out = String::new();
     for ch in token.chars() {
@@ -496,5 +530,14 @@ mod tests {
         let flags = derive_identifier_flags("AArch64");
         assert!(flags.has_digits);
         assert!(flags.camel_like);
+    }
+
+    #[test]
+    fn looks_like_name_detects_simple_proper_names() {
+        assert!(looks_like_name("Quinn"));
+        assert!(looks_like_name("Marco"));
+        assert!(!looks_like_name("qwen"));
+        assert!(!looks_like_name("MachO"));
+        assert!(!looks_like_name("third day"));
     }
 }

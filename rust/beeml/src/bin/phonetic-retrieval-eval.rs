@@ -435,7 +435,7 @@ fn evaluate_prepared_recording(
                 text: span.text.clone(),
                 ipa_tokens: span.ipa_tokens.clone(),
                 reduced_ipa_tokens: span.reduced_ipa_tokens.clone(),
-                feature_tokens: Vec::new(),
+                feature_tokens: bee_phonetic::feature_tokens_for_ipa(&span.ipa_tokens),
                 token_count: (span.token_end - span.token_start) as u8,
             },
             config.shortlist_limit,
@@ -468,8 +468,13 @@ fn evaluate_prepared_recording(
 
 fn compare_hits(a: &RankedTermHit, b: &RankedTermHit) -> std::cmp::Ordering {
     b.candidate
-        .phonetic_score
-        .total_cmp(&a.candidate.phonetic_score)
+        .acceptance_score
+        .total_cmp(&a.candidate.acceptance_score)
+        .then_with(|| {
+            b.candidate
+                .phonetic_score
+                .total_cmp(&a.candidate.phonetic_score)
+        })
         .then_with(|| {
             b.candidate
                 .coarse_score

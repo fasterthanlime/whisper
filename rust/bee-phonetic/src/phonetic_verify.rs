@@ -20,6 +20,7 @@ pub struct VerifiedCandidate {
     pub token_bonus: f32,
     pub phone_bonus: f32,
     pub extra_length_penalty: f32,
+    pub structure_bonus: f32,
     pub coarse_score: f32,
     pub token_distance: u16,
     pub token_max_len: u16,
@@ -36,8 +37,10 @@ pub struct VerifiedCandidate {
     pub short_guard_passed: bool,
     pub low_content_guard_applied: bool,
     pub low_content_guard_passed: bool,
+    pub acceptance_floor_passed: bool,
     pub used_feature_bonus: bool,
     pub phonetic_score: f32,
+    pub acceptance_score: f32,
 }
 
 pub fn verify_shortlist(
@@ -78,7 +81,8 @@ pub fn verify_shortlist(
                     similarity: token_details.similarity,
                 }
             };
-            let feature_bonus = (feature_details.similarity - token_details.similarity).max(0.0) * 0.25;
+            let feature_bonus =
+                (feature_details.similarity - token_details.similarity).max(0.0) * 0.25;
             let phonetic_score = (token_details.similarity + feature_bonus).clamp(0.0, 1.0);
             let short_guard_applied = (span.token_end - span.token_start) == 1
                 && span.ipa_tokens.len() <= 4
@@ -96,10 +100,17 @@ pub fn verify_shortlist(
             let low_content_guard_passed = !low_content_guard_applied
                 || token_details.similarity >= 0.75
                 || feature_details.similarity >= 0.85;
+            let acceptance_score = phonetic_score + candidate.structure_bonus;
+            let acceptance_floor_passed = acceptance_score >= 0.35
+                && !(candidate.coarse_score < 0.20 && phonetic_score < 0.50)
+                && !(token_details.similarity < 0.25 && feature_details.similarity < 0.45);
             if !low_content_guard_passed {
                 return None;
             }
             if !short_guard_passed {
+                return None;
+            }
+            if !acceptance_floor_passed {
                 return None;
             }
             Some(VerifiedCandidate {
@@ -116,6 +127,7 @@ pub fn verify_shortlist(
                 token_bonus: candidate.token_bonus,
                 phone_bonus: candidate.phone_bonus,
                 extra_length_penalty: candidate.extra_length_penalty,
+                structure_bonus: candidate.structure_bonus,
                 coarse_score: candidate.coarse_score,
                 token_distance: token_details.distance as u16,
                 token_max_len: token_details.max_len as u16,
@@ -132,15 +144,18 @@ pub fn verify_shortlist(
                 short_guard_passed,
                 low_content_guard_applied,
                 low_content_guard_passed,
+                acceptance_floor_passed,
                 used_feature_bonus: should_apply_feature_bonus && feature_bonus > 0.0,
                 phonetic_score,
+                acceptance_score,
             })
         })
         .collect::<Vec<_>>();
 
     out.sort_by(|a, b| {
-        b.phonetic_score
-            .total_cmp(&a.phonetic_score)
+        b.acceptance_score
+            .total_cmp(&a.acceptance_score)
+            .then_with(|| b.phonetic_score.total_cmp(&a.phonetic_score))
             .then_with(|| b.coarse_score.total_cmp(&a.coarse_score))
             .then_with(|| a.phone_count_delta.abs().cmp(&b.phone_count_delta.abs()))
     });
@@ -151,9 +166,9 @@ pub fn verify_shortlist(
 fn is_low_content_span(text: &str) -> bool {
     const LOW_CONTENT: &[&str] = &[
         "a", "an", "and", "the", "then", "that", "this", "these", "those", "if", "you", "we",
-        "they", "he", "she", "it", "i", "me", "my", "your", "our", "their", "him", "her",
-        "them", "about", "not", "sure", "what", "yeah", "well", "oh", "hmm", "uh", "um",
-        "want", "some", "there", "here",
+        "they", "he", "she", "it", "i", "me", "my", "your", "our", "their", "him", "her", "them",
+        "about", "not", "sure", "what", "yeah", "well", "oh", "hmm", "uh", "um", "want", "some",
+        "there", "here",
     ];
 
     let tokens = sentence_word_tokens(text);
@@ -219,5 +234,37 @@ mod tests {
         );
         let verified = verify_shortlist(&span, &shortlist, &index, 5);
         assert_eq!(verified.first().map(|c| c.term.as_str()), Some("AArch64"));
+    }
+
+    #[test]
+    fn verify_shortlist_rejects_weak_ripgrep_match_for_crap() {
+        let index = build_index(vec![alias(0, "ripgrep", "ripgrep", "r ɪ p ɡ ɹ ɛ p")]);
+        let span = TranscriptSpan {
+            token_start: 0,
+            token_end: 1,
+            char_start: 0,
+            char_end: 5,
+            start_sec: None,
+            end_sec: None,
+            text: "crap".to_string(),
+            ipa_tokens: crate::prototype::parse_reviewed_ipa("k ɹ a p"),
+            reduced_ipa_tokens: crate::phonetic_lexicon::reduce_ipa_tokens(
+                &crate::prototype::parse_reviewed_ipa("k ɹ a p"),
+            ),
+        };
+        let shortlist = query_index(
+            &index,
+            &RetrievalQuery {
+                text: span.text.clone(),
+                ipa_tokens: span.ipa_tokens.clone(),
+                reduced_ipa_tokens: span.reduced_ipa_tokens.clone(),
+                feature_tokens: crate::feature_view::feature_tokens_for_ipa(&span.ipa_tokens),
+                token_count: 1,
+            },
+            5,
+        );
+        assert!(!shortlist.is_empty(), "{shortlist:#?}");
+        let verified = verify_shortlist(&span, &shortlist, &index, 5);
+        assert!(verified.is_empty(), "{verified:#?}");
     }
 }

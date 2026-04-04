@@ -128,7 +128,7 @@ impl BeeMl for BeeMlService {
                         text: span.text.clone(),
                         ipa_tokens: span.ipa_tokens.clone(),
                         reduced_ipa_tokens: span.reduced_ipa_tokens.clone(),
-                        feature_tokens: Vec::new(),
+                        feature_tokens: bee_phonetic::feature_tokens_for_ipa(&span.ipa_tokens),
                         token_count: (span.token_end - span.token_start) as u8,
                     },
                     request.shortlist_limit as usize,
@@ -164,7 +164,11 @@ impl BeeMl for BeeMlService {
                             token_bonus: candidate.token_bonus,
                             phone_bonus: candidate.phone_bonus,
                             extra_length_penalty: candidate.extra_length_penalty,
+                            structure_bonus: candidate.structure_bonus,
                             phonetic_score: verified.map(|v| v.phonetic_score).unwrap_or(0.0),
+                            acceptance_score: verified
+                                .map(|v| v.acceptance_score)
+                                .unwrap_or(candidate.coarse_score),
                             token_count_match: candidate.token_count_match,
                             phone_count_delta: candidate.phone_count_delta,
                             total_qgram_overlap: candidate.total_qgram_overlap,
@@ -189,7 +193,12 @@ impl BeeMl for BeeMlService {
                                     name: "verified".to_string(),
                                     passed: verified.is_some(),
                                     detail: verified
-                                        .map(|v| format!("phonetic_score={:.3}", v.phonetic_score))
+                                        .map(|v| {
+                                            format!(
+                                                "phonetic_score={:.3} acceptance_score={:.3}",
+                                                v.phonetic_score, v.acceptance_score
+                                            )
+                                        })
                                         .unwrap_or_else(|| "not_in_verified_shortlist".to_string()),
                                 },
                             ],

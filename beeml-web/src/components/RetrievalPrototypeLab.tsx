@@ -29,7 +29,7 @@ function formatIndexView(view: { tag: string }) {
 }
 
 function candidateSortKey(candidate: RetrievalCandidateDebug) {
-  return candidate.phonetic_score * 1000 + candidate.coarse_score * 100;
+  return candidate.acceptance_score * 1000 + candidate.phonetic_score * 100;
 }
 
 function dedupeCandidatesByTerm(candidates: RetrievalCandidateDebug[]) {
@@ -267,11 +267,13 @@ export function RetrievalPrototypeLab({
                           </div>
                           <div className="candidate-score-row">
                             <span>coarse {candidate.coarse_score.toFixed(3)}</span>
+                            <span>accept {candidate.acceptance_score.toFixed(3)}</span>
                             <span>view {candidate.best_view_score.toFixed(3)}</span>
                             <span>support {candidate.cross_view_support}</span>
                             <span>token {candidate.token_bonus.toFixed(2)}</span>
                             <span>phone {candidate.phone_bonus.toFixed(2)}</span>
                             <span>length {candidate.extra_length_penalty.toFixed(2)}</span>
+                            <span>structure {candidate.structure_bonus.toFixed(2)}</span>
                             <span>phonetic {candidate.phonetic_score.toFixed(3)}</span>
                             <span>q {candidate.lane_hits[0]?.qgram_overlap ?? 0}</span>
                             <span>q-total {candidate.total_qgram_overlap}</span>

@@ -2,7 +2,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::phonetic_lexicon::{AliasSource, LexiconAlias};
+use crate::phonetic_lexicon::{
+    derive_identifier_flags, is_identifier_like, looks_like_name, AliasSource, LexiconAlias,
+};
+use crate::word_split::sentence_word_tokens;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum IndexView {
@@ -55,6 +58,7 @@ pub struct RetrievalCandidate {
     pub token_bonus: f32,
     pub phone_bonus: f32,
     pub extra_length_penalty: f32,
+    pub structure_bonus: f32,
     pub coarse_score: f32,
 }
 
@@ -89,6 +93,8 @@ pub fn build_index(aliases: Vec<LexiconAlias>) -> PhoneticIndex {
             (IndexView::RawIpa3, qgrams(&alias.ipa_tokens, 3)),
             (IndexView::ReducedIpa2, qgrams(&alias.reduced_ipa_tokens, 2)),
             (IndexView::ReducedIpa3, qgrams(&alias.reduced_ipa_tokens, 3)),
+            (IndexView::Feature2, qgrams(&alias.feature_tokens, 2)),
+            (IndexView::Feature3, qgrams(&alias.feature_tokens, 3)),
         ] {
             let mut seen_grams = HashSet::new();
             for gram in grams {
@@ -130,12 +136,25 @@ pub fn query_index(
     limit: usize,
 ) -> Vec<RetrievalCandidate> {
     let query_phone_count = query.ipa_tokens.len().min(u8::MAX as usize) as u8;
+    let query_feature_tokens = if query.feature_tokens.is_empty() {
+        crate::feature_view::feature_tokens_for_ipa(&query.ipa_tokens)
+    } else {
+        query.feature_tokens.clone()
+    };
     let query_grams_by_view = [
         (IndexView::RawIpa2, qgrams(&query.ipa_tokens, 2)),
         (IndexView::RawIpa3, qgrams(&query.ipa_tokens, 3)),
         (IndexView::ReducedIpa2, qgrams(&query.reduced_ipa_tokens, 2)),
         (IndexView::ReducedIpa3, qgrams(&query.reduced_ipa_tokens, 3)),
+        (IndexView::Feature2, qgrams(&query_feature_tokens, 2)),
+        (IndexView::Feature3, qgrams(&query_feature_tokens, 3)),
     ];
+    let query_identifier_flags = derive_identifier_flags(&query.text);
+    let query_identifier_like = is_identifier_like(&query_identifier_flags);
+    let query_name_like = looks_like_name(&query.text);
+    let query_has_name_like_token = sentence_word_tokens(&query.text)
+        .iter()
+        .any(|token| looks_like_name(&token.text));
     let mut accum: HashMap<u32, CandidateAccumulator> = HashMap::new();
 
     for (view, grams) in &query_grams_by_view {
@@ -202,6 +221,13 @@ pub fn query_index(
             let token_bonus = token_bonus(alias.token_count, query.token_count);
             let phone_bonus = phone_bonus(alias.phone_count, query_phone_count);
             let extra_length_penalty = extra_length_penalty(alias.phone_count, query_phone_count);
+            let structure_bonus = structure_bonus(
+                alias,
+                query_identifier_like,
+                query_name_like,
+                query_has_name_like_token,
+                query.token_count,
+            );
             Some(RetrievalCandidate {
                 alias_id,
                 term: alias.term.clone(),
@@ -217,12 +243,14 @@ pub fn query_index(
                 token_bonus,
                 phone_bonus,
                 extra_length_penalty,
+                structure_bonus,
                 coarse_score: coarse_score(
                     best_view_score,
                     cross_view_support,
                     token_bonus,
                     phone_bonus,
                     extra_length_penalty,
+                    structure_bonus,
                 ),
             })
         })
@@ -345,9 +373,65 @@ fn coarse_score(
     token_bonus: f32,
     phone_bonus: f32,
     extra_length_penalty: f32,
+    structure_bonus: f32,
 ) -> f32 {
     let support_bonus = 0.05 * cross_view_support.saturating_sub(1) as f32;
-    best_view_score + support_bonus + token_bonus + phone_bonus + extra_length_penalty
+    best_view_score
+        + support_bonus
+        + token_bonus
+        + phone_bonus
+        + extra_length_penalty
+        + structure_bonus
+}
+
+fn structure_bonus(
+    alias: &LexiconAlias,
+    query_identifier_like: bool,
+    query_name_like: bool,
+    query_has_name_like_token: bool,
+    query_token_count: u8,
+) -> f32 {
+    let alias_identifier_like = is_identifier_like(&alias.identifier_flags)
+        || alias.alias_source == AliasSource::Identifier;
+    let mut bonus = 0.0;
+
+    if alias_identifier_like && query_identifier_like {
+        bonus += 0.10;
+    } else if alias_identifier_like && !query_identifier_like {
+        bonus -= 0.10;
+    }
+
+    if alias.alias_source == AliasSource::Identifier && !query_identifier_like {
+        bonus -= 0.05;
+    }
+
+    if alias.identifier_flags.acronym_like && query_token_count <= 2 && !query_identifier_like {
+        bonus -= 0.06;
+    }
+
+    if query_name_like {
+        if alias_identifier_like {
+            bonus -= 0.22;
+        } else if alias.token_count == 1
+            && alias.alias_text.chars().all(|ch| ch.is_ascii_lowercase())
+            && alias.alias_text.chars().any(|ch| ch.is_ascii_alphabetic())
+        {
+            bonus -= 0.18;
+        }
+    }
+
+    if query_has_name_like_token && !query_identifier_like {
+        if alias_identifier_like {
+            bonus -= 0.12;
+        } else if alias.token_count == 1
+            && alias.alias_text.chars().all(|ch| ch.is_ascii_lowercase())
+            && alias.alias_text.chars().any(|ch| ch.is_ascii_alphabetic())
+        {
+            bonus -= 0.12;
+        }
+    }
+
+    bonus
 }
 
 fn view_weight(view: &IndexView) -> f32 {
@@ -356,8 +440,9 @@ fn view_weight(view: &IndexView) -> f32 {
         | IndexView::RawIpa3
         | IndexView::ReducedIpa2
         | IndexView::ReducedIpa3 => 1.0,
-        IndexView::Feature2 => 0.0,
-        IndexView::Feature3 => 0.0,
+        // Feature views are support lanes, not primary retrieval lanes.
+        IndexView::Feature2 => 0.10,
+        IndexView::Feature3 => 0.15,
         IndexView::ShortQueryFallback => 0.9,
     }
 }

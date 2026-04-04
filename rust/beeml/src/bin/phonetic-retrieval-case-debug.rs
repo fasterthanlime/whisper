@@ -127,7 +127,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("recordings={}", rows.len());
-    println!("source={}", if config.counterexamples { "counterexamples" } else { "canonical" });
+    println!(
+        "source={}",
+        if config.counterexamples {
+            "counterexamples"
+        } else {
+            "canonical"
+        }
+    );
 
     for (idx, row) in rows.into_iter().enumerate() {
         println!();
@@ -160,7 +167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         text: span.text.clone(),
                         ipa_tokens: span.ipa_tokens.clone(),
                         reduced_ipa_tokens: span.reduced_ipa_tokens.clone(),
-                        feature_tokens: Vec::new(),
+                        feature_tokens: bee_phonetic::feature_tokens_for_ipa(&span.ipa_tokens),
                         token_count: (span.token_end - span.token_start) as u8,
                     },
                     config.shortlist_limit,
@@ -189,7 +196,9 @@ fn score_case(case: &SpanCaseDebug, term: &str) -> f32 {
         .verified
         .iter()
         .find(|candidate| candidate.term.eq_ignore_ascii_case(term))
-        .map(|candidate| 1000.0 + candidate.phonetic_score * 100.0 + candidate.coarse_score * 10.0);
+        .map(|candidate| {
+            1000.0 + candidate.acceptance_score * 100.0 + candidate.phonetic_score * 10.0
+        });
     if let Some(score) = target_verified {
         return score;
     }
@@ -205,7 +214,7 @@ fn score_case(case: &SpanCaseDebug, term: &str) -> f32 {
 
     case.verified
         .first()
-        .map(|candidate| candidate.phonetic_score * 100.0 + candidate.coarse_score * 10.0)
+        .map(|candidate| candidate.acceptance_score * 100.0 + candidate.phonetic_score * 10.0)
         .or_else(|| {
             case.shortlist
                 .first()
@@ -270,7 +279,7 @@ fn print_case(case: &SpanCaseDebug, term: &str, aliases: &[LexiconAlias]) {
         );
         if let Some(verified) = verified_by_alias.get(&candidate.alias_id) {
             println!(
-                "    verify token={:.3} ({}/{}) feature={:.3} ({:.3}/{}) bonus={:.3} used_feature_bonus={} phonetic={:.3}",
+                "    verify token={:.3} ({}/{}) feature={:.3} ({:.3}/{}) bonus={:.3} used_feature_bonus={} phonetic={:.3} accept={:.3}",
                 verified.token_score,
                 verified.token_distance,
                 verified.token_max_len,
@@ -279,7 +288,8 @@ fn print_case(case: &SpanCaseDebug, term: &str, aliases: &[LexiconAlias]) {
                 verified.feature_max_len,
                 verified.feature_bonus,
                 verified.used_feature_bonus,
-                verified.phonetic_score
+                verified.phonetic_score,
+                verified.acceptance_score
             );
             println!(
                 "    feature_gate token_ok={} coarse_ok={} phone_ok={}",
@@ -295,8 +305,11 @@ fn print_case(case: &SpanCaseDebug, term: &str, aliases: &[LexiconAlias]) {
             );
             println!(
                 "    low_content_guard applied={} passed={}",
-                verified.low_content_guard_applied,
-                verified.low_content_guard_passed
+                verified.low_content_guard_applied, verified.low_content_guard_passed
+            );
+            println!(
+                "    acceptance_floor passed={} structure_bonus={:.2}",
+                verified.acceptance_floor_passed, verified.structure_bonus
             );
         } else {
             println!("    verify <not in verified shortlist>");
