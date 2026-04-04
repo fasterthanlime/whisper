@@ -516,7 +516,7 @@ impl BeeMlService {
 }
 
 const RAPID_FIRE_COMPONENT_HYPOTHESES: usize = 4;
-const RAPID_FIRE_SENTENCE_CHOICES: usize = 6;
+const RAPID_FIRE_SENTENCE_CHOICES: usize = 12;
 const RAPID_FIRE_EXACT_THRESHOLD: usize = 64;
 const RAPID_FIRE_BEAM_WIDTH: usize = 16;
 const RAPID_FIRE_MAX_EDITS_PER_SPAN: usize = 4;
@@ -756,112 +756,57 @@ fn build_rapid_fire_decision_set(
     }
 }
 
+/// Collect admitted edits from span traces using retrieval/phonetic scores only.
+/// The judge is NOT consulted here — choices are ranked by acceptance_score
+/// so the user sees all phonetically plausible options regardless of judge state.
 fn collect_admitted_edits(spans: &[SpanDebugTrace], is_counterexample: bool) -> Vec<EditCandidate> {
     let mut edits = Vec::new();
     for span in spans {
-        let keep_probability = span
-            .judge_options
-            .iter()
-            .find(|option| option.is_keep_original)
-            .map(|option| option.probability)
-            .unwrap_or(0.0);
         let mut admitted_for_span = Vec::new();
-        for option in dedupe_judge_options(&span.judge_options)
-            .into_iter()
-            .filter(|option| !option.is_keep_original)
-        {
-            let Some(alias_id) = option.alias_id else {
-                continue;
-            };
-            let Some(candidate) = span.candidates.iter().find(|candidate| candidate.alias_id == alias_id) else {
-                continue;
-            };
-            let margin = option.probability - keep_probability;
+        // Deduplicate candidates by term — keep best acceptance_score per term.
+        let mut best_by_term: HashMap<String, &RetrievalCandidateDebug> = HashMap::new();
+        for candidate in &span.candidates {
+            match best_by_term.get(&candidate.term) {
+                Some(existing) if existing.features.acceptance_score >= candidate.features.acceptance_score => {}
+                _ => { best_by_term.insert(candidate.term.clone(), candidate); }
+            }
+        }
+
+        for candidate in best_by_term.values() {
             let acceptance_score = candidate.features.acceptance_score;
             let phonetic_score = candidate.features.phonetic_score;
-            let verified = candidate.features.verified;
             let accepted = if is_counterexample {
-                verified
-                    && margin >= 0.10
-                    && acceptance_score >= 0.60
-                    && phonetic_score >= 0.60
+                acceptance_score >= 0.60 && phonetic_score >= 0.60
             } else {
-                verified
-                    && acceptance_score >= 0.30
-                    && phonetic_score >= 0.30
+                acceptance_score >= 0.30 && phonetic_score >= 0.30
             };
             if !accepted {
                 continue;
             }
-            // Skip identity edits — replacement is the same as the original span text
-            if normalize_comparable_text(&option.term) == normalize_comparable_text(&span.span.text) {
+            // Skip identity edits
+            if normalize_comparable_text(&candidate.term) == normalize_comparable_text(&span.span.text) {
                 continue;
             }
             admitted_for_span.push(EditCandidate {
                 span_token_start: span.span.token_start,
                 span_token_end: span.span.token_end,
                 span_text: span.span.text.clone(),
-                alias_id,
-                replacement_text: option.term,
-                score: option.score,
-                probability: option.probability,
+                alias_id: candidate.alias_id,
+                replacement_text: candidate.term.clone(),
+                score: acceptance_score,
+                probability: acceptance_score,
                 acceptance_score,
                 phonetic_score,
-                verified,
+                verified: candidate.features.verified,
             });
         }
 
-        if !is_counterexample && admitted_for_span.is_empty() {
-            let fallback = dedupe_judge_options(&span.judge_options)
-                .into_iter()
-                .filter(|option| !option.is_keep_original)
-                .filter(|option| normalize_comparable_text(&option.term) != normalize_comparable_text(&span.span.text))
-                .filter_map(|option| {
-                    let alias_id = option.alias_id?;
-                    let candidate = span.candidates.iter().find(|candidate| candidate.alias_id == alias_id)?;
-                    let acceptance_score = candidate.features.acceptance_score;
-                    let phonetic_score = candidate.features.phonetic_score;
-                    let verified = candidate.features.verified;
-                    (verified && acceptance_score >= 0.20 && phonetic_score >= 0.20).then_some(
-                        EditCandidate {
-                            span_token_start: span.span.token_start,
-                            span_token_end: span.span.token_end,
-                            span_text: span.span.text.clone(),
-                            alias_id,
-                            replacement_text: option.term,
-                            score: option.score,
-                            probability: option.probability,
-                            acceptance_score,
-                            phonetic_score,
-                            verified,
-                        },
-                    )
-                })
-                .max_by(|lhs, rhs| {
-                    lhs.probability
-                        .total_cmp(&rhs.probability)
-                        .then_with(|| lhs.score.total_cmp(&rhs.score))
-                });
-            if let Some(fallback) = fallback {
-                admitted_for_span.push(fallback);
-            }
-        }
-
         admitted_for_span.sort_by(|lhs, rhs| {
-            rhs.probability
-                .total_cmp(&lhs.probability)
-                .then_with(|| rhs.score.total_cmp(&lhs.score))
+            rhs.acceptance_score
+                .total_cmp(&lhs.acceptance_score)
+                .then_with(|| rhs.phonetic_score.total_cmp(&lhs.phonetic_score))
         });
         admitted_for_span.truncate(RAPID_FIRE_MAX_EDITS_PER_SPAN);
-        debug!(
-            span = %span.span.text,
-            token_start = span.span.token_start,
-            token_end = span.span.token_end,
-            keep_probability,
-            admitted = admitted_for_span.len(),
-            is_counterexample,
-            "collected admitted edits for span"
-        );
         edits.extend(admitted_for_span);
     }
     dedupe_edit_candidates(edits)
@@ -876,8 +821,7 @@ fn dedupe_edit_candidates(edits: Vec<EditCandidate>) -> Vec<EditCandidate> {
         );
         match best.get(&key) {
             Some(existing)
-                if existing.probability > edit.probability
-                    || (existing.probability == edit.probability && existing.score >= edit.score) => {}
+                if existing.acceptance_score >= edit.acceptance_score => {}
             _ => {
                 best.insert(key, edit);
             }
@@ -888,7 +832,7 @@ fn dedupe_edit_candidates(edits: Vec<EditCandidate>) -> Vec<EditCandidate> {
         lhs.span_token_start
             .cmp(&rhs.span_token_start)
             .then_with(|| lhs.span_token_end.cmp(&rhs.span_token_end))
-            .then_with(|| rhs.probability.total_cmp(&lhs.probability))
+            .then_with(|| rhs.acceptance_score.total_cmp(&lhs.acceptance_score))
     });
     edits
 }
@@ -1220,19 +1164,13 @@ fn prune_sentence_hypotheses(
             keep_hypothesis = Some(hypothesis);
             continue;
         }
-        let strongest_edit_probability = hypothesis
-            .components
-            .iter()
-            .flat_map(|component| component.edits.iter())
-            .map(|edit| edit.probability)
-            .fold(0.0, f32::max);
         let strongest_acceptance = hypothesis
             .components
             .iter()
             .flat_map(|component| component.edits.iter())
             .map(|edit| edit.acceptance_score)
             .fold(0.0, f32::max);
-        if strongest_edit_probability >= 0.82 && strongest_acceptance >= 0.80 {
+        if strongest_acceptance >= 0.80 {
             kept.push(hypothesis);
         }
     }
@@ -1272,35 +1210,6 @@ fn unique_component_spans(edits: &[EditCandidate]) -> Vec<RejectedGroupSpan> {
     spans
 }
 
-fn dedupe_judge_options(options: &[JudgeOptionDebug]) -> Vec<JudgeOptionDebug> {
-    let mut keep = None;
-    let mut best_by_term = HashMap::<String, JudgeOptionDebug>::new();
-    for option in options {
-        if option.is_keep_original {
-            keep = Some(option.clone());
-            continue;
-        }
-        match best_by_term.get(&option.term) {
-            Some(existing)
-                if existing.probability > option.probability
-                    || (existing.probability == option.probability
-                        && existing.score >= option.score) => {}
-            _ => {
-                best_by_term.insert(option.term.clone(), option.clone());
-            }
-        }
-    }
-    let mut deduped = best_by_term.into_values().collect::<Vec<_>>();
-    deduped.sort_by(|lhs, rhs| {
-        rhs.probability
-            .total_cmp(&lhs.probability)
-            .then_with(|| rhs.score.total_cmp(&lhs.score))
-    });
-    if let Some(keep) = keep {
-        deduped.insert(0, keep);
-    }
-    deduped
-}
 
 fn build_overlap_groups(spans: &[SpanDebugTrace]) -> Vec<Vec<SpanDebugTrace>> {
     let mut groups: Vec<Vec<SpanDebugTrace>> = Vec::new();
