@@ -1,4 +1,5 @@
 pub mod dataset;
+pub mod feature_view;
 pub mod phonetic_index;
 pub mod phonetic_lexicon;
 pub mod phonetic_verify;
@@ -11,6 +12,7 @@ pub use dataset::{
     RecordingExampleRow, SeedDataset, SeedDatasetError, SeedDatasetValidationError, SeedTermRow,
     SentenceExampleRow,
 };
+pub use feature_view::{feature_similarity, feature_tokens_for_ipa};
 pub use phonetic_index::{
     build_index, query_index, IndexView, PhoneticIndex, RetrievalCandidate, RetrievalQuery,
 };

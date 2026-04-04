@@ -33,8 +33,12 @@ pub fn verify_shortlist(
         .iter()
         .filter_map(|candidate| {
             let alias = index.aliases.get(candidate.alias_id as usize)?;
-            let phonetic_score =
+            let token_score =
                 crate::prototype::phoneme_similarity(&span.ipa_tokens, &alias.ipa_tokens)?;
+            let feature_score =
+                crate::feature_view::feature_similarity(&span.ipa_tokens, &alias.ipa_tokens)
+                    .unwrap_or(token_score);
+            let phonetic_score = ((token_score * 0.45) + (feature_score * 0.55)).clamp(0.0, 1.0);
             Some(VerifiedCandidate {
                 alias_id: candidate.alias_id,
                 term: candidate.term.clone(),
@@ -80,6 +84,7 @@ mod tests {
             alias_text: alias_text.to_string(),
             alias_source: AliasSource::Canonical,
             reduced_ipa_tokens: crate::phonetic_lexicon::reduce_ipa_tokens(&ipa_tokens),
+            feature_tokens: crate::feature_view::feature_tokens_for_ipa(&ipa_tokens),
             ipa_tokens: ipa_tokens.clone(),
             token_count: count_sentence_words(alias_text) as u8,
             phone_count: ipa_tokens.len() as u8,
@@ -112,6 +117,7 @@ mod tests {
                 text: span.text.clone(),
                 ipa_tokens: span.ipa_tokens.clone(),
                 reduced_ipa_tokens: span.reduced_ipa_tokens.clone(),
+                feature_tokens: crate::feature_view::feature_tokens_for_ipa(&span.ipa_tokens),
                 token_count: 3,
             },
             5,

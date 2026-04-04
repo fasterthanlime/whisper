@@ -246,6 +246,7 @@ fn evaluate_recording(
                 text: span.text.clone(),
                 ipa_tokens: span.ipa_tokens.clone(),
                 reduced_ipa_tokens: span.reduced_ipa_tokens.clone(),
+                feature_tokens: bee_phonetic::feature_tokens_for_ipa(&span.ipa_tokens),
                 token_count: (span.token_end - span.token_start) as u8,
             },
             config.shortlist_limit,

@@ -10,6 +10,9 @@ pub enum IndexView {
     RawIpa3,
     ReducedIpa2,
     ReducedIpa3,
+    Feature2,
+    Feature3,
+    ShortQueryFallback,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -21,6 +24,7 @@ pub struct Posting {
 pub struct PhoneticIndex {
     pub aliases: Vec<LexiconAlias>,
     pub postings: HashMap<(IndexView, String), Vec<Posting>>,
+    pub short_query_postings: HashMap<String, Vec<Posting>>,
     pub by_phone_len: BTreeMap<u8, Vec<u32>>,
     pub by_token_count: HashMap<u8, Vec<u32>>,
 }
@@ -30,6 +34,7 @@ pub struct RetrievalQuery {
     pub text: String,
     pub ipa_tokens: Vec<String>,
     pub reduced_ipa_tokens: Vec<String>,
+    pub feature_tokens: Vec<String>,
     pub token_count: u8,
 }
 
@@ -60,6 +65,7 @@ struct CandidateAccumulator {
 
 pub fn build_index(aliases: Vec<LexiconAlias>) -> PhoneticIndex {
     let mut postings: HashMap<(IndexView, String), Vec<Posting>> = HashMap::new();
+    let mut short_query_postings: HashMap<String, Vec<Posting>> = HashMap::new();
     let mut by_phone_len: BTreeMap<u8, Vec<u32>> = BTreeMap::new();
     let mut by_token_count: HashMap<u8, Vec<u32>> = HashMap::new();
 
@@ -78,6 +84,8 @@ pub fn build_index(aliases: Vec<LexiconAlias>) -> PhoneticIndex {
             (IndexView::RawIpa3, qgrams(&alias.ipa_tokens, 3)),
             (IndexView::ReducedIpa2, qgrams(&alias.reduced_ipa_tokens, 2)),
             (IndexView::ReducedIpa3, qgrams(&alias.reduced_ipa_tokens, 3)),
+            (IndexView::Feature2, qgrams(&alias.feature_tokens, 2)),
+            (IndexView::Feature3, qgrams(&alias.feature_tokens, 3)),
         ] {
             let mut seen_grams = HashSet::new();
             for gram in grams {
@@ -89,11 +97,24 @@ pub fn build_index(aliases: Vec<LexiconAlias>) -> PhoneticIndex {
                 });
             }
         }
+
+        if alias.reduced_ipa_tokens.len() <= 5 {
+            let mut seen_delete_keys = HashSet::new();
+            for key in short_query_keys(&alias.reduced_ipa_tokens) {
+                if !seen_delete_keys.insert(key.clone()) {
+                    continue;
+                }
+                short_query_postings.entry(key).or_default().push(Posting {
+                    alias_id: alias.alias_id,
+                });
+            }
+        }
     }
 
     PhoneticIndex {
         aliases,
         postings,
+        short_query_postings,
         by_phone_len,
         by_token_count,
     }
@@ -110,6 +131,8 @@ pub fn query_index(
         (IndexView::RawIpa3, qgrams(&query.ipa_tokens, 3)),
         (IndexView::ReducedIpa2, qgrams(&query.reduced_ipa_tokens, 2)),
         (IndexView::ReducedIpa3, qgrams(&query.reduced_ipa_tokens, 3)),
+        (IndexView::Feature2, qgrams(&query.feature_tokens, 2)),
+        (IndexView::Feature3, qgrams(&query.feature_tokens, 3)),
     ];
     let mut accum: HashMap<u32, CandidateAccumulator> = HashMap::new();
 
@@ -130,6 +153,30 @@ pub fn query_index(
                 let overlap = accum.entry(posting.alias_id).or_default();
                 overlap.total_overlap = overlap.total_overlap.saturating_add(1);
                 *overlap.overlaps_by_view.entry(*view).or_default() += 1;
+            }
+        }
+    }
+
+    if query.reduced_ipa_tokens.len() <= 5 {
+        let mut seen_short_keys = HashSet::new();
+        for key in short_query_keys(&query.reduced_ipa_tokens) {
+            if !seen_short_keys.insert(key.clone()) {
+                continue;
+            }
+            let Some(postings) = index.short_query_postings.get(&key) else {
+                continue;
+            };
+            for posting in postings {
+                let alias = &index.aliases[posting.alias_id as usize];
+                if !phone_count_compatible(query_phone_count, alias.phone_count) {
+                    continue;
+                }
+                let overlap = accum.entry(posting.alias_id).or_default();
+                overlap.total_overlap = overlap.total_overlap.saturating_add(1);
+                *overlap
+                    .overlaps_by_view
+                    .entry(IndexView::ShortQueryFallback)
+                    .or_default() += 1;
             }
         }
     }
@@ -215,15 +262,49 @@ fn phone_count_compatible(query: u8, candidate: u8) -> bool {
 
 fn normalized_view_overlap(
     overlap: &u16,
-    query_grams_by_view: &[(IndexView, Vec<String>); 4],
+    query_grams_by_view: &[(IndexView, Vec<String>); 6],
     view: &IndexView,
 ) -> f32 {
+    if *view == IndexView::ShortQueryFallback {
+        return short_query_view_score(*overlap) * view_weight(view);
+    }
     let denom = query_grams_by_view
         .iter()
         .find(|(candidate_view, _)| candidate_view == view)
         .map(|(_, grams)| grams.len().max(1) as f32)
         .unwrap_or(1.0);
-    *overlap as f32 / denom
+    (*overlap as f32 / denom) * view_weight(view)
+}
+
+fn short_query_keys(tokens: &[String]) -> Vec<String> {
+    if tokens.is_empty() {
+        return Vec::new();
+    }
+
+    let mut keys = Vec::with_capacity(tokens.len() + 1);
+    keys.push(short_query_key(tokens));
+    if tokens.len() >= 2 {
+        for idx in 0..tokens.len() {
+            let mut reduced = Vec::with_capacity(tokens.len() - 1);
+            reduced.extend_from_slice(&tokens[..idx]);
+            reduced.extend_from_slice(&tokens[idx + 1..]);
+            keys.push(short_query_key(&reduced));
+        }
+    }
+    keys
+}
+
+fn short_query_key(tokens: &[String]) -> String {
+    tokens.join("|")
+}
+
+fn short_query_view_score(overlap: u16) -> f32 {
+    match overlap {
+        0 => 0.0,
+        1 => 0.6,
+        2 => 0.85,
+        _ => 1.0,
+    }
 }
 
 fn token_bonus(alias_token_count: u8, query_token_count: u8) -> f32 {
@@ -265,6 +346,18 @@ fn coarse_score(
 ) -> f32 {
     let support_bonus = 0.05 * cross_view_support.saturating_sub(1) as f32;
     best_view_score + support_bonus + token_bonus + phone_bonus + extra_length_penalty
+}
+
+fn view_weight(view: &IndexView) -> f32 {
+    match view {
+        IndexView::RawIpa2
+        | IndexView::RawIpa3
+        | IndexView::ReducedIpa2
+        | IndexView::ReducedIpa3 => 1.0,
+        IndexView::Feature2 => 0.0,
+        IndexView::Feature3 => 0.0,
+        IndexView::ShortQueryFallback => 0.9,
+    }
 }
 
 #[cfg(test)]
@@ -342,6 +435,9 @@ mod tests {
             reduced_ipa_tokens: crate::phonetic_lexicon::reduce_ipa_tokens(
                 &crate::prototype::parse_reviewed_ipa("ɑːɹ s ɪ k s t i f ɔ ɹ"),
             ),
+            feature_tokens: crate::feature_view::feature_tokens_for_ipa(
+                &crate::prototype::parse_reviewed_ipa("ɑːɹ s ɪ k s t i f ɔ ɹ"),
+            ),
             token_count: 3,
         };
 
@@ -362,6 +458,9 @@ mod tests {
                 reduced_ipa_tokens: crate::phonetic_lexicon::reduce_ipa_tokens(
                     &crate::prototype::parse_reviewed_ipa("r ɪ k w ɛ s t"),
                 ),
+                feature_tokens: crate::feature_view::feature_tokens_for_ipa(
+                    &crate::prototype::parse_reviewed_ipa("r ɪ k w ɛ s t"),
+                ),
                 token_count: 1,
                 phone_count: 7,
                 identifier_flags: Default::default(),
@@ -375,6 +474,9 @@ mod tests {
                 reduced_ipa_tokens: crate::phonetic_lexicon::reduce_ipa_tokens(
                     &crate::prototype::parse_reviewed_ipa("r ɪ p ɡ ɹ ɛ p"),
                 ),
+                feature_tokens: crate::feature_view::feature_tokens_for_ipa(
+                    &crate::prototype::parse_reviewed_ipa("r ɪ p ɡ ɹ ɛ p"),
+                ),
                 token_count: 2,
                 phone_count: 7,
                 identifier_flags: Default::default(),
@@ -385,6 +487,9 @@ mod tests {
             text: "request".to_string(),
             ipa_tokens: crate::prototype::parse_reviewed_ipa("r ɪ k w ɛ s t"),
             reduced_ipa_tokens: crate::phonetic_lexicon::reduce_ipa_tokens(
+                &crate::prototype::parse_reviewed_ipa("r ɪ k w ɛ s t"),
+            ),
+            feature_tokens: crate::feature_view::feature_tokens_for_ipa(
                 &crate::prototype::parse_reviewed_ipa("r ɪ k w ɛ s t"),
             ),
             token_count: 1,
@@ -409,6 +514,9 @@ mod tests {
             reduced_ipa_tokens: crate::phonetic_lexicon::reduce_ipa_tokens(
                 &crate::prototype::parse_reviewed_ipa("s ɜː d e ɪ"),
             ),
+            feature_tokens: crate::feature_view::feature_tokens_for_ipa(
+                &crate::prototype::parse_reviewed_ipa("s ɜː d e ɪ"),
+            ),
             token_count: 1,
         };
 
@@ -419,5 +527,31 @@ mod tests {
             .find(|candidate| candidate.term == "serde_json")
             .expect("serde_json candidate");
         assert!(shortlist[0].coarse_score > serde_json.coarse_score);
+    }
+
+    #[test]
+    fn short_query_fallback_can_match_small_phone_strings() {
+        let vocab = vec![
+            row_with_reviewed_ipa("MIR", "meer", "mˈiə"),
+            row_with_reviewed_ipa("miri", "miri", "mˈiəɹi"),
+        ];
+        let aliases = build_phonetic_lexicon(&vocab, &HashMap::new());
+        let index = build_index(aliases);
+
+        let query = RetrievalQuery {
+            text: "meer".to_string(),
+            ipa_tokens: crate::prototype::parse_reviewed_ipa("m i ə"),
+            reduced_ipa_tokens: crate::phonetic_lexicon::reduce_ipa_tokens(
+                &crate::prototype::parse_reviewed_ipa("m i ə"),
+            ),
+            feature_tokens: crate::feature_view::feature_tokens_for_ipa(
+                &crate::prototype::parse_reviewed_ipa("m i ə"),
+            ),
+            token_count: 1,
+        };
+
+        let shortlist = query_index(&index, &query, 5);
+        assert_eq!(shortlist[0].term, "MIR", "{shortlist:#?}");
+        assert!(shortlist.iter().any(|candidate| candidate.term == "MIR"));
     }
 }

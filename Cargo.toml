@@ -10,7 +10,7 @@ members = [
   "rust/bee-transcribe",
   "rust/bee-ffi",
 ]
-exclude = ["mlx-rs"]
+exclude = ["mlx-rs", "rust/vendor/rspanphon"]
 
 [workspace.dependencies]
 anyhow = "1"

@@ -128,6 +128,7 @@ impl BeeMl for BeeMlService {
                         text: span.text.clone(),
                         ipa_tokens: span.ipa_tokens.clone(),
                         reduced_ipa_tokens: span.reduced_ipa_tokens.clone(),
+                        feature_tokens: bee_phonetic::feature_tokens_for_ipa(&span.ipa_tokens),
                         token_count: (span.token_end - span.token_start) as u8,
                     },
                     request.shortlist_limit as usize,
@@ -207,9 +208,9 @@ impl BeeMl for BeeMlService {
                         start_sec: span.start_sec.unwrap_or(0.0),
                         end_sec: span.end_sec.unwrap_or(0.0),
                         text: span.text,
+                        feature_tokens: bee_phonetic::feature_tokens_for_ipa(&span.ipa_tokens),
                         ipa_tokens: span.ipa_tokens,
                         reduced_ipa_tokens: span.reduced_ipa_tokens,
-                        feature_tokens: Vec::new(),
                     },
                     candidates,
                 }
@@ -244,7 +245,7 @@ impl BeeMl for BeeMlService {
                 alias_source: map_alias_source(alias.alias_source),
                 ipa_tokens: alias.ipa_tokens.clone(),
                 reduced_ipa_tokens: alias.reduced_ipa_tokens.clone(),
-                feature_tokens: Vec::new(),
+                feature_tokens: alias.feature_tokens.clone(),
                 identifier_flags: map_identifier_flags(&alias.identifier_flags),
             })
             .collect();
@@ -344,6 +345,7 @@ fn map_alias_source(source: bee_phonetic::AliasSource) -> AliasSource {
     match source {
         bee_phonetic::AliasSource::Canonical => AliasSource::Canonical,
         bee_phonetic::AliasSource::Spoken => AliasSource::Spoken,
+        bee_phonetic::AliasSource::Identifier => AliasSource::Identifier,
         bee_phonetic::AliasSource::Confusion => AliasSource::Confusion,
     }
 }
@@ -354,6 +356,9 @@ fn map_index_view(view: bee_phonetic::IndexView) -> RetrievalIndexView {
         bee_phonetic::IndexView::RawIpa3 => RetrievalIndexView::RawIpa3,
         bee_phonetic::IndexView::ReducedIpa2 => RetrievalIndexView::ReducedIpa2,
         bee_phonetic::IndexView::ReducedIpa3 => RetrievalIndexView::ReducedIpa3,
+        bee_phonetic::IndexView::Feature2 => RetrievalIndexView::Feature2,
+        bee_phonetic::IndexView::Feature3 => RetrievalIndexView::Feature3,
+        bee_phonetic::IndexView::ShortQueryFallback => RetrievalIndexView::ShortQueryFallback,
     }
 }
 
