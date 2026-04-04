@@ -48,3 +48,10 @@ not part of this canonical dataset by default.
 - use `recording_examples.jsonl` plus `audio/` for eval and reranker training
 
 This keeps the product/runtime path file-first and explicit.
+
+
+Auxiliary files not loaded by default:
+- `counterexample_sentences.jsonl`: sentence rows intentionally authored as non-target confusions / distractors
+- `counterexample_recordings.jsonl`: recording rows corresponding to those counterexamples
+
+The canonical retrieval/eval path should use `sentence_examples.jsonl` and `recording_examples.jsonl` only.

@@ -374,8 +374,16 @@ mod tests {
         let index = dataset.phonetic_index();
 
         assert_eq!(dataset.terms.len(), 26);
-        assert_eq!(dataset.sentence_examples.len(), 251);
-        assert_eq!(dataset.recording_examples.len(), 254);
+        assert_eq!(dataset.sentence_examples.len(), 140);
+        assert_eq!(dataset.recording_examples.len(), 139);
+        assert!(!dataset
+            .sentence_examples
+            .iter()
+            .any(|row| row.term.eq_ignore_ascii_case("clap")));
+        assert!(!dataset
+            .recording_examples
+            .iter()
+            .any(|row| row.term.eq_ignore_ascii_case("clap")));
         assert!(aliases.len() >= dataset.terms.len() * 2);
         assert_eq!(index.aliases.len(), aliases.len());
         assert!(!index.postings.is_empty());
