@@ -205,6 +205,11 @@ export function JudgeRapidFirePanel({
 
   return (
     <div className="prototype-lab prototype-stack">
+      {/* Eval score + graph */}
+      <section className="prototype-card" style={{ display: "flex", justifyContent: "center" }}>
+        <EvalScoreDisplay wsUrl={wsUrl} maxSpanWords={maxSpanWords} triggerCount={evalTrigger} />
+      </section>
+
       {/* Case header bar */}
       <section className="prototype-card prototype-card-tight rapid-fire-toolbar">
         <div className="rapid-fire-header-inline" style={{ justifyContent: "space-between", width: "100%" }}>
@@ -214,7 +219,6 @@ export function JudgeRapidFirePanel({
             {currentCase && <span className="mini-badge">id {currentCase.case_id}</span>}
             {currentCase && <span className="mini-badge">term {currentCase.target_term}</span>}
             {teachCount > 0 && <span className="mini-badge">{teachCount} taught</span>}
-            <EvalScoreDisplay wsUrl={wsUrl} maxSpanWords={maxSpanWords} triggerCount={evalTrigger} />
             {status && <span className="status-pill">{status}</span>}
             {error && <span className="error-pill">{error}</span>}
           </div>
