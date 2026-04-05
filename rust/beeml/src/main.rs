@@ -48,6 +48,7 @@ struct BeemlServiceInner {
     counterexamples: Vec<CounterexampleRecordingRow>,
     g2p: Mutex<CachedEspeakG2p>,
     judge: Mutex<OnlineJudge>,
+    event_log_path: std::path::PathBuf,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -340,6 +341,11 @@ impl BeeMlService {
             if !teach.selected_component_choices.is_empty() && !teach.reject_group && !taught_span {
                 return Err("selected_component_choices did not match any spans in the probe result".to_string());
             }
+
+            // Persist correction events to disk
+            if let Err(e) = save_correction_events(&self.inner.event_log_path, judge.event_log()) {
+                tracing::warn!(error = %e, "failed to save correction events");
+            }
         }
 
         let rapid_fire = expected_source_text
@@ -468,9 +474,78 @@ impl BeeMlService {
         let gold_choice_index = choices.iter().position(|c| c.is_gold);
         let gold_reachable = gold_choice_index.is_some();
 
-        // Stage 3: Judge — what did the judge pick?
-        // The judge pick is marked with is_judge_pick in the decision set.
-        let judge_pick = choices.iter().find(|c| c.is_judge_pick);
+        // Stage 3: Judge — what would the judge pick?
+        // Build a lookup of judge probabilities per (span_start, span_end, alias_id)
+        // and per (span_start, span_end) for keep_original, then score each sentence
+        // choice by the judge's actual probabilities.
+        let mut judge_edit_prob: HashMap<(u32, u32, u32), f32> = HashMap::new();
+        let mut judge_keep_prob: HashMap<(u32, u32), f32> = HashMap::new();
+        for span_trace in &probe_result.spans {
+            let ts = span_trace.span.token_start;
+            let te = span_trace.span.token_end;
+            for opt in &span_trace.judge_options {
+                if opt.is_keep_original {
+                    judge_keep_prob.insert((ts, te), opt.probability);
+                } else if let Some(alias_id) = opt.alias_id {
+                    judge_edit_prob.insert((ts, te, alias_id), opt.probability);
+                }
+            }
+        }
+
+        // Score each choice by the judge: for each component, look up the judge
+        // probability for the chosen action (keep or specific edit). The sentence
+        // score is the min across components (weakest link).
+        // For keep_original sentences that have no component_choices (synthesized
+        // fallback), use the min keep probability across all spans with edit candidates.
+        let judge_score_for_choice = |choice: &RapidFireChoice| -> f32 {
+            if choice.component_choices.is_empty() {
+                // Synthesized keep_original with no components — use min keep prob
+                // across all spans that have edit candidates
+                if judge_keep_prob.is_empty() {
+                    return 1.0; // no spans with candidates, keeping is trivially correct
+                }
+                return judge_keep_prob.values().copied().fold(f32::MAX, f32::min);
+            }
+            let mut min_prob = f32::MAX;
+            for cc in &choice.component_choices {
+                if cc.choose_keep_original {
+                    // This component keeps original — use keep prob for its spans
+                    let prob = cc.component_spans.iter()
+                        .filter_map(|s| judge_keep_prob.get(&(s.token_start, s.token_end)))
+                        .copied()
+                        .fold(0.0f32, f32::max);
+                    min_prob = min_prob.min(prob);
+                } else if let (Some(start), Some(end), Some(alias_id)) =
+                    (cc.span_token_start, cc.span_token_end, cc.chosen_alias_id)
+                {
+                    let prob = judge_edit_prob
+                        .get(&(start, end, alias_id))
+                        .copied()
+                        .unwrap_or(0.0);
+                    min_prob = min_prob.min(prob);
+                }
+            }
+            if min_prob == f32::MAX { 0.0 } else { min_prob }
+        };
+
+        // Log judge scores for the first few cases to debug
+        if !case.should_abstain {
+            let gold = choices.iter().find(|c| c.is_gold);
+            let keep = choices.iter().find(|c| c.choose_keep_original);
+            tracing::debug!(
+                case_id = %case.case_id,
+                target = %case.target_term,
+                gold_score = gold.map(|c| judge_score_for_choice(c)),
+                keep_score = keep.map(|c| judge_score_for_choice(c)),
+                gold_reachable,
+                num_choices = choices.len(),
+                "judge eval debug"
+            );
+        }
+
+        let judge_pick = choices.iter().max_by(|a, b| {
+            judge_score_for_choice(a).total_cmp(&judge_score_for_choice(b))
+        });
         let (chosen_kind, chosen_choice_id, chosen_sentence, chosen_edit_count, chosen_probability) =
             if let Some(pick) = judge_pick {
                 (
@@ -478,7 +553,7 @@ impl BeeMlService {
                     Some(pick.option_id.clone()),
                     pick.sentence.clone(),
                     pick.edits.len(),
-                    pick.probability,
+                    judge_score_for_choice(pick),
                 )
             } else {
                 (EvalChoiceKind::KeepOriginal, None, case.transcript.clone(), 0, 0.0)
@@ -1689,6 +1764,25 @@ async fn main() -> Result<()> {
     let counterexamples =
         load_counterexample_recordings().context("loading counterexample phonetic recordings")?;
 
+    let event_log_path = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".beeml")
+        .join("events.jsonl");
+
+    let mut judge = OnlineJudge::default();
+    // Replay correction events from previous sessions
+    if event_log_path.exists() {
+        match load_correction_events(&event_log_path) {
+            Ok(events) => {
+                info!(path = %event_log_path.display(), count = events.len(), "loaded correction events");
+                judge.replay_events(events);
+            }
+            Err(e) => {
+                tracing::warn!(path = %event_log_path.display(), error = %e, "failed to load correction events, starting fresh");
+            }
+        }
+    }
+
     let handler = BeeMlService {
         inner: Arc::new(BeemlServiceInner {
             engine,
@@ -1696,7 +1790,8 @@ async fn main() -> Result<()> {
             dataset,
             counterexamples,
             g2p: Mutex::new(CachedEspeakG2p::english().context("initializing g2p engine")?),
-            judge: Mutex::new(OnlineJudge::default()),
+            judge: Mutex::new(judge),
+            event_log_path,
         }),
     };
 
@@ -1739,6 +1834,43 @@ async fn main() -> Result<()> {
             }
         });
     }
+}
+
+fn load_correction_events(path: &std::path::Path) -> anyhow::Result<Vec<beeml::judge::CorrectionEvent>> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path)?;
+    let reader = std::io::BufReader::new(file);
+    let mut events = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str(&line) {
+            Ok(event) => events.push(event),
+            Err(e) => tracing::warn!(error = %e, "skipping malformed event line"),
+        }
+    }
+    // Cap at 10,000 events (keep most recent)
+    if events.len() > 10_000 {
+        events = events.split_off(events.len() - 10_000);
+    }
+    Ok(events)
+}
+
+fn save_correction_events(path: &std::path::Path, events: &[beeml::judge::CorrectionEvent]) -> anyhow::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = std::fs::File::create(path)?;
+    // Cap at 10,000 events (keep most recent)
+    let start = events.len().saturating_sub(10_000);
+    for event in &events[start..] {
+        serde_json::to_writer(&mut file, event)?;
+        writeln!(file)?;
+    }
+    Ok(())
 }
 
 fn map_alias_source(source: bee_phonetic::AliasSource) -> AliasSource {

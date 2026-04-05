@@ -21,6 +21,7 @@ path = "src/bin/gen-ts-api.rs"
 bee-phonetic = { path = "../bee-phonetic" }
 bee-transcribe = { path = "../bee-transcribe" }
 anyhow = { workspace = true }
+dirs = "5"
 espeak-ng = { version = "0.1.0", features = ["bundled-data-en"] }
 facet = "0.44.3"
 fnv = "1.0"

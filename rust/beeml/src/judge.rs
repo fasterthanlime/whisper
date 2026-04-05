@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::time::SystemTime;
 
 use bee_phonetic::{AliasSource, CandidateFeatureRow, IdentifierFlags, TranscriptSpan};
 use bee_phonetic::{SentenceWordToken, sentence_word_tokens};
@@ -50,9 +52,16 @@ const FEATURE_NAMES: &[&str] = &[
     "span_min_logprob",
     "span_mean_margin",
     "span_min_margin",
+    // Memory features (indices 32-37)
+    "candidate_prior_accept_count",
+    "candidate_prior_reject_count",
+    "candidate_total_count",
+    "candidate_recent_accept_count",
+    "candidate_session_recency",
+    "span_text_prior_correct_count",
 ];
 
-const NUM_DENSE: usize = 32;
+const NUM_DENSE: usize = 38;
 
 /// Offset for sparse hashed features so they don't collide with dense indices 0..31.
 const SPARSE_OFFSET: u64 = 1000;
@@ -179,12 +188,73 @@ fn context_features(ctx: &SpanContext, candidate_term: &str) -> Vec<Feature> {
     features
 }
 
+// ── Memory ──────────────────────────────────────────────────────────
+
+/// Per-term memory entry tracking accept/reject history.
+#[derive(Clone, Debug, Default)]
+struct TermMemoryEntry {
+    accept_count: u32,
+    reject_count: u32,
+    recent_accept_count: u32,
+    last_used: Option<SystemTime>,
+}
+
+/// Memory lookup passed to feature building.
+#[derive(Clone, Debug, Default)]
+struct TermMemory {
+    terms: HashMap<String, TermMemoryEntry>,
+    /// How many times a span text was kept as correct (user chose keep_original).
+    span_text_correct: HashMap<String, u32>,
+}
+
+impl TermMemory {
+    fn get(&self, term: &str) -> Option<&TermMemoryEntry> {
+        self.terms.get(&term.to_ascii_lowercase())
+    }
+
+    fn span_text_count(&self, text: &str) -> u32 {
+        self.span_text_correct.get(&text.to_ascii_lowercase()).copied().unwrap_or(0)
+    }
+
+    fn record_accept(&mut self, term: &str, now: SystemTime) {
+        let key = term.to_ascii_lowercase();
+        let entry = self.terms.entry(key).or_default();
+        entry.accept_count += 1;
+        entry.recent_accept_count += 1;
+        entry.last_used = Some(now);
+    }
+
+    fn record_reject(&mut self, term: &str, now: SystemTime) {
+        let key = term.to_ascii_lowercase();
+        let entry = self.terms.entry(key).or_default();
+        entry.reject_count += 1;
+        entry.last_used = Some(now);
+    }
+
+    fn record_span_correct(&mut self, span_text: &str) {
+        let key = span_text.to_ascii_lowercase();
+        *self.span_text_correct.entry(key).or_default() += 1;
+    }
+}
+
+/// A logged correction event, serializable to JSONL.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct CorrectionEvent {
+    pub timestamp: SystemTime,
+    pub span_text: String,
+    pub chosen_term: String,
+    pub all_candidate_terms: Vec<String>,
+    pub chosen_alias_id: Option<u32>,
+}
+
 // ── Judge ────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
 pub struct OnlineJudge {
     model: SparseFtrl,
     update_count: u32,
+    memory: TermMemory,
+    event_log: Vec<CorrectionEvent>,
 }
 
 #[derive(Clone, Debug)]
@@ -211,6 +281,8 @@ impl Default for OnlineJudge {
         let judge = Self {
             model,
             update_count: 0,
+            memory: TermMemory::default(),
+            event_log: Vec::new(),
         };
         tracing::info!(
             num_active = judge.model.num_active(),
@@ -289,6 +361,8 @@ fn dense_features_from_synthetic(
         0.0,                                                        // span_low_content
         // ASR uncertainty: not available in synthetic data
         0.0, 0.0, 0.0, 0.0,
+        // Memory features: not available in synthetic data
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
     ];
     values
         .iter()
@@ -319,7 +393,7 @@ impl OnlineJudge {
         candidates: &[(CandidateFeatureRow, IdentifierFlags)],
         ctx: &SpanContext,
     ) -> Vec<JudgeOption> {
-        let examples = build_examples(span, candidates, ctx);
+        let examples = build_examples(span, candidates, ctx, &self.memory);
         score_examples(&self.model, &examples)
     }
 
@@ -330,7 +404,7 @@ impl OnlineJudge {
         chosen_alias_id: Option<u32>,
         ctx: &SpanContext,
     ) -> Vec<JudgeOption> {
-        let examples = build_examples(span, candidates, ctx);
+        let examples = build_examples(span, candidates, ctx, &self.memory);
         if examples.is_empty() {
             return vec![keep_original_option()];
         }
@@ -344,15 +418,84 @@ impl OnlineJudge {
         }
         self.update_count += 1;
 
+        // Update memory counters
+        let now = SystemTime::now();
+        let all_terms: Vec<String> = candidates.iter().map(|(c, _)| c.term.clone()).collect();
+        let chosen_term = if let Some(id) = chosen_alias_id {
+            let chosen = candidates.iter().find(|(c, _)| c.alias_id == id);
+            if let Some((c, _)) = chosen {
+                self.memory.record_accept(&c.term, now);
+                // Reject all other terms
+                for (other, _) in candidates {
+                    if other.alias_id != id {
+                        self.memory.record_reject(&other.term, now);
+                    }
+                }
+                c.term.clone()
+            } else {
+                "keep_original".to_string()
+            }
+        } else {
+            // Keep original: reject all candidates, record span text as correct
+            for (c, _) in candidates {
+                self.memory.record_reject(&c.term, now);
+            }
+            self.memory.record_span_correct(&span.text);
+            "keep_original".to_string()
+        };
+
+        // Log the event
+        self.event_log.push(CorrectionEvent {
+            timestamp: now,
+            span_text: span.text.clone(),
+            chosen_term,
+            all_candidate_terms: all_terms,
+            chosen_alias_id,
+        });
+
         tracing::debug!(
             update_count = self.update_count,
             chosen = ?chosen_alias_id,
             num_candidates = examples.len(),
             num_active = self.model.num_active(),
+            event_count = self.event_log.len(),
             "judge taught"
         );
 
         score_examples(&self.model, &examples)
+    }
+
+    /// Get a reference to the event log for persistence.
+    pub fn event_log(&self) -> &[CorrectionEvent] {
+        &self.event_log
+    }
+
+    /// Replay events to rebuild memory counters (e.g., on startup from JSONL).
+    pub fn replay_events(&mut self, events: Vec<CorrectionEvent>) {
+        for event in &events {
+            if let Some(alias_id) = event.chosen_alias_id {
+                // Accept the chosen term, reject others
+                self.memory.record_accept(&event.chosen_term, event.timestamp);
+                for term in &event.all_candidate_terms {
+                    if term.to_ascii_lowercase() != event.chosen_term.to_ascii_lowercase() {
+                        self.memory.record_reject(term, event.timestamp);
+                    }
+                }
+            } else {
+                // Keep original
+                for term in &event.all_candidate_terms {
+                    self.memory.record_reject(term, event.timestamp);
+                }
+                self.memory.record_span_correct(&event.span_text);
+            }
+        }
+        tracing::info!(
+            events = events.len(),
+            terms_tracked = self.memory.terms.len(),
+            span_texts_tracked = self.memory.span_text_correct.len(),
+            "replayed correction events"
+        );
+        self.event_log = events;
     }
 }
 
@@ -360,6 +503,7 @@ fn build_examples(
     span: &TranscriptSpan,
     candidates: &[(CandidateFeatureRow, IdentifierFlags)],
     ctx: &SpanContext,
+    memory: &TermMemory,
 ) -> Vec<JudgeExample> {
     let span_token_count = (span.token_end - span.token_start) as f64;
     let span_phone_count = span.ipa_tokens.len() as f64;
@@ -371,10 +515,28 @@ fn build_examples(
     let mean_m = span.mean_margin.unwrap_or(0.0) as f64 / 5.0;
     let min_m = span.min_margin.unwrap_or(0.0) as f64 / 5.0;
 
+    // Span-level memory
+    let span_correct_count = memory.span_text_count(&span.text);
+
     candidates
         .iter()
         .map(|(candidate, flags)| {
-            // Dense features (indices 0..31)
+            // Per-candidate memory lookup
+            let mem = memory.get(&candidate.term);
+            let accept_count = mem.map(|m| m.accept_count).unwrap_or(0);
+            let reject_count = mem.map(|m| m.reject_count).unwrap_or(0);
+            let recent_accept = mem.map(|m| m.recent_accept_count).unwrap_or(0);
+            let recency = mem
+                .and_then(|m| m.last_used)
+                .and_then(|t| t.elapsed().ok())
+                .map(|d| {
+                    if d.as_secs() < 300 { 1.0 }       // < 5 min
+                    else if d.as_secs() < 1800 { 0.5 }  // < 30 min
+                    else { 0.0 }
+                })
+                .unwrap_or(0.0);
+
+            // Dense features (indices 0..37)
             let mut features: Vec<Feature> = vec![
                 Feature { index: 0, value: 1.0 },                                              // bias
                 Feature { index: 1, value: candidate.acceptance_score as f64 },                 // acceptance_score
@@ -409,6 +571,13 @@ fn build_examples(
                 Feature { index: 29, value: min_lp },
                 Feature { index: 30, value: mean_m },
                 Feature { index: 31, value: min_m },
+                // Memory features
+                Feature { index: 32, value: (1.0 + accept_count as f64).ln() / 3.0 },
+                Feature { index: 33, value: (1.0 + reject_count as f64).ln() / 3.0 },
+                Feature { index: 34, value: (1.0 + (accept_count + reject_count) as f64).ln() / 3.0 },
+                Feature { index: 35, value: (1.0 + recent_accept as f64).ln() / 3.0 },
+                Feature { index: 36, value: recency },
+                Feature { index: 37, value: (1.0 + span_correct_count as f64).ln() / 3.0 },
             ];
 
             // Sparse context features (hashed into offset range)

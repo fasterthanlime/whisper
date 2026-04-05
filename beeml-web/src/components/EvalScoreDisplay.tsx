@@ -126,11 +126,13 @@ export const EvalScoreDisplay = memo(function EvalScoreDisplay({
           setPrevEvalResult(prev);
           return response.value;
         });
+        const judgeableCount = response.value.canonical_gold_reachable + response.value.counterexample_cases;
+        const judgeCorrectCount = response.value.canonical_judge_correct + response.value.counterexample_judge_correct;
         setHistory((prev) => [...prev, {
           teachCount: teachCountRef.current,
-          judgeCorrect: response.value.judge_correct,
-          evaluatedCases: response.value.evaluated_cases,
-          pct: Math.round((response.value.judge_correct / response.value.evaluated_cases) * 100),
+          judgeCorrect: judgeCorrectCount,
+          evaluatedCases: judgeableCount,
+          pct: judgeableCount > 0 ? Math.round((judgeCorrectCount / judgeableCount) * 100) : 0,
         }]);
       } finally {
         if (!cancelled) {
@@ -142,40 +144,67 @@ export const EvalScoreDisplay = memo(function EvalScoreDisplay({
     return () => { cancelled = true; };
   }, [wsUrl, maxSpanWords, triggerCount]);
 
-  const pct = evalResult
-    ? Math.round((evalResult.judge_correct / evalResult.evaluated_cases) * 100)
+  // Separate edit vs keep metrics
+  const editPct = evalResult && evalResult.canonical_gold_reachable > 0
+    ? Math.round((evalResult.canonical_judge_correct / evalResult.canonical_gold_reachable) * 100)
+    : null;
+  const keepPct = evalResult && evalResult.counterexample_cases > 0
+    ? Math.round((evalResult.counterexample_judge_correct / evalResult.counterexample_cases) * 100)
+    : null;
+
+  // Combined for history tracking
+  const judgeableCases = evalResult
+    ? evalResult.canonical_gold_reachable + evalResult.counterexample_cases
+    : null;
+  const judgeCorrectCases = evalResult
+    ? evalResult.canonical_judge_correct + evalResult.counterexample_judge_correct
+    : null;
+  const pct = judgeableCases && judgeableCases > 0
+    ? Math.round((judgeCorrectCases! / judgeableCases) * 100)
     : null;
   const delta = evalResult && prevEvalResult
-    ? evalResult.judge_correct - prevEvalResult.judge_correct
+    ? (evalResult.canonical_judge_correct + evalResult.counterexample_judge_correct)
+      - (prevEvalResult.canonical_judge_correct + prevEvalResult.counterexample_judge_correct)
     : null;
   const bestPct = history.length > 0 ? Math.max(...history.map(h => h.pct)) : null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.25rem", padding: "0.5rem 0" }}>
-      {/* Big percentage */}
-      <div style={{ fontVariantNumeric: "tabular-nums", fontSize: "2.5rem", fontWeight: 800, letterSpacing: "-0.03em", lineHeight: 1 }}>
+    <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "0.25rem", padding: "0.5rem 0" }}>
+      {/* Two percentages: edit accuracy and keep accuracy */}
+      <div style={{ fontVariantNumeric: "tabular-nums", fontSize: "2.0rem", fontWeight: 800, letterSpacing: "-0.03em", lineHeight: 1, display: "flex", gap: "1rem", alignItems: "baseline" }}>
         {evalRunning && evalProgress ? (
           <span style={{ opacity: 0.5 }}>
             {Math.round((evalProgress.judge_correct / evalProgress.total) * 100)}%
           </span>
         ) : evalRunning ? (
           <span style={{ opacity: 0.3 }}>eval...</span>
-        ) : pct !== null ? (<>
-          {pct}%
+        ) : (<>
+          {editPct !== null && (
+            <span>
+              {editPct}%
+              <span style={{ fontSize: "0.7rem", fontWeight: 500, opacity: 0.5, marginLeft: "0.25rem" }}>edit</span>
+            </span>
+          )}
+          {keepPct !== null && (
+            <span>
+              {keepPct}%
+              <span style={{ fontSize: "0.7rem", fontWeight: 500, opacity: 0.5, marginLeft: "0.25rem" }}>keep</span>
+            </span>
+          )}
           {delta !== null && delta !== 0 && (
             <span style={{
-              fontSize: "1.2rem", fontWeight: 700, marginLeft: "0.35rem",
+              fontSize: "1.2rem", fontWeight: 700,
               color: delta > 0 ? "var(--green, #22c55e)" : "var(--red, #ef4444)",
             }}>
               {delta > 0 ? `+${delta}` : delta}
             </span>
           )}
-        </>) : null}
+        </>)}
       </div>
       {/* Cases count + best */}
       {evalResult && (
         <div style={{ fontSize: "0.8rem", opacity: 0.5, fontVariantNumeric: "tabular-nums" }}>
-          {evalResult.judge_correct}/{evalResult.evaluated_cases} cases
+          {judgeCorrectCases}/{judgeableCases} judgeable
           {bestPct !== null && bestPct > (pct ?? 0) && (
             <span style={{ marginLeft: "0.5rem", color: "var(--green, #22c55e)" }}>
               best {bestPct}%
