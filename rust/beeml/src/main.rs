@@ -1915,21 +1915,21 @@ impl BeeMl for BeeMlService {
                     if case_folds[i] == fold_k {
                         continue; // skip test fold
                     }
-                    for ps in &pc.spans {
-                        if ps.candidates.is_empty() {
-                            continue;
+                    if pc.case.should_abstain {
+                        // Counterexample: teach keep_original on the span with
+                        // the most candidates (most likely to have a false positive).
+                        if let Some(ps) = pc.spans.iter()
+                            .filter(|ps| !ps.candidates.is_empty())
+                            .max_by_key(|ps| ps.candidates.len())
+                        {
+                            judge.teach_choice(&ps.span, &ps.candidates, None, &ps.ctx);
+                            if epoch == 0 { train_count += 1; }
                         }
-                        let chosen = if pc.case.should_abstain {
-                            None // counterexample: teach keep_original
-                        } else {
-                            ps.gold_alias_id // canonical: teach the gold alias (or None if not retrieved)
-                        };
-                        // Only teach if we have a meaningful signal
-                        if chosen.is_some() || pc.case.should_abstain {
-                            judge.teach_choice(&ps.span, &ps.candidates, chosen, &ps.ctx);
-                            if epoch == 0 {
-                                train_count += 1;
-                            }
+                    } else {
+                        // Canonical: only teach the span with the gold alias.
+                        if let Some(ps) = pc.spans.iter().find(|ps| ps.gold_alias_id.is_some()) {
+                            judge.teach_choice(&ps.span, &ps.candidates, ps.gold_alias_id, &ps.ctx);
+                            if epoch == 0 { train_count += 1; }
                         }
                     }
                 }
@@ -2087,6 +2087,54 @@ async fn main() -> Result<()> {
             event_log_path,
         }),
     };
+
+    // --offline-eval: run k-fold cross-validation and exit
+    if std::env::args().any(|a| a == "--offline-eval") {
+        let folds = std::env::args()
+            .skip_while(|a| a != "--folds")
+            .nth(1)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5u32);
+        let epochs = std::env::args()
+            .skip_while(|a| a != "--epochs")
+            .nth(1)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4u32);
+
+        let result = handler
+            .run_offline_judge_eval(OfflineJudgeEvalRequest {
+                folds,
+                max_span_words: 3,
+                shortlist_limit: 100,
+                verify_limit: 20,
+                train_epochs: epochs,
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        println!("\n=== Offline Judge Eval ({folds}-fold CV, {epochs} epochs) ===");
+        for fr in &result.fold_results {
+            println!(
+                "  Fold {}: canonical {}/{}, counterexample {}/{}  (train: {}, test: {})",
+                fr.fold, fr.canonical_correct, fr.canonical_total,
+                fr.counterexample_correct, fr.counterexample_total,
+                fr.train_cases, fr.test_cases,
+            );
+        }
+        let can_pct = if result.canonical_total > 0 {
+            result.canonical_correct as f64 / result.canonical_total as f64 * 100.0
+        } else { 0.0 };
+        let cx_pct = if result.counterexample_total > 0 {
+            result.counterexample_correct as f64 / result.counterexample_total as f64 * 100.0
+        } else { 0.0 };
+        println!(
+            "\n  TOTAL: canonical {}/{} ({can_pct:.1}%), counterexample {}/{} ({cx_pct:.1}%)",
+            result.canonical_correct, result.canonical_total,
+            result.counterexample_correct, result.counterexample_total,
+        );
+
+        return Ok(());
+    }
 
     let listener = TcpListener::bind(&listen_addr)
         .await
