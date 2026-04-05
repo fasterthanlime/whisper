@@ -236,22 +236,25 @@ fn argmax(logits: &Array) -> Result<i32, Exception> {
 /// Extract the argmax token along with its logprob and top1-top2 margin.
 fn argmax_with_logprob(logits: &Array) -> Result<TokenLogprob, Exception> {
     let flat = logits.reshape(&[-1])?;
-
-    // Top-2 values from log_softmax
-    let log_probs = nn::log_softmax(&flat, None)?;
-    let top2 = indexing::topk(&log_probs, 2)?;
-    top2.eval()?;
-
-    let top1_lp = top2.index(0).item::<f32>();
-    let top2_lp = top2.index(1).item::<f32>();
-
     let idx = indexing::argmax(&flat, None)?;
     let token_id = idx.item::<i32>();
+
+    // Compute log-softmax, then index the chosen token's logprob directly
+    let log_probs = nn::log_softmax(&flat, -1)?;
+    log_probs.eval()?;
+    let top1_lp = log_probs.index(token_id).item::<f32>();
+
+    // For margin: get top-2 values (unsorted!), then sort descending
+    let top2 = indexing::topk(&log_probs, 2)?;
+    top2.eval()?;
+    let a = top2.index(0).item::<f32>();
+    let b = top2.index(1).item::<f32>();
+    let margin = if a >= b { a - b } else { b - a };
 
     Ok(TokenLogprob {
         token_id,
         logprob: top1_lp,
-        margin: top1_lp - top2_lp,
+        margin,
     })
 }
 
