@@ -12,7 +12,7 @@ use bee_phonetic::{
 };
 use bee_transcribe::{Engine, EngineConfig, SessionOptions};
 use beeml::g2p::CachedEspeakG2p;
-use beeml::judge::OnlineJudge;
+use beeml::judge::{OnlineJudge, extract_span_context};
 use beeml::rpc::{
     AcceptedEdit, AliasSource, BeeMl, CandidateFeatureDebug, CorrectionDebugResult,
     CorrectionRequest, CorrectionResult, FilterDecision, IdentifierFlags, RerankerDebugTrace,
@@ -225,10 +225,11 @@ impl BeeMlService {
                         None
                     }
                 }));
+                let span_ctx = extract_span_context(&request.transcript, span.char_start, span.char_end);
                 let judge_options = if should_teach {
-                    judge.teach_choice(&span, &judge_input, chosen_alias_id)
+                    judge.teach_choice(&span, &judge_input, chosen_alias_id, &span_ctx)
                 } else {
-                    judge.score_candidates(&span, &judge_input)
+                    judge.score_candidates(&span, &judge_input, &span_ctx)
                 };
 
                 let candidates = scored_rows
