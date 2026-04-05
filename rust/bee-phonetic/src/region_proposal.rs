@@ -4,15 +4,27 @@ use crate::phonetic_lexicon::reduce_ipa_tokens;
 use crate::word_split::sentence_word_tokens;
 use crate::word_split::SentenceWordToken;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TranscriptAlignmentToken {
     pub start_time: f64,
     pub end_time: f64,
+    #[serde(default)]
+    pub mean_logprob: Option<f32>,
+    #[serde(default)]
+    pub min_logprob: Option<f32>,
+    #[serde(default)]
+    pub mean_margin: Option<f32>,
+    #[serde(default)]
+    pub min_margin: Option<f32>,
 }
 
 pub trait TranscriptAlignmentTiming {
     fn start_time(&self) -> f64;
     fn end_time(&self) -> f64;
+    fn mean_logprob(&self) -> Option<f32> { None }
+    fn min_logprob(&self) -> Option<f32> { None }
+    fn mean_margin(&self) -> Option<f32> { None }
+    fn min_margin(&self) -> Option<f32> { None }
 }
 
 impl TranscriptAlignmentTiming for TranscriptAlignmentToken {
@@ -23,9 +35,25 @@ impl TranscriptAlignmentTiming for TranscriptAlignmentToken {
     fn end_time(&self) -> f64 {
         self.end_time
     }
+
+    fn mean_logprob(&self) -> Option<f32> {
+        self.mean_logprob
+    }
+
+    fn min_logprob(&self) -> Option<f32> {
+        self.min_logprob
+    }
+
+    fn mean_margin(&self) -> Option<f32> {
+        self.mean_margin
+    }
+
+    fn min_margin(&self) -> Option<f32> {
+        self.min_margin
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TranscriptSpan {
     pub token_start: usize,
     pub token_end: usize,
@@ -36,6 +64,18 @@ pub struct TranscriptSpan {
     pub text: String,
     pub ipa_tokens: Vec<String>,
     pub reduced_ipa_tokens: Vec<String>,
+    /// Mean log-probability across words in this span (from ASR decoder).
+    #[serde(default)]
+    pub mean_logprob: Option<f32>,
+    /// Minimum log-probability across words in this span.
+    #[serde(default)]
+    pub min_logprob: Option<f32>,
+    /// Mean top1−top2 margin across words in this span.
+    #[serde(default)]
+    pub mean_margin: Option<f32>,
+    /// Minimum top1−top2 margin across words in this span.
+    #[serde(default)]
+    pub min_margin: Option<f32>,
 }
 
 pub fn enumerate_transcript_spans_with<F, A>(
@@ -99,18 +139,64 @@ where
         return None;
     }
 
-    let (start_sec, end_sec) = if let Some(alignments) = alignments {
-        if token_end <= alignments.len() {
-            (
-                Some(alignments[token_start].start_time()),
-                Some(alignments[token_end - 1].end_time()),
-            )
+    let (start_sec, end_sec, mean_logprob, min_logprob, mean_margin, min_margin) =
+        if let Some(alignments) = alignments {
+            if token_end <= alignments.len() {
+                let span_alignments = &alignments[token_start..token_end];
+
+                // Aggregate per-word logprob stats across the span
+                let lps: Vec<f32> = span_alignments
+                    .iter()
+                    .filter_map(|a| a.mean_logprob())
+                    .collect();
+                let margins: Vec<f32> = span_alignments
+                    .iter()
+                    .filter_map(|a| a.mean_margin())
+                    .collect();
+                let min_lps: Vec<f32> = span_alignments
+                    .iter()
+                    .filter_map(|a| a.min_logprob())
+                    .collect();
+                let min_ms: Vec<f32> = span_alignments
+                    .iter()
+                    .filter_map(|a| a.min_margin())
+                    .collect();
+
+                let mean_lp = if lps.is_empty() {
+                    None
+                } else {
+                    Some(lps.iter().sum::<f32>() / lps.len() as f32)
+                };
+                let min_lp = if min_lps.is_empty() {
+                    None
+                } else {
+                    Some(min_lps.iter().copied().fold(f32::INFINITY, f32::min))
+                };
+                let mean_m = if margins.is_empty() {
+                    None
+                } else {
+                    Some(margins.iter().sum::<f32>() / margins.len() as f32)
+                };
+                let min_m = if min_ms.is_empty() {
+                    None
+                } else {
+                    Some(min_ms.iter().copied().fold(f32::INFINITY, f32::min))
+                };
+
+                (
+                    Some(span_alignments[0].start_time()),
+                    Some(span_alignments[span_alignments.len() - 1].end_time()),
+                    mean_lp,
+                    min_lp,
+                    mean_m,
+                    min_m,
+                )
+            } else {
+                (None, None, None, None, None, None)
+            }
         } else {
-            (None, None)
-        }
-    } else {
-        (None, None)
-    };
+            (None, None, None, None, None, None)
+        };
 
     Some(TranscriptSpan {
         token_start,
@@ -122,6 +208,10 @@ where
         reduced_ipa_tokens: reduce_ipa_tokens(&ipa_tokens),
         ipa_tokens,
         text,
+        mean_logprob,
+        min_logprob,
+        mean_margin,
+        min_margin,
     })
 }
 
@@ -164,10 +254,12 @@ mod tests {
             TranscriptAlignmentToken {
                 start_time: 0.2,
                 end_time: 0.4,
+                ..Default::default()
             },
             TranscriptAlignmentToken {
                 start_time: 0.4,
                 end_time: 0.6,
+                ..Default::default()
             },
         ];
         let spans =

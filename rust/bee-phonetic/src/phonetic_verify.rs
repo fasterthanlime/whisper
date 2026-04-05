@@ -255,6 +255,7 @@ mod tests {
             reduced_ipa_tokens: crate::phonetic_lexicon::reduce_ipa_tokens(
                 &crate::prototype::parse_reviewed_ipa("ɑːɹ s ɪ k s t i f ɔ ɹ"),
             ),
+            ..Default::default()
         };
         let shortlist = query_index(
             &index,
@@ -286,6 +287,7 @@ mod tests {
             reduced_ipa_tokens: crate::phonetic_lexicon::reduce_ipa_tokens(
                 &crate::prototype::parse_reviewed_ipa("k ɹ a p"),
             ),
+            ..Default::default()
         };
         let shortlist = query_index(
             &index,
@@ -318,6 +320,7 @@ mod tests {
             reduced_ipa_tokens: crate::phonetic_lexicon::reduce_ipa_tokens(
                 &crate::prototype::parse_reviewed_ipa("k ɹ a p"),
             ),
+            ..Default::default()
         };
         let shortlist = query_index(
             &index,
@@ -359,6 +362,7 @@ mod tests {
             reduced_ipa_tokens: crate::phonetic_lexicon::reduce_ipa_tokens(
                 &crate::prototype::parse_reviewed_ipa("w ɪ ð j uː eɪ t"),
             ),
+            ..Default::default()
         };
         // Simulate a candidate that made the shortlist with a high coarse score
         let fake_shortlist = vec![crate::phonetic_index::RetrievalCandidate {

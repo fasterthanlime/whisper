@@ -122,6 +122,10 @@ impl BeeMlService {
                     .map(|word| TranscriptAlignmentToken {
                         start_time: word.start,
                         end_time: word.end,
+                        mean_logprob: word.mean_logprob,
+                        min_logprob: word.min_logprob,
+                        mean_margin: word.mean_margin,
+                        min_margin: word.min_margin,
                     })
                     .collect::<Vec<_>>(),
             )

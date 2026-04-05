@@ -442,6 +442,7 @@ mod tests {
             text: text.to_string(),
             ipa_tokens: vec!["ɹ".into(), "ɛ".into(), "k".into()],
             reduced_ipa_tokens: vec!["r".into(), "e".into(), "k".into()],
+            ..Default::default()
         }
     }
 

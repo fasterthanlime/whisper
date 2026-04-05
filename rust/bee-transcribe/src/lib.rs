@@ -37,6 +37,7 @@ use bee_qwen3_asr::encoder::EncoderCache;
 use bee_qwen3_asr::forced_aligner::ForcedAligner;
 use bee_qwen3_asr::mel::MelExtractor;
 use bee_qwen3_asr::model::Qwen3ASRModel;
+use bee_qwen3_asr::generate::TokenLogprob;
 use bee_qwen3_asr::{generate, load};
 use facet::Facet;
 use mlx_rs::error::Exception;
@@ -135,6 +136,15 @@ pub struct AlignedWord {
     pub start: f64,
     /// End time in seconds from the beginning of the audio stream.
     pub end: f64,
+    /// Mean log-probability of the decoder tokens covering this word.
+    /// `None` if logprob data is not available.
+    pub mean_logprob: Option<f32>,
+    /// Minimum log-probability among decoder tokens covering this word.
+    pub min_logprob: Option<f32>,
+    /// Mean top1−top2 margin of the decoder tokens covering this word.
+    pub mean_margin: Option<f32>,
+    /// Minimum top1−top2 margin among decoder tokens covering this word.
+    pub min_margin: Option<f32>,
 }
 
 // ── Engine ──────────────────────────────────────────────────────────────
@@ -215,7 +225,9 @@ impl Engine {
             encoder_cache: EncoderCache::new(),
             mel_extractor: MelExtractor::new(400, 160, 128, 16000),
             token_ids: Vec::new(),
+            token_logprobs: Vec::new(),
             committed_tokens: Vec::new(),
+            committed_logprobs: Vec::new(),
             committed_alignments: Vec::new(),
             committed_audio_offset: 0.0,
             language_tokens,
@@ -245,9 +257,11 @@ pub struct Session<'a> {
 
     // Decoder output for the current segment
     token_ids: Vec<u32>,
+    token_logprobs: Vec<TokenLogprob>,
 
     // Committed state (accumulated across rotations)
     committed_tokens: Vec<u32>,
+    committed_logprobs: Vec<TokenLogprob>,
     committed_alignments: Vec<AlignedWord>,
     committed_audio_offset: f64,
 
@@ -336,12 +350,23 @@ impl<'a> Session<'a> {
             .unwrap_or_default();
         if !remaining_text.is_empty() && !self.audio.is_empty() {
             if let Ok(items) = self.engine.aligner.align(&self.audio, &remaining_text) {
+                let wstats = word_logprob_stats(
+                    &self.engine.tokenizer,
+                    &self.token_ids,
+                    &self.token_logprobs,
+                    items.len(),
+                );
                 let offset = self.committed_audio_offset;
-                for item in &items {
+                for (i, item) in items.iter().enumerate() {
+                    let (mean_logprob, min_logprob, mean_margin, min_margin) = wstats[i];
                     self.committed_alignments.push(AlignedWord {
                         word: item.word.clone(),
                         start: item.start_time + offset,
                         end: item.end_time + offset,
+                        mean_logprob,
+                        min_logprob,
+                        mean_margin,
+                        min_margin,
                     });
                 }
             }
@@ -382,7 +407,7 @@ impl<'a> Session<'a> {
 
         // Generate
         let mut cache = None;
-        let (generated, _logprobs, _) = generate::prefill_and_decode(
+        let (generated, logprobs, _) = generate::prefill_and_decode(
             &self.engine.model,
             &prompt,
             &audio_features,
@@ -392,15 +417,31 @@ impl<'a> Session<'a> {
         )?;
 
         // Combine prefix + generated
-        let all_ids: Vec<u32> = if let Some(prefix) = prefix_ids {
-            let mut combined = prefix;
-            combined.extend(generated.iter().map(|&t| t as u32));
-            combined
+        let (all_ids, all_logprobs): (Vec<u32>, Vec<TokenLogprob>) = if let Some(prefix) = prefix_ids {
+            // Prefix tokens reuse their previous logprobs; generated tokens get fresh ones.
+            let prefix_len = prefix.len();
+            let prefix_logprobs = if self.token_logprobs.len() >= prefix_len {
+                self.token_logprobs[..prefix_len].to_vec()
+            } else {
+                // Fallback: pad with zeros (shouldn't happen in practice)
+                let mut lps = self.token_logprobs.clone();
+                lps.resize(prefix_len, TokenLogprob { token_id: 0, logprob: 0.0, margin: 0.0 });
+                lps
+            };
+            let mut ids = prefix;
+            ids.extend(generated.iter().map(|&t| t as u32));
+            let mut lps = prefix_logprobs;
+            lps.extend_from_slice(&logprobs);
+            (ids, lps)
         } else {
-            generated.iter().map(|&t| t as u32).collect()
+            (
+                generated.iter().map(|&t| t as u32).collect(),
+                logprobs,
+            )
         };
 
         self.token_ids = all_ids;
+        self.token_logprobs = all_logprobs;
 
         // KV cache dropped here; return freed buffers to the system
         drop(cache);
@@ -462,19 +503,39 @@ impl<'a> Session<'a> {
         let last = &items[items.len() - 1];
         let audio_cut_samples = (last.end_time * 16000.0) as usize;
 
-        // Store alignments with absolute timestamps
+        // Compute per-word logprob stats from the tokens being committed
+        let commit_logprobs = if self.token_logprobs.len() >= commit_count {
+            &self.token_logprobs[..commit_count]
+        } else {
+            &self.token_logprobs[..]
+        };
+        let wstats = word_logprob_stats(
+            &self.engine.tokenizer,
+            &self.token_ids[..commit_count],
+            commit_logprobs,
+            items.len(),
+        );
+
+        // Store alignments with absolute timestamps and logprob stats
         let offset = self.committed_audio_offset;
-        for item in &items {
+        for (i, item) in items.iter().enumerate() {
+            let (mean_logprob, min_logprob, mean_margin, min_margin) = wstats[i];
             self.committed_alignments.push(AlignedWord {
                 word: item.word.clone(),
                 start: item.start_time + offset,
                 end: item.end_time + offset,
+                mean_logprob,
+                min_logprob,
+                mean_margin,
+                min_margin,
             });
         }
 
-        // Update committed tokens
+        // Update committed tokens and logprobs
         self.committed_tokens
             .extend_from_slice(&self.token_ids[..commit_count]);
+        self.committed_logprobs
+            .extend_from_slice(commit_logprobs);
 
         // Rotate session
         let cut = audio_cut_samples.min(self.audio.len());
@@ -482,6 +543,11 @@ impl<'a> Session<'a> {
         self.audio = self.audio[cut..].to_vec();
         self.encoder_cache = EncoderCache::new();
         self.token_ids = self.token_ids[commit_count..].to_vec();
+        self.token_logprobs = if self.token_logprobs.len() > commit_count {
+            self.token_logprobs[commit_count..].to_vec()
+        } else {
+            Vec::new()
+        };
         // Skip warm-up so prefix rollback kicks in immediately
         self.chunk_count = 3;
 
@@ -541,6 +607,84 @@ impl<'a> Session<'a> {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
+
+/// Compute per-word logprob statistics by mapping decoder tokens to aligner words.
+///
+/// Uses a greedy character-accumulation approach: decode tokens one by one,
+/// accumulate text, and assign tokens to the next aligner word whose text
+/// they contribute to.
+fn word_logprob_stats(
+    tokenizer: &tokenizers::Tokenizer,
+    token_ids: &[u32],
+    token_logprobs: &[TokenLogprob],
+    word_count: usize,
+) -> Vec<(Option<f32>, Option<f32>, Option<f32>, Option<f32>)> {
+    if token_logprobs.is_empty() || word_count == 0 {
+        return vec![(None, None, None, None); word_count];
+    }
+
+    // Decode each token to find its text contribution
+    let mut per_token_texts: Vec<String> = Vec::with_capacity(token_ids.len());
+    for (i, &tid) in token_ids.iter().enumerate() {
+        // Decode [0..=i] minus [0..i] to get just this token's contribution
+        let with = tokenizer.decode(&token_ids[..=i], true).unwrap_or_default();
+        let without = if i > 0 {
+            tokenizer.decode(&token_ids[..i], true).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let contribution = if with.len() >= without.len() {
+            with[without.len()..].to_string()
+        } else {
+            String::new()
+        };
+        per_token_texts.push(contribution);
+    }
+
+    // Assign tokens to words: accumulate non-whitespace runs
+    // Each word boundary is roughly a whitespace transition
+    let mut word_logprobs: Vec<Vec<&TokenLogprob>> = vec![Vec::new(); word_count];
+    let mut word_idx = 0;
+    let mut seen_chars_in_word = false;
+
+    for (i, text) in per_token_texts.iter().enumerate() {
+        if word_idx >= word_count {
+            break;
+        }
+        let lp = token_logprobs.get(i);
+
+        // Check if this token starts a new word (leading whitespace after we've seen chars)
+        let starts_with_space = text.starts_with(' ') || text.starts_with('\n');
+        if starts_with_space && seen_chars_in_word && word_idx + 1 < word_count {
+            word_idx += 1;
+            seen_chars_in_word = false;
+        }
+
+        let has_non_ws = text.chars().any(|c| !c.is_whitespace());
+        if has_non_ws {
+            seen_chars_in_word = true;
+        }
+
+        if let Some(lp) = lp {
+            word_logprobs[word_idx].push(lp);
+        }
+    }
+
+    word_logprobs
+        .iter()
+        .map(|lps| {
+            if lps.is_empty() {
+                return (None, None, None, None);
+            }
+            let n = lps.len() as f32;
+            let mean_lp = lps.iter().map(|lp| lp.logprob).sum::<f32>() / n;
+            let min_lp = lps.iter().map(|lp| lp.logprob).fold(f32::INFINITY, f32::min);
+            let mean_m = lps.iter().map(|lp| lp.margin).sum::<f32>() / n;
+            let min_m = lps.iter().map(|lp| lp.margin).fold(f32::INFINITY, f32::min);
+            (Some(mean_lp), Some(min_lp), Some(mean_m), Some(min_m))
+        })
+        .collect()
+}
 
 fn tokenize_to_i32(tokenizer: &tokenizers::Tokenizer, text: &str) -> Vec<i32> {
     tokenizer
