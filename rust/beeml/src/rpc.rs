@@ -423,6 +423,12 @@ pub struct RetrievalPrototypeEvalResult {
     pub failures_at_composition: u32,
     pub failures_at_judge: u32,
 
+    // Gold unreachable breakdown (canonical only)
+    pub unreachable_not_retrieved: u32,
+    pub unreachable_missing_edits: u32,
+    pub unreachable_composition: u32,
+    pub unreachable_surface_mismatch: u32,
+
     // Legacy (kept for backward compat)
     pub top1_hits: u32,
     pub top3_hits: u32,

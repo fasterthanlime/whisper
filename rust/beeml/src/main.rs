@@ -485,6 +485,44 @@ impl BeeMlService {
             judge_pick.is_some_and(|p| p.is_gold)
         };
 
+        // Why is gold unreachable? (canonical cases only)
+        let gold_unreachable_reason = if gold_reachable || case.should_abstain {
+            None
+        } else if !target_in_shortlist {
+            Some(GoldUnreachableReason::TargetNotRetrieved)
+        } else {
+            // Target is in shortlist. Check if any choice contains the target term.
+            let any_choice_has_target = choices.iter().any(|c| {
+                !c.choose_keep_original
+                    && c.edits.iter().any(|e| {
+                        e.replacement_text.eq_ignore_ascii_case(&case.target_term)
+                    })
+            });
+            if !any_choice_has_target {
+                // Target was retrieved but never made it into any composed sentence.
+                // Either other required edits were missing, or composition pruned it.
+                Some(GoldUnreachableReason::MissingRequiredEdits)
+            } else {
+                // Target term IS in some choices, but none match the gold sentence.
+                // This means the edits were applied but the surface form doesn't match.
+                let closest = choices
+                    .iter()
+                    .filter(|c| !c.choose_keep_original)
+                    .filter(|c| c.edits.iter().any(|e| e.replacement_text.eq_ignore_ascii_case(&case.target_term)))
+                    .min_by_key(|c| {
+                        // Simple word-level edit distance to gold
+                        let got_words: Vec<&str> = c.sentence.split_whitespace().collect();
+                        let want_words: Vec<&str> = case.source_text.split_whitespace().collect();
+                        let diff = got_words.len().abs_diff(want_words.len())
+                            + got_words.iter().zip(&want_words).filter(|(a, b)| a != b).count();
+                        diff
+                    });
+                Some(GoldUnreachableReason::SurfaceMismatch {
+                    closest_sentence: closest.map(|c| c.sentence.clone()).unwrap_or_default(),
+                })
+            }
+        };
+
         // Attribution: which stage failed first? (canonical cases only)
         let first_failure = if case.should_abstain {
             if !judge_correct {
@@ -507,6 +545,7 @@ impl BeeMlService {
             target_best_rank,
             gold_reachable,
             gold_choice_rank: gold_choice_index,
+            gold_unreachable_reason,
             decision_set_size,
             replacement_choice_count,
             chosen_kind,
@@ -1226,6 +1265,18 @@ enum EvalFailureStage {
 }
 
 #[derive(Clone, Debug)]
+enum GoldUnreachableReason {
+    /// Target term not in shortlist at all
+    TargetNotRetrieved,
+    /// Target term found but other required edits are missing from candidates
+    MissingRequiredEdits,
+    /// All edits exist but composition/pruning didn't produce the gold combination
+    CompositionDidNotProduce,
+    /// Composition produced the right edits but rendered text doesn't match expected
+    SurfaceMismatch { closest_sentence: String },
+}
+
+#[derive(Clone, Debug)]
 enum EvalChoiceKind {
     KeepOriginal,
     SentenceCandidate,
@@ -1239,6 +1290,7 @@ struct CaseEvalResult {
     // Stage 2: Composition (judge-visible decision set)
     gold_reachable: bool,
     gold_choice_rank: Option<usize>,
+    gold_unreachable_reason: Option<GoldUnreachableReason>,
     decision_set_size: usize,
     replacement_choice_count: usize,
 
@@ -1420,6 +1472,10 @@ impl BeeMl for BeeMlService {
         let mut failures_at_retrieval = 0u32;
         let mut failures_at_composition = 0u32;
         let mut failures_at_judge = 0u32;
+        let mut unreachable_not_retrieved = 0u32;
+        let mut unreachable_missing_edits = 0u32;
+        let mut unreachable_composition = 0u32;
+        let mut unreachable_surface_mismatch = 0u32;
 
         // Legacy counters
         let mut judge_correct = 0u32;
@@ -1504,6 +1560,15 @@ impl BeeMl for BeeMlService {
                     None => {}
                 }
 
+                // Gold unreachable breakdown
+                match &result.gold_unreachable_reason {
+                    Some(GoldUnreachableReason::TargetNotRetrieved) => unreachable_not_retrieved += 1,
+                    Some(GoldUnreachableReason::MissingRequiredEdits) => unreachable_missing_edits += 1,
+                    Some(GoldUnreachableReason::CompositionDidNotProduce) => unreachable_composition += 1,
+                    Some(GoldUnreachableReason::SurfaceMismatch { .. }) => unreachable_surface_mismatch += 1,
+                    None => {}
+                }
+
                 // Legacy retrieval rank
                 if let Some(rank) = result.target_best_rank {
                     if rank <= 1 { top1_hits += 1; entry.top1_hits += 1; }
@@ -1542,6 +1607,10 @@ impl BeeMl for BeeMlService {
             fail_retrieval = failures_at_retrieval,
             fail_composition = failures_at_composition,
             fail_judge = failures_at_judge,
+            unreach_not_retrieved = unreachable_not_retrieved,
+            unreach_missing_edits = unreachable_missing_edits,
+            unreach_composition = unreachable_composition,
+            unreach_surface = unreachable_surface_mismatch,
             total_ms = eval_elapsed.as_millis() as u64,
             "eval complete"
         );
@@ -1558,6 +1627,10 @@ impl BeeMl for BeeMlService {
             failures_at_retrieval,
             failures_at_composition,
             failures_at_judge,
+            unreachable_not_retrieved,
+            unreachable_missing_edits,
+            unreachable_composition,
+            unreachable_surface_mismatch,
             judge_correct,
             judge_replace_correct,
             judge_abstain_correct,

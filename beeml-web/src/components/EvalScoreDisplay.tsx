@@ -206,6 +206,13 @@ export const EvalScoreDisplay = memo(function EvalScoreDisplay({
               <span style={{ color: "var(--red, #ef4444)" }}> · {evalResult.counterexample_replacement_built} leaked</span>
             )}
           </>)}
+          {(evalResult.unreachable_not_retrieved > 0 || evalResult.unreachable_missing_edits > 0 || evalResult.unreachable_surface_mismatch > 0) && (<>
+            <br />
+            <span style={{ opacity: 0.7 }}>unreachable: </span>
+            {evalResult.unreachable_not_retrieved > 0 && <span>{evalResult.unreachable_not_retrieved} not retrieved</span>}
+            {evalResult.unreachable_missing_edits > 0 && <span>{evalResult.unreachable_not_retrieved > 0 ? " · " : ""}{evalResult.unreachable_missing_edits} missing edits</span>}
+            {evalResult.unreachable_surface_mismatch > 0 && <span>{(evalResult.unreachable_not_retrieved + evalResult.unreachable_missing_edits) > 0 ? " · " : ""}{evalResult.unreachable_surface_mismatch} surface</span>}
+          </>)}
         </div>
       )}
 
