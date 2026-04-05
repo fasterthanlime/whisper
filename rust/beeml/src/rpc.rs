@@ -406,6 +406,24 @@ pub struct RetrievalPrototypeEvalProgress {
 #[derive(Clone, Debug, Facet)]
 pub struct RetrievalPrototypeEvalResult {
     pub evaluated_cases: u32,
+
+    // Canonical funnel
+    pub canonical_cases: u32,
+    pub canonical_shortlist_found: u32,
+    pub canonical_gold_reachable: u32,
+    pub canonical_judge_correct: u32,
+
+    // Counterexample
+    pub counterexample_cases: u32,
+    pub counterexample_replacement_built: u32,
+    pub counterexample_judge_correct: u32,
+
+    // Failure attribution (canonical only)
+    pub failures_at_retrieval: u32,
+    pub failures_at_composition: u32,
+    pub failures_at_judge: u32,
+
+    // Legacy (kept for backward compat)
     pub top1_hits: u32,
     pub top3_hits: u32,
     pub top10_hits: u32,

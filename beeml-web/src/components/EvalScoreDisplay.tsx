@@ -189,6 +189,26 @@ export const EvalScoreDisplay = memo(function EvalScoreDisplay({
         </div>
       )}
 
+      {/* Per-stage funnel */}
+      {evalResult && evalResult.canonical_cases > 0 && (
+        <div style={{ fontSize: "0.75rem", opacity: 0.6, fontVariantNumeric: "tabular-nums", textAlign: "center", lineHeight: 1.6 }}>
+          <span>retrieval {evalResult.canonical_shortlist_found}</span>
+          <span style={{ opacity: 0.3 }}> · </span>
+          <span>reachable {evalResult.canonical_gold_reachable}</span>
+          <span style={{ opacity: 0.3 }}> · </span>
+          <span>judge {evalResult.canonical_judge_correct}</span>
+          <span style={{ opacity: 0.3 }}> / </span>
+          <span>{evalResult.canonical_cases} canonical</span>
+          {evalResult.counterexample_cases > 0 && (<>
+            <br />
+            <span>cx: {evalResult.counterexample_judge_correct}/{evalResult.counterexample_cases} correct</span>
+            {evalResult.counterexample_replacement_built > 0 && (
+              <span style={{ color: "var(--red, #ef4444)" }}> · {evalResult.counterexample_replacement_built} leaked</span>
+            )}
+          </>)}
+        </div>
+      )}
+
       {/* Graph */}
       <SparklineGraph history={history} />
     </div>

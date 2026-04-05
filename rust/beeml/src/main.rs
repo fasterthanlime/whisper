@@ -424,6 +424,7 @@ impl BeeMlService {
         request: &RetrievalPrototypeEvalRequest,
     ) -> Result<CaseEvalResult, String> {
         // Use the same pipeline as run_probe — one path for everything.
+        // Pass expected_source_text so rapid fire decision set is built with is_gold flags.
         let probe_result = self.run_probe(
             RetrievalPrototypeProbeRequest {
                 transcript: case.transcript.clone(),
@@ -431,84 +432,90 @@ impl BeeMlService {
                 max_span_words: request.max_span_words,
                 shortlist_limit: request.shortlist_limit,
                 verify_limit: request.verify_limit,
-                expected_source_text: None,
+                expected_source_text: Some(case.source_text.clone()),
             },
             None,
         )?;
 
-        // Extract retrieval rank: best verified candidate per term across all spans.
-        let mut best_by_term: HashMap<String, f32> = HashMap::new();
+        // Stage 1: Retrieval — did any span's candidate list contain the target term?
+        let mut target_best_rank: Option<usize> = None;
         for span_trace in &probe_result.spans {
-            for candidate in &span_trace.candidates {
-                if !candidate.accepted {
-                    continue;
-                }
-                let score = candidate.features.acceptance_score;
-                match best_by_term.get(&candidate.term) {
-                    Some(&existing) if existing >= score => {}
-                    _ => {
-                        best_by_term.insert(candidate.term.clone(), score);
-                    }
-                }
-            }
-        }
-        let mut ranked: Vec<(String, f32)> = best_by_term.into_iter().collect();
-        ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        let target_rank = ranked
-            .iter()
-            .position(|(term, _)| term.eq_ignore_ascii_case(&case.target_term))
-            .map(|idx| idx + 1);
-        let best_span_text = ranked
-            .first()
-            .map(|(term, _)| term.clone())
-            .unwrap_or_default();
-
-        // Extract judge choice: best non-keep candidate across all spans.
-        let mut best_judge_choice: Option<CaseJudgeChoice> = None;
-        for span_trace in &probe_result.spans {
-            if let Some(best) = span_trace
-                .judge_options
+            if let Some(rank) = span_trace
+                .candidates
                 .iter()
-                .filter(|o| !o.is_keep_original)
-                .max_by(|a, b| {
-                    a.probability
-                        .total_cmp(&b.probability)
-                        .then_with(|| a.score.total_cmp(&b.score))
-                })
+                .enumerate()
+                .find(|(_, c)| c.term.eq_ignore_ascii_case(&case.target_term))
+                .map(|(i, _)| i + 1)
             {
-                match &best_judge_choice {
-                    Some(existing)
-                        if existing.probability > best.probability
-                            || (existing.probability == best.probability
-                                && existing.score >= best.score) => {}
-                    _ => {
-                        best_judge_choice = Some(CaseJudgeChoice {
-                            span_text: span_trace.span.text.clone(),
-                            chosen_action: best.term.clone(),
-                            probability: best.probability,
-                            score: best.score,
-                            is_keep_original: false,
-                        });
-                    }
+                match target_best_rank {
+                    Some(existing) if existing <= rank => {}
+                    _ => { target_best_rank = Some(rank); }
                 }
             }
         }
-        // Judge chooses keep_original if no candidate exceeded threshold
-        let judge_choice = match best_judge_choice {
-            Some(choice) if choice.probability >= 0.5 => choice,
-            _ => CaseJudgeChoice {
-                span_text: String::new(),
-                chosen_action: "keep_original".to_string(),
-                probability: 0.0,
-                score: 0.0,
-                is_keep_original: true,
-            },
+        let target_in_shortlist = target_best_rank.is_some();
+
+        // Stage 2: Composition — is the gold sentence in the judge-visible decision set?
+        let rapid_fire = probe_result.rapid_fire.as_ref();
+        let choices = rapid_fire.map(|rf| &rf.choices[..]).unwrap_or(&[]);
+        let decision_set_size = choices.len();
+        let replacement_choice_count = choices.iter().filter(|c| !c.choose_keep_original).count();
+        let gold_choice_index = choices.iter().position(|c| c.is_gold);
+        let gold_reachable = gold_choice_index.is_some();
+
+        // Stage 3: Judge — what did the judge pick?
+        // The judge pick is marked with is_judge_pick in the decision set.
+        let judge_pick = choices.iter().find(|c| c.is_judge_pick);
+        let (chosen_kind, chosen_choice_id, chosen_sentence, chosen_edit_count, chosen_probability) =
+            if let Some(pick) = judge_pick {
+                (
+                    if pick.choose_keep_original { EvalChoiceKind::KeepOriginal } else { EvalChoiceKind::SentenceCandidate },
+                    Some(pick.option_id.clone()),
+                    pick.sentence.clone(),
+                    pick.edits.len(),
+                    pick.probability,
+                )
+            } else {
+                (EvalChoiceKind::KeepOriginal, None, case.transcript.clone(), 0, 0.0)
+            };
+
+        let judge_correct = if case.should_abstain {
+            matches!(chosen_kind, EvalChoiceKind::KeepOriginal)
+        } else {
+            judge_pick.is_some_and(|p| p.is_gold)
+        };
+
+        // Attribution: which stage failed first? (canonical cases only)
+        let first_failure = if case.should_abstain {
+            if !judge_correct {
+                Some(EvalFailureStage::Judge)
+            } else {
+                None
+            }
+        } else if !target_in_shortlist {
+            Some(EvalFailureStage::RetrievalShortlist)
+        } else if !gold_reachable {
+            Some(EvalFailureStage::Composition)
+        } else if !judge_correct {
+            Some(EvalFailureStage::Judge)
+        } else {
+            None
         };
 
         Ok(CaseEvalResult {
-            target_rank,
-            best_span_text,
-            judge_choice,
+            target_in_shortlist,
+            target_best_rank,
+            gold_reachable,
+            gold_choice_rank: gold_choice_index,
+            decision_set_size,
+            replacement_choice_count,
+            chosen_kind,
+            chosen_choice_id,
+            chosen_sentence,
+            chosen_edit_count,
+            chosen_probability,
+            judge_correct,
+            first_failure,
         })
     }
 }
@@ -1211,18 +1218,40 @@ fn normalize_comparable_text(text: &str) -> String {
     normalized.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-struct CaseJudgeChoice {
-    span_text: String,
-    chosen_action: String,
-    probability: f32,
-    score: f32,
-    is_keep_original: bool,
+#[derive(Clone, Debug)]
+enum EvalFailureStage {
+    RetrievalShortlist,
+    Composition,
+    Judge,
+}
+
+#[derive(Clone, Debug)]
+enum EvalChoiceKind {
+    KeepOriginal,
+    SentenceCandidate,
 }
 
 struct CaseEvalResult {
-    target_rank: Option<usize>,
-    best_span_text: String,
-    judge_choice: CaseJudgeChoice,
+    // Stage 1: Retrieval
+    target_in_shortlist: bool,
+    target_best_rank: Option<usize>,
+
+    // Stage 2: Composition (judge-visible decision set)
+    gold_reachable: bool,
+    gold_choice_rank: Option<usize>,
+    decision_set_size: usize,
+    replacement_choice_count: usize,
+
+    // Stage 3: Judge
+    chosen_kind: EvalChoiceKind,
+    chosen_choice_id: Option<String>,
+    chosen_sentence: String,
+    chosen_edit_count: usize,
+    chosen_probability: f32,
+    judge_correct: bool,
+
+    // Attribution
+    first_failure: Option<EvalFailureStage>,
 }
 
 impl BeeMl for BeeMlService {
@@ -1381,18 +1410,32 @@ impl BeeMl for BeeMlService {
             });
 
         // Aggregate metrics sequentially and send progress.
-        let mut top1_hits = 0u32;
-        let mut top3_hits = 0u32;
-        let mut top10_hits = 0u32;
+        let mut canonical_cases = 0u32;
+        let mut canonical_shortlist_found = 0u32;
+        let mut canonical_gold_reachable = 0u32;
+        let mut canonical_judge_correct = 0u32;
+        let mut counterexample_cases = 0u32;
+        let mut counterexample_replacement_built = 0u32;
+        let mut counterexample_judge_correct = 0u32;
+        let mut failures_at_retrieval = 0u32;
+        let mut failures_at_composition = 0u32;
+        let mut failures_at_judge = 0u32;
+
+        // Legacy counters
         let mut judge_correct = 0u32;
         let mut judge_replace_correct = 0u32;
         let mut judge_abstain_correct = 0u32;
+        let mut top1_hits = 0u32;
+        let mut top3_hits = 0u32;
+        let mut top10_hits = 0u32;
         let mut misses = Vec::new();
         let mut judge_failures = Vec::new();
         let mut per_term = HashMap::<String, RetrievalEvalTermSummary>::new();
 
         for (recording_id, case, result) in eval_results {
             let result = result?;
+
+            // Per-term legacy tracking
             let entry = per_term
                 .entry(case.target_term.clone())
                 .or_insert(RetrievalEvalTermSummary {
@@ -1404,60 +1447,77 @@ impl BeeMl for BeeMlService {
                 });
             entry.cases += 1;
 
-            if let Some(rank) = result.target_rank {
-                if rank <= 1 {
-                    top1_hits += 1;
-                    entry.top1_hits += 1;
+            if case.should_abstain {
+                // Counterexample
+                counterexample_cases += 1;
+                if result.replacement_choice_count > 0 {
+                    counterexample_replacement_built += 1;
                 }
-                if rank <= 3 {
-                    top3_hits += 1;
-                    entry.top3_hits += 1;
-                }
-                if rank <= 10 {
-                    top10_hits += 1;
-                    entry.top10_hits += 1;
-                }
-            } else {
-                misses.push(RetrievalEvalMiss {
-                    recording_id: recording_id as u32,
-                    suite: case.suite.to_string(),
-                    term: case.target_term.clone(),
-                    transcript: case.transcript.clone(),
-                    best_span_text: result.best_span_text.clone(),
-                });
-            }
-
-            let judge_ok = if case.should_abstain {
-                result.judge_choice.is_keep_original
-            } else {
-                !result.judge_choice.is_keep_original
-                    && result
-                        .judge_choice
-                        .chosen_action
-                        .eq_ignore_ascii_case(&case.target_term)
-            };
-            if judge_ok {
-                judge_correct += 1;
-                if case.should_abstain {
+                if result.judge_correct {
+                    counterexample_judge_correct += 1;
                     judge_abstain_correct += 1;
+                    judge_correct += 1;
                 } else {
-                    judge_replace_correct += 1;
+                    judge_failures.push(JudgeEvalFailure {
+                        case_id: case.case_id.clone(),
+                        suite: case.suite.to_string(),
+                        target_term: case.target_term.clone(),
+                        transcript: case.transcript.clone(),
+                        expected_action: "keep_original".to_string(),
+                        chosen_action: result.chosen_sentence.clone(),
+                        chosen_span_text: result.chosen_choice_id.clone().unwrap_or_default(),
+                        chosen_probability: result.chosen_probability,
+                    });
+                    // Counterexample judge failures tracked separately, not in the canonical funnel
                 }
             } else {
-                judge_failures.push(JudgeEvalFailure {
-                    case_id: case.case_id.clone(),
-                    suite: case.suite.to_string(),
-                    target_term: case.target_term.clone(),
-                    transcript: case.transcript.clone(),
-                    expected_action: if case.should_abstain {
-                        "keep_original".to_string()
-                    } else {
-                        case.target_term.clone()
-                    },
-                    chosen_action: result.judge_choice.chosen_action.clone(),
-                    chosen_span_text: result.judge_choice.span_text.clone(),
-                    chosen_probability: result.judge_choice.probability,
-                });
+                // Canonical
+                canonical_cases += 1;
+                if result.target_in_shortlist {
+                    canonical_shortlist_found += 1;
+                }
+                if result.gold_reachable {
+                    canonical_gold_reachable += 1;
+                }
+                if result.judge_correct {
+                    canonical_judge_correct += 1;
+                    judge_replace_correct += 1;
+                    judge_correct += 1;
+                } else {
+                    judge_failures.push(JudgeEvalFailure {
+                        case_id: case.case_id.clone(),
+                        suite: case.suite.to_string(),
+                        target_term: case.target_term.clone(),
+                        transcript: case.transcript.clone(),
+                        expected_action: case.target_term.clone(),
+                        chosen_action: result.chosen_sentence.clone(),
+                        chosen_span_text: result.chosen_choice_id.clone().unwrap_or_default(),
+                        chosen_probability: result.chosen_probability,
+                    });
+                }
+
+                // Failure attribution
+                match &result.first_failure {
+                    Some(EvalFailureStage::RetrievalShortlist) => failures_at_retrieval += 1,
+                    Some(EvalFailureStage::Composition) => failures_at_composition += 1,
+                    Some(EvalFailureStage::Judge) => failures_at_judge += 1,
+                    None => {}
+                }
+
+                // Legacy retrieval rank
+                if let Some(rank) = result.target_best_rank {
+                    if rank <= 1 { top1_hits += 1; entry.top1_hits += 1; }
+                    if rank <= 3 { top3_hits += 1; entry.top3_hits += 1; }
+                    if rank <= 10 { top10_hits += 1; entry.top10_hits += 1; }
+                } else {
+                    misses.push(RetrievalEvalMiss {
+                        recording_id: recording_id as u32,
+                        suite: case.suite.to_string(),
+                        term: case.target_term.clone(),
+                        transcript: case.transcript.clone(),
+                        best_span_text: result.chosen_sentence.clone(),
+                    });
+                }
             }
 
             let _ = progress.send(RetrievalPrototypeEvalProgress {
@@ -1472,24 +1532,38 @@ impl BeeMl for BeeMlService {
 
         let eval_elapsed = eval_start.elapsed();
         info!(
-            evaluated = total,
-            judge_correct,
-            judge_replace_correct,
-            judge_abstain_correct,
-            top1_hits,
-            judge_failures = judge_failures.len(),
+            canonical = canonical_cases,
+            shortlist = canonical_shortlist_found,
+            reachable = canonical_gold_reachable,
+            judge = canonical_judge_correct,
+            cx = counterexample_cases,
+            cx_leak = counterexample_replacement_built,
+            cx_judge = counterexample_judge_correct,
+            fail_retrieval = failures_at_retrieval,
+            fail_composition = failures_at_composition,
+            fail_judge = failures_at_judge,
             total_ms = eval_elapsed.as_millis() as u64,
             "eval complete"
         );
 
         Ok(RetrievalPrototypeEvalResult {
             evaluated_cases: total,
-            top1_hits,
-            top3_hits,
-            top10_hits,
+            canonical_cases,
+            canonical_shortlist_found,
+            canonical_gold_reachable,
+            canonical_judge_correct,
+            counterexample_cases,
+            counterexample_replacement_built,
+            counterexample_judge_correct,
+            failures_at_retrieval,
+            failures_at_composition,
+            failures_at_judge,
             judge_correct,
             judge_replace_correct,
             judge_abstain_correct,
+            top1_hits,
+            top3_hits,
+            top10_hits,
             misses,
             judge_failures,
             per_term,
