@@ -1280,3 +1280,93 @@ button.choice-button.choice-button-keep:hover {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ── Offline eval tables ──────────────────────────────────────── */
+
+.sweep-section {
+  margin: 0.75rem 0;
+}
+
+.sweep-section > strong {
+  display: block;
+  margin-bottom: 0.4rem;
+  font-size: 13px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+}
+
+.sweep-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sweep-table th,
+.sweep-table td {
+  padding: 0.25rem 0.5rem;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+
+.sweep-table th {
+  font-weight: 600;
+  color: var(--text-muted);
+  text-align: right;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sweep-table td:first-child,
+.sweep-table th:first-child {
+  text-align: left;
+}
+
+.sweep-table td.good {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.sweep-details {
+  margin-top: 0.75rem;
+}
+
+.sweep-details summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 0.4rem 0;
+}
+
+.eval-subsection {
+  margin: 1rem 0;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.eval-subsection h4 {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.prob-dist-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+  font-size: 13px;
+}
+
+.prob-dist-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.mono {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+}

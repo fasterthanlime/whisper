@@ -4,12 +4,13 @@ import { JudgeEvalPanel } from "./components/JudgeEvalPanel";
 import { JudgeRapidFirePanel } from "./components/JudgeRapidFirePanel";
 import { RetrievalPrototypeLab } from "./components/RetrievalPrototypeLab";
 import { TranscribeDemoPanel } from "./components/TranscribeDemoPanel";
+import { OfflineJudgeEvalPanel } from "./components/OfflineJudgeEvalPanel";
 
 const WS_URL = "ws://127.0.0.1:9944";
 
 export default function App() {
   const [tab, setTab] = useState<
-    "transcribe" | "retrieval" | "rapid-fire" | "judge-eval"
+    "transcribe" | "retrieval" | "rapid-fire" | "judge-eval" | "offline-eval"
   >("rapid-fire");
 
   return (
@@ -32,6 +33,14 @@ export default function App() {
             onClick={() => setTab("judge-eval")}
           >
             Judge Eval
+          </button>
+          <button
+            role="tab"
+            aria-selected={tab === "offline-eval"}
+            className={tab === "offline-eval" ? "primary" : ""}
+            onClick={() => setTab("offline-eval")}
+          >
+            Offline Eval
           </button>
           <button
             role="tab"
@@ -59,6 +68,8 @@ export default function App() {
             <JudgeRapidFirePanel wsUrl={WS_URL} />
           ) : tab === "judge-eval" ? (
             <JudgeEvalPanel wsUrl={WS_URL} />
+          ) : tab === "offline-eval" ? (
+            <OfflineJudgeEvalPanel wsUrl={WS_URL} />
           ) : (
             <RetrievalPrototypeLab wsUrl={WS_URL} />
           )}

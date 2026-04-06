@@ -17,7 +17,9 @@ use beeml::rpc::{
     AcceptedEdit, AliasSource, BeeMl, CandidateFeatureDebug, CorrectionDebugResult,
     CorrectionRequest, CorrectionResult, FilterDecision, IdentifierFlags, RerankerDebugTrace,
     JudgeEvalFailure, JudgeOptionDebug, JudgeStateDebug, OfflineJudgeEvalRequest,
-    OfflineJudgeEvalResult, OfflineJudgeFoldResult, RapidFireChoice, RapidFireComponent,
+    OfflineJudgeEvalResult, OfflineJudgeFoldResult, ModelSummary, ThresholdRow,
+    TwoStageGridPoint, TwoStageResult, ProbDistribution,
+    RapidFireChoice, RapidFireComponent,
     RapidFireComponentChoice, RapidFireDecisionSet, RapidFireEdit,
     RejectedGroupSpan,
     RetrievalEvalMiss, RetrievalEvalTermSummary, RetrievalPrototypeEvalProgress,
@@ -2591,6 +2593,53 @@ impl BeeMl for BeeMlService {
 
         let thresholds: &[f32] = &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
 
+        fn metrics_to_row(t: f32, m: &EvalMetrics) -> ThresholdRow {
+            ThresholdRow {
+                threshold: t,
+                canonical_correct: m.canonical_correct,
+                canonical_total: m.canonical_total,
+                cx_correct: m.cx_correct,
+                cx_total: m.cx_total,
+                balanced_pct: m.balanced_pct() as f32,
+                canonical_replace_pct: m.canonical_replace_pct() as f32,
+                cx_replace_pct: m.cx_replace_pct() as f32,
+            }
+        }
+
+        fn metrics_to_summary(name: &str, t: f32, m: &EvalMetrics) -> ModelSummary {
+            ModelSummary {
+                name: name.to_string(),
+                best_threshold: t,
+                canonical_correct: m.canonical_correct,
+                canonical_total: m.canonical_total,
+                cx_correct: m.cx_correct,
+                cx_total: m.cx_total,
+                balanced_pct: m.balanced_pct() as f32,
+                canonical_replace_pct: m.canonical_replace_pct() as f32,
+                cx_replace_pct: m.cx_replace_pct() as f32,
+            }
+        }
+
+        fn collect_sweep(scored: &[ScoredCase], thresholds: &[f32], reachable_only: bool) -> Vec<ThresholdRow> {
+            thresholds.iter().map(|&t| {
+                let m = eval_at_threshold(scored, t, reachable_only);
+                metrics_to_row(t, &m)
+            }).collect()
+        }
+
+        fn make_prob_dist(label: &str, vals: &[f32]) -> ProbDistribution {
+            let p = |pct: f64| -> f32 {
+                if vals.is_empty() { return 0.0; }
+                let idx = ((vals.len() as f64 - 1.0) * pct).round() as usize;
+                vals[idx.min(vals.len() - 1)]
+            };
+            ProbDistribution {
+                label: label.to_string(),
+                n: vals.len() as u32,
+                min: p(0.0), p25: p(0.25), p50: p(0.5), p75: p(0.75), max: p(1.0),
+            }
+        }
+
         fn print_sweep(label: &str, scored: &[ScoredCase], thresholds: &[f32], reachable_only: bool) {
             println!("\n  [{label}] threshold sweep:");
             for &t in thresholds {
@@ -2623,10 +2672,11 @@ impl BeeMl for BeeMlService {
         println!("\n--- Eval 1: Baselines ---");
 
         // 1a. Deterministic baseline
+        let deterministic_sweep;
         {
             println!("\n  [deterministic] acceptance_score threshold sweep:");
             let det_thresholds: &[f32] = &[0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
-            for &t in det_thresholds {
+            deterministic_sweep = det_thresholds.iter().map(|&t| {
                 let m = eval_deterministic_kfold(&probed_cases, &case_folds, folds, t);
                 println!(
                     "    T={t:.1}  can {}/{} ({:.1}%)  cx {}/{} ({:.1}%)  bal {:.1}%  repl: can {:.1}% cx {:.1}%",
@@ -2635,24 +2685,29 @@ impl BeeMl for BeeMlService {
                     m.balanced_pct(),
                     m.canonical_replace_pct(), m.cx_replace_pct(),
                 );
-            }
+                metrics_to_row(t, &m)
+            }).collect::<Vec<_>>();
         }
 
         // 1b. Seed-only baseline — train once, sweep thresholds
         let scored_seed = train_and_score_kfold(&probed_cases, &case_folds, folds, TrainMode::None, beeml::judge::FeatureSlice::All);
         print_sweep("seed_only", &scored_seed, thresholds, false);
+        let seed_only_sweep = collect_sweep(&scored_seed, thresholds, false);
 
         // 1c. Taught (current teach_choice replay)
         let scored_taught = train_and_score_kfold(&probed_cases, &case_folds, folds, TrainMode::TeachChoice { epochs: train_epochs }, beeml::judge::FeatureSlice::All);
         print_sweep("taught", &scored_taught, thresholds, false);
+        let taught_sweep = collect_sweep(&scored_taught, thresholds, false);
 
         // ── Eval 2+3: Case-balanced FTRL + threshold sweep ─────────────
         println!("\n--- Eval 2: Case-balanced FTRL ---");
         let scored_balanced = train_and_score_kfold(&probed_cases, &case_folds, folds, TrainMode::CaseBalanced { epochs: train_epochs, hard_neg_cap: 3 }, beeml::judge::FeatureSlice::All);
         print_sweep("case_balanced", &scored_balanced, thresholds, false);
+        let case_balanced_sweep = collect_sweep(&scored_balanced, thresholds, false);
 
         // ── Eval 4: Feature ablation (on case-balanced) ────────────────
         println!("\n--- Eval 4: Feature ablation (case-balanced, best threshold) ---");
+        let ablation_results;
         {
             use beeml::judge::FeatureSlice;
             let slices = [
@@ -2661,7 +2716,7 @@ impl BeeMl for BeeMlService {
                 FeatureSlice::PlusContext,
                 FeatureSlice::All,
             ];
-            for slice in &slices {
+            ablation_results = slices.iter().map(|slice| {
                 let scored = train_and_score_kfold(&probed_cases, &case_folds, folds, TrainMode::CaseBalanced { epochs: train_epochs, hard_neg_cap: 3 }, *slice);
                 let (bt, m) = best_threshold(&scored, thresholds, false);
                 println!(
@@ -2672,7 +2727,8 @@ impl BeeMl for BeeMlService {
                     m.balanced_pct(),
                     m.canonical_replace_pct(), m.cx_replace_pct(),
                 );
-            }
+                metrics_to_summary(slice.name(), bt, &m)
+            }).collect::<Vec<_>>();
         }
 
         // ── Eval 5: Reachable-only ─────────────────────────────────────
@@ -2682,6 +2738,7 @@ impl BeeMl for BeeMlService {
 
         // ── Eval 6: Formulation comparison ─────────────────────────────
         println!("\n--- Eval 6: Formulation comparison (best threshold each) ---");
+        let formulation_results;
         {
             let formulations: &[(&str, TrainMode)] = &[
                 ("independent_binary", TrainMode::TeachChoice { epochs: train_epochs }),
@@ -2689,7 +2746,7 @@ impl BeeMl for BeeMlService {
                 ("freeze_dense", TrainMode::FreezeDense { epochs: train_epochs, hard_neg_cap: 3 }),
                 ("casewise_softmax", TrainMode::CasewiseSoftmax { epochs: train_epochs }),
             ];
-            for (name, train_mode) in formulations {
+            formulation_results = formulations.iter().map(|(name, train_mode)| {
                 let scored = train_and_score_kfold(&probed_cases, &case_folds, folds, train_mode.clone(), beeml::judge::FeatureSlice::All);
                 let (bt, m) = best_threshold(&scored, thresholds, false);
                 println!(
@@ -2699,11 +2756,13 @@ impl BeeMl for BeeMlService {
                     m.balanced_pct(),
                     m.canonical_replace_pct(), m.cx_replace_pct(),
                 );
-            }
+                metrics_to_summary(name, bt, &m)
+            }).collect::<Vec<_>>();
         }
 
         // ── Eval 8: Two-stage (span gate + candidate ranker) ──────────
         println!("\n--- Eval 8: Two-stage (span gate + candidate ranker) ---");
+        let two_stage_result;
         {
             let two_stage_scored = train_and_score_twostage_kfold(
                 &probed_cases, &case_folds, folds, train_epochs, 3,
@@ -2711,6 +2770,7 @@ impl BeeMl for BeeMlService {
 
             // Stage A alone: gate accuracy at various thresholds
             println!("\n  Stage A (gate) alone:");
+            let mut gate_sweep = Vec::new();
             for &gt in thresholds {
                 let mut gate_pos_total = 0u32;
                 let mut gate_pos_correct = 0u32;
@@ -2732,13 +2792,23 @@ impl BeeMl for BeeMlService {
                 let neg_pct = if gate_neg_total > 0 { gate_neg_correct as f64 / gate_neg_total as f64 * 100.0 } else { 0.0 };
                 let bal = (pos_pct + neg_pct) / 2.0;
                 println!("    GT={gt:.1}  open_correct {gate_pos_correct}/{gate_pos_total} ({pos_pct:.1}%)  closed_correct {gate_neg_correct}/{gate_neg_total} ({neg_pct:.1}%)  bal {bal:.1}%");
+                gate_sweep.push(ThresholdRow {
+                    threshold: gt,
+                    canonical_correct: gate_pos_correct,
+                    canonical_total: gate_pos_total,
+                    cx_correct: gate_neg_correct,
+                    cx_total: gate_neg_total,
+                    balanced_pct: bal as f32,
+                    canonical_replace_pct: pos_pct as f32,
+                    cx_replace_pct: (100.0 - neg_pct) as f32,
+                });
             }
 
             // Stage B alone: ranker top-1 accuracy on gold-present spans
             println!("\n  Stage B (ranker) alone (gold-verified spans):");
+            let mut ranker_correct = 0u32;
+            let mut ranker_total = 0u32;
             {
-                let mut ranker_correct = 0u32;
-                let mut ranker_total = 0u32;
                 for sc in &two_stage_scored {
                     if sc.should_abstain || !sc.reachable { continue; }
                     ranker_total += 1;
@@ -2779,8 +2849,25 @@ impl BeeMl for BeeMlService {
                 best_m.canonical_replace_pct(), best_m.cx_replace_pct(),
             );
 
+            fn metrics_to_grid(gt: f32, rt: f32, m: &EvalMetrics) -> TwoStageGridPoint {
+                TwoStageGridPoint {
+                    gate_threshold: gt,
+                    ranker_threshold: rt,
+                    canonical_correct: m.canonical_correct,
+                    canonical_total: m.canonical_total,
+                    cx_correct: m.cx_correct,
+                    cx_total: m.cx_total,
+                    balanced_pct: m.balanced_pct() as f32,
+                    canonical_replace_pct: m.canonical_replace_pct() as f32,
+                    cx_replace_pct: m.cx_replace_pct() as f32,
+                }
+            }
+
+            let best_grid = metrics_to_grid(best_gt, best_rt, &best_m);
+
             // Show a few interesting grid points
             println!("\n    Selected grid points:");
+            let mut grid_points = Vec::new();
             for &gt in &[0.2, 0.3, 0.4, 0.5] {
                 for &rt in &[0.2, 0.3, 0.4, 0.5] {
                     let m = eval_twostage_at_thresholds(&two_stage_scored, gt, rt);
@@ -2790,6 +2877,7 @@ impl BeeMl for BeeMlService {
                         m.balanced_pct(),
                         m.canonical_replace_pct(), m.cx_replace_pct(),
                     );
+                    grid_points.push(metrics_to_grid(gt, rt, &m));
                 }
             }
 
@@ -2836,6 +2924,18 @@ impl BeeMl for BeeMlService {
             ranker_nongold_probs.sort_by(|a, b| a.total_cmp(b));
             println!("    Gold=best (correct rank):    {}", pctl(&ranker_gold_probs));
             println!("    Gold!=best (wrong rank):     {}", pctl(&ranker_nongold_probs));
+
+            two_stage_result = TwoStageResult {
+                gate_sweep,
+                ranker_top1_correct: ranker_correct,
+                ranker_top1_total: ranker_total,
+                best: best_grid,
+                grid_points,
+                gate_canonical_dist: make_prob_dist("canonical", &gate_can_probs),
+                gate_cx_dist: make_prob_dist("counterexample", &gate_cx_probs),
+                ranker_gold_best_dist: make_prob_dist("gold=best", &ranker_gold_probs),
+                ranker_gold_not_best_dist: make_prob_dist("gold!=best", &ranker_nongold_probs),
+            };
         }
 
         // ── Probability distribution diagnostics ────────────────────────
@@ -2976,8 +3076,19 @@ impl BeeMl for BeeMlService {
             }
         }
 
-        // Return a summary (the RPC result is less important than stdout now)
         Ok(OfflineJudgeEvalResult {
+            canonical_cases: canonical_count as u32,
+            gold_retrieved: canonical_with_gold as u32,
+            gold_verified: canonical_gold_verified as u32,
+            gold_reachable: two_stage_result.best.canonical_total,
+            counterexample_cases: cx_count as u32,
+            deterministic_sweep,
+            seed_only_sweep,
+            taught_sweep,
+            case_balanced_sweep,
+            ablation_results,
+            formulation_results,
+            two_stage: two_stage_result,
             canonical_correct: 0,
             canonical_total: 0,
             counterexample_correct: 0,

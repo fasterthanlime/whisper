@@ -461,8 +461,106 @@ pub struct OfflineJudgeFoldResult {
     pub counterexample_total: u32,
 }
 
+/// A single row in a threshold sweep table.
+#[derive(Clone, Debug, Facet)]
+pub struct ThresholdRow {
+    pub threshold: f32,
+    pub canonical_correct: u32,
+    pub canonical_total: u32,
+    pub cx_correct: u32,
+    pub cx_total: u32,
+    pub balanced_pct: f32,
+    pub canonical_replace_pct: f32,
+    pub cx_replace_pct: f32,
+}
+
+/// Summary for a single model/formulation at its best threshold.
+#[derive(Clone, Debug, Facet)]
+pub struct ModelSummary {
+    pub name: String,
+    pub best_threshold: f32,
+    pub canonical_correct: u32,
+    pub canonical_total: u32,
+    pub cx_correct: u32,
+    pub cx_total: u32,
+    pub balanced_pct: f32,
+    pub canonical_replace_pct: f32,
+    pub cx_replace_pct: f32,
+}
+
+/// Two-stage threshold grid point.
+#[derive(Clone, Debug, Facet)]
+pub struct TwoStageGridPoint {
+    pub gate_threshold: f32,
+    pub ranker_threshold: f32,
+    pub canonical_correct: u32,
+    pub canonical_total: u32,
+    pub cx_correct: u32,
+    pub cx_total: u32,
+    pub balanced_pct: f32,
+    pub canonical_replace_pct: f32,
+    pub cx_replace_pct: f32,
+}
+
+/// Probability distribution summary.
+#[derive(Clone, Debug, Facet)]
+pub struct ProbDistribution {
+    pub label: String,
+    pub n: u32,
+    pub min: f32,
+    pub p25: f32,
+    pub p50: f32,
+    pub p75: f32,
+    pub max: f32,
+}
+
+/// Two-stage eval results.
+#[derive(Clone, Debug, Facet)]
+pub struct TwoStageResult {
+    /// Gate-only threshold sweep
+    pub gate_sweep: Vec<ThresholdRow>,
+    /// Ranker top-1 accuracy
+    pub ranker_top1_correct: u32,
+    pub ranker_top1_total: u32,
+    /// Best composed result
+    pub best: TwoStageGridPoint,
+    /// Selected grid points for the threshold sweep table
+    pub grid_points: Vec<TwoStageGridPoint>,
+    /// Gate probability distributions
+    pub gate_canonical_dist: ProbDistribution,
+    pub gate_cx_dist: ProbDistribution,
+    /// Ranker probability distributions
+    pub ranker_gold_best_dist: ProbDistribution,
+    pub ranker_gold_not_best_dist: ProbDistribution,
+}
+
 #[derive(Clone, Debug, Facet)]
 pub struct OfflineJudgeEvalResult {
+    /// Dataset stats
+    pub canonical_cases: u32,
+    pub gold_retrieved: u32,
+    pub gold_verified: u32,
+    pub gold_reachable: u32,
+    pub counterexample_cases: u32,
+
+    /// Eval 1: Baseline threshold sweeps
+    pub deterministic_sweep: Vec<ThresholdRow>,
+    pub seed_only_sweep: Vec<ThresholdRow>,
+    pub taught_sweep: Vec<ThresholdRow>,
+
+    /// Eval 2: Case-balanced sweep
+    pub case_balanced_sweep: Vec<ThresholdRow>,
+
+    /// Eval 4: Feature ablation summaries (best threshold each)
+    pub ablation_results: Vec<ModelSummary>,
+
+    /// Eval 6: Formulation comparison (best threshold each)
+    pub formulation_results: Vec<ModelSummary>,
+
+    /// Eval 8: Two-stage results
+    pub two_stage: TwoStageResult,
+
+    /// Legacy fields
     pub canonical_correct: u32,
     pub canonical_total: u32,
     pub counterexample_correct: u32,
