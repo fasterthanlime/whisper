@@ -61,10 +61,10 @@ const FEATURE_NAMES: &[&str] = &[
     "span_text_prior_correct_count",
 ];
 
-const NUM_DENSE: usize = 38;
+pub const NUM_DENSE: usize = 38;
 
 /// Offset for sparse hashed features so they don't collide with dense indices 0..31.
-const SPARSE_OFFSET: u64 = 1000;
+pub const SPARSE_OFFSET: u64 = 1000;
 /// Hash space for sparse context features.
 const SPARSE_BUCKETS: u64 = 1 << 14; // 16384
 
@@ -201,7 +201,7 @@ struct TermMemoryEntry {
 
 /// Memory lookup passed to feature building.
 #[derive(Clone, Debug, Default)]
-struct TermMemory {
+pub struct TermMemory {
     terms: HashMap<String, TermMemoryEntry>,
     /// How many times a span text was kept as correct (user chose keep_original).
     span_text_correct: HashMap<String, u32>,
@@ -268,10 +268,10 @@ pub struct JudgeOption {
 }
 
 #[derive(Clone, Debug)]
-struct JudgeExample {
-    alias_id: u32,
-    term: String,
-    features: Vec<Feature>,
+pub struct JudgeExample {
+    pub alias_id: u32,
+    pub term: String,
+    pub features: Vec<Feature>,
 }
 
 impl Default for OnlineJudge {
@@ -289,6 +289,20 @@ impl Default for OnlineJudge {
             "judge initialized with seed weights"
         );
         judge
+    }
+}
+
+impl OnlineJudge {
+    /// Create a new judge without tracing (for batch eval).
+    pub fn new_quiet() -> Self {
+        let mut model = SparseFtrl::new(1.0, 1.0, 0.0001, 0.001);
+        seed_model(&mut model);
+        Self {
+            model,
+            update_count: 0,
+            memory: TermMemory::default(),
+            event_log: Vec::new(),
+        }
     }
 }
 
@@ -465,6 +479,106 @@ impl OnlineJudge {
         score_examples(&self.model, &examples)
     }
 
+    /// Case-balanced training: each case contributes bounded weight.
+    /// For canonical (gold_alias_id = Some): 1 positive + up to hard_neg_cap hard negatives.
+    /// For counterexample (gold_alias_id = None): single hardest false positive as negative.
+    pub fn train_balanced(
+        &mut self,
+        span: &TranscriptSpan,
+        candidates: &[(CandidateFeatureRow, IdentifierFlags)],
+        gold_alias_id: Option<u32>,
+        ctx: &SpanContext,
+        hard_neg_cap: usize,
+    ) {
+        let examples = build_examples(span, candidates, ctx, &self.memory);
+        if examples.is_empty() {
+            return;
+        }
+
+        if let Some(gold_id) = gold_alias_id {
+            // Canonical: train gold as positive
+            if let Some(gold) = examples.iter().find(|e| e.alias_id == gold_id) {
+                self.model.update(&gold.features, true);
+            }
+            // Hard negatives: top-scoring non-gold candidates
+            let mut negatives: Vec<&JudgeExample> = examples
+                .iter()
+                .filter(|e| e.alias_id != gold_id)
+                .collect();
+            negatives.sort_by(|a, b| {
+                let sa = self.model.predict(&a.features);
+                let sb = self.model.predict(&b.features);
+                sb.total_cmp(&sa)
+            });
+            for neg in negatives.into_iter().take(hard_neg_cap) {
+                self.model.update(&neg.features, false);
+            }
+        } else {
+            // Counterexample: single hardest false positive
+            let hardest = examples
+                .iter()
+                .max_by(|a, b| {
+                    let sa = self.model.predict(&a.features);
+                    let sb = self.model.predict(&b.features);
+                    sa.total_cmp(&sb)
+                });
+            if let Some(neg) = hardest {
+                self.model.update(&neg.features, false);
+            }
+        }
+    }
+
+    /// Case-wise softmax training: all candidates + keep_original compete.
+    /// gold_index is the index into the candidate list that should win,
+    /// or None if keep_original should win.
+    pub fn train_softmax(
+        &mut self,
+        span: &TranscriptSpan,
+        candidates: &[(CandidateFeatureRow, IdentifierFlags)],
+        gold_alias_id: Option<u32>,
+        ctx: &SpanContext,
+    ) {
+        let examples = build_examples(span, candidates, ctx, &self.memory);
+        if examples.is_empty() {
+            return;
+        }
+
+        // Build feature vecs for all candidates + keep_original
+        let mut all_features: Vec<Vec<Feature>> = examples
+            .iter()
+            .map(|e| e.features.clone())
+            .collect();
+
+        // keep_original candidate: bias=1, candidate scores=0, but context/ASR features present
+        let keep_features = build_keep_original_features(span, ctx);
+        all_features.push(keep_features);
+
+        // Gold index: if gold_alias_id matches a candidate, use that index.
+        // Otherwise (keep_original), gold is the last index.
+        let gold_index = if let Some(gold_id) = gold_alias_id {
+            examples.iter().position(|e| e.alias_id == gold_id)
+                .unwrap_or(all_features.len() - 1) // fallback to keep_original
+        } else {
+            all_features.len() - 1 // keep_original
+        };
+
+        self.model.update_softmax(
+            &all_features.iter().map(|f| f.as_slice()).collect::<Vec<_>>()
+                .iter().map(|f| f.to_vec()).collect::<Vec<_>>(),
+            gold_index,
+        );
+    }
+
+    /// Access the underlying model for direct scoring in eval.
+    pub fn model(&self) -> &SparseFtrl {
+        &self.model
+    }
+
+    /// Mutable access to the underlying model for ablated training.
+    pub fn model_mut(&mut self) -> &mut SparseFtrl {
+        &mut self.model
+    }
+
     /// Get a reference to the event log for persistence.
     pub fn event_log(&self) -> &[CorrectionEvent] {
         &self.event_log
@@ -499,7 +613,7 @@ impl OnlineJudge {
     }
 }
 
-fn build_examples(
+pub fn build_examples(
     span: &TranscriptSpan,
     candidates: &[(CandidateFeatureRow, IdentifierFlags)],
     ctx: &SpanContext,
@@ -592,7 +706,7 @@ fn build_examples(
         .collect()
 }
 
-fn score_examples(model: &SparseFtrl, examples: &[JudgeExample]) -> Vec<JudgeOption> {
+pub fn score_examples(model: &SparseFtrl, examples: &[JudgeExample]) -> Vec<JudgeOption> {
     let mut options: Vec<JudgeOption> = examples
         .iter()
         .map(|example| {
@@ -716,6 +830,100 @@ pub fn extract_span_context(
         sentence_start,
         app_id: None,
     }
+}
+
+/// Build features for a synthetic "keep_original" candidate in softmax formulation.
+/// Has context + ASR features but no candidate-specific phonetic scores.
+pub fn build_keep_original_features(span: &TranscriptSpan, ctx: &SpanContext) -> Vec<Feature> {
+    let span_token_count = (span.token_end - span.token_start) as f64;
+    let span_phone_count = span.ipa_tokens.len() as f64;
+    let span_low_content = is_low_content_span(&span.text) as u8 as f64;
+    let mean_lp = span.mean_logprob.unwrap_or(0.0) as f64 / 5.0;
+    let min_lp = span.min_logprob.unwrap_or(0.0) as f64 / 5.0;
+    let mean_m = span.mean_margin.unwrap_or(0.0) as f64 / 5.0;
+    let min_m = span.min_margin.unwrap_or(0.0) as f64 / 5.0;
+
+    let mut features = vec![
+        Feature { index: 0, value: 1.0 },   // bias
+        // indices 1-24: candidate-specific scores = 0 (no candidate)
+        Feature { index: 25, value: span_token_count / 4.0 },
+        Feature { index: 26, value: span_phone_count / 12.0 },
+        Feature { index: 27, value: span_low_content },
+        Feature { index: 28, value: mean_lp },
+        Feature { index: 29, value: min_lp },
+        Feature { index: 30, value: mean_m },
+        Feature { index: 31, value: min_m },
+        // indices 32-37: memory = 0 (no candidate)
+    ];
+
+    // Context features (same as any candidate, but no TERM= features)
+    if let Some(l1) = ctx.left_tokens.first() {
+        features.push(Feature { index: hash_feature(&format!("L1={l1}")), value: 1.0 });
+    }
+    if ctx.left_tokens.len() >= 2 {
+        let bigram = format!("{}_{}", ctx.left_tokens[0], ctx.left_tokens[1]);
+        features.push(Feature { index: hash_feature(&format!("L2={bigram}")), value: 1.0 });
+    }
+    if let Some(r1) = ctx.right_tokens.first() {
+        features.push(Feature { index: hash_feature(&format!("R1={r1}")), value: 1.0 });
+    }
+    if ctx.right_tokens.len() >= 2 {
+        let bigram = format!("{}_{}", ctx.right_tokens[0], ctx.right_tokens[1]);
+        features.push(Feature { index: hash_feature(&format!("R2={bigram}")), value: 1.0 });
+    }
+    if ctx.code_like {
+        features.push(Feature { index: hash_feature("CTX=code"), value: 1.0 });
+    }
+    if ctx.prose_like {
+        features.push(Feature { index: hash_feature("CTX=prose"), value: 1.0 });
+    }
+    if ctx.list_like {
+        features.push(Feature { index: hash_feature("CTX=list"), value: 1.0 });
+    }
+    if ctx.sentence_start {
+        features.push(Feature { index: hash_feature("CTX=sent_start"), value: 1.0 });
+    }
+    if let Some(app) = &ctx.app_id {
+        features.push(Feature { index: hash_feature(&format!("APP={app}")), value: 1.0 });
+    }
+
+    features
+}
+
+/// Feature slice definitions for ablation.
+#[derive(Clone, Copy, Debug)]
+pub enum FeatureSlice {
+    /// Indices 0-27: phonetic/structural only
+    PhoneticOnly,
+    /// Indices 0-31: + ASR uncertainty
+    PlusAsr,
+    /// Indices 0-31 + sparse context features
+    PlusContext,
+    /// All features (0-37 + sparse)
+    All,
+}
+
+impl FeatureSlice {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::PhoneticOnly => "phonetic_only",
+            Self::PlusAsr => "+asr",
+            Self::PlusContext => "+context",
+            Self::All => "all",
+        }
+    }
+}
+
+/// Filter features to only include those allowed by the slice.
+pub fn filter_features(features: &[Feature], slice: FeatureSlice) -> Vec<Feature> {
+    features.iter().copied().filter(|f| {
+        match slice {
+            FeatureSlice::PhoneticOnly => f.index < 28,
+            FeatureSlice::PlusAsr => f.index < 32,
+            FeatureSlice::PlusContext => f.index < 32 || f.index >= SPARSE_OFFSET,
+            FeatureSlice::All => true,
+        }
+    }).collect()
 }
 
 #[cfg(test)]

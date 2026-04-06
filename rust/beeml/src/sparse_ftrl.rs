@@ -111,6 +111,42 @@ impl SparseFtrl {
     pub fn weight_at(&self, index: u64) -> f64 {
         self.weight_for(index)
     }
+
+    /// Softmax update: treat candidates as a multi-class problem.
+    /// `gold_index` is the index into `candidates` that should win.
+    /// Gradient for each candidate i: softmax_prob_i - (1 if i == gold, else 0).
+    pub fn update_softmax(&mut self, candidates: &[Vec<Feature>], gold_index: usize) {
+        if candidates.is_empty() {
+            return;
+        }
+        // Compute logits
+        let logits: Vec<f64> = candidates.iter().map(|f| self.predict(f)).collect();
+        // Numerically stable softmax
+        let max_logit = logits.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let exps: Vec<f64> = logits.iter().map(|&l| (l - max_logit).exp()).collect();
+        let sum_exp: f64 = exps.iter().sum();
+        let probs: Vec<f64> = exps.iter().map(|&e| e / sum_exp).collect();
+
+        // Update each candidate with gradient = prob - target
+        for (i, features) in candidates.iter().enumerate() {
+            let target = if i == gold_index { 1.0 } else { 0.0 };
+            let g = probs[i] - target;
+            for f in features {
+                let g_i = g * f.value;
+                let (z_old, n_old) = self.accumulators.get(&f.index).copied().unwrap_or((0.0, 0.0));
+                let w_i = if z_old.abs() <= self.l1 {
+                    0.0
+                } else {
+                    let sign = if z_old > 0.0 { 1.0 } else { -1.0 };
+                    -(z_old - sign * self.l1) / ((self.beta + n_old.sqrt()) / self.alpha + self.l2)
+                };
+                let sigma = ((n_old + g_i * g_i).sqrt() - n_old.sqrt()) / self.alpha;
+                let z_new = z_old + g_i - sigma * w_i;
+                let n_new = n_old + g_i * g_i;
+                self.accumulators.insert(f.index, (z_new, n_new));
+            }
+        }
+    }
 }
 
 fn sigmoid(x: f64) -> f64 {

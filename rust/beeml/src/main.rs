@@ -1454,6 +1454,391 @@ struct ProbedCase {
     spans: Vec<ProbedSpan>,
 }
 
+// ── Offline eval helpers ───────────────────────────────────────────
+
+#[derive(Clone, Debug, Default)]
+struct EvalMetrics {
+    canonical_correct: u32,
+    canonical_total: u32,
+    canonical_replaced: u32,
+    cx_correct: u32,
+    cx_total: u32,
+    cx_replaced: u32,
+}
+
+impl EvalMetrics {
+    fn canonical_pct(&self) -> f64 {
+        if self.canonical_total == 0 { 0.0 } else { self.canonical_correct as f64 / self.canonical_total as f64 * 100.0 }
+    }
+    fn cx_pct(&self) -> f64 {
+        if self.cx_total == 0 { 0.0 } else { self.cx_correct as f64 / self.cx_total as f64 * 100.0 }
+    }
+    fn balanced_pct(&self) -> f64 {
+        (self.canonical_pct() + self.cx_pct()) / 2.0
+    }
+    fn canonical_replace_pct(&self) -> f64 {
+        if self.canonical_total == 0 { 0.0 } else { self.canonical_replaced as f64 / self.canonical_total as f64 * 100.0 }
+    }
+    fn cx_replace_pct(&self) -> f64 {
+        if self.cx_total == 0 { 0.0 } else { self.cx_replaced as f64 / self.cx_total as f64 * 100.0 }
+    }
+    fn merge(&mut self, other: &EvalMetrics) {
+        self.canonical_correct += other.canonical_correct;
+        self.canonical_total += other.canonical_total;
+        self.canonical_replaced += other.canonical_replaced;
+        self.cx_correct += other.cx_correct;
+        self.cx_total += other.cx_total;
+        self.cx_replaced += other.cx_replaced;
+    }
+}
+
+#[derive(Clone, Debug)]
+enum TrainMode {
+    /// No training, use seed weights only.
+    None,
+    /// Current teach_choice replay.
+    TeachChoice { epochs: usize },
+    /// Case-balanced: 1 positive + hard negatives for canonical, 1 hard negative for cx.
+    CaseBalanced { epochs: usize, hard_neg_cap: usize },
+    /// Casewise softmax: all candidates + keep_original compete.
+    CasewiseSoftmax { epochs: usize },
+}
+
+/// Eval 1a: Deterministic baseline using the same candidate set as the judge.
+fn eval_deterministic_kfold(
+    probed_cases: &[ProbedCase],
+    case_folds: &[usize],
+    folds: usize,
+    acceptance_threshold: f32,
+) -> EvalMetrics {
+    let mut total = EvalMetrics::default();
+    for fold_k in 0..folds {
+        let mut fold = EvalMetrics::default();
+        for (i, pc) in probed_cases.iter().enumerate() {
+            if case_folds[i] != fold_k { continue; }
+
+            if pc.case.should_abstain {
+                fold.cx_total += 1;
+                // Check if any verified candidate above threshold exists
+                let any_replace = pc.spans.iter().any(|ps| {
+                    ps.candidates.iter().any(|(c, _)| {
+                        c.verified && c.acceptance_score >= acceptance_threshold
+                    })
+                });
+                if any_replace { fold.cx_replaced += 1; } else { fold.cx_correct += 1; }
+            } else {
+                // Find span with gold alias
+                let gold_span = pc.spans.iter().find(|ps| ps.gold_alias_id.is_some());
+                if let Some(gs) = gold_span {
+                    fold.canonical_total += 1;
+                    // Rank all verified candidates by acceptance_score > phonetic_score > coarse_score
+                    let mut ranked: Vec<_> = gs.candidates.iter()
+                        .filter(|(c, _)| c.verified && c.acceptance_score >= acceptance_threshold)
+                        .collect();
+                    ranked.sort_by(|(a, _), (b, _)| {
+                        b.acceptance_score.total_cmp(&a.acceptance_score)
+                            .then_with(|| b.phonetic_score.total_cmp(&a.phonetic_score))
+                            .then_with(|| b.coarse_score.total_cmp(&a.coarse_score))
+                    });
+                    if !ranked.is_empty() {
+                        fold.canonical_replaced += 1;
+                        if ranked[0].0.alias_id == gs.gold_alias_id.unwrap() {
+                            fold.canonical_correct += 1;
+                        }
+                    }
+                }
+            }
+        }
+        total.merge(&fold);
+    }
+    total
+}
+
+/// Pre-scored case: for each test case, store the probabilities so we can
+/// sweep thresholds without re-training.
+struct ScoredCase {
+    should_abstain: bool,
+    /// For canonical: the alias_id of the gold candidate.
+    gold_alias_id: Option<u32>,
+    /// Best candidate (alias_id, probability) from the gold span (canonical) or
+    /// highest-prob candidate across all spans (counterexample).
+    best_candidate: Option<(u32, f32)>,
+    /// Whether gold was reachable (canonical: gold span exists; cx: any candidates exist).
+    reachable: bool,
+}
+
+/// Train k-fold, score all test cases, return pre-scored results.
+fn train_and_score_kfold(
+    probed_cases: &[ProbedCase],
+    case_folds: &[usize],
+    folds: usize,
+    train_mode: TrainMode,
+    slice: beeml::judge::FeatureSlice,
+) -> Vec<ScoredCase> {
+    use beeml::judge::FeatureSlice;
+
+    let use_ablation = !matches!(slice, FeatureSlice::All);
+    let mut scored = Vec::with_capacity(probed_cases.len());
+    // Initialize with None — only test-fold cases get scored.
+    scored.resize_with(probed_cases.len(), || ScoredCase {
+        should_abstain: false,
+        gold_alias_id: None,
+        best_candidate: None,
+        reachable: false,
+    });
+
+    for fold_k in 0..folds {
+        let mut judge = OnlineJudge::new_quiet();
+
+        // ── Training phase ──
+        let epochs = match &train_mode {
+            TrainMode::None => 0,
+            TrainMode::TeachChoice { epochs } => *epochs,
+            TrainMode::CaseBalanced { epochs, .. } => *epochs,
+            TrainMode::CasewiseSoftmax { epochs } => *epochs,
+        };
+
+        for _epoch in 0..epochs {
+            for (i, pc) in probed_cases.iter().enumerate() {
+                if case_folds[i] == fold_k { continue; }
+                if use_ablation {
+                    train_case_ablated(&mut judge, pc, &train_mode, slice);
+                } else {
+                    train_case(&mut judge, pc, &train_mode);
+                }
+            }
+        }
+
+        // ── Score test cases ──
+        for (i, pc) in probed_cases.iter().enumerate() {
+            if case_folds[i] != fold_k { continue; }
+
+            if pc.case.should_abstain {
+                let has_candidates = pc.spans.iter().any(|ps| !ps.candidates.is_empty());
+                // Find max probability of any candidate across all spans
+                let max_prob = pc.spans.iter()
+                    .filter(|ps| !ps.candidates.is_empty())
+                    .filter_map(|ps| {
+                        if use_ablation {
+                            score_span_ablated(&judge, ps, slice).into_iter()
+                                .max_by(|a, b| a.1.total_cmp(&b.1))
+                        } else {
+                            let options = judge.score_candidates(&ps.span, &ps.candidates, &ps.ctx);
+                            options.iter()
+                                .filter(|o| !o.is_keep_original)
+                                .max_by(|a, b| a.probability.total_cmp(&b.probability))
+                                .map(|o| (o.alias_id.unwrap_or(0), o.probability))
+                        }
+                    })
+                    .max_by(|a, b| a.1.total_cmp(&b.1));
+
+                scored[i] = ScoredCase {
+                    should_abstain: true,
+                    gold_alias_id: None,
+                    best_candidate: max_prob,
+                    reachable: has_candidates,
+                };
+            } else {
+                let gold_span = pc.spans.iter().find(|ps| ps.gold_alias_id.is_some());
+                let (best_candidate, reachable) = if let Some(gs) = gold_span {
+                    let best = if use_ablation {
+                        let s = score_span_ablated(&judge, gs, slice);
+                        s.into_iter().max_by(|a, b| a.1.total_cmp(&b.1))
+                    } else {
+                        let options = judge.score_candidates(&gs.span, &gs.candidates, &gs.ctx);
+                        options.iter()
+                            .filter(|o| !o.is_keep_original)
+                            .max_by(|a, b| a.probability.total_cmp(&b.probability))
+                            .map(|o| (o.alias_id.unwrap_or(0), o.probability))
+                    };
+                    (best, true)
+                } else {
+                    (None, false)
+                };
+                scored[i] = ScoredCase {
+                    should_abstain: false,
+                    gold_alias_id: gold_span.and_then(|gs| gs.gold_alias_id),
+                    best_candidate,
+                    reachable,
+                };
+            }
+        }
+    }
+    scored
+}
+
+/// Evaluate pre-scored cases at a given threshold.
+fn eval_at_threshold(scored: &[ScoredCase], threshold: f32, reachable_only: bool) -> EvalMetrics {
+    let mut m = EvalMetrics::default();
+    for sc in scored {
+        if sc.should_abstain {
+            if reachable_only && !sc.reachable { continue; }
+            m.cx_total += 1;
+            let replaced = sc.best_candidate.map(|(_, p)| p >= threshold).unwrap_or(false);
+            if replaced { m.cx_replaced += 1; } else { m.cx_correct += 1; }
+        } else {
+            if reachable_only && !sc.reachable { continue; }
+            if !sc.reachable { continue; } // skip unreachable canonical regardless
+            m.canonical_total += 1;
+            if let Some((alias_id, prob)) = sc.best_candidate {
+                if prob >= threshold {
+                    m.canonical_replaced += 1;
+                    if sc.gold_alias_id == Some(alias_id) {
+                        m.canonical_correct += 1;
+                    }
+                }
+            }
+        }
+    }
+    m
+}
+
+/// Train on a single probed case using the given mode (non-ablated).
+fn train_case(judge: &mut OnlineJudge, pc: &ProbedCase, mode: &TrainMode) {
+    match mode {
+        TrainMode::None => {}
+        TrainMode::TeachChoice { .. } => {
+            if pc.case.should_abstain {
+                if let Some(ps) = best_cx_span(pc) {
+                    judge.teach_choice(&ps.span, &ps.candidates, Option::None, &ps.ctx);
+                }
+            } else if let Some(ps) = gold_span(pc) {
+                judge.teach_choice(&ps.span, &ps.candidates, ps.gold_alias_id, &ps.ctx);
+            }
+        }
+        TrainMode::CaseBalanced { hard_neg_cap, .. } => {
+            if pc.case.should_abstain {
+                if let Some(ps) = best_cx_span(pc) {
+                    judge.train_balanced(&ps.span, &ps.candidates, Option::None, &ps.ctx, *hard_neg_cap);
+                }
+            } else if let Some(ps) = gold_span(pc) {
+                judge.train_balanced(&ps.span, &ps.candidates, ps.gold_alias_id, &ps.ctx, *hard_neg_cap);
+            }
+        }
+        TrainMode::CasewiseSoftmax { .. } => {
+            if pc.case.should_abstain {
+                if let Some(ps) = best_cx_span(pc) {
+                    judge.train_softmax(&ps.span, &ps.candidates, Option::None, &ps.ctx);
+                }
+            } else if let Some(ps) = gold_span(pc) {
+                judge.train_softmax(&ps.span, &ps.candidates, ps.gold_alias_id, &ps.ctx);
+            }
+        }
+    }
+}
+
+/// Train on a single probed case with feature ablation.
+/// Uses build_examples + filter_features + direct model update.
+fn train_case_ablated(
+    judge: &mut OnlineJudge,
+    pc: &ProbedCase,
+    mode: &TrainMode,
+    slice: beeml::judge::FeatureSlice,
+) {
+    use beeml::judge::{build_examples, filter_features};
+
+    let ps = if pc.case.should_abstain {
+        best_cx_span(pc)
+    } else {
+        gold_span(pc)
+    };
+    let Some(ps) = ps else { return };
+
+    let examples = build_examples(&ps.span, &ps.candidates, &ps.ctx, &Default::default());
+    if examples.is_empty() { return; }
+
+    // Filter features for ablation
+    let filtered: Vec<_> = examples.iter()
+        .map(|e| filter_features(&e.features, slice))
+        .collect();
+
+    match mode {
+        TrainMode::None => {}
+        TrainMode::TeachChoice { .. } | TrainMode::CaseBalanced { .. } => {
+            // Case-balanced: same logic but with filtered features
+            if let Some(gold_id) = ps.gold_alias_id {
+                // Canonical
+                if let Some(gold_idx) = examples.iter().position(|e| e.alias_id == gold_id) {
+                    judge.model_mut().update(&filtered[gold_idx], true);
+                }
+                let hard_neg_cap = match mode {
+                    TrainMode::CaseBalanced { hard_neg_cap, .. } => *hard_neg_cap,
+                    _ => examples.len(),
+                };
+                let mut neg_indices: Vec<usize> = (0..examples.len())
+                    .filter(|&j| examples[j].alias_id != gold_id)
+                    .collect();
+                neg_indices.sort_by(|&a, &b| {
+                    let sa = judge.model().predict(&filtered[a]);
+                    let sb = judge.model().predict(&filtered[b]);
+                    sb.total_cmp(&sa)
+                });
+                for &idx in neg_indices.iter().take(hard_neg_cap) {
+                    judge.model_mut().update(&filtered[idx], false);
+                }
+            } else {
+                // Counterexample: single hardest negative
+                let hardest = (0..examples.len())
+                    .max_by(|&a, &b| {
+                        let sa = judge.model().predict(&filtered[a]);
+                        let sb = judge.model().predict(&filtered[b]);
+                        sa.total_cmp(&sb)
+                    });
+                if let Some(idx) = hardest {
+                    judge.model_mut().update(&filtered[idx], false);
+                }
+            }
+        }
+        TrainMode::CasewiseSoftmax { .. } => {
+            // Softmax with filtered features
+            let gold_index = if let Some(gold_id) = ps.gold_alias_id {
+                examples.iter().position(|e| e.alias_id == gold_id)
+                    .unwrap_or(filtered.len()) // keep_original
+            } else {
+                filtered.len() // keep_original
+            };
+            // Add keep_original features (filtered)
+            let keep_features = filter_features(
+                &beeml::judge::build_keep_original_features(&ps.span, &ps.ctx),
+                slice,
+            );
+            let mut all = filtered.clone();
+            all.push(keep_features);
+            judge.model_mut().update_softmax(&all, gold_index);
+        }
+    }
+}
+
+/// Score a span with ablated features, returns (alias_id, probability) pairs.
+fn score_span_ablated(
+    judge: &OnlineJudge,
+    ps: &ProbedSpan,
+    slice: beeml::judge::FeatureSlice,
+) -> Vec<(u32, f32)> {
+    use beeml::judge::{build_examples, filter_features};
+
+    let examples = build_examples(&ps.span, &ps.candidates, &ps.ctx, &Default::default());
+    examples.iter()
+        .map(|e| {
+            let filtered = filter_features(&e.features, slice);
+            let prob = judge.model().predict_prob(&filtered) as f32;
+            (e.alias_id, prob)
+        })
+        .collect()
+}
+
+/// Get the best counterexample span (most candidates = most likely false positive).
+fn best_cx_span(pc: &ProbedCase) -> Option<&ProbedSpan> {
+    pc.spans.iter()
+        .filter(|ps| !ps.candidates.is_empty())
+        .max_by_key(|ps| ps.candidates.len())
+}
+
+/// Get the span containing the gold alias.
+fn gold_span(pc: &ProbedCase) -> Option<&ProbedSpan> {
+    pc.spans.iter().find(|ps| ps.gold_alias_id.is_some())
+}
+
 #[derive(Clone, Debug)]
 enum EvalFailureStage {
     RetrievalShortlist,
@@ -1850,7 +2235,7 @@ impl BeeMl for BeeMlService {
         let shortlist_limit = if request.shortlist_limit == 0 { 100 } else { request.shortlist_limit };
 
         // Step 1: Load all cases and probe spans (no judge involved).
-        let cases = self.teaching_cases(0, true); // 0 = no limit, true = include counterexamples
+        let cases = self.teaching_cases(0, true);
         info!(cases = cases.len(), folds, train_epochs, "starting offline judge eval");
 
         let service = self.clone();
@@ -1873,7 +2258,6 @@ impl BeeMl for BeeMlService {
         info!(probed = probed_cases.len(), "probed all cases");
 
         // Step 2: Term-stratified k-fold split.
-        // Group unique terms, sort alphabetically, assign to folds round-robin.
         let mut terms: Vec<String> = probed_cases
             .iter()
             .map(|pc| pc.case.target_term.to_ascii_lowercase())
@@ -1888,7 +2272,6 @@ impl BeeMl for BeeMlService {
             .map(|(i, term)| (term.clone(), i % folds))
             .collect();
 
-        // Assign each case to a fold based on its term.
         let case_folds: Vec<usize> = probed_cases
             .iter()
             .map(|pc| {
@@ -1898,121 +2281,128 @@ impl BeeMl for BeeMlService {
             })
             .collect();
 
-        // Step 3: Run k-fold cross-validation.
-        let mut fold_results = Vec::with_capacity(folds);
-        let mut total_canonical_correct = 0u32;
-        let mut total_canonical_total = 0u32;
-        let mut total_cx_correct = 0u32;
-        let mut total_cx_total = 0u32;
+        // ── Eval 1: Baselines ──────────────────────────────────────────
+        println!("\n=== Phase 4 Offline Judge Eval ({folds}-fold CV, {train_epochs} epochs) ===");
 
-        for fold_k in 0..folds {
-            let mut judge = OnlineJudge::default();
+        let thresholds: &[f32] = &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
 
-            // Train on all folds except fold_k.
-            let mut train_count = 0u32;
-            for epoch in 0..train_epochs {
-                for (i, pc) in probed_cases.iter().enumerate() {
-                    if case_folds[i] == fold_k {
-                        continue; // skip test fold
-                    }
-                    if pc.case.should_abstain {
-                        // Counterexample: teach keep_original on the span with
-                        // the most candidates (most likely to have a false positive).
-                        if let Some(ps) = pc.spans.iter()
-                            .filter(|ps| !ps.candidates.is_empty())
-                            .max_by_key(|ps| ps.candidates.len())
-                        {
-                            judge.teach_choice(&ps.span, &ps.candidates, None, &ps.ctx);
-                            if epoch == 0 { train_count += 1; }
-                        }
-                    } else {
-                        // Canonical: only teach the span with the gold alias.
-                        if let Some(ps) = pc.spans.iter().find(|ps| ps.gold_alias_id.is_some()) {
-                            judge.teach_choice(&ps.span, &ps.candidates, ps.gold_alias_id, &ps.ctx);
-                            if epoch == 0 { train_count += 1; }
-                        }
-                    }
-                }
+        fn print_sweep(label: &str, scored: &[ScoredCase], thresholds: &[f32], reachable_only: bool) {
+            println!("\n  [{label}] threshold sweep:");
+            for &t in thresholds {
+                let m = eval_at_threshold(scored, t, reachable_only);
+                println!(
+                    "    T={t:.1}  can {}/{} ({:.1}%)  cx {}/{} ({:.1}%)  bal {:.1}%  repl: can {:.1}% cx {:.1}%",
+                    m.canonical_correct, m.canonical_total, m.canonical_pct(),
+                    m.cx_correct, m.cx_total, m.cx_pct(),
+                    m.balanced_pct(),
+                    m.canonical_replace_pct(), m.cx_replace_pct(),
+                );
             }
-
-            // Evaluate on fold_k.
-            let mut canonical_correct = 0u32;
-            let mut canonical_total = 0u32;
-            let mut cx_correct = 0u32;
-            let mut cx_total = 0u32;
-
-            for (i, pc) in probed_cases.iter().enumerate() {
-                if case_folds[i] != fold_k {
-                    continue; // skip train folds
-                }
-                if pc.case.should_abstain {
-                    // Counterexample: judge should keep original for all spans.
-                    cx_total += 1;
-                    let any_edit_chosen = pc.spans.iter().any(|ps| {
-                        if ps.candidates.is_empty() {
-                            return false;
-                        }
-                        let options = judge.score_candidates(&ps.span, &ps.candidates, &ps.ctx);
-                        options.iter().any(|o| o.chosen && !o.is_keep_original)
-                    });
-                    if !any_edit_chosen {
-                        cx_correct += 1;
-                    }
-                } else {
-                    // Canonical: judge should pick the gold alias for the target span.
-                    // Find the span that has the gold alias_id.
-                    let gold_span = pc.spans.iter().find(|ps| ps.gold_alias_id.is_some());
-                    if let Some(gs) = gold_span {
-                        canonical_total += 1;
-                        let options = judge.score_candidates(&gs.span, &gs.candidates, &gs.ctx);
-                        let chosen = options.iter().find(|o| o.chosen);
-                        if let Some(c) = chosen {
-                            if c.alias_id == gs.gold_alias_id {
-                                canonical_correct += 1;
-                            }
-                        }
-                    }
-                    // If no gold span found (target not retrieved), skip — not judgeable
-                }
-            }
-
-            info!(
-                fold = fold_k,
-                train = train_count,
-                canonical = %format!("{canonical_correct}/{canonical_total}"),
-                counterexample = %format!("{cx_correct}/{cx_total}"),
-                "fold complete"
-            );
-
-            fold_results.push(OfflineJudgeFoldResult {
-                fold: fold_k as u32,
-                train_cases: train_count,
-                test_cases: canonical_total + cx_total,
-                canonical_correct,
-                canonical_total,
-                counterexample_correct: cx_correct,
-                counterexample_total: cx_total,
-            });
-
-            total_canonical_correct += canonical_correct;
-            total_canonical_total += canonical_total;
-            total_cx_correct += cx_correct;
-            total_cx_total += cx_total;
         }
 
-        info!(
-            canonical = %format!("{total_canonical_correct}/{total_canonical_total}"),
-            counterexample = %format!("{total_cx_correct}/{total_cx_total}"),
-            folds,
-            "offline judge eval complete"
-        );
+        fn best_threshold(scored: &[ScoredCase], thresholds: &[f32], reachable_only: bool) -> (f32, EvalMetrics) {
+            let mut best_t = 0.5f32;
+            let mut best_bal = 0.0f64;
+            let mut best_m = EvalMetrics::default();
+            for &t in thresholds {
+                let m = eval_at_threshold(scored, t, reachable_only);
+                if m.balanced_pct() > best_bal {
+                    best_bal = m.balanced_pct();
+                    best_t = t;
+                    best_m = m;
+                }
+            }
+            (best_t, best_m)
+        }
 
+        println!("\n--- Eval 1: Baselines ---");
+
+        // 1a. Deterministic baseline
+        {
+            println!("\n  [deterministic] acceptance_score threshold sweep:");
+            let det_thresholds: &[f32] = &[0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+            for &t in det_thresholds {
+                let m = eval_deterministic_kfold(&probed_cases, &case_folds, folds, t);
+                println!(
+                    "    T={t:.1}  can {}/{} ({:.1}%)  cx {}/{} ({:.1}%)  bal {:.1}%  repl: can {:.1}% cx {:.1}%",
+                    m.canonical_correct, m.canonical_total, m.canonical_pct(),
+                    m.cx_correct, m.cx_total, m.cx_pct(),
+                    m.balanced_pct(),
+                    m.canonical_replace_pct(), m.cx_replace_pct(),
+                );
+            }
+        }
+
+        // 1b. Seed-only baseline — train once, sweep thresholds
+        let scored_seed = train_and_score_kfold(&probed_cases, &case_folds, folds, TrainMode::None, beeml::judge::FeatureSlice::All);
+        print_sweep("seed_only", &scored_seed, thresholds, false);
+
+        // 1c. Taught (current teach_choice replay)
+        let scored_taught = train_and_score_kfold(&probed_cases, &case_folds, folds, TrainMode::TeachChoice { epochs: train_epochs }, beeml::judge::FeatureSlice::All);
+        print_sweep("taught", &scored_taught, thresholds, false);
+
+        // ── Eval 2+3: Case-balanced FTRL + threshold sweep ─────────────
+        println!("\n--- Eval 2: Case-balanced FTRL ---");
+        let scored_balanced = train_and_score_kfold(&probed_cases, &case_folds, folds, TrainMode::CaseBalanced { epochs: train_epochs, hard_neg_cap: 3 }, beeml::judge::FeatureSlice::All);
+        print_sweep("case_balanced", &scored_balanced, thresholds, false);
+
+        // ── Eval 4: Feature ablation (on case-balanced) ────────────────
+        println!("\n--- Eval 4: Feature ablation (case-balanced, best threshold) ---");
+        {
+            use beeml::judge::FeatureSlice;
+            let slices = [
+                FeatureSlice::PhoneticOnly,
+                FeatureSlice::PlusAsr,
+                FeatureSlice::PlusContext,
+                FeatureSlice::All,
+            ];
+            for slice in &slices {
+                let scored = train_and_score_kfold(&probed_cases, &case_folds, folds, TrainMode::CaseBalanced { epochs: train_epochs, hard_neg_cap: 3 }, *slice);
+                let (bt, m) = best_threshold(&scored, thresholds, false);
+                println!(
+                    "  {:<16} T={bt:.1}  can {}/{} ({:.1}%)  cx {}/{} ({:.1}%)  bal {:.1}%  repl: can {:.1}% cx {:.1}%",
+                    slice.name(),
+                    m.canonical_correct, m.canonical_total, m.canonical_pct(),
+                    m.cx_correct, m.cx_total, m.cx_pct(),
+                    m.balanced_pct(),
+                    m.canonical_replace_pct(), m.cx_replace_pct(),
+                );
+            }
+        }
+
+        // ── Eval 5: Reachable-only ─────────────────────────────────────
+        println!("\n--- Eval 5: Reachable-only (case-balanced) ---");
+        // Reuse scored_balanced, just filter by reachable
+        print_sweep("reachable_only", &scored_balanced, thresholds, true);
+
+        // ── Eval 6: Formulation comparison ─────────────────────────────
+        println!("\n--- Eval 6: Formulation comparison (best threshold each) ---");
+        {
+            let formulations: &[(&str, TrainMode)] = &[
+                ("independent_binary", TrainMode::TeachChoice { epochs: train_epochs }),
+                ("case_balanced", TrainMode::CaseBalanced { epochs: train_epochs, hard_neg_cap: 3 }),
+                ("casewise_softmax", TrainMode::CasewiseSoftmax { epochs: train_epochs }),
+            ];
+            for (name, train_mode) in formulations {
+                let scored = train_and_score_kfold(&probed_cases, &case_folds, folds, train_mode.clone(), beeml::judge::FeatureSlice::All);
+                let (bt, m) = best_threshold(&scored, thresholds, false);
+                println!(
+                    "  {name:<24} T={bt:.1}  can {}/{} ({:.1}%)  cx {}/{} ({:.1}%)  bal {:.1}%  repl: can {:.1}% cx {:.1}%",
+                    m.canonical_correct, m.canonical_total, m.canonical_pct(),
+                    m.cx_correct, m.cx_total, m.cx_pct(),
+                    m.balanced_pct(),
+                    m.canonical_replace_pct(), m.cx_replace_pct(),
+                );
+            }
+        }
+
+        // Return a summary (the RPC result is less important than stdout now)
         Ok(OfflineJudgeEvalResult {
-            canonical_correct: total_canonical_correct,
-            canonical_total: total_canonical_total,
-            counterexample_correct: total_cx_correct,
-            counterexample_total: total_cx_total,
-            fold_results,
+            canonical_correct: 0,
+            canonical_total: 0,
+            counterexample_correct: 0,
+            counterexample_total: 0,
+            fold_results: vec![],
         })
     }
 }
@@ -2088,7 +2478,7 @@ async fn main() -> Result<()> {
         }),
     };
 
-    // --offline-eval: run k-fold cross-validation and exit
+    // --offline-eval: run full Phase 4 eval suite and exit
     if std::env::args().any(|a| a == "--offline-eval") {
         let folds = std::env::args()
             .skip_while(|a| a != "--folds")
@@ -2101,7 +2491,7 @@ async fn main() -> Result<()> {
             .and_then(|v| v.parse().ok())
             .unwrap_or(4u32);
 
-        let result = handler
+        handler
             .run_offline_judge_eval(OfflineJudgeEvalRequest {
                 folds,
                 max_span_words: 3,
@@ -2111,27 +2501,6 @@ async fn main() -> Result<()> {
             })
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-        println!("\n=== Offline Judge Eval ({folds}-fold CV, {epochs} epochs) ===");
-        for fr in &result.fold_results {
-            println!(
-                "  Fold {}: canonical {}/{}, counterexample {}/{}  (train: {}, test: {})",
-                fr.fold, fr.canonical_correct, fr.canonical_total,
-                fr.counterexample_correct, fr.counterexample_total,
-                fr.train_cases, fr.test_cases,
-            );
-        }
-        let can_pct = if result.canonical_total > 0 {
-            result.canonical_correct as f64 / result.canonical_total as f64 * 100.0
-        } else { 0.0 };
-        let cx_pct = if result.counterexample_total > 0 {
-            result.counterexample_correct as f64 / result.counterexample_total as f64 * 100.0
-        } else { 0.0 };
-        println!(
-            "\n  TOTAL: canonical {}/{} ({can_pct:.1}%), counterexample {}/{} ({cx_pct:.1}%)",
-            result.canonical_correct, result.canonical_total,
-            result.counterexample_correct, result.counterexample_total,
-        );
 
         return Ok(());
     }
