@@ -40,8 +40,8 @@ bee-phonetic = { path = "../bee-phonetic" }
 anyhow = { workspace = true }
 espeak-ng = { version = "0.1.0", features = ["bundled-data-en"] }
 fnv = "1.0"
-serde = { workspace = true }
-serde_json = { workspace = true }
+facet-core = { workspace = true }
+facet-json = { workspace = true }
 tracing = "0.1"
 ```
 

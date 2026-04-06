@@ -16,7 +16,7 @@ Without bee-types, bee-correct either:
 
 ## What goes in bee-types
 
-Lightweight, serializable structs with no behavior:
+Lightweight structs with facet derives, no behavior:
 
 ```rust
 // Transcript types
@@ -51,10 +51,11 @@ pub struct TeachingEvent { ... }
 
 ```toml
 [dependencies]
-serde = { workspace = true, features = ["derive"] }
+facet-core = { workspace = true }
+facet-json = { workspace = true }
 ```
 
-That's it. No runtime, no ASR, no phonetics.
+That's it. No runtime, no ASR, no phonetics. Uses facet for derive, not serde.
 
 ## Who depends on bee-types
 
@@ -66,6 +67,6 @@ That's it. No runtime, no ASR, no phonetics.
 
 ## Validation
 
-- `cargo build -p bee-types` compiles with only serde
-- No runtime code in bee-types (no functions, just struct definitions + derives)
+- `cargo build -p bee-types` compiles with only facet
+- No runtime code in bee-types (no functions, just struct definitions + facet derives)
 - bee-correct does NOT depend on bee-transcribe
