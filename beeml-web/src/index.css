@@ -1373,20 +1373,11 @@ button.choice-button.choice-button-keep:hover {
 
 /* ── Correction Review Panel ─────────────────────────────────────── */
 
-.cr-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
 /* Track container: the sentence flows left-to-right */
 .track-container {
   font-size: 17px;
-  line-height: 1.6;
-  padding: 1rem;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  line-height: 1.8;
+  padding: 0.75rem 1rem;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1404,7 +1395,7 @@ button.choice-button.choice-button-keep:hover {
   display: inline-flex;
   flex-direction: column;
   align-items: stretch;
-  margin: 0 1px;
+  margin: 2px 1px;
   border-radius: 5px;
   overflow: hidden;
   border: 1px solid var(--border-strong);
@@ -1451,7 +1442,6 @@ button.choice-button.choice-button-keep:hover {
 }
 
 .track-resolved-original {
-  /* User kept the original — subtle warm tint */
   background: light-dark(#fff4e6, #2a2218);
   color: var(--text);
 }
@@ -1461,7 +1451,6 @@ button.choice-button.choice-button-keep:hover {
 }
 
 .track-resolved-replacement {
-  /* User accepted the correction — subtle cool tint */
   background: light-dark(#e6f2ff, #1a2232);
   color: var(--accent);
   font-weight: 600;
@@ -1486,70 +1475,178 @@ button.choice-button.choice-button-keep:hover {
   text-align: center;
 }
 
-/* Status bar */
-.cr-status-bar {
+/* ── Correction Window (macOS-like panel) ────────────────────────── */
+
+.cw-backdrop {
+  margin-top: 1rem;
   display: flex;
-  align-items: baseline;
-  gap: 0.75rem;
-  font-size: 13px;
-  flex-wrap: wrap;
+  justify-content: center;
 }
 
-.cr-status-pending {
-  font-weight: 600;
-  color: var(--warning);
-}
-
-.cr-status-accepted {
-  color: var(--success);
-}
-
-.cr-status-rejected {
-  color: var(--text-muted);
-}
-
-.cr-status-hint {
-  color: var(--text-dim);
-  font-size: 12px;
-}
-
-/* Preview, actions, empty, notes — shared */
-.cr-preview {
-  padding: 0.5rem 0.75rem;
-  background: var(--bg-surface-alt);
-  border-radius: 6px;
-  font-size: 14px;
-  display: flex;
-  gap: 0.5rem;
-  align-items: baseline;
-}
-
-.cr-preview-label {
-  font-weight: 600;
-  color: var(--text-muted);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  flex-shrink: 0;
-}
-
-.cr-preview-text {
-  color: var(--text);
-}
-
-.cr-actions {
-  display: flex;
-  gap: 0.5rem;
-  padding-top: 0.25rem;
-}
-
-.cr-empty {
-  padding: 1rem;
+.cw-window {
+  width: 100%;
+  max-width: 640px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.25),
+    0 2px 8px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
 }
 
+/* Title bar */
+.cw-titlebar {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+}
+
+.cw-titlebar-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.cw-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.cw-dot-close {
+  background: #ff5f57;
+  cursor: pointer;
+}
+
+.cw-dot-close:hover {
+  background: #e0443e;
+}
+
+.cw-dot-min {
+  background: #febc2e;
+}
+
+.cw-dot-max {
+  background: #28c840;
+}
+
+.cw-title {
+  flex: 1;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.cw-titlebar-spacer {
+  width: 54px; /* balance the dots */
+}
+
+/* Body */
+.cw-body {
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cw-instructions {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.cw-result {
+  padding: 6px 10px;
+  background: var(--bg-surface);
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.cw-no-corrections {
+  padding: 1.5rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  color: var(--text-muted);
+}
+
+/* Footer */
+.cw-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.cw-shortcut-hints {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cw-hint-text {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.cw-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--text-muted);
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  line-height: 1.4;
+}
+
+.cw-kbd-inline {
+  margin-left: 6px;
+  font-size: 13px;
+}
+
+.cw-apply-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent-text);
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.cw-apply-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.cw-apply-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+  background: var(--bg-surface-alt);
+  color: var(--text-muted);
+}
+
+/* Keep shared styles for the prototype shell */
 .cr-notes {
   padding: 0.5rem 0.75rem;
   font-size: 13px;
@@ -1561,11 +1658,4 @@ button.choice-button.choice-button-keep:hover {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-}
-
-.cr-notes code {
-  font-size: 12px;
-  background: var(--bg-surface-alt);
-  padding: 1px 4px;
-  border-radius: 3px;
 }
