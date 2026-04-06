@@ -1,4 +1,2 @@
-pub mod g2p;
-pub mod judge;
+pub use bee_correct::{g2p, judge, sparse_ftrl};
 pub mod rpc;
-pub mod sparse_ftrl;

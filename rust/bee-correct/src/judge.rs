@@ -2,8 +2,10 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::time::SystemTime;
 
-use bee_phonetic::{AliasSource, CandidateFeatureRow, IdentifierFlags, TranscriptSpan};
-use bee_phonetic::{SentenceWordToken, sentence_word_tokens};
+use bee_phonetic::{CandidateFeatureRow, sentence_word_tokens};
+// Re-export types that consumers need
+pub use bee_types::{CorrectionEvent, SpanContext};
+use bee_types::{AliasSource, IdentifierFlags, SentenceWordToken, TranscriptSpan};
 
 use crate::sparse_ftrl::{Feature, SparseFtrl};
 
@@ -103,28 +105,6 @@ const BASE_WEIGHTS: &[(u64, f64)] = &[
 /// Threshold for the judge to accept a candidate replacement.
 /// If no candidate's probability exceeds this, keep original.
 const ACCEPT_THRESHOLD: f32 = 0.5;
-
-// ── Context ─────────────────────────────────────────────────────────
-
-/// Sentence-level context for the span being evaluated.
-/// Extracted at the call site from the full transcript.
-#[derive(Clone, Debug, Default)]
-pub struct SpanContext {
-    /// 1-2 lowercased words to the left of the span.
-    pub left_tokens: Vec<String>,
-    /// 1-2 lowercased words to the right of the span.
-    pub right_tokens: Vec<String>,
-    /// Span appears to be in code-like context.
-    pub code_like: bool,
-    /// Span appears to be in prose.
-    pub prose_like: bool,
-    /// Line starts with a list marker.
-    pub list_like: bool,
-    /// Span is at the start of a sentence.
-    pub sentence_start: bool,
-    /// Application context identifier (e.g., "terminal", "xcode").
-    pub app_id: Option<String>,
-}
 
 // ── Hashing ─────────────────────────────────────────────────────────
 
@@ -237,15 +217,6 @@ impl TermMemory {
     }
 }
 
-/// A logged correction event, serializable to JSONL.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct CorrectionEvent {
-    pub timestamp: SystemTime,
-    pub span_text: String,
-    pub chosen_term: String,
-    pub all_candidate_terms: Vec<String>,
-    pub chosen_alias_id: Option<u32>,
-}
 
 // ── Judge ────────────────────────────────────────────────────────────
 
@@ -460,7 +431,10 @@ impl OnlineJudge {
 
         // Log the event
         self.event_log.push(CorrectionEvent {
-            timestamp: now,
+            timestamp_secs: now
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
             span_text: span.text.clone(),
             chosen_term,
             all_candidate_terms: all_terms,
@@ -592,18 +566,20 @@ impl OnlineJudge {
     /// Replay events to rebuild memory counters (e.g., on startup from JSONL).
     pub fn replay_events(&mut self, events: Vec<CorrectionEvent>) {
         for event in &events {
-            if let Some(alias_id) = event.chosen_alias_id {
+            let ts = std::time::UNIX_EPOCH
+                + std::time::Duration::from_secs(event.timestamp_secs);
+            if let Some(_alias_id) = event.chosen_alias_id {
                 // Accept the chosen term, reject others
-                self.memory.record_accept(&event.chosen_term, event.timestamp);
+                self.memory.record_accept(&event.chosen_term, ts);
                 for term in &event.all_candidate_terms {
                     if term.to_ascii_lowercase() != event.chosen_term.to_ascii_lowercase() {
-                        self.memory.record_reject(term, event.timestamp);
+                        self.memory.record_reject(term, ts);
                     }
                 }
             } else {
                 // Keep original
                 for term in &event.all_candidate_terms {
-                    self.memory.record_reject(term, event.timestamp);
+                    self.memory.record_reject(term, ts);
                 }
                 self.memory.record_span_correct(&event.span_text);
             }

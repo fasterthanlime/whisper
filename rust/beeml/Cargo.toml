@@ -22,16 +22,15 @@ name = "regen-corpus"
 path = "src/bin/regen-corpus.rs"
 
 [dependencies]
+bee-correct = { path = "../bee-correct" }
 bee-phonetic = { path = "../bee-phonetic" }
 bee-types = { path = "../bee-types" }
 bee-qwen3-asr = { path = "../bee-qwen3-asr" }
 bee-transcribe = { path = "../bee-transcribe" }
 anyhow = { workspace = true }
 dirs = "5"
-espeak-ng = { version = "0.1.0", features = ["bundled-data-en"] }
 facet = "0.44.3"
 facet-json = "0.44"
-fnv = "1.0"
 rayon = "1.10.0"
 serde = { workspace = true }
 serde_json = { workspace = true }

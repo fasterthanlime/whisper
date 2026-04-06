@@ -3267,9 +3267,9 @@ fn load_correction_events(path: &std::path::Path) -> anyhow::Result<Vec<beeml::j
         if line.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str(&line) {
+        match facet_json::from_str::<beeml::judge::CorrectionEvent>(&line) {
             Ok(event) => events.push(event),
-            Err(e) => tracing::warn!(error = %e, "skipping malformed event line"),
+            Err(e) => tracing::warn!(error = ?e, "skipping malformed event line"),
         }
     }
     // Cap at 10,000 events (keep most recent)
@@ -3288,8 +3288,8 @@ fn save_correction_events(path: &std::path::Path, events: &[beeml::judge::Correc
     // Cap at 10,000 events (keep most recent)
     let start = events.len().saturating_sub(10_000);
     for event in &events[start..] {
-        serde_json::to_writer(&mut file, event)?;
-        writeln!(file)?;
+        let json = facet_json::to_string(event).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        writeln!(file, "{json}")?;
     }
     Ok(())
 }
