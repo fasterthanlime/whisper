@@ -594,6 +594,246 @@ impl OnlineJudge {
     }
 }
 
+// ── Two-stage judge ─────────────────────────────────────────────────
+
+/// External event sink — caller decides storage.
+pub trait CorrectionEventSink {
+    fn log_event(&mut self, event: &CorrectionEvent);
+}
+
+/// Decision output from the two-stage judge.
+#[derive(Clone, Debug)]
+pub struct SpanDecision {
+    /// Whether the gate opened (span worth correcting).
+    pub gate_open: bool,
+    /// Gate probability (higher = more likely to correct).
+    pub gate_prob: f32,
+    /// Chosen candidate, if gate opened and a candidate exceeded ranker threshold.
+    pub chosen: Option<CandidateChoice>,
+    /// All candidates with ranker scores, sorted descending.
+    pub options: Vec<RankedCandidate>,
+}
+
+/// A candidate chosen by the ranker.
+#[derive(Clone, Debug)]
+pub struct CandidateChoice {
+    pub alias_id: u32,
+    pub term: String,
+    pub replacement_text: String,
+    pub ranker_prob: f32,
+}
+
+/// A candidate scored by the ranker.
+#[derive(Clone, Debug)]
+pub struct RankedCandidate {
+    pub alias_id: u32,
+    pub term: String,
+    pub ranker_prob: f32,
+}
+
+/// Two-stage judge: span gate (should we correct?) + candidate ranker (which candidate?).
+#[derive(Clone, Debug)]
+pub struct TwoStageJudge {
+    gate: SparseFtrl,
+    ranker: SparseFtrl,
+    memory: TermMemory,
+    pub gate_threshold: f32,
+    pub ranker_threshold: f32,
+}
+
+impl TwoStageJudge {
+    pub fn new(gate_threshold: f32, ranker_threshold: f32) -> Self {
+        let mut gate = SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
+        seed_gate_model(&mut gate);
+        let mut ranker = SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
+        seed_ranker_model(&mut ranker);
+        Self {
+            gate,
+            ranker,
+            memory: TermMemory::default(),
+            gate_threshold,
+            ranker_threshold,
+        }
+    }
+
+    /// Score a span: gate decision + ranked candidates.
+    pub fn score_span(
+        &self,
+        span: &TranscriptSpan,
+        candidates: &[(CandidateFeatureRow, IdentifierFlags)],
+        ctx: &SpanContext,
+    ) -> SpanDecision {
+        let gate_features = build_gate_features(span, candidates, ctx, &self.memory);
+        let gate_prob = self.gate.predict_prob(&gate_features) as f32;
+
+        if gate_prob < self.gate_threshold {
+            return SpanDecision {
+                gate_open: false,
+                gate_prob,
+                chosen: None,
+                options: Vec::new(),
+            };
+        }
+
+        let examples = build_ranker_features(span, candidates, &self.memory);
+        let mut options: Vec<RankedCandidate> = examples
+            .iter()
+            .map(|ex| RankedCandidate {
+                alias_id: ex.alias_id,
+                term: ex.term.clone(),
+                ranker_prob: self.ranker.predict_prob(&ex.features) as f32,
+            })
+            .collect();
+        options.sort_by(|a, b| b.ranker_prob.total_cmp(&a.ranker_prob));
+
+        let chosen = options.first().and_then(|best| {
+            if best.ranker_prob >= self.ranker_threshold {
+                // Find the alias text for the chosen candidate
+                let alias_text = candidates
+                    .iter()
+                    .find(|(c, _)| c.alias_id == best.alias_id)
+                    .map(|(c, _)| c.alias_text.clone())
+                    .unwrap_or_default();
+                Some(CandidateChoice {
+                    alias_id: best.alias_id,
+                    term: best.term.clone(),
+                    replacement_text: alias_text,
+                    ranker_prob: best.ranker_prob,
+                })
+            } else {
+                None
+            }
+        });
+
+        SpanDecision {
+            gate_open: true,
+            gate_prob,
+            chosen,
+            options,
+        }
+    }
+
+    /// Update weights from user feedback and log via sink.
+    pub fn teach_span(
+        &mut self,
+        span: &TranscriptSpan,
+        candidates: &[(CandidateFeatureRow, IdentifierFlags)],
+        chosen_alias_id: Option<u32>,
+        ctx: &SpanContext,
+        sink: &mut dyn CorrectionEventSink,
+    ) {
+        let now = SystemTime::now();
+        let is_correction = chosen_alias_id.is_some();
+
+        // Train gate: positive if correcting, negative if keeping original
+        let gate_features = build_gate_features(span, candidates, ctx, &self.memory);
+        self.gate.update(&gate_features, is_correction);
+
+        // Train ranker: only when correcting
+        if let Some(gold_id) = chosen_alias_id {
+            let examples = build_ranker_features(span, candidates, &self.memory);
+            // Score all to find hard negatives
+            let mut scored: Vec<_> = examples
+                .iter()
+                .map(|ex| (ex, self.ranker.predict_prob(&ex.features)))
+                .collect();
+            scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+            for (ex, _score) in &scored {
+                if ex.alias_id == gold_id {
+                    self.ranker.update(&ex.features, true);
+                } else {
+                    self.ranker.update(&ex.features, false);
+                }
+            }
+        }
+
+        // Update memory
+        let all_terms: Vec<String> = candidates
+            .iter()
+            .map(|(c, _)| c.term.clone())
+            .collect();
+        let chosen_term = if let Some(gold_id) = chosen_alias_id {
+            candidates
+                .iter()
+                .find(|(c, _)| c.alias_id == gold_id)
+                .map(|(c, _)| c.term.clone())
+                .unwrap_or_else(|| "keep_original".to_string())
+        } else {
+            "keep_original".to_string()
+        };
+
+        if is_correction {
+            self.memory.record_accept(&chosen_term, now);
+            for (c, _) in candidates {
+                if c.term.to_ascii_lowercase() != chosen_term.to_ascii_lowercase() {
+                    self.memory.record_reject(&c.term, now);
+                }
+            }
+        } else {
+            for (c, _) in candidates {
+                self.memory.record_reject(&c.term, now);
+            }
+            self.memory.record_span_correct(&span.text);
+        }
+
+        // Log event
+        sink.log_event(&CorrectionEvent {
+            timestamp_secs: now
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            span_text: span.text.clone(),
+            chosen_term,
+            all_candidate_terms: all_terms,
+            chosen_alias_id,
+        });
+    }
+
+    /// Gate probability for diagnostics.
+    pub fn gate_prob(
+        &self,
+        span: &TranscriptSpan,
+        candidates: &[(CandidateFeatureRow, IdentifierFlags)],
+        ctx: &SpanContext,
+    ) -> f32 {
+        let features = build_gate_features(span, candidates, ctx, &self.memory);
+        self.gate.predict_prob(&features) as f32
+    }
+
+    /// Read access to memory for diagnostics.
+    pub fn memory(&self) -> &TermMemory {
+        &self.memory
+    }
+
+    /// Replay events to rebuild memory counters.
+    pub fn replay_events(&mut self, events: &[CorrectionEvent]) {
+        for event in events {
+            let ts = std::time::UNIX_EPOCH
+                + std::time::Duration::from_secs(event.timestamp_secs);
+            if event.chosen_alias_id.is_some() {
+                self.memory.record_accept(&event.chosen_term, ts);
+                for term in &event.all_candidate_terms {
+                    if term.to_ascii_lowercase() != event.chosen_term.to_ascii_lowercase() {
+                        self.memory.record_reject(term, ts);
+                    }
+                }
+            } else {
+                for term in &event.all_candidate_terms {
+                    self.memory.record_reject(term, ts);
+                }
+                self.memory.record_span_correct(&event.span_text);
+            }
+        }
+        tracing::info!(
+            events = events.len(),
+            terms_tracked = self.memory.terms.len(),
+            span_texts_tracked = self.memory.span_text_correct.len(),
+            "replayed correction events into TwoStageJudge"
+        );
+    }
+}
+
 pub fn build_examples(
     span: &TranscriptSpan,
     candidates: &[(CandidateFeatureRow, IdentifierFlags)],
