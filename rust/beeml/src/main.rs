@@ -1861,6 +1861,203 @@ fn gold_span(pc: &ProbedCase) -> Option<&ProbedSpan> {
     pc.spans.iter().find(|ps| ps.gold_alias_id.is_some())
 }
 
+/// Two-stage scored case: gate probability + ranker probability.
+struct TwoStageScoredCase {
+    should_abstain: bool,
+    gold_alias_id: Option<u32>,
+    /// Gate probability for the best span (canonical: gold span; cx: best span).
+    gate_prob: f32,
+    /// Best candidate (alias_id, ranker_probability) from the ranker.
+    ranker_best: Option<(u32, f32)>,
+    /// Whether gold was reachable (retrieved + verified).
+    reachable: bool,
+}
+
+/// Train two-stage model (gate + ranker) with k-fold CV.
+/// Returns pre-scored results for threshold sweeping.
+fn train_and_score_twostage_kfold(
+    probed_cases: &[ProbedCase],
+    case_folds: &[usize],
+    folds: usize,
+    epochs: usize,
+    hard_neg_cap: usize,
+) -> Vec<TwoStageScoredCase> {
+    use beeml::judge::{build_gate_features, build_ranker_features, seed_gate_model, seed_ranker_model};
+
+    let mut scored = Vec::with_capacity(probed_cases.len());
+    scored.resize_with(probed_cases.len(), || TwoStageScoredCase {
+        should_abstain: false,
+        gold_alias_id: None,
+        gate_prob: 0.0,
+        ranker_best: None,
+        reachable: false,
+    });
+
+    for fold_k in 0..folds {
+        // Create separate models for gate and ranker
+        let mut gate_model = beeml::sparse_ftrl::SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
+        seed_gate_model(&mut gate_model);
+        let mut ranker_model = beeml::sparse_ftrl::SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
+        seed_ranker_model(&mut ranker_model);
+
+        let memory: beeml::judge::TermMemory = Default::default();
+
+        // ── Training phase ──
+        for _epoch in 0..epochs {
+            for (i, pc) in probed_cases.iter().enumerate() {
+                if case_folds[i] == fold_k { continue; }
+
+                // Stage A: train gate on ALL spans
+                if pc.case.should_abstain {
+                    // Counterexample: all spans are negative
+                    for ps in &pc.spans {
+                        if ps.candidates.is_empty() { continue; }
+                        let feats = build_gate_features(&ps.span, &ps.candidates, &ps.ctx, &memory);
+                        gate_model.update(&feats, false);
+                    }
+                } else {
+                    // Canonical: gold span = positive, skip non-gold spans (ambiguous)
+                    if let Some(ps) = pc.spans.iter().find(|ps| ps.gold_alias_id.is_some()) {
+                        let feats = build_gate_features(&ps.span, &ps.candidates, &ps.ctx, &memory);
+                        gate_model.update(&feats, true);
+                    }
+                }
+
+                // Stage B: train ranker only on spans with verified gold
+                if !pc.case.should_abstain {
+                    if let Some(ps) = pc.spans.iter().find(|ps| ps.gold_alias_id.is_some()) {
+                        let gold_id = ps.gold_alias_id.unwrap();
+                        // Only train if gold is verified (use larger supervision set)
+                        let gold_verified = ps.candidates.iter().any(|(c, _)| c.alias_id == gold_id && c.verified);
+                        if gold_verified {
+                            let examples = build_ranker_features(&ps.span, &ps.candidates, &memory);
+                            // Gold = positive
+                            if let Some(gold_ex) = examples.iter().find(|e| e.alias_id == gold_id) {
+                                ranker_model.update(&gold_ex.features, true);
+                            }
+                            // Hard negatives
+                            let mut neg_indices: Vec<usize> = examples.iter()
+                                .enumerate()
+                                .filter(|(_, e)| e.alias_id != gold_id)
+                                .map(|(j, _)| j)
+                                .collect();
+                            neg_indices.sort_by(|&a, &b| {
+                                let sa = ranker_model.predict(&examples[a].features);
+                                let sb = ranker_model.predict(&examples[b].features);
+                                sb.total_cmp(&sa)
+                            });
+                            for &idx in neg_indices.iter().take(hard_neg_cap) {
+                                ranker_model.update(&examples[idx].features, false);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Score test cases ──
+        for (i, pc) in probed_cases.iter().enumerate() {
+            if case_folds[i] != fold_k { continue; }
+
+            if pc.case.should_abstain {
+                let has_candidates = pc.spans.iter().any(|ps| !ps.candidates.is_empty());
+                // Gate: max gate prob across all spans
+                let best_gate = pc.spans.iter()
+                    .filter(|ps| !ps.candidates.is_empty())
+                    .map(|ps| {
+                        let feats = build_gate_features(&ps.span, &ps.candidates, &ps.ctx, &memory);
+                        let gp = gate_model.predict_prob(&feats) as f32;
+                        // Ranker: best candidate in this span
+                        let examples = build_ranker_features(&ps.span, &ps.candidates, &memory);
+                        let best_cand = examples.iter()
+                            .map(|e| (e.alias_id, ranker_model.predict_prob(&e.features) as f32))
+                            .max_by(|a, b| a.1.total_cmp(&b.1));
+                        (gp, best_cand)
+                    })
+                    .max_by(|a, b| a.0.total_cmp(&b.0));
+
+                let (gate_prob, ranker_best) = best_gate
+                    .map(|(gp, rb)| (gp, rb))
+                    .unwrap_or((0.0, None));
+
+                scored[i] = TwoStageScoredCase {
+                    should_abstain: true,
+                    gold_alias_id: None,
+                    gate_prob,
+                    ranker_best,
+                    reachable: has_candidates,
+                };
+            } else {
+                let gold_span = pc.spans.iter().find(|ps| ps.gold_alias_id.is_some());
+                if let Some(gs) = gold_span {
+                    let gold_id = gs.gold_alias_id.unwrap();
+                    let gold_verified = gs.candidates.iter().any(|(c, _)| c.alias_id == gold_id && c.verified);
+
+                    let gate_feats = build_gate_features(&gs.span, &gs.candidates, &gs.ctx, &memory);
+                    let gate_prob = gate_model.predict_prob(&gate_feats) as f32;
+
+                    let examples = build_ranker_features(&gs.span, &gs.candidates, &memory);
+                    let ranker_best = examples.iter()
+                        .map(|e| (e.alias_id, ranker_model.predict_prob(&e.features) as f32))
+                        .max_by(|a, b| a.1.total_cmp(&b.1));
+
+                    scored[i] = TwoStageScoredCase {
+                        should_abstain: false,
+                        gold_alias_id: Some(gold_id),
+                        gate_prob,
+                        ranker_best,
+                        reachable: gold_verified,
+                    };
+                } else {
+                    scored[i] = TwoStageScoredCase {
+                        should_abstain: false,
+                        gold_alias_id: None,
+                        gate_prob: 0.0,
+                        ranker_best: None,
+                        reachable: false,
+                    };
+                }
+            }
+        }
+    }
+    scored
+}
+
+/// Evaluate two-stage scored cases at given thresholds.
+fn eval_twostage_at_thresholds(
+    scored: &[TwoStageScoredCase],
+    gate_threshold: f32,
+    ranker_threshold: f32,
+) -> EvalMetrics {
+    let mut m = EvalMetrics::default();
+    for sc in scored {
+        if !sc.reachable { continue; }
+        if sc.should_abstain {
+            m.cx_total += 1;
+            // Gate must open AND ranker must accept for a replacement to happen
+            let gate_open = sc.gate_prob >= gate_threshold;
+            let ranker_accept = sc.ranker_best.map(|(_, p)| p >= ranker_threshold).unwrap_or(false);
+            let replaced = gate_open && ranker_accept;
+            if replaced { m.cx_replaced += 1; }
+            if !replaced { m.cx_correct += 1; } // Correctly abstained
+        } else {
+            m.canonical_total += 1;
+            let gate_open = sc.gate_prob >= gate_threshold;
+            let ranker_accept = sc.ranker_best.map(|(_, p)| p >= ranker_threshold).unwrap_or(false);
+            let replaced = gate_open && ranker_accept;
+            if replaced {
+                m.canonical_replaced += 1;
+                if let Some((alias_id, _)) = sc.ranker_best {
+                    if sc.gold_alias_id == Some(alias_id) {
+                        m.canonical_correct += 1;
+                    }
+                }
+            }
+        }
+    }
+    m
+}
+
 #[derive(Clone, Debug)]
 enum EvalFailureStage {
     RetrievalShortlist,
@@ -2503,6 +2700,142 @@ impl BeeMl for BeeMlService {
                     m.canonical_replace_pct(), m.cx_replace_pct(),
                 );
             }
+        }
+
+        // ── Eval 8: Two-stage (span gate + candidate ranker) ──────────
+        println!("\n--- Eval 8: Two-stage (span gate + candidate ranker) ---");
+        {
+            let two_stage_scored = train_and_score_twostage_kfold(
+                &probed_cases, &case_folds, folds, train_epochs, 3,
+            );
+
+            // Stage A alone: gate accuracy at various thresholds
+            println!("\n  Stage A (gate) alone:");
+            for &gt in thresholds {
+                let mut gate_pos_total = 0u32;
+                let mut gate_pos_correct = 0u32;
+                let mut gate_neg_total = 0u32;
+                let mut gate_neg_correct = 0u32;
+                for sc in &two_stage_scored {
+                    if !sc.reachable { continue; }
+                    let gate_open = sc.gate_prob >= gt;
+                    if sc.should_abstain {
+                        gate_neg_total += 1;
+                        if !gate_open { gate_neg_correct += 1; }
+                    } else {
+                        gate_pos_total += 1;
+                        if gate_open { gate_pos_correct += 1; }
+                    }
+                }
+                if gate_pos_total == 0 && gate_neg_total == 0 { continue; }
+                let pos_pct = if gate_pos_total > 0 { gate_pos_correct as f64 / gate_pos_total as f64 * 100.0 } else { 0.0 };
+                let neg_pct = if gate_neg_total > 0 { gate_neg_correct as f64 / gate_neg_total as f64 * 100.0 } else { 0.0 };
+                let bal = (pos_pct + neg_pct) / 2.0;
+                println!("    GT={gt:.1}  open_correct {gate_pos_correct}/{gate_pos_total} ({pos_pct:.1}%)  closed_correct {gate_neg_correct}/{gate_neg_total} ({neg_pct:.1}%)  bal {bal:.1}%");
+            }
+
+            // Stage B alone: ranker top-1 accuracy on gold-present spans
+            println!("\n  Stage B (ranker) alone (gold-verified spans):");
+            {
+                let mut ranker_correct = 0u32;
+                let mut ranker_total = 0u32;
+                for sc in &two_stage_scored {
+                    if sc.should_abstain || !sc.reachable { continue; }
+                    ranker_total += 1;
+                    if let Some((alias_id, _)) = sc.ranker_best {
+                        if sc.gold_alias_id == Some(alias_id) {
+                            ranker_correct += 1;
+                        }
+                    }
+                }
+                println!("    Top-1 accuracy: {ranker_correct}/{ranker_total} ({:.1}%)",
+                    if ranker_total > 0 { ranker_correct as f64 / ranker_total as f64 * 100.0 } else { 0.0 });
+            }
+
+            // Composed: sweep gate_threshold × ranker_threshold
+            println!("\n  Composed (gate × ranker) threshold sweep:");
+            let gate_thresholds: &[f32] = &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+            let ranker_thresholds: &[f32] = &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+            let mut best_bal = 0.0f64;
+            let mut best_gt = 0.0f32;
+            let mut best_rt = 0.0f32;
+            let mut best_m = EvalMetrics::default();
+            for &gt in gate_thresholds {
+                for &rt in ranker_thresholds {
+                    let m = eval_twostage_at_thresholds(&two_stage_scored, gt, rt);
+                    let bal = m.balanced_pct();
+                    if bal > best_bal || (bal == best_bal && m.canonical_replace_pct() > best_m.canonical_replace_pct()) {
+                        best_bal = bal;
+                        best_gt = gt;
+                        best_rt = rt;
+                        best_m = m.clone();
+                    }
+                }
+            }
+            println!("    Best: GT={best_gt:.1} RT={best_rt:.1}  can {}/{} ({:.1}%)  cx {}/{} ({:.1}%)  bal {:.1}%  repl: can {:.1}% cx {:.1}%",
+                best_m.canonical_correct, best_m.canonical_total, best_m.canonical_pct(),
+                best_m.cx_correct, best_m.cx_total, best_m.cx_pct(),
+                best_m.balanced_pct(),
+                best_m.canonical_replace_pct(), best_m.cx_replace_pct(),
+            );
+
+            // Show a few interesting grid points
+            println!("\n    Selected grid points:");
+            for &gt in &[0.2, 0.3, 0.4, 0.5] {
+                for &rt in &[0.2, 0.3, 0.4, 0.5] {
+                    let m = eval_twostage_at_thresholds(&two_stage_scored, gt, rt);
+                    println!("      GT={gt:.1} RT={rt:.1}  can {}/{} ({:.1}%)  cx {}/{} ({:.1}%)  bal {:.1}%  repl: can {:.1}% cx {:.1}%",
+                        m.canonical_correct, m.canonical_total, m.canonical_pct(),
+                        m.cx_correct, m.cx_total, m.cx_pct(),
+                        m.balanced_pct(),
+                        m.canonical_replace_pct(), m.cx_replace_pct(),
+                    );
+                }
+            }
+
+            // Gate probability distributions
+            println!("\n  Gate probability distributions:");
+            let mut gate_can_probs: Vec<f32> = two_stage_scored.iter()
+                .filter(|sc| !sc.should_abstain && sc.reachable)
+                .map(|sc| sc.gate_prob)
+                .collect();
+            let mut gate_cx_probs: Vec<f32> = two_stage_scored.iter()
+                .filter(|sc| sc.should_abstain && sc.reachable)
+                .map(|sc| sc.gate_prob)
+                .collect();
+            gate_can_probs.sort_by(|a, b| a.total_cmp(b));
+            gate_cx_probs.sort_by(|a, b| a.total_cmp(b));
+
+            fn pctl(vals: &[f32]) -> String {
+                if vals.is_empty() { return "N/A".to_string(); }
+                let p = |pct: f64| -> f32 {
+                    let idx = ((vals.len() as f64 - 1.0) * pct).round() as usize;
+                    vals[idx.min(vals.len() - 1)]
+                };
+                format!("n={:<4} min={:.3} p25={:.3} p50={:.3} p75={:.3} max={:.3}",
+                    vals.len(), p(0.0), p(0.25), p(0.5), p(0.75), p(1.0))
+            }
+            println!("    Canonical (should open):  {}", pctl(&gate_can_probs));
+            println!("    Counterex (should close): {}", pctl(&gate_cx_probs));
+
+            // Ranker probability distributions
+            println!("\n  Ranker probability distributions:");
+            let mut ranker_gold_probs: Vec<f32> = Vec::new();
+            let mut ranker_nongold_probs: Vec<f32> = Vec::new();
+            for sc in &two_stage_scored {
+                if sc.should_abstain || !sc.reachable { continue; }
+                if let Some((alias_id, prob)) = sc.ranker_best {
+                    if sc.gold_alias_id == Some(alias_id) {
+                        ranker_gold_probs.push(prob);
+                    } else {
+                        ranker_nongold_probs.push(prob);
+                    }
+                }
+            }
+            ranker_gold_probs.sort_by(|a, b| a.total_cmp(b));
+            ranker_nongold_probs.sort_by(|a, b| a.total_cmp(b));
+            println!("    Gold=best (correct rank):    {}", pctl(&ranker_gold_probs));
+            println!("    Gold!=best (wrong rank):     {}", pctl(&ranker_nongold_probs));
         }
 
         // ── Probability distribution diagnostics ────────────────────────

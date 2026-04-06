@@ -895,6 +895,366 @@ pub fn build_keep_original_features(span: &TranscriptSpan, ctx: &SpanContext) ->
     features
 }
 
+// ── Two-stage feature builders ─────────────────────────────────────
+
+/// Dense feature layout for the span gate model (Stage A).
+pub const GATE_FEATURE_NAMES: &[&str] = &[
+    "bias",                    // 0
+    "span_token_count",        // 1
+    "span_phone_count",        // 2
+    "span_low_content",        // 3
+    "span_mean_logprob",       // 4
+    "span_min_logprob",        // 5
+    "span_mean_margin",        // 6
+    "span_min_margin",         // 7
+    "span_correct_count",      // 8
+    "max_acceptance_score",    // 9
+    "max_phonetic_score",      // 10
+    "any_verified",            // 11
+    "any_acceptance_floor",    // 12
+    "candidate_count",         // 13
+];
+
+pub const NUM_GATE_DENSE: usize = 14;
+
+/// Dense feature layout for the candidate ranker model (Stage B).
+/// Indices 0-24 are candidate-specific, 25-30 are candidate-relative.
+pub const RANKER_FEATURE_NAMES: &[&str] = &[
+    "bias",                    // 0
+    "acceptance_score",        // 1
+    "phonetic_score",          // 2
+    "coarse_score",            // 3
+    "token_score",             // 4
+    "feature_score",           // 5
+    "feature_bonus",           // 6
+    "best_view_score",         // 7
+    "cross_view_support",      // 8
+    "qgram_overlap",           // 9
+    "total_qgram_overlap",     // 10
+    "token_count_match",       // 11
+    "phone_closeness",         // 12
+    "alias_source_spoken",     // 13
+    "alias_source_identifier", // 14
+    "alias_source_confusion",  // 15
+    "identifier_acronym",      // 16
+    "identifier_digits",       // 17
+    "identifier_snake",        // 18
+    "identifier_camel",        // 19
+    "identifier_symbol",       // 20
+    "short_guard_passed",      // 21
+    "low_content_guard_passed",// 22
+    "acceptance_floor_passed", // 23
+    "verified",                // 24
+    // Candidate-relative features
+    "rank_in_span",            // 25
+    "margin_to_next",          // 26
+    "is_best_verified",        // 27
+    "is_only_verified",        // 28
+    "normalized_acceptance",   // 29
+    "normalized_phonetic",     // 30
+    // Per-candidate memory
+    "prior_accept_count",      // 31
+    "prior_reject_count",      // 32
+    "total_count",             // 33
+    "recent_accept_count",     // 34
+    "session_recency",         // 35
+];
+
+pub const NUM_RANKER_DENSE: usize = 36;
+
+/// Build span-level features for the gate model (Stage A).
+/// One feature vector per span — does NOT depend on individual candidates.
+pub fn build_gate_features(
+    span: &TranscriptSpan,
+    candidates: &[(CandidateFeatureRow, IdentifierFlags)],
+    ctx: &SpanContext,
+    memory: &TermMemory,
+) -> Vec<Feature> {
+    let span_token_count = (span.token_end - span.token_start) as f64;
+    let span_phone_count = span.ipa_tokens.len() as f64;
+    let span_low_content = is_low_content_span(&span.text) as u8 as f64;
+    let mean_lp = span.mean_logprob.unwrap_or(0.0) as f64 / 5.0;
+    let min_lp = span.min_logprob.unwrap_or(0.0) as f64 / 5.0;
+    let mean_m = span.mean_margin.unwrap_or(0.0) as f64 / 5.0;
+    let min_m = span.min_margin.unwrap_or(0.0) as f64 / 5.0;
+    let span_correct_count = memory.span_text_count(&span.text);
+
+    // Summary stats from candidates
+    let max_acceptance = candidates.iter().map(|(c, _)| c.acceptance_score).fold(0.0f32, f32::max);
+    let max_phonetic = candidates.iter().map(|(c, _)| c.phonetic_score).fold(0.0f32, f32::max);
+    let any_verified = candidates.iter().any(|(c, _)| c.verified) as u8 as f64;
+    let any_acceptance_floor = candidates.iter().any(|(c, _)| c.acceptance_floor_passed) as u8 as f64;
+    let candidate_count = candidates.len() as f64;
+
+    let mut features = vec![
+        Feature { index: 0, value: 1.0 },                                        // bias
+        Feature { index: 1, value: span_token_count / 4.0 },                     // span_token_count
+        Feature { index: 2, value: span_phone_count / 12.0 },                    // span_phone_count
+        Feature { index: 3, value: span_low_content },                            // span_low_content
+        Feature { index: 4, value: mean_lp },                                     // span_mean_logprob
+        Feature { index: 5, value: min_lp },                                      // span_min_logprob
+        Feature { index: 6, value: mean_m },                                      // span_mean_margin
+        Feature { index: 7, value: min_m },                                       // span_min_margin
+        Feature { index: 8, value: (1.0 + span_correct_count as f64).ln() / 3.0 }, // span_correct_count
+        Feature { index: 9, value: max_acceptance as f64 },                        // max_acceptance_score
+        Feature { index: 10, value: max_phonetic as f64 },                         // max_phonetic_score
+        Feature { index: 11, value: any_verified },                                // any_verified
+        Feature { index: 12, value: any_acceptance_floor },                        // any_acceptance_floor
+        Feature { index: 13, value: (1.0 + candidate_count).ln() / 3.0 },         // candidate_count
+    ];
+
+    // Sparse context features (no TERM= since this is span-level)
+    if let Some(l1) = ctx.left_tokens.first() {
+        features.push(Feature { index: hash_feature(&format!("L1={l1}")), value: 1.0 });
+    }
+    if ctx.left_tokens.len() >= 2 {
+        let bigram = format!("{}_{}", ctx.left_tokens[0], ctx.left_tokens[1]);
+        features.push(Feature { index: hash_feature(&format!("L2={bigram}")), value: 1.0 });
+    }
+    if let Some(r1) = ctx.right_tokens.first() {
+        features.push(Feature { index: hash_feature(&format!("R1={r1}")), value: 1.0 });
+    }
+    if ctx.right_tokens.len() >= 2 {
+        let bigram = format!("{}_{}", ctx.right_tokens[0], ctx.right_tokens[1]);
+        features.push(Feature { index: hash_feature(&format!("R2={bigram}")), value: 1.0 });
+    }
+    if ctx.code_like {
+        features.push(Feature { index: hash_feature("CTX=code"), value: 1.0 });
+    }
+    if ctx.prose_like {
+        features.push(Feature { index: hash_feature("CTX=prose"), value: 1.0 });
+    }
+    if ctx.list_like {
+        features.push(Feature { index: hash_feature("CTX=list"), value: 1.0 });
+    }
+    if ctx.sentence_start {
+        features.push(Feature { index: hash_feature("CTX=sent_start"), value: 1.0 });
+    }
+    if let Some(app) = &ctx.app_id {
+        features.push(Feature { index: hash_feature(&format!("APP={app}")), value: 1.0 });
+    }
+
+    features
+}
+
+/// Build candidate-level features for the ranker model (Stage B).
+/// Each candidate gets candidate-specific + candidate-relative features.
+/// NO span-level ASR or context features (those belong to Stage A).
+pub fn build_ranker_features(
+    span: &TranscriptSpan,
+    candidates: &[(CandidateFeatureRow, IdentifierFlags)],
+    memory: &TermMemory,
+) -> Vec<JudgeExample> {
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    // Pre-compute candidate-relative stats
+    let max_acceptance = candidates.iter().map(|(c, _)| c.acceptance_score).fold(0.0f32, f32::max);
+    let max_phonetic = candidates.iter().map(|(c, _)| c.phonetic_score).fold(0.0f32, f32::max);
+    let verified_count: usize = candidates.iter().filter(|(c, _)| c.verified).count();
+
+    // Sort indices by acceptance_score desc for rank computation
+    let mut sorted_indices: Vec<usize> = (0..candidates.len()).collect();
+    sorted_indices.sort_by(|&a, &b| {
+        candidates[b].0.acceptance_score.total_cmp(&candidates[a].0.acceptance_score)
+    });
+    let mut ranks = vec![0usize; candidates.len()];
+    for (rank, &idx) in sorted_indices.iter().enumerate() {
+        ranks[idx] = rank;
+    }
+
+    // Find best verified candidate (by acceptance_score)
+    let best_verified_id = candidates.iter()
+        .filter(|(c, _)| c.verified)
+        .max_by(|a, b| a.0.acceptance_score.total_cmp(&b.0.acceptance_score))
+        .map(|(c, _)| c.alias_id);
+
+    // Sorted acceptance scores for margin computation
+    let sorted_acceptance: Vec<f32> = sorted_indices.iter()
+        .map(|&i| candidates[i].0.acceptance_score)
+        .collect();
+
+    candidates
+        .iter()
+        .enumerate()
+        .map(|(i, (candidate, flags))| {
+            let rank = ranks[i];
+            let rank_feature = 1.0 / (1.0 + rank as f64);
+
+            // Margin to next candidate
+            let margin = if rank == 0 && sorted_acceptance.len() > 1 {
+                (sorted_acceptance[0] - sorted_acceptance[1]) as f64
+            } else if rank > 0 {
+                (sorted_acceptance[rank - 1] - sorted_acceptance[rank]) as f64
+            } else {
+                0.0
+            };
+
+            let is_best_verified = best_verified_id == Some(candidate.alias_id);
+            let is_only_verified = candidate.verified && verified_count == 1;
+            let norm_acceptance = if max_acceptance > 0.0 {
+                candidate.acceptance_score as f64 / max_acceptance as f64
+            } else { 0.0 };
+            let norm_phonetic = if max_phonetic > 0.0 {
+                candidate.phonetic_score as f64 / max_phonetic as f64
+            } else { 0.0 };
+
+            // Per-candidate memory
+            let mem = memory.get(&candidate.term);
+            let accept_count = mem.map(|m| m.accept_count).unwrap_or(0);
+            let reject_count = mem.map(|m| m.reject_count).unwrap_or(0);
+            let recent_accept = mem.map(|m| m.recent_accept_count).unwrap_or(0);
+            let recency = mem
+                .and_then(|m| m.last_used)
+                .and_then(|t| t.elapsed().ok())
+                .map(|d| {
+                    if d.as_secs() < 300 { 1.0 }
+                    else if d.as_secs() < 1800 { 0.5 }
+                    else { 0.0 }
+                })
+                .unwrap_or(0.0);
+
+            let features = vec![
+                Feature { index: 0, value: 1.0 },                                              // bias
+                Feature { index: 1, value: candidate.acceptance_score as f64 },                 // acceptance_score
+                Feature { index: 2, value: candidate.phonetic_score as f64 },                   // phonetic_score
+                Feature { index: 3, value: candidate.coarse_score as f64 },                     // coarse_score
+                Feature { index: 4, value: candidate.token_score as f64 },                      // token_score
+                Feature { index: 5, value: candidate.feature_score as f64 },                    // feature_score
+                Feature { index: 6, value: candidate.feature_bonus as f64 },                    // feature_bonus
+                Feature { index: 7, value: candidate.best_view_score as f64 },                  // best_view_score
+                Feature { index: 8, value: candidate.cross_view_support as f64 / 6.0 },         // cross_view_support
+                Feature { index: 9, value: candidate.qgram_overlap as f64 / 10.0 },             // qgram_overlap
+                Feature { index: 10, value: candidate.total_qgram_overlap as f64 / 20.0 },      // total_qgram_overlap
+                Feature { index: 11, value: candidate.token_count_match as u8 as f64 },          // token_count_match
+                Feature { index: 12, value: 1.0 / (1.0 + candidate.phone_count_delta.abs() as f64) }, // phone_closeness
+                Feature { index: 13, value: (candidate.alias_source == AliasSource::Spoken) as u8 as f64 },
+                Feature { index: 14, value: (candidate.alias_source == AliasSource::Identifier) as u8 as f64 },
+                Feature { index: 15, value: (candidate.alias_source == AliasSource::Confusion) as u8 as f64 },
+                Feature { index: 16, value: flags.acronym_like as u8 as f64 },
+                Feature { index: 17, value: flags.has_digits as u8 as f64 },
+                Feature { index: 18, value: flags.snake_like as u8 as f64 },
+                Feature { index: 19, value: flags.camel_like as u8 as f64 },
+                Feature { index: 20, value: flags.symbol_like as u8 as f64 },
+                Feature { index: 21, value: candidate.short_guard_passed as u8 as f64 },
+                Feature { index: 22, value: candidate.low_content_guard_passed as u8 as f64 },
+                Feature { index: 23, value: candidate.acceptance_floor_passed as u8 as f64 },
+                Feature { index: 24, value: candidate.verified as u8 as f64 },
+                // Candidate-relative features
+                Feature { index: 25, value: rank_feature },                                      // rank_in_span
+                Feature { index: 26, value: margin },                                            // margin_to_next
+                Feature { index: 27, value: is_best_verified as u8 as f64 },                     // is_best_verified
+                Feature { index: 28, value: is_only_verified as u8 as f64 },                     // is_only_verified
+                Feature { index: 29, value: norm_acceptance },                                   // normalized_acceptance
+                Feature { index: 30, value: norm_phonetic },                                     // normalized_phonetic
+                // Per-candidate memory
+                Feature { index: 31, value: (1.0 + accept_count as f64).ln() / 3.0 },
+                Feature { index: 32, value: (1.0 + reject_count as f64).ln() / 3.0 },
+                Feature { index: 33, value: (1.0 + (accept_count + reject_count) as f64).ln() / 3.0 },
+                Feature { index: 34, value: (1.0 + recent_accept as f64).ln() / 3.0 },
+                Feature { index: 35, value: recency },
+            ];
+
+            JudgeExample {
+                alias_id: candidate.alias_id,
+                term: candidate.term.clone(),
+                features,
+            }
+        })
+        .collect()
+}
+
+/// Seed the span gate model with reasonable initial weights.
+pub fn seed_gate_model(model: &mut SparseFtrl) {
+    // Gate should open when: ASR is uncertain (low logprob, low margin)
+    // AND candidates look promising (high acceptance, verified present).
+    //
+    // Synthetic examples: spans that should be corrected vs. should not.
+    // We encode them as (gate_features_dense_values, label).
+    //
+    // Format: [bias, span_tok, span_phone, low_content, mean_lp, min_lp, mean_m, min_m,
+    //          span_correct, max_accept, max_phonetic, any_verified, any_accept_floor, cand_count]
+
+    let examples: &[(&[f64], bool)] = &[
+        // Positive: good candidate + uncertain ASR
+        (&[1.0, 0.5, 0.5, 0.0, -0.10, -0.15, 0.05, 0.02, 0.0, 0.70, 0.65, 1.0, 1.0, 0.5], true),
+        (&[1.0, 0.3, 0.4, 0.0, -0.08, -0.12, 0.08, 0.04, 0.0, 0.55, 0.50, 1.0, 0.0, 0.3], true),
+        (&[1.0, 0.5, 0.6, 0.0, -0.05, -0.10, 0.10, 0.05, 0.0, 0.80, 0.75, 1.0, 1.0, 0.7], true),
+        // Positive: moderate candidate, low ASR confidence
+        (&[1.0, 0.4, 0.5, 0.0, -0.15, -0.20, 0.03, 0.01, 0.0, 0.50, 0.45, 0.0, 0.0, 0.3], true),
+        // Negative: no good candidates
+        (&[1.0, 0.5, 0.5, 0.0, -0.10, -0.15, 0.05, 0.02, 0.0, 0.20, 0.15, 0.0, 0.0, 0.5], false),
+        (&[1.0, 0.3, 0.4, 0.0, -0.05, -0.08, 0.12, 0.08, 0.0, 0.15, 0.10, 0.0, 0.0, 0.2], false),
+        // Negative: high ASR confidence (probably transcribed correctly)
+        (&[1.0, 0.5, 0.5, 0.0, -0.02, -0.03, 0.30, 0.25, 0.0, 0.60, 0.55, 1.0, 0.0, 0.5], false),
+        // Negative: low content span
+        (&[1.0, 0.3, 0.3, 1.0, -0.10, -0.15, 0.05, 0.02, 0.0, 0.40, 0.35, 0.0, 0.0, 0.3], false),
+        // Negative: span already corrected before
+        (&[1.0, 0.5, 0.5, 0.0, -0.10, -0.15, 0.05, 0.02, 0.8, 0.50, 0.45, 0.0, 0.0, 0.3], false),
+    ];
+
+    let featurize = |vals: &[f64]| -> Vec<Feature> {
+        vals.iter().enumerate().map(|(i, &v)| Feature { index: i as u64, value: v }).collect()
+    };
+
+    let orig_alpha = model.alpha;
+    model.alpha = 1.0;
+    for epoch in 0..20 {
+        if epoch == 5 { model.alpha = 0.5; }
+        for &(vals, label) in examples {
+            model.update(&featurize(vals), label);
+        }
+    }
+    model.alpha = orig_alpha;
+}
+
+/// Seed the candidate ranker model with initial weights.
+pub fn seed_ranker_model(model: &mut SparseFtrl) {
+    // Ranker should prefer: high acceptance, verified, good rank, good margin.
+    // Seed with the same phonetic score structure as the main model,
+    // plus positive weight on candidate-relative features.
+    let examples: &[(&[f64], bool)] = &[
+        // Positive: strong verified candidate, rank 1
+        //          [bias, accept, phon, coarse, token, feat, fb, bv, cvs, qg, tqg, tcm, pc,
+        //           sp, id, cf, acr, dig, snk, cam, sym, sg, lcg, afp, ver,
+        //           rank, margin, bv, ov, na, np, ac, rc, tc, rac, rec]
+        (&[1.0, 0.75, 0.70, 0.60, 0.55, 0.50, 0.30, 0.30, 0.50, 0.40, 0.35, 1.0, 0.80,
+           1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+           1.0, 0.15, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0], true),
+        // Positive: good candidate, rank 1, not only verified
+        (&[1.0, 0.60, 0.55, 0.45, 0.40, 0.40, 0.20, 0.20, 0.33, 0.30, 0.25, 1.0, 0.70,
+           0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0,
+           1.0, 0.10, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0], true),
+        // Negative: weak candidate, low rank
+        (&[1.0, 0.25, 0.20, 0.15, 0.10, 0.15, 0.05, 0.10, 0.17, 0.10, 0.05, 0.0, 0.40,
+           0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
+           0.25, 0.02, 0.0, 0.0, 0.33, 0.40, 0.0, 0.0, 0.0, 0.0, 0.0], false),
+        // Negative: unverified, low scores
+        (&[1.0, 0.15, 0.10, 0.08, 0.05, 0.08, 0.02, 0.05, 0.17, 0.05, 0.02, 0.0, 0.30,
+           0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+           0.50, 0.01, 0.0, 0.0, 0.20, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0], false),
+        // Negative: decent scores but not verified, rank 2
+        (&[1.0, 0.50, 0.45, 0.35, 0.30, 0.35, 0.15, 0.15, 0.33, 0.25, 0.20, 1.0, 0.60,
+           1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
+           0.50, 0.05, 0.0, 0.0, 0.67, 0.75, 0.0, 0.0, 0.0, 0.0, 0.0], false),
+    ];
+
+    let featurize = |vals: &[f64]| -> Vec<Feature> {
+        vals.iter().enumerate().map(|(i, &v)| Feature { index: i as u64, value: v }).collect()
+    };
+
+    let orig_alpha = model.alpha;
+    model.alpha = 1.0;
+    for epoch in 0..20 {
+        if epoch == 5 { model.alpha = 0.5; }
+        for &(vals, label) in examples {
+            model.update(&featurize(vals), label);
+        }
+    }
+    model.alpha = orig_alpha;
+}
+
 /// Feature slice definitions for ablation.
 #[derive(Clone, Copy, Debug)]
 pub enum FeatureSlice {
