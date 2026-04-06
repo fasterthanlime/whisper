@@ -5,19 +5,28 @@ import { JudgeRapidFirePanel } from "./components/JudgeRapidFirePanel";
 import { RetrievalPrototypeLab } from "./components/RetrievalPrototypeLab";
 import { TranscribeDemoPanel } from "./components/TranscribeDemoPanel";
 import { OfflineJudgeEvalPanel } from "./components/OfflineJudgeEvalPanel";
+import { CorrectionReviewPanel } from "./components/CorrectionReviewPanel";
 
 const WS_URL = "ws://127.0.0.1:9944";
 
 export default function App() {
   const [tab, setTab] = useState<
-    "transcribe" | "retrieval" | "rapid-fire" | "judge-eval" | "offline-eval"
-  >("rapid-fire");
+    "transcribe" | "retrieval" | "rapid-fire" | "judge-eval" | "offline-eval" | "correction-ui"
+  >("correction-ui");
 
   return (
     <div className="app-shell">
       <header className="app-header">
         <strong>beeml</strong>
         <div className="tab-row" role="tablist">
+          <button
+            role="tab"
+            aria-selected={tab === "correction-ui"}
+            className={tab === "correction-ui" ? "primary" : ""}
+            onClick={() => setTab("correction-ui")}
+          >
+            Correction UI
+          </button>
           <button
             role="tab"
             aria-selected={tab === "rapid-fire"}
@@ -64,6 +73,8 @@ export default function App() {
         <div className="app-page">
           {tab === "transcribe" ? (
             <TranscribeDemoPanel wsUrl={WS_URL} />
+          ) : tab === "correction-ui" ? (
+            <CorrectionReviewPanel />
           ) : tab === "rapid-fire" ? (
             <JudgeRapidFirePanel wsUrl={WS_URL} />
           ) : tab === "judge-eval" ? (
