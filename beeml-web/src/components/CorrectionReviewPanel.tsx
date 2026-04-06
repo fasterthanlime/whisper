@@ -1,12 +1,12 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 
-// ── Mock data ────────────────────────────────────────────────────────
+// ── Data model ───────────────────────────────────────────────────────
 
 interface Correction {
   id: number;
   /** Character range in the raw transcript */
-  originalStart: number;
-  originalEnd: number;
+  start: number;
+  end: number;
   /** The misheard text */
   originalText: string;
   /** The corrected term */
@@ -15,104 +15,102 @@ interface Correction {
   term: string;
   /** Gate × ranker confidence */
   confidence: number;
-  /** User accept/reject state */
-  accepted: boolean;
 }
+
+/** A user-added correction (from highlighting text) */
+interface UserCorrection {
+  id: number;
+  start: number;
+  end: number;
+  originalText: string;
+  replacementText: string;
+}
+
+/** Resolution state for each correction */
+type Resolution = "pending" | "accepted" | "rejected";
 
 interface InsertionRecord {
   rawTranscript: string;
-  correctedText: string;
   corrections: Correction[];
 }
 
 const MOCK_SCENARIOS: { label: string; data: InsertionRecord }[] = [
   {
-    label: "3 corrections (serde_json, tokio, JSON)",
+    label: "3 corrections",
     data: {
       rawTranscript:
         "I was working with Sir Day Jason and Tokyo to parse the Jason file",
-      correctedText:
-        "I was working with serde_json and tokio to parse the JSON file",
       corrections: [
         {
           id: 1,
-          originalStart: 22,
-          originalEnd: 36,
+          start: 19,
+          end: 32,
           originalText: "Sir Day Jason",
           replacementText: "serde_json",
           term: "serde_json",
           confidence: 0.92,
-          accepted: true,
         },
         {
           id: 2,
-          originalStart: 41,
-          originalEnd: 46,
+          start: 37,
+          end: 42,
           originalText: "Tokyo",
           replacementText: "tokio",
           term: "tokio",
           confidence: 0.87,
-          accepted: true,
         },
         {
           id: 3,
-          originalStart: 61,
-          originalEnd: 66,
+          start: 57,
+          end: 62,
           originalText: "Jason",
           replacementText: "JSON",
           term: "JSON",
           confidence: 0.95,
-          accepted: true,
         },
       ],
     },
   },
   {
-    label: "1 correction (kubectl)",
+    label: "1 correction",
     data: {
       rawTranscript: "then I ran cube cuddle to deploy the pods",
-      correctedText: "then I ran kubectl to deploy the pods",
       corrections: [
         {
           id: 1,
-          originalStart: 11,
-          originalEnd: 23,
+          start: 11,
+          end: 23,
           originalText: "cube cuddle",
           replacementText: "kubectl",
           term: "kubectl",
           confidence: 0.89,
-          accepted: true,
         },
       ],
     },
   },
   {
-    label: "2 corrections, one wrong (AArch64, bearcove)",
+    label: "2 corrections",
     data: {
       rawTranscript:
         "we need to target arch 64 and deploy to bear cove",
-      correctedText:
-        "we need to target AArch64 and deploy to bearcove",
       corrections: [
         {
           id: 1,
-          originalStart: 23,
-          originalEnd: 30,
+          start: 16,
+          end: 23,
           originalText: "arch 64",
           replacementText: "AArch64",
           term: "AArch64",
           confidence: 0.78,
-          accepted: true,
         },
         {
           id: 2,
-          originalStart: 45,
-          originalEnd: 54,
+          start: 41,
+          end: 50,
           originalText: "bear cove",
           replacementText: "bearcove",
           term: "bearcove",
           confidence: 0.71,
-          accepted: true,
         },
       ],
     },
@@ -121,115 +119,261 @@ const MOCK_SCENARIOS: { label: string; data: InsertionRecord }[] = [
     label: "No corrections",
     data: {
       rawTranscript: "the weather is nice today",
-      correctedText: "the weather is nice today",
       corrections: [],
     },
   },
 ];
 
-// ── Components ───────────────────────────────────────────────────────
+// ── Track segment model ──────────────────────────────────────────────
 
-/** Renders the sentence with inline correction annotations */
-function AnnotatedSentence({
-  record,
-}: {
-  record: InsertionRecord;
-}) {
-  const { rawTranscript, corrections } = record;
+type Segment =
+  | { kind: "plain"; text: string }
+  | {
+      kind: "split";
+      id: number;
+      originalText: string;
+      replacementText: string;
+      confidence?: number;
+      resolution: Resolution;
+      isUserAdded: boolean;
+      editing: boolean;
+    };
 
-  // Build segments: alternating plain text and correction spans
-  const segments: React.ReactNode[] = [];
+function buildSegments(
+  rawTranscript: string,
+  corrections: Correction[],
+  userCorrections: UserCorrection[],
+  resolutions: Map<number, Resolution>,
+  editingId: number | null,
+): Segment[] {
+  // Merge system + user corrections, sorted by start
+  const allSplits = [
+    ...corrections.map((c) => ({
+      id: c.id,
+      start: c.start,
+      end: c.end,
+      originalText: c.originalText,
+      replacementText: c.replacementText,
+      confidence: c.confidence,
+      isUserAdded: false,
+    })),
+    ...userCorrections.map((c) => ({
+      id: c.id,
+      start: c.start,
+      end: c.end,
+      originalText: c.originalText,
+      replacementText: c.replacementText,
+      confidence: undefined,
+      isUserAdded: true,
+    })),
+  ].sort((a, b) => a.start - b.start);
+
+  const segments: Segment[] = [];
   let cursor = 0;
 
-  const sorted = [...corrections].sort(
-    (a, b) => a.originalStart - b.originalStart
-  );
-
-  for (const c of sorted) {
-    // Plain text before this correction
-    if (cursor < c.originalStart) {
-      segments.push(
-        <span key={`plain-${cursor}`} className="cr-plain">
-          {rawTranscript.slice(cursor, c.originalStart)}
-        </span>
-      );
+  for (const s of allSplits) {
+    if (cursor < s.start) {
+      segments.push({ kind: "plain", text: rawTranscript.slice(cursor, s.start) });
     }
-
-    // The correction span
-    segments.push(
-      <span
-        key={`correction-${c.id}`}
-        className={`cr-correction ${c.accepted ? "cr-accepted" : "cr-rejected"}`}
-      >
-        <span className="cr-original">{c.originalText}</span>
-        <span className="cr-arrow"> → </span>
-        <span className="cr-replacement">{c.replacementText}</span>
-      </span>
-    );
-
-    cursor = c.originalEnd;
+    segments.push({
+      kind: "split",
+      id: s.id,
+      originalText: s.originalText,
+      replacementText: s.replacementText,
+      confidence: s.confidence,
+      resolution: resolutions.get(s.id) ?? "pending",
+      isUserAdded: s.isUserAdded,
+      editing: editingId === s.id,
+    });
+    cursor = s.end;
   }
 
-  // Trailing text
   if (cursor < rawTranscript.length) {
-    segments.push(
-      <span key={`plain-${cursor}`} className="cr-plain">
-        {rawTranscript.slice(cursor)}
+    segments.push({ kind: "plain", text: rawTranscript.slice(cursor) });
+  }
+
+  return segments;
+}
+
+// ── Components ───────────────────────────────────────────────────────
+
+function PlainSegment({ text }: { text: string }) {
+  return <span className="track-plain">{text}</span>;
+}
+
+function SplitSegment({
+  seg,
+  onResolve,
+  onEditChange,
+  onEditSubmit,
+}: {
+  seg: Extract<Segment, { kind: "split" }>;
+  onResolve: (id: number, resolution: Resolution) => void;
+  onEditChange: (id: number, text: string) => void;
+  onEditSubmit: (id: number) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (seg.editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [seg.editing]);
+
+  if (seg.resolution === "rejected") {
+    // Resolved to original — single track, show original
+    return (
+      <span
+        className="track-resolved track-resolved-original"
+        onClick={() => onResolve(seg.id, "pending")}
+        title="Click to re-open"
+      >
+        {seg.originalText}
       </span>
     );
   }
 
-  return <div className="cr-sentence">{segments}</div>;
-}
-
-/** One row in the correction list */
-function CorrectionRow({
-  correction,
-  onToggle,
-}: {
-  correction: Correction;
-  onToggle: (id: number) => void;
-}) {
-  return (
-    <label className={`cr-row ${correction.accepted ? "" : "cr-row-rejected"}`}>
-      <input
-        type="checkbox"
-        checked={correction.accepted}
-        onChange={() => onToggle(correction.id)}
-      />
-      <span className="cr-row-replacement">{correction.replacementText}</span>
-      <span className="cr-row-original">was: "{correction.originalText}"</span>
-      <span className="cr-row-confidence">
-        {(correction.confidence * 100).toFixed(0)}%
+  if (seg.resolution === "accepted") {
+    // Resolved to correction — single track, show replacement
+    return (
+      <span
+        className="track-resolved track-resolved-replacement"
+        onClick={() => onResolve(seg.id, "pending")}
+        title="Click to re-open"
+      >
+        {seg.replacementText}
       </span>
-    </label>
-  );
-}
-
-/** The "what would be inserted" preview */
-function ResultPreview({ record }: { record: InsertionRecord }) {
-  const { rawTranscript, corrections } = record;
-
-  // Build the final text by applying accepted corrections
-  const sorted = [...corrections].sort(
-    (a, b) => b.originalStart - a.originalStart // reverse order for safe replacement
-  );
-  let result = rawTranscript;
-  for (const c of sorted) {
-    if (c.accepted) {
-      result =
-        result.slice(0, c.originalStart) +
-        c.replacementText +
-        result.slice(c.originalEnd);
-    }
+    );
   }
 
+  // Pending — show split
   return (
-    <div className="cr-preview">
-      <span className="cr-preview-label">Result:</span>
-      <span className="cr-preview-text">{result}</span>
+    <span className="track-split">
+      <span
+        className="track-lane track-lane-original"
+        onClick={() => onResolve(seg.id, "rejected")}
+        title="Keep original"
+      >
+        {seg.originalText}
+      </span>
+      <span
+        className="track-lane track-lane-replacement"
+        onClick={() => onResolve(seg.id, "accepted")}
+        title="Accept correction"
+      >
+        {seg.editing ? (
+          <input
+            ref={inputRef}
+            className="track-edit-input"
+            value={seg.replacementText}
+            onChange={(e) => onEditChange(seg.id, e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onEditSubmit(seg.id);
+              if (e.key === "Escape") onResolve(seg.id, "rejected");
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          seg.replacementText
+        )}
+      </span>
+    </span>
+  );
+}
+
+function TrackView({
+  segments,
+  rawTranscript,
+  onResolve,
+  onEditChange,
+  onEditSubmit,
+  onUserSelect,
+}: {
+  segments: Segment[];
+  rawTranscript: string;
+  onResolve: (id: number, resolution: Resolution) => void;
+  onEditChange: (id: number, text: string) => void;
+  onEditSubmit: (id: number) => void;
+  onUserSelect: (start: number, end: number, text: string) => void;
+}) {
+  const trackRef = useRef<HTMLDivElement>(null);
+
+  const handleMouseUp = useCallback(() => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !trackRef.current) return;
+
+    const range = sel.getRangeAt(0);
+    // Only handle selections within plain segments
+    const startNode = range.startContainer;
+    const endNode = range.endContainer;
+
+    const startEl = startNode.parentElement?.closest(".track-plain");
+    const endEl = endNode.parentElement?.closest(".track-plain");
+    if (!startEl || !endEl) return;
+
+    const selectedText = sel.toString().trim();
+    if (!selectedText) return;
+
+    // Find the character offset in the raw transcript
+    const idx = rawTranscript.indexOf(selectedText);
+    if (idx === -1) return;
+
+    sel.removeAllRanges();
+    onUserSelect(idx, idx + selectedText.length, selectedText);
+  }, [rawTranscript, onUserSelect]);
+
+  return (
+    <div
+      className="track-container"
+      ref={trackRef}
+      onMouseUp={handleMouseUp}
+    >
+      {segments.map((seg, i) =>
+        seg.kind === "plain" ? (
+          <PlainSegment key={i} text={seg.text} />
+        ) : (
+          <SplitSegment
+            key={seg.id}
+            seg={seg}
+            onResolve={onResolve}
+            onEditChange={onEditChange}
+            onEditSubmit={onEditSubmit}
+          />
+        )
+      )}
     </div>
   );
+}
+
+/** Compose final text from resolutions */
+function composeFinalText(
+  rawTranscript: string,
+  corrections: Correction[],
+  userCorrections: UserCorrection[],
+  resolutions: Map<number, Resolution>,
+): string {
+  const allSplits = [
+    ...corrections.map((c) => ({
+      id: c.id, start: c.start, end: c.end,
+      replacementText: c.replacementText,
+    })),
+    ...userCorrections.map((c) => ({
+      id: c.id, start: c.start, end: c.end,
+      replacementText: c.replacementText,
+    })),
+  ].sort((a, b) => b.start - a.start); // reverse for safe replacement
+
+  let result = rawTranscript;
+  for (const s of allSplits) {
+    const res = resolutions.get(s.id) ?? "pending";
+    // "accepted" or "pending" (default to accepting system corrections)
+    if (res !== "rejected") {
+      result =
+        result.slice(0, s.start) + s.replacementText + result.slice(s.end);
+    }
+  }
+  return result;
 }
 
 // ── Main panel ───────────────────────────────────────────────────────
@@ -238,38 +382,82 @@ export function CorrectionReviewPanel() {
   const [scenarioIdx, setScenarioIdx] = useState(0);
   const scenario = MOCK_SCENARIOS[scenarioIdx];
 
-  // Deep clone corrections so we can toggle accept/reject
-  const [corrections, setCorrections] = useState<Correction[]>(
-    () => scenario.data.corrections.map((c) => ({ ...c }))
+  const [resolutions, setResolutions] = useState<Map<number, Resolution>>(
+    () => new Map()
   );
+  const [userCorrections, setUserCorrections] = useState<UserCorrection[]>([]);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [nextId, setNextId] = useState(1000);
 
-  const [dismissed, setDismissed] = useState(false);
-  const [applied, setApplied] = useState(false);
+  const switchScenario = useCallback((idx: number) => {
+    setScenarioIdx(idx);
+    setResolutions(new Map());
+    setUserCorrections([]);
+    setEditingId(null);
+  }, []);
 
-  const switchScenario = useCallback(
-    (idx: number) => {
-      setScenarioIdx(idx);
-      setCorrections(
-        MOCK_SCENARIOS[idx].data.corrections.map((c) => ({ ...c }))
-      );
-      setDismissed(false);
-      setApplied(false);
-    },
-    []
-  );
+  const handleResolve = useCallback((id: number, resolution: Resolution) => {
+    setResolutions((prev) => {
+      const next = new Map(prev);
+      next.set(id, resolution);
+      return next;
+    });
+  }, []);
 
-  const toggleCorrection = useCallback((id: number) => {
-    setCorrections((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, accepted: !c.accepted } : c))
+  const handleEditChange = useCallback((id: number, text: string) => {
+    setUserCorrections((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, replacementText: text } : c))
     );
   }, []);
 
-  const record: InsertionRecord = {
-    ...scenario.data,
-    corrections,
-  };
+  const handleEditSubmit = useCallback((id: number) => {
+    setEditingId(null);
+    setResolutions((prev) => {
+      const next = new Map(prev);
+      next.set(id, "accepted");
+      return next;
+    });
+  }, []);
 
-  const acceptedCount = corrections.filter((c) => c.accepted).length;
+  const handleUserSelect = useCallback(
+    (start: number, end: number, text: string) => {
+      const id = nextId;
+      setNextId((n) => n + 1);
+      setUserCorrections((prev) => [
+        ...prev,
+        { id, start, end, originalText: text, replacementText: "" },
+      ]);
+      setEditingId(id);
+    },
+    [nextId]
+  );
+
+  const segments = buildSegments(
+    scenario.data.rawTranscript,
+    scenario.data.corrections,
+    userCorrections,
+    resolutions,
+    editingId,
+  );
+
+  const pendingCount = segments.filter(
+    (s) => s.kind === "split" && s.resolution === "pending"
+  ).length;
+
+  const totalSplits = segments.filter((s) => s.kind === "split").length;
+  const acceptedCount = segments.filter(
+    (s) => s.kind === "split" && s.resolution === "accepted"
+  ).length;
+  const rejectedCount = segments.filter(
+    (s) => s.kind === "split" && s.resolution === "rejected"
+  ).length;
+
+  const finalText = composeFinalText(
+    scenario.data.rawTranscript,
+    scenario.data.corrections,
+    userCorrections,
+    resolutions,
+  );
 
   return (
     <div className="prototype-lab prototype-stack">
@@ -279,8 +467,7 @@ export function CorrectionReviewPanel() {
           <div>
             <strong>Correction Review — UI Prototype</strong>
             <span>
-              Mock data. Simulates the ROpt-C panel a user would see after
-              dictating.
+              Mock data. Simulates the ROpt-C panel after dictating.
             </span>
           </div>
         </header>
@@ -299,142 +486,119 @@ export function CorrectionReviewPanel() {
         </div>
       </section>
 
-      {/* The actual correction review panel */}
-      {!dismissed && !applied ? (
-        <section className="prototype-card cr-panel">
-          {corrections.length === 0 ? (
-            <div className="cr-empty">
-              <p>No corrections were applied.</p>
-              <p className="text-dim">
-                The transcript was inserted as-is. If you think a term should
-                have been corrected, you can add it to your vocabulary.
-              </p>
-              <div className="cr-actions">
-                <button onClick={() => setDismissed(true)}>Dismiss</button>
-              </div>
-            </div>
-          ) : (
-            <>
-              {/* Notification bar */}
-              <div className="cr-notification">
-                <span className="cr-notification-count">
-                  {acceptedCount} correction{acceptedCount !== 1 ? "s" : ""}{" "}
-                  applied
-                </span>
-                <span className="cr-notification-hint">
-                  Uncheck to revert individual corrections
-                </span>
-              </div>
-
-              {/* Annotated sentence */}
-              <AnnotatedSentence record={record} />
-
-              {/* Correction list */}
-              <div className="cr-list">
-                {corrections.map((c) => (
-                  <CorrectionRow
-                    key={c.id}
-                    correction={c}
-                    onToggle={toggleCorrection}
-                  />
-                ))}
-              </div>
-
-              {/* Result preview */}
-              <ResultPreview record={record} />
-
-              {/* Actions */}
-              <div className="cr-actions">
-                <button
-                  className="primary"
-                  onClick={() => setApplied(true)}
-                >
-                  Apply
-                </button>
-                <button
-                  onClick={() => {
-                    setCorrections((prev) =>
-                      prev.map((c) => ({ ...c, accepted: false }))
-                    );
-                  }}
-                >
-                  Revert All
-                </button>
-                <button onClick={() => setDismissed(true)}>Dismiss</button>
-              </div>
-            </>
-          )}
-        </section>
-      ) : (
-        <section className="prototype-card prototype-card-tight">
-          <div className="cr-result-message">
-            {applied ? (
-              <>
-                <strong>Applied.</strong>{" "}
-                {acceptedCount} correction{acceptedCount !== 1 ? "s" : ""} kept,{" "}
-                {corrections.length - acceptedCount} reverted.
-                <span className="text-dim">
-                  {" "}
-                  Teaching signals would be sent to the judge.
-                </span>
-              </>
-            ) : (
-              <>
-                <strong>Dismissed.</strong>{" "}
-                <span className="text-dim">
-                  Corrections remain as-is in the text.
-                </span>
-              </>
-            )}
-            <button
-              style={{ marginLeft: "1rem" }}
-              onClick={() => {
-                setDismissed(false);
-                setApplied(false);
-              }}
-            >
-              Reset
-            </button>
+      {/* The track view */}
+      <section className="prototype-card cr-panel">
+        {totalSplits === 0 && userCorrections.length === 0 ? (
+          <div className="cr-empty">
+            <p>No corrections were applied to this transcript.</p>
+            <p className="text-dim">
+              Select text in the sentence below to suggest a correction.
+            </p>
           </div>
-        </section>
-      )}
+        ) : (
+          <div className="cr-status-bar">
+            {pendingCount > 0 ? (
+              <span className="cr-status-pending">
+                {pendingCount} unresolved
+              </span>
+            ) : null}
+            {acceptedCount > 0 ? (
+              <span className="cr-status-accepted">
+                {acceptedCount} accepted
+              </span>
+            ) : null}
+            {rejectedCount > 0 ? (
+              <span className="cr-status-rejected">
+                {rejectedCount} reverted
+              </span>
+            ) : null}
+            <span className="cr-status-hint">
+              Click original (top) to keep it. Click correction (bottom) to accept.
+              Select plain text to add a correction.
+            </span>
+          </div>
+        )}
 
-      {/* Context: what the IME would do */}
+        <TrackView
+          segments={segments}
+          rawTranscript={scenario.data.rawTranscript}
+          onResolve={handleResolve}
+          onEditChange={handleEditChange}
+          onEditSubmit={handleEditSubmit}
+          onUserSelect={handleUserSelect}
+        />
+
+        {/* Result preview */}
+        <div className="cr-preview">
+          <span className="cr-preview-label">Result:</span>
+          <span className="cr-preview-text">{finalText}</span>
+        </div>
+
+        {/* Actions */}
+        <div className="cr-actions">
+          <button
+            className="primary"
+            disabled={pendingCount > 0}
+            title={
+              pendingCount > 0
+                ? "Resolve all corrections first"
+                : "Apply corrections"
+            }
+          >
+            Apply
+          </button>
+          <button
+            onClick={() => {
+              const next = new Map<number, Resolution>();
+              for (const s of segments) {
+                if (s.kind === "split") next.set(s.id, "rejected");
+              }
+              setResolutions(next);
+            }}
+          >
+            Keep All Originals
+          </button>
+          <button
+            onClick={() => {
+              const next = new Map<number, Resolution>();
+              for (const s of segments) {
+                if (s.kind === "split") next.set(s.id, "accepted");
+              }
+              setResolutions(next);
+            }}
+          >
+            Accept All
+          </button>
+        </div>
+      </section>
+
+      {/* IME notes */}
       <section className="prototype-card prototype-card-tight">
         <header className="panel-header-row">
           <div>
-            <strong>IME behavior notes</strong>
+            <strong>Interaction model</strong>
           </div>
         </header>
         <div className="cr-notes">
           <ul>
             <li>
-              <strong>Insert:</strong> IME calls{" "}
-              <code>insertText(correctedText, replacementRange: NSNotFound)</code>{" "}
-              — user sees corrected text immediately.
+              The sentence is a <strong>track</strong> that splits at
+              corrections: original on top, correction on bottom.
             </li>
             <li>
-              <strong>Track:</strong> IME saves the insertion range (cursor pos +
-              length) and the raw transcript.
+              Click the <strong>original</strong> (top lane) to resolve the
+              split back to the original text.
             </li>
             <li>
-              <strong>Review:</strong> ROpt-C opens this panel. User toggles
-              corrections.
+              Click the <strong>correction</strong> (bottom lane) to accept it.
             </li>
             <li>
-              <strong>Apply:</strong> IME calls{" "}
-              <code>
-                insertText(finalText, replacementRange: savedRange)
-              </code>{" "}
-              to replace the inserted text with the user's chosen mix.
+              <strong>Select any plain text</strong> to create a new split —
+              a text input appears for you to type the correct term.
             </li>
             <li>
-              <strong>Teach:</strong> Each accepted/rejected correction becomes a
-              training signal for the two-stage judge.
-            </li>
-            <li>
-              <strong>Invalidate:</strong> If the user moves the cursor or edits
-              the text before reviewing, the insertion record is invalidated.
+              Resolved splits merge back into the single track. Click a
+              resolved word to re-open the split.
             </li>
           </ul>
         </div>
