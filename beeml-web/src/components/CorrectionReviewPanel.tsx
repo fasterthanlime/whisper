@@ -61,8 +61,8 @@ const MOCK_SCENARIOS: { label: string; data: InsertionRecord }[] = [
         },
         {
           id: 3,
-          start: 57,
-          end: 62,
+          start: 56,
+          end: 61,
           originalText: "Jason",
           replacementText: "JSON",
           term: "JSON",
@@ -79,7 +79,7 @@ const MOCK_SCENARIOS: { label: string; data: InsertionRecord }[] = [
         {
           id: 1,
           start: 11,
-          end: 23,
+          end: 22,
           originalText: "cube cuddle",
           replacementText: "kubectl",
           term: "kubectl",
@@ -96,8 +96,8 @@ const MOCK_SCENARIOS: { label: string; data: InsertionRecord }[] = [
       corrections: [
         {
           id: 1,
-          start: 16,
-          end: 23,
+          start: 18,
+          end: 25,
           originalText: "arch 64",
           replacementText: "AArch64",
           term: "AArch64",
@@ -105,8 +105,8 @@ const MOCK_SCENARIOS: { label: string; data: InsertionRecord }[] = [
         },
         {
           id: 2,
-          start: 41,
-          end: 50,
+          start: 40,
+          end: 49,
           originalText: "bear cove",
           replacementText: "bearcove",
           term: "bearcove",
