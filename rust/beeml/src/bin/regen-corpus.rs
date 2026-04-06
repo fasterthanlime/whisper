@@ -143,7 +143,7 @@ fn write_jsonl(path: &Path, rows: &[RecordingExampleRow]) -> anyhow::Result<()> 
     use std::io::Write;
     let mut file = std::fs::File::create(path)?;
     for row in rows {
-        serde_json::to_writer(&mut file, row)?;
+        write!(file, "{}", facet_json::to_string(row).map_err(|e| anyhow::anyhow!("{e:?}"))?)?;
         writeln!(file)?;
     }
     Ok(())

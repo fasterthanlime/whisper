@@ -1,9 +1,4 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SentenceWordToken {
-    pub char_start: usize,
-    pub char_end: usize,
-    pub text: String,
-}
+pub use bee_types::SentenceWordToken;
 
 pub fn split_sentence_words(text: &str) -> Vec<String> {
     sentence_word_tokens(text)

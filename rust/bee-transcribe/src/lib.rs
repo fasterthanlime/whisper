@@ -127,25 +127,7 @@ pub struct Update {
     pub alignments: Vec<AlignedWord>,
 }
 
-/// A single word with its time boundaries from forced alignment.
-#[derive(Debug, Clone, Facet)]
-pub struct AlignedWord {
-    /// The word text.
-    pub word: String,
-    /// Start time in seconds from the beginning of the audio stream.
-    pub start: f64,
-    /// End time in seconds from the beginning of the audio stream.
-    pub end: f64,
-    /// Mean log-probability of the decoder tokens covering this word.
-    /// `None` if logprob data is not available.
-    pub mean_logprob: Option<f32>,
-    /// Minimum log-probability among decoder tokens covering this word.
-    pub min_logprob: Option<f32>,
-    /// Mean top1−top2 margin of the decoder tokens covering this word.
-    pub mean_margin: Option<f32>,
-    /// Minimum top1−top2 margin among decoder tokens covering this word.
-    pub min_margin: Option<f32>,
-}
+pub use bee_types::AlignedWord;
 
 // ── Engine ──────────────────────────────────────────────────────────────
 

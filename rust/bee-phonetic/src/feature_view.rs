@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use serde::{Deserialize, Serialize};
+use facet::Facet;
 
 use rspanphon::featuretable::FeatureTable;
 
@@ -55,7 +55,8 @@ pub struct FeatureSimilarityDetails {
     pub ops: Vec<FeatureEditOp>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Facet)]
+#[repr(u8)]
 pub enum FeatureEditKind {
     Match,
     Substitute,
@@ -63,7 +64,7 @@ pub enum FeatureEditKind {
     Delete,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Facet)]
 pub struct FeatureEditOp {
     pub kind: FeatureEditKind,
     pub left: Option<String>,

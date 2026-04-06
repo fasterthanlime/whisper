@@ -1,28 +1,13 @@
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use facet::Facet;
 
 use crate::types::{ReviewedConfusionSurfaceRow, VocabRow};
 use crate::word_split::count_sentence_words;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum AliasSource {
-    Canonical,
-    Spoken,
-    Identifier,
-    Confusion,
-}
+pub use bee_types::{AliasSource, IdentifierFlags};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct IdentifierFlags {
-    pub acronym_like: bool,
-    pub has_digits: bool,
-    pub snake_like: bool,
-    pub camel_like: bool,
-    pub symbol_like: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Facet, PartialEq, Eq)]
 pub struct LexiconAlias {
     pub alias_id: u32,
     pub term: String,

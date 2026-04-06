@@ -3,8 +3,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use facet::Facet;
 
 use crate::phonetic_index::{build_index, PhoneticIndex};
 use crate::phonetic_lexicon::{build_phonetic_lexicon, LexiconAlias};
@@ -111,7 +110,7 @@ impl SeedDataset {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Facet, PartialEq, Eq)]
 pub struct SeedTermRow {
     pub term: String,
     pub spoken: String,
@@ -119,7 +118,7 @@ pub struct SeedTermRow {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Facet, PartialEq, Eq)]
 pub struct SentenceExampleRow {
     pub term: String,
     pub text: String,
@@ -127,7 +126,7 @@ pub struct SentenceExampleRow {
     pub surface_form: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Facet, PartialEq)]
 pub struct RecordingExampleRow {
     pub term: String,
     pub text: String,
@@ -136,23 +135,18 @@ pub struct RecordingExampleRow {
     pub transcript: String,
     /// Per-word alignment with ASR confidence data.
     /// Populated by regen-corpus from audio files.
-    #[serde(default)]
     pub words: Vec<RecordingWordAlignment>,
 }
 
 /// Per-word alignment data from ASR, stored alongside recording examples.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 pub struct RecordingWordAlignment {
     pub word: String,
     pub start: f64,
     pub end: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mean_logprob: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_logprob: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mean_margin: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_margin: Option<f32>,
 }
 
@@ -165,7 +159,7 @@ pub enum SeedDatasetError {
     Json {
         path: PathBuf,
         line: usize,
-        source: serde_json::Error,
+        source: facet_json::DeserializeError,
     },
 }
 
@@ -265,7 +259,7 @@ impl CleanPath for PathBuf {
 
 fn load_jsonl<T>(path: PathBuf) -> Result<Vec<T>, SeedDatasetError>
 where
-    T: DeserializeOwned,
+    T: Facet<'static>,
 {
     let file = File::open(&path).map_err(|source| SeedDatasetError::Io {
         path: path.clone(),
@@ -282,7 +276,7 @@ where
         if line.trim().is_empty() {
             continue;
         }
-        let row = serde_json::from_str(&line).map_err(|source| SeedDatasetError::Json {
+        let row = facet_json::from_str(&line).map_err(|source| SeedDatasetError::Json {
             path: path.clone(),
             line: idx + 1,
             source,

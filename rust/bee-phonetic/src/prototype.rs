@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use facet::Facet;
 
 pub fn parse_reviewed_ipa(ipa_text: &str) -> Vec<String> {
     const MULTI_SYMBOL_PHONES: &[&str] = &[
@@ -55,7 +55,8 @@ pub fn phoneme_similarity(a: &[String], b: &[String]) -> Option<f32> {
     Some(details.similarity)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Facet)]
+#[repr(u8)]
 pub enum TokenEditKind {
     Match,
     Substitute,
@@ -63,7 +64,7 @@ pub enum TokenEditKind {
     Delete,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Facet)]
 pub struct TokenEditOp {
     pub kind: TokenEditKind,
     pub left: Option<String>,
@@ -72,7 +73,7 @@ pub struct TokenEditOp {
     pub boundary_penalty: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Facet)]
 pub struct PhonemeSimilarityDetails {
     pub distance: usize,
     pub weighted_distance: f32,

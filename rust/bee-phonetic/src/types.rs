@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
+use facet::Facet;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Facet, PartialEq, Eq)]
 pub struct VocabRow {
     pub id: i64,
     pub term: String,
@@ -17,7 +17,7 @@ impl VocabRow {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Facet, PartialEq, Eq)]
 pub struct ReviewedConfusionSurfaceRow {
     pub id: i64,
     pub term: String,
@@ -29,7 +29,7 @@ pub struct ReviewedConfusionSurfaceRow {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Facet, PartialEq, Eq)]
 pub struct AuthoredSentenceRow {
     pub term: String,
     pub sentence: String,
@@ -37,7 +37,7 @@ pub struct AuthoredSentenceRow {
     pub surface_form: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Facet, PartialEq, Eq)]
 pub struct AuthoredRecordingRow {
     pub term: String,
     pub sentence: String,

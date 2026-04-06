@@ -10,7 +10,7 @@ use bee_phonetic::{
 };
 use beeml::g2p::CachedEspeakG2p;
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
+use facet::Facet;
 
 #[derive(Debug, Clone)]
 struct EvalConfig {
@@ -52,14 +52,14 @@ struct PreparedRecording {
     spans: Vec<TranscriptSpan>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, Facet)]
+#[repr(u8)]
 enum EvalSuite {
     Canonical,
     Counterexample,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Facet)]
 struct CounterexampleRecordingRow {
     term: String,
     text: String,
@@ -113,7 +113,7 @@ struct RecordingTimings {
     recording_total: Duration,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Facet)]
 struct CandidateFeatureExportRow {
     suite: EvalSuite,
     target_term: String,
@@ -134,7 +134,6 @@ struct CandidateFeatureExportRow {
     alias_ipa_tokens: Vec<String>,
     alias_reduced_ipa_tokens: Vec<String>,
     alias_feature_tokens: Vec<String>,
-    #[serde(flatten)]
     candidate: VerifiedCandidate,
 }
 
@@ -662,7 +661,7 @@ fn load_counterexample_recordings(
         if line.trim().is_empty() {
             continue;
         }
-        let row = serde_json::from_str::<CounterexampleRecordingRow>(line)
+        let row = facet_json::from_str::<CounterexampleRecordingRow>(line)
             .map_err(|error| format!("{}:{}: {error}", path.display(), line_idx + 1))?;
         out.push(row);
     }
@@ -681,7 +680,8 @@ fn write_feature_export(
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
     for row in rows {
-        serde_json::to_writer(&mut writer, row)?;
+        let json = facet_json::to_string(row).map_err(|e| format!("{e:?}"))?;
+        writer.write_all(json.as_bytes())?;
         writer.write_all(b"\n")?;
     }
     writer.flush()?;

@@ -168,9 +168,10 @@ dependencies = [
 name = "bee-phonetic"
 version = "0.1.0"
 dependencies = [
+ "bee-types",
+ "facet",
+ "facet-json",
  "rspanphon",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -210,6 +211,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bee-qwen3-asr",
+ "bee-types",
  "bee-vad",
  "env_logger",
  "facet",
@@ -218,6 +220,13 @@ dependencies = [
  "mlx-rs",
  "serde_json",
  "tokenizers",
+]
+
+[[package]]
+name = "bee-types"
+version = "0.1.0"
+dependencies = [
+ "facet",
 ]
 
 [[package]]
@@ -236,9 +245,11 @@ dependencies = [
  "bee-phonetic",
  "bee-qwen3-asr",
  "bee-transcribe",
+ "bee-types",
  "dirs 5.0.1",
  "espeak-ng",
  "facet",
+ "facet-json",
  "fnv",
  "rayon",
  "serde",

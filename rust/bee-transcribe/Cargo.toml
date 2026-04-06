@@ -10,6 +10,7 @@ bee-qwen3-asr = { path = "../bee-qwen3-asr" }
 bee-vad = { path = "../bee-vad" }
 mlx-rs.workspace = true
 tokenizers.workspace = true
+bee-types = { path = "../bee-types" }
 facet = "0.44.3"
 hound = "3"
 log = "0.4"

@@ -1,22 +1,8 @@
-use serde::{Deserialize, Serialize};
-
 use crate::phonetic_lexicon::reduce_ipa_tokens;
 use crate::word_split::sentence_word_tokens;
 use crate::word_split::SentenceWordToken;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct TranscriptAlignmentToken {
-    pub start_time: f64,
-    pub end_time: f64,
-    #[serde(default)]
-    pub mean_logprob: Option<f32>,
-    #[serde(default)]
-    pub min_logprob: Option<f32>,
-    #[serde(default)]
-    pub mean_margin: Option<f32>,
-    #[serde(default)]
-    pub min_margin: Option<f32>,
-}
+pub use bee_types::TranscriptAlignmentToken;
 
 pub trait TranscriptAlignmentTiming {
     fn start_time(&self) -> f64;
@@ -53,30 +39,7 @@ impl TranscriptAlignmentTiming for TranscriptAlignmentToken {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct TranscriptSpan {
-    pub token_start: usize,
-    pub token_end: usize,
-    pub char_start: usize,
-    pub char_end: usize,
-    pub start_sec: Option<f64>,
-    pub end_sec: Option<f64>,
-    pub text: String,
-    pub ipa_tokens: Vec<String>,
-    pub reduced_ipa_tokens: Vec<String>,
-    /// Mean log-probability across words in this span (from ASR decoder).
-    #[serde(default)]
-    pub mean_logprob: Option<f32>,
-    /// Minimum log-probability across words in this span.
-    #[serde(default)]
-    pub min_logprob: Option<f32>,
-    /// Mean top1−top2 margin across words in this span.
-    #[serde(default)]
-    pub mean_margin: Option<f32>,
-    /// Minimum top1−top2 margin across words in this span.
-    #[serde(default)]
-    pub min_margin: Option<f32>,
-}
+pub use bee_types::TranscriptSpan;
 
 pub fn enumerate_transcript_spans_with<F, A>(
     transcript: &str,

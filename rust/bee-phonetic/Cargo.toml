@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+bee-types = { path = "../bee-types" }
 rspanphon = { path = "../vendor/rspanphon" }
-serde = { workspace = true }
-serde_json = { workspace = true }
+facet = "0.44.3"
+facet-json = "0.44"
 
 [dev-dependencies]

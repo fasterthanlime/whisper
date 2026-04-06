@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use facet::Facet;
 
 use crate::phonetic_index::{PhoneticIndex, RetrievalCandidate};
 use crate::phonetic_lexicon::AliasSource;
@@ -8,7 +8,7 @@ use crate::word_split::sentence_word_tokens;
 pub use crate::feature_view::FeatureEditOp;
 pub use crate::prototype::TokenEditOp;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Facet)]
 pub struct CandidateFeatureRow {
     pub alias_id: u32,
     pub term: String,

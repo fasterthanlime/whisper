@@ -1,24 +1,15 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use serde::{Deserialize, Serialize};
+use facet::Facet;
 
 use crate::phonetic_lexicon::{
     derive_identifier_flags, is_identifier_like, looks_like_name, AliasSource, LexiconAlias,
 };
 use crate::word_split::sentence_word_tokens;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum IndexView {
-    RawIpa2,
-    RawIpa3,
-    ReducedIpa2,
-    ReducedIpa3,
-    Feature2,
-    Feature3,
-    ShortQueryFallback,
-}
+pub use bee_types::IndexView;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Facet, PartialEq, Eq)]
 pub struct Posting {
     pub alias_id: u32,
 }
@@ -33,7 +24,7 @@ pub struct PhoneticIndex {
     pub by_token_count: HashMap<u8, Vec<u32>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Facet)]
 pub struct RetrievalQuery {
     pub text: String,
     pub ipa_tokens: Vec<String>,
@@ -42,7 +33,7 @@ pub struct RetrievalQuery {
     pub token_count: u8,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Facet)]
 pub struct RetrievalCandidate {
     pub alias_id: u32,
     pub term: String,
