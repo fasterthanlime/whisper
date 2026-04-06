@@ -7,19 +7,24 @@ Run date: 2026-04-06. 5-fold CV, 4 epochs, stratified by term.
 The single-model FTRL judge was fundamentally broken: it tried to learn
 "should this span be corrected?" and "which candidate wins?" in one weight
 vector, causing counterexample training to suppress shared features and
-crush replacement globally. Best single-model result: 65% balanced accuracy.
+crush replacement globally. Best single-model result: 64.5% balanced accuracy.
 
 Splitting into two stages — a span gate and a candidate ranker — solved the
-problem: **94% balanced accuracy, 88% canonical correct, 100% counterexample
-correct, zero false positive replacements.**
+problem: **92.1% balanced accuracy over 86 reachable canonical cases,
+with 5.3% false positive replacement rate.**
 
 | Model | Balanced | Can. Acc | Cx. Acc | Can. Repl% | Cx. Repl% |
 |-------|----------|----------|---------|------------|-----------|
-| **Two-stage (GT=0.2, RT=0.1)** | **94.0%** | **88.0%** (22/25) | **100.0%** (113/113) | **96.0%** | **0.0%** |
-| +ASR ablation (best single) | 65.3% | 36.0% (9/25) | 94.7% (107/113) | 64.0% | 5.3% |
-| Case-balanced single | 50.0% | 0.0% (0/25) | 100.0% (113/113) | 8.0% | 0.0% |
-| Seed-only (no training) | 38.5% | 0.0% (0/25) | 77.0% (87/113) | 16.0% | 23.0% |
-| Deterministic baseline | 44.3% | 1.9% (2/104) | 86.7% (98/113) | 2.9% | 13.3% |
+| **Two-stage (GT=0.3, RT=0.1)** | **92.1%** | **89.5%** (77/86) | **94.7%** (107/113) | **97.7%** | **5.3%** |
+| Two-stage (GT=0.4, RT=0.2) | 91.6% | 84.9% (73/86) | 98.2% (111/113) | 93.0% | 1.8% |
+| Two-stage (GT=0.5, RT=0.2) | 91.3% | 82.6% (71/86) | 100.0% (113/113) | 90.7% | 0.0% |
+| +ASR ablation (best single) | 64.5% | 29.1% (25/86) | 100.0% (113/113) | 45.3% | 0.0% |
+| Case-balanced single | 53.3% | 9.3% (8/86) | 97.3% (110/113) | 17.4% | 2.7% |
+| Deterministic baseline | 63.4% | 80.8% (84/104) | 46.0% (52/113) | 84.6% | 54.0% |
+
+The two-stage architecture offers a smooth precision/recall tradeoff: at
+GT=0.5, RT=0.2, it achieves zero false positive replacements while still
+correcting 82.6% of canonical cases.
 
 ## Dataset
 
@@ -28,16 +33,19 @@ correct, zero false positive replacements.**
 | Canonical cases | 106 |
 | Gold retrieved | 104 (98.1%) |
 | Gold verified (reachable) | 86 (81.1%) |
-| Gold verified AND in judge decision set | 25 (23.6%) |
 | Counterexample cases | 113 |
 | Counterexamples with candidates | 113 (100%) |
 | Terms in vocabulary | 26 |
 
-"Reachable" means the gold candidate survived composition, pruning, and
-deduplication to appear in the judge's final decision set *and* passed
-verification. 81 cases (106 − 25) have gold retrieved but not in the
-judge-visible decision set — retrieval works, but the judge never sees
-the gold option.
+"Reachable" means the gold candidate was retrieved AND passed verification
+in at least one span for that case. 20 canonical cases (106 − 86) have gold
+either not retrieved (2) or retrieved but not verified (18).
+
+**Bug fix (2026-04-06):** An earlier version of the eval reported only 25
+reachable canonical cases. This was caused by `find(|ps| ps.gold_alias_id.is_some())`
+selecting the first span with gold, which often had an unverified gold
+candidate even when a different span for the same case had verified gold.
+Fixed by preferring spans where gold is verified (`find_best_gold_span`).
 
 ## Feature activation diagnostics
 
@@ -120,32 +128,32 @@ two-stage architecture (Eval 8) supersedes them.
 
 ### Eval 1: Baselines
 
-**Deterministic** (acceptance_score ranking, best threshold T=0.8):
-44.3% balanced. Uses all 104 canonical cases (doesn't require judge
-reachability).
+**Deterministic** (acceptance_score ranking, best threshold T=0.3):
+63.4% balanced (84/104 canonical, 52/113 cx). Uses all 104 canonical
+cases (doesn't require verification). High canonical accuracy but
+replaces 54% of counterexamples — no abstention ability.
 
-**Seed-only** (no training, best T=0.9): 38.5% balanced. Replaces
-aggressively at all lower thresholds (80–100% replacement rate) but
-gets 28% canonical right. Has moderate ranking quality but no
-abstention ability.
+**Seed-only** (no training, best T=0.9): 40.2% balanced. Replaces
+aggressively at lower thresholds (84–100% replacement rate). Has
+moderate ranking quality but no abstention ability.
 
-**Taught** (teach_choice replay, best T=0.6): 52.7% balanced. Training
-improved cx_acc (from 0% → 97.3%) but destroyed canonical accuracy
-(from 28% → 0%). Training learned to reject everything.
+**Taught** (teach_choice replay, best T=0.5): 53.7% balanced. Training
+improved cx_acc but destroyed canonical accuracy. Training learned to
+reject almost everything.
 
 ### Eval 2: Case-balanced FTRL
 
-Best T=0.5: 50.0% balanced. Same problem — training suppresses all
-probabilities. Marginally different from taught.
+Best T=0.5: 53.3% balanced. Same problem — training suppresses all
+probabilities. 8/86 canonical correct.
 
 ### Eval 4: Feature ablation (case-balanced)
 
-| Slice | Best T | Balanced | Can. Repl% | Cx. Repl% |
-|-------|--------|----------|------------|-----------|
-| phonetic_only (idx 0–27) | 0.3 | 50.0% | 0.0% | 0.0% |
-| **+asr (idx 0–31)** | **0.2** | **65.3%** | **64.0%** | **5.3%** |
-| +context (idx 0–31 + sparse) | 0.5 | 50.0% | 8.0% | 0.0% |
-| all (idx 0–37 + sparse) | 0.5 | 50.0% | 8.0% | 0.0% |
+| Slice | Best T | Balanced | Can. Acc | Cx. Acc |
+|-------|--------|----------|----------|---------|
+| phonetic_only (idx 0–27) | 0.5 | 50.5% | 15.1% | 85.8% |
+| **+asr (idx 0–31)** | **0.5** | **64.5%** | **29.1%** | **100.0%** |
+| +context (idx 0–31 + sparse) | 0.5 | 53.3% | 9.3% | 97.3% |
+| all (idx 0–37 + sparse) | 0.5 | 53.3% | 9.3% | 97.3% |
 
 +ASR was the only slice that helped. This was the key clue that span-level
 features wanted a separate model.
@@ -154,10 +162,10 @@ features wanted a separate model.
 
 | Formulation | Best T | Balanced |
 |-------------|--------|----------|
-| independent_binary | 0.6 | 50.0% |
-| case_balanced | 0.5 | 50.0% |
-| freeze_dense | 0.9 | 49.6% |
-| casewise_softmax | 0.7 | 50.0% |
+| independent_binary | 0.5 | 53.7% |
+| case_balanced | 0.5 | 53.3% |
+| freeze_dense | 0.9 | 50.0% |
+| casewise_softmax | 0.9 | 47.8% |
 
 All formulations converged to "reject everything." The problem was
 architectural, not an issue with the loss function or training balance.
@@ -166,12 +174,12 @@ architectural, not an issue with the loss function or training balance.
 
 | Population | n | min | p25 | p50 | p75 | max |
 |------------|---|-----|-----|-----|-----|-----|
-| Gold prob (gold = best) | 8 | 0.076 | 0.166 | 0.241 | 0.249 | 0.333 |
-| Best-non-gold (gold ≠ best) | 17 | 0.027 | 0.078 | 0.118 | 0.224 | 0.570 |
-| Top cx prob | 113 | 0.028 | 0.171 | 0.209 | 0.264 | 0.499 |
+| Gold prob (gold = best) | 48 | 0.039 | 0.159 | 0.253 | 0.424 | 0.769 |
+| Best-non-gold (gold ≠ best) | 38 | 0.048 | 0.083 | 0.263 | 0.434 | 0.743 |
+| Top cx prob | 113 | 0.023 | 0.188 | 0.267 | 0.351 | 0.562 |
 
 Gold and cx probabilities are interleaved. No threshold can separate them.
-In 17 of 25 canonical cases (68%), gold is NOT the best-scoring candidate.
+In 38 of 86 canonical cases (44%), gold is NOT the best-scoring candidate.
 
 ## Root cause analysis
 
@@ -205,16 +213,16 @@ bad candidates) corrupts the weights for problem 1 (and vice versa).
 
 ### One-case training trace (proof)
 
-Starting from seed weights, training on 1 canonical (QEMU) then
-1 counterexample (qwen):
+Starting from seed weights, training on 1 canonical (tokio) then
+1 counterexample (reqwest):
 
 | Mode | After canonical | After cx | Net effect on gold |
 |------|----------------|----------|--------------------|
-| teach_choice | gold +0.163 | gold −0.111 | gold +0.052 but cx −0.321 |
-| case_balanced | gold −0.318 | gold −0.025 | gold −0.343 |
+| teach_choice | gold −0.755 | gold −0.159 | gold −0.914 |
+| case_balanced | gold −0.865 | gold −0.017 | gold −0.882 |
 
-Case-balanced training actively lowers gold probability even on the
-canonical example, because hard negatives share features with gold.
+Both modes actively lower gold probability even on the canonical example,
+because hard negatives share features with gold.
 
 ## Eval 8: Two-stage architecture (the fix)
 
@@ -236,8 +244,7 @@ Two separate `SparseFtrl` models with non-overlapping feature sets:
 - 36 dense features: candidate scores (12), alias/identifier flags (8),
   guards + verified (4), **candidate-relative features (6)**, memory (5)
 - No span-level ASR or context features (those belong to Stage A)
-- Trained only on spans where gold is retrieved + verified (86 cases,
-  not just the 25 judge-reachable ones)
+- Trained only on spans where gold is retrieved + verified (86 cases)
 
 ### Candidate-relative features (new in Stage B)
 
@@ -251,7 +258,7 @@ Two separate `SparseFtrl` models with non-overlapping feature sets:
 | normalized_phonetic | phonetic_score / max in span |
 
 These features are candidate-specific without sharing values across
-candidates, so training on negatives does not suppress positives.
+candidates, so training on negatives does not suppress positive candidates.
 
 ### Results
 
@@ -259,66 +266,65 @@ candidates, so training on negatives does not suppress positives.
 
 | Gate T | Open correct | Closed correct | Balanced |
 |--------|-------------|----------------|----------|
-| 0.1 | 24/25 (96.0%) | 110/113 (97.3%) | **96.7%** |
-| **0.2** | **24/25 (96.0%)** | **113/113 (100.0%)** | **98.0%** |
-| 0.3 | 20/25 (80.0%) | 113/113 (100.0%) | 90.0% |
-| 0.4 | 19/25 (76.0%) | 113/113 (100.0%) | 88.0% |
-| 0.5 | 18/25 (72.0%) | 113/113 (100.0%) | 86.0% |
-| 0.6 | 15/25 (60.0%) | 113/113 (100.0%) | 80.0% |
-| 0.7 | 13/25 (52.0%) | 113/113 (100.0%) | 76.0% |
-| 0.8 | 11/25 (44.0%) | 113/113 (100.0%) | 72.0% |
-| 0.9 | 9/25 (36.0%) | 113/113 (100.0%) | 68.0% |
+| 0.1 | 86/86 (100.0%) | 70/113 (61.9%) | 81.0% |
+| 0.2 | 86/86 (100.0%) | 92/113 (81.4%) | 90.7% |
+| **0.3** | **84/86 (97.7%)** | **107/113 (94.7%)** | **96.2%** |
+| 0.4 | 80/86 (93.0%) | 111/113 (98.2%) | 95.6% |
+| 0.5 | 78/86 (90.7%) | 113/113 (100.0%) | 95.3% |
+| 0.6 | 76/86 (88.4%) | 113/113 (100.0%) | 94.2% |
+| 0.7 | 65/86 (75.6%) | 113/113 (100.0%) | 87.8% |
+| 0.8 | 55/86 (64.0%) | 113/113 (100.0%) | 82.0% |
+| 0.9 | 44/86 (51.2%) | 113/113 (100.0%) | 75.6% |
 
-At GT=0.2: the gate correctly opens for 96% of canonical spans and
-correctly closes for 100% of counterexample spans. Only 1 canonical
-case is missed by the gate.
+At GT=0.3: the gate correctly opens for 97.7% of canonical spans and
+correctly closes for 94.7% of counterexample spans. Best balanced
+accuracy: 96.2%.
 
 #### Stage B (ranker) alone
 
-**Top-1 accuracy: 23/25 (92.0%)**
+**Top-1 accuracy: 78/86 (90.7%)**
 
-Of 25 reachable canonical cases, the ranker puts gold first in 23.
+Of 86 reachable canonical cases, the ranker puts gold first in 78.
 
 #### Composed (gate x ranker)
 
 | Gate T | Ranker T | Can. Acc | Cx. Acc | Balanced | Can. Repl% | Cx. Repl% |
 |--------|----------|----------|---------|----------|------------|-----------|
-| **0.2** | **0.1** | **22/25 (88.0%)** | **113/113 (100.0%)** | **94.0%** | **96.0%** | **0.0%** |
-| 0.2 | 0.5 | 20/25 (80.0%) | 113/113 (100.0%) | 90.0% | 88.0% | 0.0% |
-| 0.3 | 0.2 | 18/25 (72.0%) | 113/113 (100.0%) | 86.0% | 80.0% | 0.0% |
-| 0.4 | 0.2 | 17/25 (68.0%) | 113/113 (100.0%) | 84.0% | 76.0% | 0.0% |
-| 0.5 | 0.2 | 16/25 (64.0%) | 113/113 (100.0%) | 82.0% | 72.0% | 0.0% |
+| **0.3** | **0.1** | **77/86 (89.5%)** | **107/113 (94.7%)** | **92.1%** | **97.7%** | **5.3%** |
+| 0.4 | 0.2 | 73/86 (84.9%) | 111/113 (98.2%) | 91.6% | 93.0% | 1.8% |
+| 0.5 | 0.2 | 71/86 (82.6%) | 113/113 (100.0%) | 91.3% | 90.7% | 0.0% |
+| 0.2 | 0.2 | 78/86 (90.7%) | 92/113 (81.4%) | 86.1% | 100.0% | 18.6% |
 
-**Zero false positive replacements at every threshold tested.**
-
-The 3 missed canonical cases come from the gate (1 case where gate
-doesn't open at GT=0.2) and the ranker (2 cases where gold isn't top-1).
+The architecture provides a smooth precision/recall tradeoff:
+- **Aggressive** (GT=0.3, RT=0.1): 89.5% can, 94.7% cx, 5.3% false positive rate
+- **Balanced** (GT=0.4, RT=0.2): 84.9% can, 98.2% cx, 1.8% false positive rate
+- **Conservative** (GT=0.5, RT=0.2): 82.6% can, 100% cx, 0% false positive rate
 
 #### Probability distributions
 
-**Gate probabilities** — perfectly separated:
+**Gate probabilities** — well separated:
 
 | Population | n | min | p25 | p50 | p75 | max |
 |------------|---|-----|-----|-----|-----|-----|
-| Canonical (should open) | 25 | 0.017 | 0.416 | 0.759 | 0.968 | 0.999 |
-| Counterex (should close) | 113 | 0.004 | 0.015 | 0.028 | 0.046 | 0.196 |
+| Canonical (should open) | 86 | 0.219 | 0.710 | 0.903 | 0.979 | 1.000 |
+| Counterex (should close) | 113 | 0.002 | 0.013 | 0.057 | 0.167 | 0.441 |
 
-Canonical median: 0.759. Counterexample median: 0.028. The distributions
-barely overlap — the max counterexample (0.196) is below the canonical
-median. This is why the gate achieves 98% balanced accuracy.
+Canonical median: 0.903. Counterexample median: 0.057. The distributions
+barely overlap — the max counterexample (0.441) is below the canonical p25
+(0.710). This is why the gate achieves 96.2% balanced accuracy.
 
 **Ranker probabilities** — gold ranks high with good confidence:
 
 | Population | n | min | p25 | p50 | p75 | max |
 |------------|---|-----|-----|-----|-----|-----|
-| Gold = best (correct rank) | 23 | 0.465 | 0.580 | 0.635 | 0.776 | 0.882 |
-| Gold ≠ best (wrong rank) | 2 | 0.556 | 0.556 | 0.793 | 0.793 | 0.793 |
+| Gold = best (correct rank) | 78 | 0.566 | 0.747 | 0.793 | 0.851 | 0.949 |
+| Gold ≠ best (wrong rank) | 8 | 0.589 | 0.641 | 0.719 | 0.757 | 0.895 |
 
-Gold median probability: 0.635 (vs 0.241 in the single model). The ranker
+Gold median probability: 0.793 (vs 0.253 in the single model). The ranker
 gives gold high absolute probability, not just relative ranking.
 
-The 2 cases where gold isn't best still have high non-gold probability
-(0.556, 0.793), suggesting the ranker is confident about a wrong candidate
+The 8 cases where gold isn't best have moderate non-gold probability
+(median 0.719), suggesting the ranker is confident about a wrong candidate
 rather than uncertain.
 
 ## Why the two-stage architecture works
@@ -338,22 +344,24 @@ rather than uncertain.
    candidate-specific without sharing values across candidates,
    so negative updates don't suppress positive candidates.
 
-4. **Larger training set for ranker**: Stage B trains on all 86
-   gold-verified spans, not just the 25 judge-reachable ones.
-   This gives 3.4x more positive supervision.
+4. **Full training set**: Stage B trains on all 86 gold-verified spans,
+   not limited by downstream pipeline reachability.
 
 ## What remains
 
-- **3 missed canonical cases**: 1 gate miss (gate prob too low) +
-  2 ranker misses (gold not top-1). Error analysis on these specific
-  cases would inform whether the gate needs better ASR features or
-  the ranker needs better candidate discrimination.
+- **9 missed canonical cases**: 2 gate misses (gate prob too low at GT=0.3) +
+  8 ranker misses (gold not top-1) − 1 overlap = 9 total. Error analysis on
+  these specific cases would inform whether the gate needs better ASR
+  features or the ranker needs better candidate discrimination.
 
-- **Online integration**: The two-stage architecture needs to be
-  wired into the production `OnlineJudge` for live correction. The
-  gate and ranker models would each maintain their own FTRL weights,
-  trained from `teach_choice` feedback.
+- **Online integration**: The two-stage architecture needs to be wired into
+  the production `OnlineJudge` for live correction. The gate and ranker
+  models would each maintain their own FTRL weights, trained from
+  `teach_choice` feedback.
 
-- **Dataset limitations**: 25 reachable canonical cases is small.
-  The 81 unreachable cases suggest retrieval/composition improvements
-  could dramatically expand the judge's opportunity set.
+- **End-to-end vs judge-stage**: The 92.1% balanced accuracy is a
+  judge-stage metric — it measures how well the judge performs on the
+  86 cases where gold reaches it. End-to-end accuracy (78/106 = 73.6%
+  at GT=0.3) is lower because 20 cases never reach the judge due to
+  retrieval or verification failures. Improving the retrieval and
+  verification pipeline would expand the judge's opportunity set.

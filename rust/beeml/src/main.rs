@@ -1532,7 +1532,7 @@ fn eval_deterministic_kfold(
                 if any_replace { fold.cx_replaced += 1; } else { fold.cx_correct += 1; }
             } else {
                 // Find span with gold alias
-                let gold_span = pc.spans.iter().find(|ps| ps.gold_alias_id.is_some());
+                let gold_span = find_best_gold_span(&pc.spans);
                 if let Some(gs) = gold_span {
                     fold.canonical_total += 1;
                     // Rank all verified candidates by acceptance_score > phonetic_score > coarse_score
@@ -1649,7 +1649,7 @@ fn train_and_score_kfold(
                     reachable: has_candidates,
                 };
             } else {
-                let gold_span = pc.spans.iter().find(|ps| ps.gold_alias_id.is_some());
+                let gold_span = find_best_gold_span(&pc.spans);
                 let (best_candidate, reachable) = if let Some(gs) = gold_span {
                     // Reachable = gold candidate exists AND is verified
                     let gold_verified = gs.gold_alias_id
@@ -1858,9 +1858,20 @@ fn best_cx_span(pc: &ProbedCase) -> Option<&ProbedSpan> {
         .max_by_key(|ps| ps.candidates.len())
 }
 
-/// Get the span containing the gold alias.
+/// Get the span containing the gold alias (prefers verified gold).
 fn gold_span(pc: &ProbedCase) -> Option<&ProbedSpan> {
-    pc.spans.iter().find(|ps| ps.gold_alias_id.is_some())
+    find_best_gold_span(&pc.spans)
+}
+
+/// Find best gold span: prefer verified gold, fall back to any gold.
+fn find_best_gold_span(spans: &[ProbedSpan]) -> Option<&ProbedSpan> {
+    spans.iter()
+        .find(|ps| {
+            if let Some(gid) = ps.gold_alias_id {
+                ps.candidates.iter().any(|(c, _)| c.alias_id == gid && c.verified)
+            } else { false }
+        })
+        .or_else(|| spans.iter().find(|ps| ps.gold_alias_id.is_some()))
 }
 
 /// Two-stage scored case: gate probability + ranker probability.
@@ -1919,7 +1930,8 @@ fn train_and_score_twostage_kfold(
                     }
                 } else {
                     // Canonical: gold span = positive, skip non-gold spans (ambiguous)
-                    if let Some(ps) = pc.spans.iter().find(|ps| ps.gold_alias_id.is_some()) {
+                    // Prefer verified-gold span over any-gold span
+                    if let Some(ps) = find_best_gold_span(&pc.spans) {
                         let feats = build_gate_features(&ps.span, &ps.candidates, &ps.ctx, &memory);
                         gate_model.update(&feats, true);
                     }
@@ -1927,9 +1939,8 @@ fn train_and_score_twostage_kfold(
 
                 // Stage B: train ranker only on spans with verified gold
                 if !pc.case.should_abstain {
-                    if let Some(ps) = pc.spans.iter().find(|ps| ps.gold_alias_id.is_some()) {
+                    if let Some(ps) = find_best_gold_span(&pc.spans) {
                         let gold_id = ps.gold_alias_id.unwrap();
-                        // Only train if gold is verified (use larger supervision set)
                         let gold_verified = ps.candidates.iter().any(|(c, _)| c.alias_id == gold_id && c.verified);
                         if gold_verified {
                             let examples = build_ranker_features(&ps.span, &ps.candidates, &memory);
@@ -1990,7 +2001,14 @@ fn train_and_score_twostage_kfold(
                     reachable: has_candidates,
                 };
             } else {
-                let gold_span = pc.spans.iter().find(|ps| ps.gold_alias_id.is_some());
+                // Prefer the span where gold is verified; fall back to any span with gold
+                let gold_span = pc.spans.iter()
+                    .find(|ps| {
+                        if let Some(gid) = ps.gold_alias_id {
+                            ps.candidates.iter().any(|(c, _)| c.alias_id == gid && c.verified)
+                        } else { false }
+                    })
+                    .or_else(|| pc.spans.iter().find(|ps| ps.gold_alias_id.is_some()));
                 if let Some(gs) = gold_span {
                     let gold_id = gs.gold_alias_id.unwrap();
                     let gold_verified = gs.candidates.iter().any(|(c, _)| c.alias_id == gold_id && c.verified);
@@ -2767,6 +2785,8 @@ impl BeeMl for BeeMlService {
             let two_stage_scored = train_and_score_twostage_kfold(
                 &probed_cases, &case_folds, folds, train_epochs, 3,
             );
+
+
 
             // Stage A alone: gate accuracy at various thresholds
             println!("\n  Stage A (gate) alone:");
