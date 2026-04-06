@@ -1502,6 +1502,8 @@ enum TrainMode {
     CaseBalanced { epochs: usize, hard_neg_cap: usize },
     /// Casewise softmax: all candidates + keep_original compete.
     CasewiseSoftmax { epochs: usize },
+    /// Freeze dense seed weights, only train sparse/ASR/memory features.
+    FreezeDense { epochs: usize, hard_neg_cap: usize },
 }
 
 /// Eval 1a: Deterministic baseline using the same candidate set as the judge.
@@ -1596,7 +1598,13 @@ fn train_and_score_kfold(
             TrainMode::TeachChoice { epochs } => *epochs,
             TrainMode::CaseBalanced { epochs, .. } => *epochs,
             TrainMode::CasewiseSoftmax { epochs } => *epochs,
+            TrainMode::FreezeDense { epochs, .. } => *epochs,
         };
+
+        if matches!(&train_mode, TrainMode::FreezeDense { .. }) {
+            // Freeze the 28 original phonetic/structural dense features (indices 0-27)
+            judge.freeze_dense(28);
+        }
 
         for _epoch in 0..epochs {
             for (i, pc) in probed_cases.iter().enumerate() {
@@ -1641,6 +1649,10 @@ fn train_and_score_kfold(
             } else {
                 let gold_span = pc.spans.iter().find(|ps| ps.gold_alias_id.is_some());
                 let (best_candidate, reachable) = if let Some(gs) = gold_span {
+                    // Reachable = gold candidate exists AND is verified
+                    let gold_verified = gs.gold_alias_id
+                        .map(|gid| gs.candidates.iter().any(|(c, _)| c.alias_id == gid && c.verified))
+                        .unwrap_or(false);
                     let best = if use_ablation {
                         let s = score_span_ablated(&judge, gs, slice);
                         s.into_iter().max_by(|a, b| a.1.total_cmp(&b.1))
@@ -1651,7 +1663,7 @@ fn train_and_score_kfold(
                             .max_by(|a, b| a.probability.total_cmp(&b.probability))
                             .map(|o| (o.alias_id.unwrap_or(0), o.probability))
                     };
-                    (best, true)
+                    (best, gold_verified)
                 } else {
                     (None, false)
                 };
@@ -1724,6 +1736,15 @@ fn train_case(judge: &mut OnlineJudge, pc: &ProbedCase, mode: &TrainMode) {
                 judge.train_softmax(&ps.span, &ps.candidates, ps.gold_alias_id, &ps.ctx);
             }
         }
+        TrainMode::FreezeDense { hard_neg_cap, .. } => {
+            if pc.case.should_abstain {
+                if let Some(ps) = best_cx_span(pc) {
+                    judge.train_balanced(&ps.span, &ps.candidates, Option::None, &ps.ctx, *hard_neg_cap);
+                }
+            } else if let Some(ps) = gold_span(pc) {
+                judge.train_balanced(&ps.span, &ps.candidates, ps.gold_alias_id, &ps.ctx, *hard_neg_cap);
+            }
+        }
     }
 }
 
@@ -1754,7 +1775,7 @@ fn train_case_ablated(
 
     match mode {
         TrainMode::None => {}
-        TrainMode::TeachChoice { .. } | TrainMode::CaseBalanced { .. } => {
+        TrainMode::TeachChoice { .. } | TrainMode::CaseBalanced { .. } | TrainMode::FreezeDense { .. } => {
             // Case-balanced: same logic but with filtered features
             if let Some(gold_id) = ps.gold_alias_id {
                 // Canonical
@@ -1762,7 +1783,8 @@ fn train_case_ablated(
                     judge.model_mut().update(&filtered[gold_idx], true);
                 }
                 let hard_neg_cap = match mode {
-                    TrainMode::CaseBalanced { hard_neg_cap, .. } => *hard_neg_cap,
+                    TrainMode::CaseBalanced { hard_neg_cap, .. }
+                    | TrainMode::FreezeDense { hard_neg_cap, .. } => *hard_neg_cap,
                     _ => examples.len(),
                 };
                 let mut neg_indices: Vec<usize> = (0..examples.len())
@@ -2281,8 +2303,94 @@ impl BeeMl for BeeMlService {
             })
             .collect();
 
-        // ── Eval 1: Baselines ──────────────────────────────────────────
+        // ── Dataset summary ──────────────────────────────────────────────
         println!("\n=== Phase 4 Offline Judge Eval ({folds}-fold CV, {train_epochs} epochs) ===");
+
+        // Reachability summary
+        let canonical_count = probed_cases.iter().filter(|pc| !pc.case.should_abstain).count();
+        let canonical_with_gold = probed_cases.iter()
+            .filter(|pc| !pc.case.should_abstain)
+            .filter(|pc| pc.spans.iter().any(|ps| ps.gold_alias_id.is_some()))
+            .count();
+        let canonical_gold_verified = probed_cases.iter()
+            .filter(|pc| !pc.case.should_abstain)
+            .filter(|pc| pc.spans.iter().any(|ps| {
+                if let Some(gold_id) = ps.gold_alias_id {
+                    ps.candidates.iter().any(|(c, _)| c.alias_id == gold_id && c.verified)
+                } else {
+                    false
+                }
+            }))
+            .count();
+        let cx_count = probed_cases.iter().filter(|pc| pc.case.should_abstain).count();
+        let cx_with_candidates = probed_cases.iter()
+            .filter(|pc| pc.case.should_abstain)
+            .filter(|pc| pc.spans.iter().any(|ps| !ps.candidates.is_empty()))
+            .count();
+        println!("\n  Dataset: {canonical_count} canonical ({canonical_with_gold} gold retrieved, {canonical_gold_verified} gold verified), {cx_count} counterexamples ({cx_with_candidates} with candidates)");
+
+        // ── Feature activation diagnostics ──────────────────────────────
+        {
+            use beeml::judge::{build_examples, FeatureSlice, SPARSE_OFFSET, NUM_DENSE};
+            println!("\n--- Feature activation diagnostics ---");
+
+            let mut total_examples = 0u64;
+            let mut dense_nonzero_sum = 0u64;
+            let mut sparse_nonzero_sum = 0u64;
+            let mut sparse_feature_counts: HashMap<u64, u32> = HashMap::new();
+            let mut dense_abs_sums = vec![0.0f64; NUM_DENSE];
+            let mut dense_nonzero_counts = vec![0u64; NUM_DENSE];
+
+            for pc in &probed_cases {
+                for ps in &pc.spans {
+                    if ps.candidates.is_empty() { continue; }
+                    let examples = build_examples(&ps.span, &ps.candidates, &ps.ctx, &Default::default());
+                    for ex in &examples {
+                        total_examples += 1;
+                        for f in &ex.features {
+                            if f.index < NUM_DENSE as u64 {
+                                if f.value != 0.0 {
+                                    dense_nonzero_sum += 1;
+                                    dense_abs_sums[f.index as usize] += f.value.abs();
+                                    dense_nonzero_counts[f.index as usize] += 1;
+                                }
+                            } else {
+                                if f.value != 0.0 {
+                                    sparse_nonzero_sum += 1;
+                                    *sparse_feature_counts.entry(f.index).or_default() += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let unique_sparse = sparse_feature_counts.len();
+            println!("  Total examples: {total_examples}");
+            println!("  Avg dense nonzero: {:.1}", dense_nonzero_sum as f64 / total_examples.max(1) as f64);
+            println!("  Avg sparse nonzero: {:.1}", sparse_nonzero_sum as f64 / total_examples.max(1) as f64);
+            println!("  Unique sparse features: {unique_sparse}");
+
+            // Top 20 most frequent sparse features
+            let mut sparse_sorted: Vec<_> = sparse_feature_counts.iter().collect();
+            sparse_sorted.sort_by(|a, b| b.1.cmp(a.1));
+            println!("  Top 20 sparse features by frequency:");
+            for (idx, count) in sparse_sorted.iter().take(20) {
+                println!("    bucket {idx}: {count} activations");
+            }
+
+            // Dense feature activation rates
+            println!("  Dense feature activation (nonzero rate, avg magnitude when active):");
+            for (i, name) in beeml::judge::FEATURE_NAMES.iter().enumerate() {
+                let rate = if total_examples > 0 { dense_nonzero_counts[i] as f64 / total_examples as f64 * 100.0 } else { 0.0 };
+                let avg_mag = if dense_nonzero_counts[i] > 0 { dense_abs_sums[i] / dense_nonzero_counts[i] as f64 } else { 0.0 };
+                if rate > 0.0 {
+                    println!("    [{i:2}] {name:<30} {rate:5.1}%  avg={avg_mag:.4}");
+                }
+            }
+        }
+
+        // ── Eval 1: Baselines ──────────────────────────────────────────
 
         let thresholds: &[f32] = &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
 
@@ -2381,6 +2489,7 @@ impl BeeMl for BeeMlService {
             let formulations: &[(&str, TrainMode)] = &[
                 ("independent_binary", TrainMode::TeachChoice { epochs: train_epochs }),
                 ("case_balanced", TrainMode::CaseBalanced { epochs: train_epochs, hard_neg_cap: 3 }),
+                ("freeze_dense", TrainMode::FreezeDense { epochs: train_epochs, hard_neg_cap: 3 }),
                 ("casewise_softmax", TrainMode::CasewiseSoftmax { epochs: train_epochs }),
             ];
             for (name, train_mode) in formulations {
@@ -2393,6 +2502,144 @@ impl BeeMl for BeeMlService {
                     m.balanced_pct(),
                     m.canonical_replace_pct(), m.cx_replace_pct(),
                 );
+            }
+        }
+
+        // ── Probability distribution diagnostics ────────────────────────
+        println!("\n--- Probability distributions (case-balanced model) ---");
+        {
+            let mut gold_probs: Vec<f32> = Vec::new();
+            let mut cx_top_probs: Vec<f32> = Vec::new();
+
+            for sc in &scored_balanced {
+                if sc.should_abstain {
+                    if let Some((_, prob)) = sc.best_candidate {
+                        cx_top_probs.push(prob);
+                    }
+                } else if sc.reachable {
+                    if let Some((alias_id, prob)) = sc.best_candidate {
+                        if sc.gold_alias_id == Some(alias_id) {
+                            gold_probs.push(prob);
+                        }
+                    }
+                }
+            }
+
+            gold_probs.sort_by(|a, b| a.total_cmp(b));
+            cx_top_probs.sort_by(|a, b| a.total_cmp(b));
+
+            fn percentiles(vals: &[f32]) -> String {
+                if vals.is_empty() { return "N/A".to_string(); }
+                let p = |pct: f64| -> f32 {
+                    let idx = ((vals.len() as f64 - 1.0) * pct).round() as usize;
+                    vals[idx.min(vals.len() - 1)]
+                };
+                format!("n={:<4} min={:.3} p25={:.3} p50={:.3} p75={:.3} max={:.3}",
+                    vals.len(), p(0.0), p(0.25), p(0.5), p(0.75), p(1.0))
+            }
+
+            println!("  Gold candidate prob (canonical, gold=best):  {}", percentiles(&gold_probs));
+            println!("  Top negative prob (counterexample):           {}", percentiles(&cx_top_probs));
+
+            // Also show where gold candidate is NOT the best
+            let mut gold_not_best_probs: Vec<f32> = Vec::new();
+            let mut gold_not_best_best: Vec<f32> = Vec::new();
+            for sc in &scored_balanced {
+                if !sc.should_abstain && sc.reachable {
+                    if let Some((alias_id, _prob)) = sc.best_candidate {
+                        if sc.gold_alias_id != Some(alias_id) {
+                            // Gold was not the top candidate — find gold prob
+                            // We don't have it directly, but we know it's not the best
+                            gold_not_best_best.push(_prob);
+                        }
+                    }
+                }
+            }
+            if !gold_not_best_best.is_empty() {
+                gold_not_best_best.sort_by(|a, b| a.total_cmp(b));
+                println!("  Best-non-gold prob (canonical, gold!=best):   {}", percentiles(&gold_not_best_best));
+                println!("  Cases where gold is NOT best candidate: {}", gold_not_best_best.len());
+            }
+        }
+
+        // ── One-case training trace ────────────────────────────────────
+        println!("\n--- One-case training trace ---");
+        {
+            // Pick first canonical case with gold span and first cx case with candidates
+            let first_canonical = probed_cases.iter()
+                .find(|pc| !pc.case.should_abstain && pc.spans.iter().any(|ps| ps.gold_alias_id.is_some()));
+            let first_cx = probed_cases.iter()
+                .find(|pc| pc.case.should_abstain && pc.spans.iter().any(|ps| !ps.candidates.is_empty()));
+
+            if let (Some(can_case), Some(cx_case)) = (first_canonical, first_cx) {
+                for (mode_name, mode) in &[
+                    ("teach_choice", TrainMode::TeachChoice { epochs: 1 }),
+                    ("case_balanced", TrainMode::CaseBalanced { epochs: 1, hard_neg_cap: 3 }),
+                ] {
+                    println!("\n  [{mode_name}] training trace:");
+                    let mut judge = OnlineJudge::new_quiet();
+
+                    // Score before training
+                    let can_span = gold_span(can_case).unwrap();
+                    let cx_span = best_cx_span(cx_case).unwrap();
+
+                    let pre_can = judge.score_candidates(&can_span.span, &can_span.candidates, &can_span.ctx);
+                    let gold_pre = pre_can.iter()
+                        .find(|o| o.alias_id == can_span.gold_alias_id)
+                        .map(|o| o.probability).unwrap_or(0.0);
+                    let best_pre = pre_can.iter()
+                        .filter(|o| !o.is_keep_original)
+                        .max_by(|a, b| a.probability.total_cmp(&b.probability))
+                        .map(|o| o.probability).unwrap_or(0.0);
+
+                    let pre_cx = judge.score_candidates(&cx_span.span, &cx_span.candidates, &cx_span.ctx);
+                    let cx_best_pre = pre_cx.iter()
+                        .filter(|o| !o.is_keep_original)
+                        .max_by(|a, b| a.probability.total_cmp(&b.probability))
+                        .map(|o| o.probability).unwrap_or(0.0);
+
+                    println!("    Before training:");
+                    println!("      canonical gold prob={gold_pre:.4}, best prob={best_pre:.4} (term={})", can_case.case.target_term);
+                    println!("      counterex best prob={cx_best_pre:.4} (term={})", cx_case.case.target_term);
+
+                    // Train on canonical case
+                    train_case(&mut judge, can_case, mode);
+                    let post_can1 = judge.score_candidates(&can_span.span, &can_span.candidates, &can_span.ctx);
+                    let gold_post1 = post_can1.iter()
+                        .find(|o| o.alias_id == can_span.gold_alias_id)
+                        .map(|o| o.probability).unwrap_or(0.0);
+                    let post_cx1 = judge.score_candidates(&cx_span.span, &cx_span.candidates, &cx_span.ctx);
+                    let cx_best_post1 = post_cx1.iter()
+                        .filter(|o| !o.is_keep_original)
+                        .max_by(|a, b| a.probability.total_cmp(&b.probability))
+                        .map(|o| o.probability).unwrap_or(0.0);
+
+                    println!("    After training on 1 canonical:");
+                    println!("      canonical gold prob={gold_post1:.4} (delta={:+.4})", gold_post1 - gold_pre);
+                    println!("      counterex best prob={cx_best_post1:.4} (delta={:+.4})", cx_best_post1 - cx_best_pre);
+
+                    // Train on counterexample case
+                    train_case(&mut judge, cx_case, mode);
+                    let post_can2 = judge.score_candidates(&can_span.span, &can_span.candidates, &can_span.ctx);
+                    let gold_post2 = post_can2.iter()
+                        .find(|o| o.alias_id == can_span.gold_alias_id)
+                        .map(|o| o.probability).unwrap_or(0.0);
+                    let post_cx2 = judge.score_candidates(&cx_span.span, &cx_span.candidates, &cx_span.ctx);
+                    let cx_best_post2 = post_cx2.iter()
+                        .filter(|o| !o.is_keep_original)
+                        .max_by(|a, b| a.probability.total_cmp(&b.probability))
+                        .map(|o| o.probability).unwrap_or(0.0);
+
+                    println!("    After training on 1 counterexample:");
+                    println!("      canonical gold prob={gold_post2:.4} (delta={:+.4} from canonical-only)", gold_post2 - gold_post1);
+                    println!("      counterex best prob={cx_best_post2:.4} (delta={:+.4} from canonical-only)", cx_best_post2 - cx_best_post1);
+
+                    // Weight norm
+                    let weights = judge.weights();
+                    let weight_norm: f64 = weights.iter().map(|w| (*w as f64) * (*w as f64)).sum::<f64>().sqrt();
+                    println!("    Weight L2 norm: {weight_norm:.4}");
+                    println!("    Active features: {}", judge.model().num_active());
+                }
             }
         }
 

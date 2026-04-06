@@ -18,7 +18,7 @@ const LOW_CONTENT: &[&str] = &[
 
 // Each candidate is scored independently: "should this replacement happen?"
 // All candidates share the same feature space so learning transfers across cases.
-const FEATURE_NAMES: &[&str] = &[
+pub const FEATURE_NAMES: &[&str] = &[
     "bias",
     "acceptance_score",
     "phonetic_score",
@@ -577,6 +577,11 @@ impl OnlineJudge {
     /// Mutable access to the underlying model for ablated training.
     pub fn model_mut(&mut self) -> &mut SparseFtrl {
         &mut self.model
+    }
+
+    /// Freeze the first N dense feature indices so seed weights are preserved.
+    pub fn freeze_dense(&mut self, n: usize) {
+        self.model.freeze(0..n as u64);
     }
 
     /// Get a reference to the event log for persistence.

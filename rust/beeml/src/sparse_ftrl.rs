@@ -21,6 +21,8 @@ pub struct SparseFtrl {
     pub l1: f64,
     /// L2 regularization.
     pub l2: f64,
+    /// Feature indices that are frozen (not updated during training).
+    frozen: std::collections::HashSet<u64>,
 }
 
 /// A single active feature: index + value.
@@ -38,7 +40,13 @@ impl SparseFtrl {
             beta,
             l1,
             l2,
+            frozen: std::collections::HashSet::new(),
         }
+    }
+
+    /// Freeze a set of feature indices — they will not be updated during training.
+    pub fn freeze(&mut self, indices: impl IntoIterator<Item = u64>) {
+        self.frozen.extend(indices);
     }
 
     /// Compute the weight for a single feature from its accumulators.
@@ -74,6 +82,7 @@ impl SparseFtrl {
         let g = p - if label { 1.0 } else { 0.0 };
 
         for f in features {
+            if self.frozen.contains(&f.index) { continue; }
             let g_i = g * f.value;
             // Compute current weight before mutating accumulators
             let (z_old, n_old) = self.accumulators.get(&f.index).copied().unwrap_or((0.0, 0.0));
@@ -132,6 +141,7 @@ impl SparseFtrl {
             let target = if i == gold_index { 1.0 } else { 0.0 };
             let g = probs[i] - target;
             for f in features {
+                if self.frozen.contains(&f.index) { continue; }
                 let g_i = g * f.value;
                 let (z_old, n_old) = self.accumulators.get(&f.index).copied().unwrap_or((0.0, 0.0));
                 let w_i = if z_old.abs() <= self.l1 {
