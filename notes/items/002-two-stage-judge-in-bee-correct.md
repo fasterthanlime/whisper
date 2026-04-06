@@ -5,58 +5,88 @@
 Make the two-stage architecture (span gate + candidate ranker) the default
 judge in bee-correct, replacing the single-model OnlineJudge for scoring.
 
-## Current state
+## Depends on
 
-- `OnlineJudge` wraps a single `SparseFtrl` model
-- Two-stage gate + ranker exist as standalone functions (`build_gate_features`,
-  `build_ranker_features`, `seed_gate_model`, `seed_ranker_model`) but are
-  only used in the offline eval harness
-- No struct encapsulates the two-stage architecture
+- 001 (bee-correct crate exists)
 
 ## Design
 
-New struct in bee-correct:
+Separate concerns: judge owns weights + memory, logging is external.
 
 ```rust
+/// Core judge: weights + memory, no event storage.
 pub struct TwoStageJudge {
-    gate: SparseFtrl,       // Stage A: should this span be corrected?
-    ranker: SparseFtrl,     // Stage B: which candidate wins?
-    memory: TermMemory,     // shared memory across both stages
-    event_log: Vec<CorrectionEvent>,
+    gate: SparseFtrl,
+    ranker: SparseFtrl,
+    memory: TermMemory,
     gate_threshold: f32,    // default 0.5 (conservative)
     ranker_threshold: f32,  // default 0.2 (conservative)
 }
+
+/// Decision output with full trace for product/debug use.
+pub struct SpanDecision {
+    pub gate_open: bool,
+    pub gate_prob: f32,
+    pub chosen: Option<CandidateChoice>,
+    pub options: Vec<RankedCandidate>,  // all candidates with scores
+}
+
+pub struct CandidateChoice {
+    pub alias_id: u32,
+    pub term: String,
+    pub replacement_text: String,
+    pub ranker_prob: f32,
+}
 ```
 
-Public API:
+### Public API
 
 ```rust
 impl TwoStageJudge {
     pub fn new(gate_threshold: f32, ranker_threshold: f32) -> Self;
+
+    /// Score a span: gate decision + ranked candidates.
+    /// Returns enough trace for product UI and debug.
     pub fn score_span(&self, span, candidates, ctx) -> SpanDecision;
-    pub fn teach_choice(&mut self, span, candidates, chosen_alias_id, ctx);
+
+    /// Update weights from user feedback.
+    pub fn teach_span(&mut self, span, candidates, chosen_alias_id, ctx);
+
+    /// Direct access for diagnostics.
     pub fn gate_prob(&self, span, candidates, ctx) -> f32;
     pub fn ranker_scores(&self, span, candidates) -> Vec<(u32, f32)>;
-}
 
-pub struct SpanDecision {
-    pub gate_open: bool,
-    pub gate_prob: f32,
-    pub chosen: Option<CandidateChoice>,  // None if gate closed
-    pub options: Vec<RankedCandidate>,
+    // Persistence
+    pub fn save_weights(&self, path: &Path) -> Result<()>;
+    pub fn load_weights(&mut self, path: &Path) -> Result<()>;
+    pub fn save_memory(&self, path: &Path) -> Result<()>;
+    pub fn load_memory(&mut self, path: &Path) -> Result<()>;
 }
 ```
+
+### Event logging is separate
+
+```rust
+/// External to TwoStageJudge — caller decides storage.
+pub trait CorrectionEventSink {
+    fn log_event(&mut self, event: &CorrectionEvent);
+}
+
+// Implementations: Vec<CorrectionEvent>, File, no-op, etc.
+```
+
+This avoids the judge owning a growing Vec that's awkward for FFI
+ownership, persistence, and long sessions.
 
 ## Operating points
 
 Default to conservative (GT=0.5, RT=0.2) for production.
-Expose thresholds as configuration for experimentation.
+Expose thresholds as configuration.
 
 ## Keep OnlineJudge
 
-Don't delete the old single-model judge yet — keep it as a regression
-baseline and for the eval harness comparison. But the production code
-path should use TwoStageJudge.
+Don't delete the old single-model judge — keep as regression baseline
+and for eval harness comparison. Production code path uses TwoStageJudge.
 
 ## Depends on
 

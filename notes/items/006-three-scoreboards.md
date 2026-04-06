@@ -2,7 +2,16 @@
 
 ## Goal
 
-Always report three separate metrics to prevent denominator confusion.
+Always report three separate metrics. This is architecture protection,
+not reporting polish. Never go back to one blended number.
+
+## Mandatory in
+
+- CLI eval output (`--offline-eval`)
+- Web eval UI (OfflineJudgeEvalPanel)
+- Any future app-facing diagnostics
+
+Must survive the 001 extraction intact.
 
 ## Scoreboards
 
@@ -18,7 +27,7 @@ Denominator: all canonical cases (106).
 
 ### 2. Judge-stage
 
-Denominator: reachable cases only (86 canonical, 113 cx).
+Denominator: reachable cases only (currently 86 canonical, 113 cx).
 
 | Metric | Definition |
 |--------|------------|
@@ -34,13 +43,12 @@ Shows where cases are lost before the judge.
 |--------|------------|
 | Gold retrieved | Gold term appears in shortlist / all canonical |
 | Gold verified | Gold candidate passes verification / all canonical |
-| Gold reaches judge | Gold in judge-visible decision set / all canonical |
 
 ## Implementation
 
 - Update `--offline-eval` output to print all three scoreboards
 - Update the web UI (OfflineJudgeEvalPanel) to show all three
-- Update eval-results.md template to use this structure
+- Keep this structure through the 001 extraction
 
 ## Depends on
 

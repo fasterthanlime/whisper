@@ -15,133 +15,65 @@ dictation IME.
 2. Correction engine processes transcript → decision set
 3. Insert corrected text (not raw transcript) via `insertText`
 4. Track the insertion range (cursor position + length)
-5. Brief subtle notification: "2 corrections applied" (or nothing if zero)
-6. User hits ROpt-C → correction review panel opens
-7. Panel shows sentence with correction ranges, each accept/reject-able
-8. Accept/reject feeds back to `bee_correct_teach`
+5. User hits ROpt-C → correction review panel opens
+6. Panel shows the **track view**: sentence splits at corrections,
+   original on top, correction on bottom
+7. User clicks lanes to resolve each correction
+8. Apply replaces the inserted text via `insertText(_, replacementRange:)`
+9. Teaching events sent to `bee_correct_teach` with stable session/edit IDs
+
+## The panel always shows both
+
+Per consultant feedback: always show raw transcript AND corrected text,
+not just the corrected sentence. The teaching signal depends on the
+contrast. The track view achieves this naturally — both are visible
+at split points.
 
 ## IME text replacement: confirmed feasible
 
 `insertText(_:replacementRange:)` on the IMK client supports replacing
-specific character ranges in the host app's text. This is the standard
-mechanism CJK IMEs use for re-input (e.g., replacing "かな" with "kana").
+specific character ranges. Standard mechanism used by CJK IMEs.
 
-Works in apps that properly implement `NSTextInputClient` (TextEdit,
-Xcode, Safari, most Cocoa apps). May not work in Electron or
-cross-platform apps that half-implement the protocol — same constraint
-all IMEs live with.
-
-### What to track per insertion
-
-```swift
-struct InsertionRecord {
-    let range: NSRange           // where we inserted
-    let rawTranscript: String    // what ASR produced
-    let correctedText: String    // what we actually inserted
-    let corrections: [CorrectionRange]  // individual corrections applied
-    let timestamp: Date
-}
-
-struct CorrectionRange {
-    let originalSpan: Range<Int>     // character range in raw transcript
-    let replacementText: String      // what we replaced it with
-    let aliasId: UInt32              // which vocab term
-    let term: String                 // canonical term name
-    let confidence: Float            // gate_prob * ranker_prob
-}
-```
+Works in apps that properly implement `NSTextInputClient`. May not work
+in Electron or cross-platform apps — same constraint all IMEs live with.
 
 ### Invalidation
 
-If the user moves the cursor away from the insertion point or edits the
-text manually, the insertion record is invalidated — we can no longer
-safely replace. The correction panel should show "text has been modified,
-corrections can no longer be applied" or just not open.
-
-## Correction review panel
-
-Triggered by ROpt-C (Right Option + C). Shows:
-
-### Main view
-
-The sentence with correction ranges highlighted. Each correction shows:
-- Original text (struck through or dimmed)
-- Replacement text (highlighted)
-- Accept/reject toggle per correction
-
-Example:
-
-```
-I was working with [Sir Day Jason → serde_json] and [Tokyo → tokio]
-to parse the [Jason → JSON] file.
-
-[✓] serde_json  (was: "Sir Day Jason")
-[✓] tokio       (was: "Tokyo")
-[✓] JSON        (was: "Jason")
-
-[Apply] [Revert All] [Dismiss]
-```
-
-### Corrections are range-based, not word-based
-
-"Sir Day Jason" → "serde_json" maps a 3-word span to a 1-word term.
-The UI operates on character ranges, not word boundaries.
-
-### Actions
-
-| Action | Effect | Teaching signal |
-|--------|--------|-----------------|
-| Accept (keep checked) | Correction stays | Positive for gate + ranker |
-| Reject (uncheck) | Revert to original text | Negative for gate |
-| Revert All | Revert entire sentence to raw transcript | Negative for all |
-| Dismiss | Keep whatever is checked, close panel | Mixed signal per correction |
-
-### "Mark as correct" (original was fine)
-
-If no corrections were applied but the user thinks there should have been
-one, or if a correction was wrong: the panel should have a way to say
-"the original was right." This is a negative gate signal.
-
-### "Add term" flow
-
-If the user knows a term that should be in the vocabulary:
-
-1. User selects a range in the transcript (the misheard text)
-2. Types the correct term
-3. System adds it to the phonetic index
-4. This is vocab expansion — creates a new alias entry
-
-This is a stretch goal. The core flow (accept/reject existing corrections)
-should ship first.
-
-## Multiple corrections in one utterance
-
-The panel shows all corrections at once. Each is independently
-accept/reject-able. The "Apply" button commits the final mix of
-accepted and rejected corrections by replacing the insertion range
-with the appropriately modified text.
+If the user moves the cursor or edits the text manually, the insertion
+record is invalidated. The panel should indicate corrections can no
+longer be applied in-place (but teaching signals can still be sent).
 
 ## Operating point
 
 Default: conservative (GT=0.5, RT=0.2) — zero false positives in eval.
-This means the user should almost never see a wrong correction. The cost
-is missing some valid corrections, but the user can always re-dictate.
+The product lives or dies on false positives.
 
-## Prototyping plan
+## Teaching signals
 
-1. **HTML prototype** in beeml web UI — nail the interaction design
-   with mock data, no backend needed
-2. **SwiftUI panel** — real panel using AppKit/SwiftUI, connected to
-   bee-ffi correction API
-3. **IME integration** — wire the panel to ROpt-C, track insertion
-   ranges, handle replacement
+| User action | Teaching signal |
+|-------------|-----------------|
+| Accept correction (click bottom lane) | Positive gate + positive ranker |
+| Reject correction (click top lane) | Negative gate |
+| Accept all (Enter) | Positive for all pending |
+| User adds correction (select + type) | Vocabulary expansion signal |
+| Dismiss (Esc) | No signal (ambiguous) |
+
+Teaching references stable edit IDs from the process result (see 003),
+not raw character offsets. This avoids drift if reprocessed.
+
+## Prototyping
+
+1. HTML prototype in beeml web UI (done — track/lane metaphor validated)
+2. SwiftUI panel with mock data
+3. SwiftUI panel with real bee-ffi correction API
+4. IME integration: ROpt-C triggers panel, Apply does replacement
 
 ## Open questions
 
-- Should the notification ("2 corrections applied") be visual or audio?
 - How long does the insertion record stay valid? Until next dictation?
   Until cursor moves? Time-based expiry?
-- Should there be a global history of corrections (not just current
-  insertion)?
-- What about corrections across multiple dictation segments in the
-  same document?
+- Should there be a global history of corrections?
+- What about corrections across multiple dictation segments?
+- "Add term" flow: when the user types a new term in the panel, what
+  happens? Index update? Alias creation? Verification? This needs its
+  own work item once the core flow ships.
