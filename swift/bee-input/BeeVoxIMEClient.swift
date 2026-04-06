@@ -67,7 +67,7 @@ final class BeeVoxIMEClient: Sendable {
         }
         beeInputLog("VOXIPC: connecting to \(path)")
         let connector = UnixConnector(path: path)
-        let dispatcher = ImeChannelingDispatcher(handler: ImeImpl())
+        let dispatcher = ImeDispatcher(handler: ImeImpl())
         do {
             let session = try await VoxRuntime.Session.initiator(
                 connector, dispatcher: dispatcher, resumable: false)

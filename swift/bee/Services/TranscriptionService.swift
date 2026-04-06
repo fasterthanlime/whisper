@@ -127,9 +127,9 @@ final class TranscriptionService: @unchecked Sendable {
         var err: UnsafeMutablePointer<CChar>?
         let result: AsrFeedResult = samples.withUnsafeBufferPointer { buf in
             if finalizing {
-                return asr_session_feed_finalizing(session.ptr, buf.baseAddress, buf.count, &err)
+                return asr_session_feed_finalizing(session.ptr, buf.baseAddress, UInt(buf.count), &err)
             } else {
-                return asr_session_feed(session.ptr, buf.baseAddress, buf.count, &err)
+                return asr_session_feed(session.ptr, buf.baseAddress, UInt(buf.count), &err)
             }
         }
 
@@ -188,7 +188,7 @@ final class TranscriptionService: @unchecked Sendable {
 
         var err: UnsafeMutablePointer<CChar>?
         let result = samples.withUnsafeBufferPointer { buf in
-            asr_engine_transcribe_samples(engine, buf.baseAddress, buf.count, &err)
+            asr_engine_transcribe_samples(engine, buf.baseAddress, UInt(buf.count), &err)
         }
 
         if let err {

@@ -2,6 +2,7 @@
 // DO NOT EDIT - regenerate with `cargo xtask codegen --swift`
 
 import Foundation
+@preconcurrency import NIOCore
 import VoxRuntime
 
 // MARK: - App Method IDs
@@ -16,6 +17,8 @@ public enum AppMethodId {
 }
 
 // MARK: - App Types
+
+// MARK: - App Encoders
 
 // MARK: - App Client
 
@@ -46,197 +49,71 @@ public final class AppClient: AppCaller, Sendable {
     }
 
     public func imeHello() async throws -> String {
-        let payload = Data()
+        let payload: [UInt8] = []
         let schemaInfo = ClientSchemaInfo(methodInfo: app_method_schemas[0x75699685b1a93d32]!, schemaRegistry: app_schema_registry)
         let response = try await connection.call(methodId: 0x75699685b1a93d32, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
-        var cursor = 0
-        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
-        switch _cursor_resultDisc {
-        case 0:
-            let result = try decodeString(from: response, offset: &cursor)
+        return try decodeInfallibleResponse(response) { buf in
+            let result = try decodeString(from: &buf)
             return result
-        case 1:
-            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
-            switch _cursor_errorCode {
-            case 0:
-                throw VoxError.decodeError("unexpected user error for infallible method")
-            case 1:
-                throw VoxError.unknownMethod
-            case 2:
-                throw VoxError.decodeError("invalid payload")
-            case 3:
-                throw VoxError.cancelled
-            case 4:
-                throw VoxError.indeterminate
-            default:
-                throw VoxError.decodeError("invalid VoxError discriminant: \(_cursor_errorCode)")
-            }
-        default:
-            throw VoxError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
         }
     }
 
     public func claimSession() async throws -> String {
-        let payload = Data()
+        let payload: [UInt8] = []
         let schemaInfo = ClientSchemaInfo(methodInfo: app_method_schemas[0xa450881492adee30]!, schemaRegistry: app_schema_registry)
         let response = try await connection.call(methodId: 0xa450881492adee30, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
-        var cursor = 0
-        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
-        switch _cursor_resultDisc {
-        case 0:
-            let result = try decodeString(from: response, offset: &cursor)
+        return try decodeInfallibleResponse(response) { buf in
+            let result = try decodeString(from: &buf)
             return result
-        case 1:
-            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
-            switch _cursor_errorCode {
-            case 0:
-                throw VoxError.decodeError("unexpected user error for infallible method")
-            case 1:
-                throw VoxError.unknownMethod
-            case 2:
-                throw VoxError.decodeError("invalid payload")
-            case 3:
-                throw VoxError.cancelled
-            case 4:
-                throw VoxError.indeterminate
-            default:
-                throw VoxError.decodeError("invalid VoxError discriminant: \(_cursor_errorCode)")
-            }
-        default:
-            throw VoxError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
         }
     }
 
     public func imeAttach(sessionId: String) async throws -> Bool {
-        var payloadBytes: [UInt8] = []
-        payloadBytes += encodeString(sessionId)
-        let payload = Data(payloadBytes)
+        var buffer = ByteBufferAllocator().buffer(capacity: 64)
+        encodeString(sessionId, into: &buffer)
+        let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
         let schemaInfo = ClientSchemaInfo(methodInfo: app_method_schemas[0x8a60f92280588cd0]!, schemaRegistry: app_schema_registry)
         let response = try await connection.call(methodId: 0x8a60f92280588cd0, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
-        var cursor = 0
-        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
-        switch _cursor_resultDisc {
-        case 0:
-            let result = try decodeBool(from: response, offset: &cursor)
+        return try decodeInfallibleResponse(response) { buf in
+            let result = try decodeBool(from: &buf)
             return result
-        case 1:
-            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
-            switch _cursor_errorCode {
-            case 0:
-                throw VoxError.decodeError("unexpected user error for infallible method")
-            case 1:
-                throw VoxError.unknownMethod
-            case 2:
-                throw VoxError.decodeError("invalid payload")
-            case 3:
-                throw VoxError.cancelled
-            case 4:
-                throw VoxError.indeterminate
-            default:
-                throw VoxError.decodeError("invalid VoxError discriminant: \(_cursor_errorCode)")
-            }
-        default:
-            throw VoxError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
         }
     }
 
     public func imeActivationRevoked() async throws -> Bool {
-        let payload = Data()
+        let payload: [UInt8] = []
         let schemaInfo = ClientSchemaInfo(methodInfo: app_method_schemas[0x069f4682025f282c]!, schemaRegistry: app_schema_registry)
         let response = try await connection.call(methodId: 0x069f4682025f282c, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
-        var cursor = 0
-        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
-        switch _cursor_resultDisc {
-        case 0:
-            let result = try decodeBool(from: response, offset: &cursor)
+        return try decodeInfallibleResponse(response) { buf in
+            let result = try decodeBool(from: &buf)
             return result
-        case 1:
-            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
-            switch _cursor_errorCode {
-            case 0:
-                throw VoxError.decodeError("unexpected user error for infallible method")
-            case 1:
-                throw VoxError.unknownMethod
-            case 2:
-                throw VoxError.decodeError("invalid payload")
-            case 3:
-                throw VoxError.cancelled
-            case 4:
-                throw VoxError.indeterminate
-            default:
-                throw VoxError.decodeError("invalid VoxError discriminant: \(_cursor_errorCode)")
-            }
-        default:
-            throw VoxError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
         }
     }
 
     public func imeContextLost(hadMarkedText: Bool) async throws -> Bool {
-        var payloadBytes: [UInt8] = []
-        payloadBytes += encodeBool(hadMarkedText)
-        let payload = Data(payloadBytes)
+        var buffer = ByteBufferAllocator().buffer(capacity: 64)
+        encodeBool(hadMarkedText, into: &buffer)
+        let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
         let schemaInfo = ClientSchemaInfo(methodInfo: app_method_schemas[0xf05b46d1538b1ac3]!, schemaRegistry: app_schema_registry)
         let response = try await connection.call(methodId: 0xf05b46d1538b1ac3, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
-        var cursor = 0
-        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
-        switch _cursor_resultDisc {
-        case 0:
-            let result = try decodeBool(from: response, offset: &cursor)
+        return try decodeInfallibleResponse(response) { buf in
+            let result = try decodeBool(from: &buf)
             return result
-        case 1:
-            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
-            switch _cursor_errorCode {
-            case 0:
-                throw VoxError.decodeError("unexpected user error for infallible method")
-            case 1:
-                throw VoxError.unknownMethod
-            case 2:
-                throw VoxError.decodeError("invalid payload")
-            case 3:
-                throw VoxError.cancelled
-            case 4:
-                throw VoxError.indeterminate
-            default:
-                throw VoxError.decodeError("invalid VoxError discriminant: \(_cursor_errorCode)")
-            }
-        default:
-            throw VoxError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
         }
     }
 
     public func imeKeyEvent(sessionId: String, eventType: String, keyCode: UInt32, characters: String) async throws -> Bool {
-        var payloadBytes: [UInt8] = []
-        payloadBytes += encodeString(sessionId)
-        payloadBytes += encodeString(eventType)
-        payloadBytes += encodeU32(keyCode)
-        payloadBytes += encodeString(characters)
-        let payload = Data(payloadBytes)
+        var buffer = ByteBufferAllocator().buffer(capacity: 64)
+        encodeString(sessionId, into: &buffer)
+        encodeString(eventType, into: &buffer)
+        encodeU32(keyCode, into: &buffer)
+        encodeString(characters, into: &buffer)
+        let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
         let schemaInfo = ClientSchemaInfo(methodInfo: app_method_schemas[0x70404de7bbc58de7]!, schemaRegistry: app_schema_registry)
         let response = try await connection.call(methodId: 0x70404de7bbc58de7, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
-        var cursor = 0
-        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
-        switch _cursor_resultDisc {
-        case 0:
-            let result = try decodeBool(from: response, offset: &cursor)
+        return try decodeInfallibleResponse(response) { buf in
+            let result = try decodeBool(from: &buf)
             return result
-        case 1:
-            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
-            switch _cursor_errorCode {
-            case 0:
-                throw VoxError.decodeError("unexpected user error for infallible method")
-            case 1:
-                throw VoxError.unknownMethod
-            case 2:
-                throw VoxError.decodeError("invalid payload")
-            case 3:
-                throw VoxError.cancelled
-            case 4:
-                throw VoxError.indeterminate
-            default:
-                throw VoxError.decodeError("invalid VoxError discriminant: \(_cursor_errorCode)")
-            }
-        default:
-            throw VoxError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
         }
     }
 }
@@ -260,7 +137,7 @@ public protocol AppHandler: Sendable {
     func imeKeyEvent(sessionId: String, eventType: String, keyCode: UInt32, characters: String) async throws -> Bool
 }
 
-public final class AppChannelingDispatcher: ServiceDispatcher {
+public final class AppDispatcher: ServiceDispatcher {
     private let handler: AppHandler
     private let schemaRegistry: [UInt64: Schema]
     private let methodSchemas: [UInt64: MethodSchemaInfo]
@@ -272,21 +149,22 @@ public final class AppChannelingDispatcher: ServiceDispatcher {
     }
 
     public func dispatch(methodId: UInt64, payload: [UInt8], requestId: UInt64, registry: ChannelRegistry, schemaSendTracker _: SchemaSendTracker, taskTx: @escaping @Sendable (TaskMessage) -> Void) async {
-        let payload = Data(payload)
+        var buffer = ByteBufferAllocator().buffer(capacity: payload.count)
+        buffer.writeBytes(payload)
         let taskSender: TaskSender = taskTx
         switch methodId {
         case 0x75699685b1a93d32:
-            await dispatch_imeHello(methodId: methodId, requestId: requestId, payload: payload, registry: registry, taskSender: taskSender)
+            await dispatch_imeHello(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0xa450881492adee30:
-            await dispatch_claimSession(methodId: methodId, requestId: requestId, payload: payload, registry: registry, taskSender: taskSender)
+            await dispatch_claimSession(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0x8a60f92280588cd0:
-            await dispatch_imeAttach(methodId: methodId, requestId: requestId, payload: payload, registry: registry, taskSender: taskSender)
+            await dispatch_imeAttach(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0x069f4682025f282c:
-            await dispatch_imeActivationRevoked(methodId: methodId, requestId: requestId, payload: payload, registry: registry, taskSender: taskSender)
+            await dispatch_imeActivationRevoked(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0xf05b46d1538b1ac3:
-            await dispatch_imeContextLost(methodId: methodId, requestId: requestId, payload: payload, registry: registry, taskSender: taskSender)
+            await dispatch_imeContextLost(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0x70404de7bbc58de7:
-            await dispatch_imeKeyEvent(methodId: methodId, requestId: requestId, payload: payload, registry: registry, taskSender: taskSender)
+            await dispatch_imeKeyEvent(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         default:
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
         }
@@ -315,14 +193,15 @@ public final class AppChannelingDispatcher: ServiceDispatcher {
     /// Call this synchronously before spawning the dispatch task to avoid
     /// race conditions where Data arrives before channels are registered.
     public func preregister(methodId: UInt64, payload: [UInt8], registry: ChannelRegistry) async {
-        let payload = Data(payload)
+        var buffer = ByteBufferAllocator().buffer(capacity: payload.count)
+        buffer.writeBytes(payload)
         switch methodId {
         default:
             break
         }
     }
 
-    private func dispatch_imeHello(methodId: UInt64, requestId: UInt64, payload: Data, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
+    private func dispatch_imeHello(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
         guard let methodInfo = methodSchemas[methodId] else {
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
             return
@@ -331,7 +210,8 @@ public final class AppChannelingDispatcher: ServiceDispatcher {
         do {
             do {
                 let result = try await handler.imeHello()
-                taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: { encodeString($0) }), methodId: methodId, schemaPayload: responseSchemaPayload))
+                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeString(val, into: &buf) })
+                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
                 taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
             }
@@ -340,7 +220,7 @@ public final class AppChannelingDispatcher: ServiceDispatcher {
         }
     }
 
-    private func dispatch_claimSession(methodId: UInt64, requestId: UInt64, payload: Data, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
+    private func dispatch_claimSession(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
         guard let methodInfo = methodSchemas[methodId] else {
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
             return
@@ -349,7 +229,8 @@ public final class AppChannelingDispatcher: ServiceDispatcher {
         do {
             do {
                 let result = try await handler.claimSession()
-                taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: { encodeString($0) }), methodId: methodId, schemaPayload: responseSchemaPayload))
+                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeString(val, into: &buf) })
+                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
                 taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
             }
@@ -358,18 +239,18 @@ public final class AppChannelingDispatcher: ServiceDispatcher {
         }
     }
 
-    private func dispatch_imeAttach(methodId: UInt64, requestId: UInt64, payload: Data, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
+    private func dispatch_imeAttach(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
         guard let methodInfo = methodSchemas[methodId] else {
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
             return
         }
         let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
         do {
-            var cursor = 0
-            let sessionId = try decodeString(from: payload, offset: &cursor)
+            let sessionId = try decodeString(from: &buffer)
             do {
                 let result = try await handler.imeAttach(sessionId: sessionId)
-                taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: { encodeBool($0) }), methodId: methodId, schemaPayload: responseSchemaPayload))
+                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
+                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
                 taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
             }
@@ -378,7 +259,7 @@ public final class AppChannelingDispatcher: ServiceDispatcher {
         }
     }
 
-    private func dispatch_imeActivationRevoked(methodId: UInt64, requestId: UInt64, payload: Data, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
+    private func dispatch_imeActivationRevoked(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
         guard let methodInfo = methodSchemas[methodId] else {
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
             return
@@ -387,7 +268,8 @@ public final class AppChannelingDispatcher: ServiceDispatcher {
         do {
             do {
                 let result = try await handler.imeActivationRevoked()
-                taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: { encodeBool($0) }), methodId: methodId, schemaPayload: responseSchemaPayload))
+                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
+                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
                 taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
             }
@@ -396,18 +278,18 @@ public final class AppChannelingDispatcher: ServiceDispatcher {
         }
     }
 
-    private func dispatch_imeContextLost(methodId: UInt64, requestId: UInt64, payload: Data, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
+    private func dispatch_imeContextLost(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
         guard let methodInfo = methodSchemas[methodId] else {
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
             return
         }
         let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
         do {
-            var cursor = 0
-            let hadMarkedText = try decodeBool(from: payload, offset: &cursor)
+            let hadMarkedText = try decodeBool(from: &buffer)
             do {
                 let result = try await handler.imeContextLost(hadMarkedText: hadMarkedText)
-                taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: { encodeBool($0) }), methodId: methodId, schemaPayload: responseSchemaPayload))
+                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
+                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
                 taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
             }
@@ -416,21 +298,21 @@ public final class AppChannelingDispatcher: ServiceDispatcher {
         }
     }
 
-    private func dispatch_imeKeyEvent(methodId: UInt64, requestId: UInt64, payload: Data, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
+    private func dispatch_imeKeyEvent(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
         guard let methodInfo = methodSchemas[methodId] else {
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
             return
         }
         let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
         do {
-            var cursor = 0
-            let sessionId = try decodeString(from: payload, offset: &cursor)
-            let eventType = try decodeString(from: payload, offset: &cursor)
-            let keyCode = try decodeU32(from: payload, offset: &cursor)
-            let characters = try decodeString(from: payload, offset: &cursor)
+            let sessionId = try decodeString(from: &buffer)
+            let eventType = try decodeString(from: &buffer)
+            let keyCode = try decodeU32(from: &buffer)
+            let characters = try decodeString(from: &buffer)
             do {
                 let result = try await handler.imeKeyEvent(sessionId: sessionId, eventType: eventType, keyCode: keyCode, characters: characters)
-                taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: { encodeBool($0) }), methodId: methodId, schemaPayload: responseSchemaPayload))
+                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
+                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
                 taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
             }
@@ -510,18 +392,18 @@ public struct AppSerializers: BindingSerializers {
 
     public func txSerializer(for schema: BindingSchema) -> @Sendable (Any) -> [UInt8] {
         switch schema {
-        case .bool: return { encodeBool($0 as! Bool) }
-        case .u8: return { encodeU8($0 as! UInt8) }
-        case .i8: return { encodeI8($0 as! Int8) }
-        case .u16: return { encodeU16($0 as! UInt16) }
-        case .i16: return { encodeI16($0 as! Int16) }
-        case .u32: return { encodeU32($0 as! UInt32) }
-        case .i32: return { encodeI32($0 as! Int32) }
-        case .u64: return { encodeVarint($0 as! UInt64) }
-        case .i64: return { encodeI64($0 as! Int64) }
-        case .f32: return { encodeF32($0 as! Float) }
-        case .f64: return { encodeF64($0 as! Double) }
-        case .string: return { encodeString($0 as! String) }
+        case .bool: return { var b = ByteBufferAllocator().buffer(capacity: 1); encodeBool($0 as! Bool, into: &b); return b.readBytes(length: b.readableBytes) ?? [] }
+        case .u8: return { var b = ByteBufferAllocator().buffer(capacity: 1); encodeU8($0 as! UInt8, into: &b); return b.readBytes(length: b.readableBytes) ?? [] }
+        case .i8: return { var b = ByteBufferAllocator().buffer(capacity: 1); encodeI8($0 as! Int8, into: &b); return b.readBytes(length: b.readableBytes) ?? [] }
+        case .u16: return { var b = ByteBufferAllocator().buffer(capacity: 2); encodeU16($0 as! UInt16, into: &b); return b.readBytes(length: b.readableBytes) ?? [] }
+        case .i16: return { var b = ByteBufferAllocator().buffer(capacity: 2); encodeI16($0 as! Int16, into: &b); return b.readBytes(length: b.readableBytes) ?? [] }
+        case .u32: return { var b = ByteBufferAllocator().buffer(capacity: 4); encodeU32($0 as! UInt32, into: &b); return b.readBytes(length: b.readableBytes) ?? [] }
+        case .i32: return { var b = ByteBufferAllocator().buffer(capacity: 4); encodeI32($0 as! Int32, into: &b); return b.readBytes(length: b.readableBytes) ?? [] }
+        case .u64: return { var b = ByteBufferAllocator().buffer(capacity: 9); encodeVarint($0 as! UInt64, into: &b); return b.readBytes(length: b.readableBytes) ?? [] }
+        case .i64: return { var b = ByteBufferAllocator().buffer(capacity: 9); encodeI64($0 as! Int64, into: &b); return b.readBytes(length: b.readableBytes) ?? [] }
+        case .f32: return { var b = ByteBufferAllocator().buffer(capacity: 4); encodeF32($0 as! Float, into: &b); return b.readBytes(length: b.readableBytes) ?? [] }
+        case .f64: return { var b = ByteBufferAllocator().buffer(capacity: 8); encodeF64($0 as! Double, into: &b); return b.readBytes(length: b.readableBytes) ?? [] }
+        case .string: return { var b = ByteBufferAllocator().buffer(capacity: 64); encodeString($0 as! String, into: &b); return b.readBytes(length: b.readableBytes) ?? [] }
         case .bytes: return { [UInt8]($0 as! Data) }
         case .tx(_, _), .rx(_, _): fatalError("Channel schemas are not serialized directly")
         default: fatalError("Unsupported schema for Tx serialization: \(schema)")
@@ -530,18 +412,18 @@ public struct AppSerializers: BindingSerializers {
 
     public func rxDeserializer(for schema: BindingSchema) -> @Sendable ([UInt8]) throws -> Any {
         switch schema {
-        case .bool: return { var o = 0; return try decodeBool(from: Data($0), offset: &o) }
-        case .u8: return { var o = 0; return try decodeU8(from: Data($0), offset: &o) }
-        case .i8: return { var o = 0; return try decodeI8(from: Data($0), offset: &o) }
-        case .u16: return { var o = 0; return try decodeU16(from: Data($0), offset: &o) }
-        case .i16: return { var o = 0; return try decodeI16(from: Data($0), offset: &o) }
-        case .u32: return { var o = 0; return try decodeU32(from: Data($0), offset: &o) }
-        case .i32: return { var o = 0; return try decodeI32(from: Data($0), offset: &o) }
-        case .u64: return { var o = 0; return try decodeVarint(from: Data($0), offset: &o) }
-        case .i64: return { var o = 0; return try decodeI64(from: Data($0), offset: &o) }
-        case .f32: return { var o = 0; return try decodeF32(from: Data($0), offset: &o) }
-        case .f64: return { var o = 0; return try decodeF64(from: Data($0), offset: &o) }
-        case .string: return { var o = 0; return try decodeString(from: Data($0), offset: &o) }
+        case .bool: return { var b = ByteBufferAllocator().buffer(bytes: $0); return try decodeBool(from: &b) }
+        case .u8: return { var b = ByteBufferAllocator().buffer(bytes: $0); return try decodeU8(from: &b) }
+        case .i8: return { var b = ByteBufferAllocator().buffer(bytes: $0); return try decodeI8(from: &b) }
+        case .u16: return { var b = ByteBufferAllocator().buffer(bytes: $0); return try decodeU16(from: &b) }
+        case .i16: return { var b = ByteBufferAllocator().buffer(bytes: $0); return try decodeI16(from: &b) }
+        case .u32: return { var b = ByteBufferAllocator().buffer(bytes: $0); return try decodeU32(from: &b) }
+        case .i32: return { var b = ByteBufferAllocator().buffer(bytes: $0); return try decodeI32(from: &b) }
+        case .u64: return { var b = ByteBufferAllocator().buffer(bytes: $0); return try decodeVarint(from: &b) }
+        case .i64: return { var b = ByteBufferAllocator().buffer(bytes: $0); return try decodeI64(from: &b) }
+        case .f32: return { var b = ByteBufferAllocator().buffer(bytes: $0); return try decodeF32(from: &b) }
+        case .f64: return { var b = ByteBufferAllocator().buffer(bytes: $0); return try decodeF64(from: &b) }
+        case .string: return { var b = ByteBufferAllocator().buffer(bytes: $0); return try decodeString(from: &b) }
         case .bytes: return { Data($0) }
         case .tx(_, _), .rx(_, _): fatalError("Channel schemas are not deserialized directly")
         default: fatalError("Unsupported schema for Rx deserialization: \(schema)")

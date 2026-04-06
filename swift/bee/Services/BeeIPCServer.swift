@@ -57,7 +57,6 @@ final class BeeIPCServer {
     private static let imeSessionStartedName = NSNotification.Name(
         "fasterthanlime.bee.imeSessionStarted")
 
-    private var listener: UnixListener?
     private var imeClient: ImeClient?
     private var pendingSessionId: String?
     private(set) var activeSessionId: String?
@@ -72,36 +71,22 @@ final class BeeIPCServer {
             beeLog("VOXIPC: no app group container URL")
             return
         }
-        unlink(path)
-        do {
-            listener = try await UnixListener.bind(unixPath: path)
-            beeLog("VOXIPC: listening at \(path)")
-        } catch {
-            beeLog("VOXIPC: bind failed: \(error)")
-            return
-        }
+        let acceptor = UnixAcceptor(path: path)
+        let dispatcher = AppDispatcher(handler: AppImpl(server: self))
+        beeLog("VOXIPC: accepting at \(path)")
 
         Task { [weak self] in
             guard let self else { return }
-            guard let listener = self.listener else { return }
-            for await link in listener.acceptConnections() {
+            do {
+                let session = try await VoxRuntime.Session.acceptor(
+                    acceptor, dispatcher: dispatcher, resumable: false)
                 beeLog("VOXIPC: IME connected")
-                Task { [weak self] in
-                    guard let self else { return }
-                    do {
-                        _ = try await performAcceptorTransportPrologue(
-                            transport: link, supportedConduit: .bare)
-                        let dispatcher = AppChannelingDispatcher(handler: AppImpl(server: self))
-                        let session = try await VoxRuntime.Session.acceptorOn(
-                            link, transport: .bare, dispatcher: dispatcher, resumable: false)
-                        self.imeClient = ImeClient(connection: session.connection)
-                        try await session.run()
-                    } catch {
-                        beeLog("VOXIPC: session error: \(error)")
-                    }
-                    self.imeClient = nil
-                }
+                self.imeClient = ImeClient(connection: session.connection)
+                try await session.run()
+            } catch {
+                beeLog("VOXIPC: session error: \(error)")
             }
+            self.imeClient = nil
         }
     }
 
