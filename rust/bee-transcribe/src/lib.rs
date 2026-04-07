@@ -37,13 +37,15 @@ pub fn clear_mlx_cache() {
 
 /// Set the MLX Metal buffer cache limit. Buffers beyond this are returned
 /// to the system instead of being pooled for reuse.
-pub fn set_mlx_cache_limit(limit: usize) -> usize {
+pub fn set_mlx_cache_limit(limit: usize) -> Result<usize, String> {
     ensure_mlx_error_handler();
     let mut prev = 0usize;
-    unsafe {
-        mlx_set_cache_limit(&mut prev, limit);
+    let rc = unsafe { mlx_set_cache_limit(&mut prev, limit) };
+    if rc != 0 {
+        Err(format!("mlx_set_cache_limit failed (rc={rc})"))
+    } else {
+        Ok(prev)
     }
-    prev
 }
 
 use bee_qwen3_asr::config::AsrConfig;
