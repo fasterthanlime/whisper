@@ -1,6 +1,5 @@
 //! bee-ffi — vox-ffi service exposing the Bee engine to Swift.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -33,11 +32,8 @@ declare_link_endpoint!(pub mod bee_ffi_endpoint { export = bee_ffi_v1_vtable; })
 
 #[ctor::ctor]
 fn on_load() {
-    // Read log path from environment (set by Swift before dlopen)
+    // Set up tracing subscriber writing to the log file specified by Swift
     if let Ok(path) = std::env::var("BEE_FFI_LOG_PATH") {
-        *FFI_LOG_PATH.lock().unwrap() = Some(PathBuf::from(&path));
-
-        // Set up tracing subscriber writing to the same log file
         if let Ok(file) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -170,7 +166,7 @@ impl bee_rpc::Bee for BeeService {
         if let Some(ref tensors) = engine.vad_tensors {
             match bee_vad::SileroVad::from_tensors(tensors) {
                 Ok(vad) => session.set_vad(vad),
-                Err(e) => ffi_log(&format!("Failed to create VAD: {e}")),
+                Err(e) => tracing::warn!("Failed to create VAD: {e}"),
             }
         }
 
@@ -231,7 +227,7 @@ impl bee_rpc::Bee for BeeService {
                 is_final: false,
             },
             Err(e) => {
-                ffi_log(&format!("FEED error: {e}"));
+                tracing::error!("FEED error: {e}");
                 FeedResult {
                     text: format!("error: {e}"),
                     committed_utf16_len: 0,
@@ -466,26 +462,3 @@ impl bee_rpc::Bee for BeeService {
     }
 }
 
-// ── Logging ───────────────────────────────────────────────────────────
-
-static FFI_LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
-
-pub(crate) fn ffi_log(msg: &str) {
-    let path = FFI_LOG_PATH.lock().unwrap().clone();
-    let Some(path) = path else { return };
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
-        let _ = writeln!(
-            f,
-            "[{:.3}] FFI: {}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs_f64(),
-            msg
-        );
-    }
-}

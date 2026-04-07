@@ -92,11 +92,11 @@ pub(crate) fn load_engine(model_dir: &Path, cache_base: &Path) -> Result<AsrEngi
         let st_path = d.join("model.safetensors");
         match mlx_rs::Array::load_safetensors(&st_path) {
             Ok(tensors) => {
-                crate::ffi_log(&format!("Silero VAD loaded ({} tensors)", tensors.len()));
+                tracing::info!("Silero VAD loaded ({} tensors)", tensors.len());
                 Some(tensors)
             }
             Err(e) => {
-                crate::ffi_log(&format!("Failed to load VAD: {e}"));
+                tracing::warn!("Failed to load VAD: {e}");
                 None
             }
         }
