@@ -345,10 +345,12 @@ struct BeeApp: App {
     init() {
         let audioEngine = AudioEngine()
         let transcriptionService = TranscriptionService()
+        let correctionService = CorrectionService()
         let inputClient = BeeInputClient()
         let state = AppState(
             audioEngine: audioEngine,
             transcriptionService: transcriptionService,
+            correctionService: correctionService,
             inputClient: inputClient
         )
         _appState = State(initialValue: state)

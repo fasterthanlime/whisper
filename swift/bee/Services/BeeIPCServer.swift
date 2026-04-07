@@ -213,4 +213,16 @@ final class BeeIPCServer {
             beeLog("VOXIPC: stopDictating failed: \(error)")
         }
     }
+
+    func replaceText(sessionId: String, oldText: String, newText: String) async {
+        guard let client = imeClient else {
+            beeLog("VOXIPC: replaceText — IME not connected, dropping")
+            return
+        }
+        do {
+            _ = try await client.replaceText(sessionId: sessionId, oldText: oldText, newText: newText)
+        } catch {
+            beeLog("VOXIPC: replaceText failed: \(error)")
+        }
+    }
 }

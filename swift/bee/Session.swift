@@ -65,6 +65,7 @@ actor Session {
     // Dependencies
     private let audioEngine: AudioEngine
     private let transcriptionService: TranscriptionService
+    private let correctionService: CorrectionService?
     private let inputClient: BeeInputClient
 
     // Channels
@@ -88,6 +89,9 @@ actor Session {
     // Cursor symbol — 🐝 during recording, spinner frames during finalization
     private var cursorSymbol = "🐝"
 
+    // Correction output — set by ASR task, read by AppState after completion
+    private let correctionOutputRef = CorrectionOutputRef()
+
     // Diagnostics — lock-protected, written by tasks, read by debug overlay
     let diag = SessionDiag()
     private let textSnapshot = SessionTextSnapshot()
@@ -103,6 +107,7 @@ actor Session {
     init(
         audioEngine: AudioEngine,
         transcriptionService: TranscriptionService,
+        correctionService: CorrectionService? = nil,
         inputClient: BeeInputClient,
         targetApp: TargetApp
     ) {
@@ -110,8 +115,13 @@ actor Session {
         self.createdAt = Date()
         self.audioEngine = audioEngine
         self.transcriptionService = transcriptionService
+        self.correctionService = correctionService
         self.inputClient = inputClient
         self.targetApp = targetApp
+    }
+
+    var correctionOutput: CorrectionService.Output? {
+        correctionOutputRef.value
     }
 
     // MARK: - Start
@@ -270,6 +280,9 @@ actor Session {
         // --- ASR Task ---
         // Reads Channel 1, feeds Rust FFI, writes to Channel 2.
         let ts = self.transcriptionService
+        let cs = self.correctionService
+        let appBundleId = self.targetApp.bundleID
+        let corrOutRef = self.correctionOutputRef
 
         asrTask = Task.detached {
             guard let asrSession else {
@@ -331,13 +344,22 @@ actor Session {
                     let result = ts.finish(session: asrSession)
                     let finalizeUs = Int((ProcessInfo.processInfo.systemUptime - t0) * 1_000_000)
 
-                    let finalText = result?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let rawText = result?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                    // Apply corrections if engine is available
+                    let corrOutput = cs?.process(text: rawText, appId: appBundleId)
+                    corrOutRef.set(corrOutput)
+                    let finalText = corrOutput?.bestText ?? rawText
+
                     diagRef.update {
                         $0.finalizeUs = finalizeUs
                         $0.finalText = finalText
                     }
 
-                    logger.info("[\(sessionID)] Finalized: \"\(finalText.prefix(80))\"")
+                    logger.info("[\(sessionID)] Finalized: \"\(rawText.prefix(80))\"")
+                    if let corrOutput {
+                        logger.info("[\(sessionID)] Corrected \(corrOutput.edits.count) span(s): \"\(finalText.prefix(80))\"")
+                    }
                     ch2.send(.done(text: finalText, mode: endMode))
                     ch2.finish()
                     return
@@ -521,7 +543,7 @@ actor Session {
         if !text.isEmpty {
             inputClient.commitText(text, sessionID: id)
             ime = .committed
-            result = .committed(id: id, text: text, submitted: false)
+            result = .committed(id: id, text: text, submitted: false, correction: correctionOutput)
         } else {
             inputClient.clearMarkedText(sessionID: id)
             inputClient.stopDictating(sessionID: id)
@@ -775,7 +797,7 @@ actor Session {
                 await MainActor.run { inputClient.deactivate() }
                 ime = .committed
             }
-            emitCompletion(.committed(id: id, text: text, submitted: submit))
+            emitCompletion(.committed(id: id, text: text, submitted: submit, correction: correctionOutput))
 
         case .cancel:
             inputClient.clearMarkedText(sessionID: id)
@@ -946,7 +968,20 @@ extension String {
 enum SessionResult: Sendable {
     case aborted(id: UUID)
     case cancelled(id: UUID, text: String)
-    case committed(id: UUID, text: String, submitted: Bool)
+    case committed(id: UUID, text: String, submitted: Bool, correction: CorrectionService.Output?)
+}
+
+final class CorrectionOutputRef: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: CorrectionService.Output?
+
+    func set(_ output: CorrectionService.Output?) {
+        lock.withLock { _value = output }
+    }
+
+    var value: CorrectionService.Output? {
+        lock.withLock { _value }
+    }
 }
 
 private func beeLogPath() -> String {

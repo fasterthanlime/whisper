@@ -38,6 +38,13 @@ private final class ImeImpl: ImeHandler, @unchecked Sendable {
         await BeeVoxIMEClient.shared.handlePreparedSession(sessionId: sessionId, targetPid: targetPid)
         return true
     }
+
+    func replaceText(sessionId: String, oldText: String, newText: String) async throws -> Bool {
+        beeInputLog("VOXIPC: replaceText session=\(sessionId.prefix(8))")
+        guard let id = UUID(uuidString: sessionId) else { return false }
+        await MainActor.run { BeeIMEBridgeState.shared.replaceText(oldText: oldText, newText: newText, sessionID: id) }
+        return true
+    }
 }
 
 // MARK: - Client

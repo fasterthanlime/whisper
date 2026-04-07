@@ -65,7 +65,11 @@ final class AppState {
     // Shared infrastructure
     let audioEngine: AudioEngine
     let transcriptionService: TranscriptionService
+    let correctionService: CorrectionService
     let inputClient: BeeInputClient
+
+    // Correction state
+    var lastCorrectionOutput: CorrectionService.Output?
 
     // Model
     static let stateChangedNotification = NSNotification.Name("fasterthanlime.bee.stateChanged")
@@ -382,10 +386,12 @@ final class AppState {
     init(
         audioEngine: AudioEngine,
         transcriptionService: TranscriptionService,
+        correctionService: CorrectionService,
         inputClient: BeeInputClient
     ) {
         self.audioEngine = audioEngine
         self.transcriptionService = transcriptionService
+        self.correctionService = correctionService
         self.inputClient = inputClient
         self.debugEnabled = UserDefaults.standard.bool(forKey: DefaultsKey.debugOverlayEnabled)
         let defaults = UserDefaults.standard
@@ -603,6 +609,19 @@ final class AppState {
                 return true  // swallowed
             }
 
+            // ROpt+C = open correction review panel
+            if keyCode == 0x08 /* kVK_ANSI_C */ {
+                Task { await session.abort() }
+                if let output = lastCorrectionOutput, !output.edits.isEmpty {
+                    CorrectionPanel.shared.show(
+                        output: output,
+                        correctionService: correctionService,
+                        inputClient: inputClient
+                    )
+                }
+                return true  // swallowed
+            }
+
             // Spurious activation — abort silently, let the key through
             Task { await session.abort() }
             return false
@@ -745,6 +764,7 @@ final class AppState {
         let session = Session(
             audioEngine: audioEngine,
             transcriptionService: transcriptionService,
+            correctionService: correctionService,
             inputClient: inputClient,
             targetApp: targetApp
         )
@@ -788,8 +808,9 @@ final class AppState {
             if !text.isEmpty {
                 addHistoryEntry(text: text)
             }
-        case .committed(let id, let text, _):
+        case .committed(let id, let text, _, let correction):
             resultID = id
+            lastCorrectionOutput = correction
             if !text.isEmpty {
                 addHistoryEntry(text: text)
             }
@@ -858,6 +879,21 @@ final class AppState {
                     model: model,
                     cacheDir: STTModelDefinition.cacheDirectory
                 )
+
+                // Load correction engine if dataset directory exists
+                if let datasetDir = ProcessInfo.processInfo.environment["BEE_CORRECTION_DATASET_DIR"] {
+                    let eventsPath = ProcessInfo.processInfo.environment["BEE_CORRECTION_EVENTS_PATH"]
+                    do {
+                        try await correctionService.load(
+                            datasetDir: datasetDir,
+                            eventsPath: eventsPath
+                        )
+                        beeLog("APP: correction engine loaded from \(datasetDir)")
+                    } catch {
+                        beeLog("APP: correction engine failed to load: \(error)")
+                    }
+                }
+
                 await MainActor.run {
                     self.modelStatus = .loaded
                     self.applyWarmPolicyForCurrentState()

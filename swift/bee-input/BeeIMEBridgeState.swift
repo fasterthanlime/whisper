@@ -13,6 +13,7 @@ final class BeeIMESession {
 
     var currentMarkedText: String = ""
     var autoCommittedPrefix: String = ""
+    var lastCommittedText: String = ""
 
     init(controller: BeeInputController, pid: pid_t?, clientID: String?) {
         self.controller = controller
@@ -75,8 +76,10 @@ final class BeeIMESession {
 
         beeInputLog("commitText: \(finalText.prefix(60).debugDescription) hasClient=true")
         currentMarkedText = ""
+        let textWithSpace = finalText + " "
+        lastCommittedText = textWithSpace
         client.insertText(
-            finalText + " ",
+            textWithSpace,
             replacementRange: NSRange(location: NSNotFound, length: 0)
         )
     }
@@ -90,6 +93,28 @@ final class BeeIMESession {
             selectionRange: NSRange(location: 0, length: 0),
             replacementRange: NSRange(location: NSNotFound, length: 0)
         )
+    }
+
+    func handleReplaceText(oldText: String, newText: String) {
+        guard let client = controller?.client() else {
+            beeInputLog("handleReplaceText: no client, dropping")
+            return
+        }
+        // The old text (with trailing space) was just committed.
+        // Cursor should be right after it. Use selectedRange to find where we are,
+        // then compute the replacement range by looking back.
+        let sel = client.selectedRange()
+        let oldWithSpace = oldText + " "
+        let oldLen = oldWithSpace.utf16.count
+        let replaceStart = sel.location >= oldLen ? sel.location - oldLen : 0
+        let replaceRange = NSRange(location: replaceStart, length: oldLen)
+        let newWithSpace = newText + " "
+        beeInputLog("handleReplaceText: replacing range \(replaceRange) with \(newWithSpace.prefix(60).debugDescription)")
+        client.insertText(
+            newWithSpace,
+            replacementRange: replaceRange
+        )
+        lastCommittedText = newWithSpace
     }
 
     func clearOrphanedMarkedText() {
@@ -267,5 +292,14 @@ final class BeeIMEBridgeState: NSObject {
             return
         }
         state = .activated(session)
+    }
+
+    func replaceText(oldText: String, newText: String, sessionID: UUID) {
+        // Find the session — can be in activated or serving state
+        guard let session = currentSession else {
+            beeInputLog("replaceText: no session, dropping")
+            return
+        }
+        session.handleReplaceText(oldText: oldText, newText: newText)
     }
 }

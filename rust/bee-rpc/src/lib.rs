@@ -15,6 +15,9 @@ pub trait Ime {
     /// App pushes a prepared session to the IME. IME should claim it
     /// when activateServer fires for the matching PID.
     async fn prepare_session(&self, session_id: String, target_pid: i32) -> bool;
+
+    /// App asks IME to replace previously committed text.
+    async fn replace_text(&self, session_id: String, old_text: String, new_text: String) -> bool;
 }
 
 /// Methods the app exposes — IME calls into app.
