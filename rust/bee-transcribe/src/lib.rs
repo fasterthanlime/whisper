@@ -322,6 +322,7 @@ impl<'a> Session<'a> {
         self.buffer.extend_from_slice(samples);
 
         if self.buffer.len() < self.chunk_size_samples {
+            tracing::trace!("feed: buffering {}/{}", self.buffer.len(), self.chunk_size_samples);
             return Ok(None);
         }
 
@@ -333,9 +334,10 @@ impl<'a> Session<'a> {
             if let Some(ref mut vad) = self.vad {
                 let prob = vad.process_audio(&chunk).unwrap_or(0.0);
                 if prob < self.options.vad_threshold {
-                    // Pre-speech silence — discard chunk
+                    tracing::debug!("feed: pre-speech silence (vad={prob:.3})");
                     return Ok(None);
                 }
+                tracing::info!("feed: speech detected (vad={prob:.3})");
             }
             self.speech_detected = true;
         }
@@ -346,9 +348,19 @@ impl<'a> Session<'a> {
         // Skip decode if this chunk is silence (but keep the audio)
         if self.chunk_count > 1 {
             let is_silence = if let Some(ref mut vad) = self.vad {
-                vad.process_audio(&chunk).unwrap_or(0.0) < self.options.vad_threshold
+                let prob = vad.process_audio(&chunk).unwrap_or(0.0);
+                let silent = prob < self.options.vad_threshold;
+                if silent {
+                    tracing::debug!("feed: mid-speech silence (vad={prob:.3}), skipping decode");
+                }
+                silent
             } else {
-                compute_rms(&chunk) < 0.006
+                let rms = compute_rms(&chunk);
+                let silent = rms < 0.006;
+                if silent {
+                    tracing::debug!("feed: mid-speech silence (rms={rms:.4}), skipping decode");
+                }
+                silent
             };
             if is_silence {
                 return Ok(None);
@@ -356,12 +368,16 @@ impl<'a> Session<'a> {
         }
 
         // Decode
+        tracing::debug!("feed: decoding chunk {} ({} audio samples total)", self.chunk_count, self.audio.len());
         self.decode_step(self.options.max_tokens_streaming)?;
 
         // Check for commit
         self.maybe_commit()?;
 
-        Ok(Some(self.make_update()))
+        let update = self.make_update();
+        tracing::debug!("feed: text={:?} committed_len={}", &update.text[..update.text.len().min(80)], update.committed_len);
+
+        Ok(Some(update))
     }
 
     /// Finalize the session: flush remaining audio with a higher token
