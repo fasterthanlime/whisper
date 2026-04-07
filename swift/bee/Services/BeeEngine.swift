@@ -15,6 +15,7 @@ actor BeeEngine {
         if let frameworksPath = Bundle.main.privateFrameworksPath {
             let bundled = URL(fileURLWithPath: frameworksPath)
                 .appendingPathComponent("libbee_ffi.dylib")
+            beeLog("BEE-ENGINE: checking bundled path \(bundled.path) exists=\(FileManager.default.fileExists(atPath: bundled.path))")
             if FileManager.default.fileExists(atPath: bundled.path) {
                 return bundled
             }
@@ -28,13 +29,16 @@ actor BeeEngine {
             .deletingLastPathComponent()  // *.app
             .deletingLastPathComponent()  // build dir
         let devPath = projectRoot.appendingPathComponent("target/release/libbee_ffi.dylib")
+        beeLog("BEE-ENGINE: checking dev path \(devPath.path) exists=\(FileManager.default.fileExists(atPath: devPath.path))")
         if FileManager.default.fileExists(atPath: devPath.path) {
             return devPath
         }
 
         // Fallback
-        return URL(fileURLWithPath: Bundle.main.privateFrameworksPath!)
+        let fallback = URL(fileURLWithPath: Bundle.main.privateFrameworksPath!)
             .appendingPathComponent("libbee_ffi.dylib")
+        beeLog("BEE-ENGINE: using fallback path \(fallback.path)")
+        return fallback
     }
 
     /// Connect to the Rust bee-ffi service via vox-ffi.
