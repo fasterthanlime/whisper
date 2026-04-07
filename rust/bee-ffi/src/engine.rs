@@ -146,17 +146,16 @@ pub(crate) fn required_downloads() -> Vec<RepoDownload> {
                 RepoFile {
                     name: "config.json".into(),
                     url: hf_file_url("mlx-community/Qwen3-ASR-1.7B-4bit", "config.json"),
-                    size: 7_188,
                 },
                 RepoFile {
                     name: "tokenizer.json".into(),
                     url: hf_file_url("mlx-community/Qwen3-ASR-1.7B-4bit", "tokenizer.json"),
-                    size: 4_760_186,
+
                 },
                 RepoFile {
                     name: "model.safetensors".into(),
                     url: hf_file_url("mlx-community/Qwen3-ASR-1.7B-4bit", "model.safetensors"),
-                    size: 1_603_081_617,
+
                 },
                 RepoFile {
                     name: "generation_config.json".into(),
@@ -164,7 +163,7 @@ pub(crate) fn required_downloads() -> Vec<RepoDownload> {
                         "mlx-community/Qwen3-ASR-1.7B-4bit",
                         "generation_config.json",
                     ),
-                    size: 115,
+
                 },
                 RepoFile {
                     name: "preprocessor_config.json".into(),
@@ -172,7 +171,7 @@ pub(crate) fn required_downloads() -> Vec<RepoDownload> {
                         "mlx-community/Qwen3-ASR-1.7B-4bit",
                         "preprocessor_config.json",
                     ),
-                    size: 330,
+
                 },
             ],
         },
@@ -186,7 +185,7 @@ pub(crate) fn required_downloads() -> Vec<RepoDownload> {
                         "mlx-community/Qwen3-ForcedAligner-0.6B-4bit",
                         "config.json",
                     ),
-                    size: 6_900,
+
                 },
                 RepoFile {
                     name: "model.safetensors".into(),
@@ -194,7 +193,7 @@ pub(crate) fn required_downloads() -> Vec<RepoDownload> {
                         "mlx-community/Qwen3-ForcedAligner-0.6B-4bit",
                         "model.safetensors",
                     ),
-                    size: 971_000_000,
+
                 },
                 RepoFile {
                     name: "tokenizer.json".into(),
@@ -202,7 +201,7 @@ pub(crate) fn required_downloads() -> Vec<RepoDownload> {
                         "mlx-community/Qwen3-ForcedAligner-0.6B-4bit",
                         "tokenizer.json",
                     ),
-                    size: 2_800_000,
+
                 },
             ],
         },
@@ -212,7 +211,7 @@ pub(crate) fn required_downloads() -> Vec<RepoDownload> {
             files: vec![RepoFile {
                 name: "model.safetensors".into(),
                 url: hf_file_url("aitytech/Silero-VAD-v5-MLX", "model.safetensors"),
-                size: 1_200_000,
+
             }],
         },
     ]

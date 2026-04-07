@@ -27,12 +27,10 @@ public enum BeeMethodId {
 public struct RepoFile: Codable, Sendable {
     public var name: String
     public var url: String
-    public var size: UInt64
 
-    nonisolated public init(name: String, url: String, size: UInt64) {
+    nonisolated public init(name: String, url: String) {
         self.name = name
         self.url = url
-        self.size = size
     }
 }
 
@@ -147,7 +145,6 @@ public struct EditResolution: Codable, Sendable {
 nonisolated internal func encodeRepoFile(_ value: RepoFile, into buffer: inout ByteBuffer) {
     encodeString(value.name, into: &buffer)
     encodeString(value.url, into: &buffer)
-    encodeVarint(value.size, into: &buffer)
 }
 
 nonisolated internal func encodeRepoDownload(_ value: RepoDownload, into buffer: inout ByteBuffer) {
@@ -255,8 +252,7 @@ public final class BeeClient: BeeCaller, Sendable {
                 let _files = try ({ buf in try decodeVec(from: &buf, decoder: { buf in
                 let _name = try ({ buf in try decodeString(from: &buf) })(&buf)
                 let _url = try ({ buf in try decodeString(from: &buf) })(&buf)
-                let _size = try ({ buf in try decodeVarint(from: &buf) })(&buf)
-                return RepoFile(name: _name, url: _url, size: _size)
+                return RepoFile(name: _name, url: _url)
             }) })(&buf)
                 return RepoDownload(repoId: _repoId, localDir: _localDir, files: _files)
             })
@@ -821,10 +817,12 @@ public let bee_schemas: [String: MethodBindingSchema] = [
 
 /// Global schema registry containing all schemas for this service.
 nonisolated(unsafe) public let bee_schema_registry: [UInt64: Schema] = [
+    0x082890bfae12d841: Schema(id: 0x082890bfae12d841, typeParams: [], kind: .struct(name: "RepoDownload", fields: [FieldSchema(name: "repo_id", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "local_dir", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "files", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0x3c1d05e5924fa784)]), required: true)])),
     0x0a96b404b4d79d67: Schema(id: 0x0a96b404b4d79d67, typeParams: ["T"], kind: .list(element: .var(name: "T"))),
     0x178367a87f66fb46: Schema(id: 0x178367a87f66fb46, typeParams: [], kind: .primitive(.bool)),
     0x281c5be4f2ee63b4: Schema(id: 0x281c5be4f2ee63b4, typeParams: [], kind: .primitive(.u32)),
     0x361f4536eee9f991: Schema(id: 0x361f4536eee9f991, typeParams: [], kind: .primitive(.i32)),
+    0x3c1d05e5924fa784: Schema(id: 0x3c1d05e5924fa784, typeParams: [], kind: .struct(name: "RepoFile", fields: [FieldSchema(name: "name", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "url", typeRef: .concrete(0x6d7dce914ee150e8), required: true)])),
     0x3f2e589db81e95bf: Schema(id: 0x3f2e589db81e95bf, typeParams: [], kind: .primitive(.f64)),
     0x42046de663beeef0: Schema(id: 0x42046de663beeef0, typeParams: ["T", "E"], kind: .enum(name: "Result", variants: [VariantSchema(name: "Ok", index: 0, payload: .newtype(typeRef: .var(name: "T"))), VariantSchema(name: "Err", index: 1, payload: .newtype(typeRef: .var(name: "E")))])),
     0x4cf4b2aeb98a1939: Schema(id: 0x4cf4b2aeb98a1939, typeParams: ["E"], kind: .enum(name: "VoxError", variants: [VariantSchema(name: "User", index: 0, payload: .newtype(typeRef: .var(name: "E"))), VariantSchema(name: "UnknownMethod", index: 1, payload: .unit), VariantSchema(name: "InvalidPayload", index: 2, payload: .newtype(typeRef: .concrete(0x6d7dce914ee150e8))), VariantSchema(name: "Cancelled", index: 3, payload: .unit), VariantSchema(name: "ConnectionClosed", index: 4, payload: .unit), VariantSchema(name: "SessionShutdown", index: 5, payload: .unit), VariantSchema(name: "SendFailed", index: 6, payload: .unit), VariantSchema(name: "Indeterminate", index: 7, payload: .unit)])),
@@ -834,16 +832,13 @@ nonisolated(unsafe) public let bee_schema_registry: [UInt64: Schema] = [
     0x6a31d1dd6bec4d20: Schema(id: 0x6a31d1dd6bec4d20, typeParams: [], kind: .struct(name: "CorrectionOutput", fields: [FieldSchema(name: "session_id", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "best_text", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "edits", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0x5c000f00fa144db4)]), required: true)])),
     0x6d7dce914ee150e8: Schema(id: 0x6d7dce914ee150e8, typeParams: [], kind: .primitive(.string)),
     0x6ec4adf14402f13d: Schema(id: 0x6ec4adf14402f13d, typeParams: [], kind: .struct(name: "EngineStats", fields: [FieldSchema(name: "cpu_percent", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "gpu_percent", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "vram_used_mb", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "ram_used_mb", typeRef: .concrete(0x8e02f623d1b2310c), required: true)])),
-    0x7881b2b6e54aaf59: Schema(id: 0x7881b2b6e54aaf59, typeParams: [], kind: .struct(name: "RepoDownload", fields: [FieldSchema(name: "repo_id", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "local_dir", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "files", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0xf59a1caa17fdc1b4)]), required: true)])),
     0x8083f12c0c95579b: Schema(id: 0x8083f12c0c95579b, typeParams: [], kind: .struct(name: "FeedResult", fields: [FieldSchema(name: "text", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "committed_utf16_len", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "alignments", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0xf0d30c1c928667ef)]), required: true), FieldSchema(name: "is_final", typeRef: .concrete(0x178367a87f66fb46), required: true)])),
     0x8e02f623d1b2310c: Schema(id: 0x8e02f623d1b2310c, typeParams: [], kind: .primitive(.f32)),
     0x915c6fb5b64f270b: Schema(id: 0x915c6fb5b64f270b, typeParams: ["T0", "T1", "T2", "T3"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2"), .var(name: "T3")])),
     0xba0496aa8cee7a4c: Schema(id: 0xba0496aa8cee7a4c, typeParams: ["T0", "T1"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1")])),
     0xbc5c33249a2dc720: Schema(id: 0xbc5c33249a2dc720, typeParams: [], kind: .primitive(.unit)),
-    0xd9356298b81639ac: Schema(id: 0xd9356298b81639ac, typeParams: [], kind: .primitive(.u64)),
     0xdcafd4de6b7969bb: Schema(id: 0xdcafd4de6b7969bb, typeParams: ["T"], kind: .option(element: .var(name: "T"))),
     0xf0d30c1c928667ef: Schema(id: 0xf0d30c1c928667ef, typeParams: [], kind: .struct(name: "AlignedWord", fields: [FieldSchema(name: "word", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "start", typeRef: .concrete(0x3f2e589db81e95bf), required: true), FieldSchema(name: "end", typeRef: .concrete(0x3f2e589db81e95bf), required: true), FieldSchema(name: "mean_logprob", typeRef: .generic(0xdcafd4de6b7969bb, args: [.concrete(0x8e02f623d1b2310c)]), required: true), FieldSchema(name: "min_logprob", typeRef: .generic(0xdcafd4de6b7969bb, args: [.concrete(0x8e02f623d1b2310c)]), required: true), FieldSchema(name: "mean_margin", typeRef: .generic(0xdcafd4de6b7969bb, args: [.concrete(0x8e02f623d1b2310c)]), required: true), FieldSchema(name: "min_margin", typeRef: .generic(0xdcafd4de6b7969bb, args: [.concrete(0x8e02f623d1b2310c)]), required: true)])),
-    0xf59a1caa17fdc1b4: Schema(id: 0xf59a1caa17fdc1b4, typeParams: [], kind: .struct(name: "RepoFile", fields: [FieldSchema(name: "name", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "url", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "size", typeRef: .concrete(0xd9356298b81639ac), required: true)])),
     0xf92331d26d0aabc4: Schema(id: 0xf92331d26d0aabc4, typeParams: [], kind: .struct(name: "EditResolution", fields: [FieldSchema(name: "edit_id", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "accepted", typeRef: .concrete(0x178367a87f66fb46), required: true)])),
 ]
 
@@ -852,8 +847,8 @@ nonisolated(unsafe) public let bee_method_schemas: [UInt64: MethodSchemaInfo] = 
     0xec7becd2deb1dad4: MethodSchemaInfo(
         argsSchemaIds: [0xbc5c33249a2dc720],
         argsRoot: .concrete(0xbc5c33249a2dc720),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0xd9356298b81639ac, 0xf59a1caa17fdc1b4, 0x0a96b404b4d79d67, 0x7881b2b6e54aaf59],
-        responseRoot: .generic(0x42046de663beeef0, args: [.generic(0x0a96b404b4d79d67, args: [.concrete(0x7881b2b6e54aaf59)]), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x3c1d05e5924fa784, 0x0a96b404b4d79d67, 0x082890bfae12d841],
+        responseRoot: .generic(0x42046de663beeef0, args: [.generic(0x0a96b404b4d79d67, args: [.concrete(0x082890bfae12d841)]), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),
     0x1c123a5c2762d6a5: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0x6847ab90feda71c1],

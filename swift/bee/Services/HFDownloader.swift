@@ -1,6 +1,9 @@
 import Foundation
 
 /// Downloads HuggingFace model files with progress reporting.
+/// Progress is reported per-file (0→1 for each file). Small config files
+/// flash through instantly; the large safetensors files show real progress
+/// based on the HTTP Content-Length header.
 final class HFDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     private var continuation: CheckedContinuation<Void, Error>?
     private var onProgress: ((Double) -> Void)?
@@ -16,37 +19,27 @@ final class HFDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Senda
         cacheDir: URL,
         onProgress: @escaping (Double) -> Void
     ) async throws -> Int {
-        // Collect all files that need downloading
-        var filesToDownload: [(url: String, destination: URL, size: UInt64)] = []
+        var filesToDownload: [(url: String, destination: URL)] = []
         for repo in repos {
             let repoDir = cacheDir.appendingPathComponent(repo.localDir)
             try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
             for file in repo.files {
                 let dest = repoDir.appendingPathComponent(file.name)
                 if !FileManager.default.fileExists(atPath: dest.path) {
-                    filesToDownload.append((url: file.url, destination: dest, size: file.size))
+                    filesToDownload.append((url: file.url, destination: dest))
                 }
             }
         }
 
         if filesToDownload.isEmpty { return 0 }
 
-        let totalBytes = filesToDownload.reduce(UInt64(0)) { $0 + max($1.size, 1) }
-        var completedBytes: UInt64 = 0
-
         for file in filesToDownload {
-            let fileSize = Double(max(file.size, 1))
-            let baseBytes = Double(completedBytes)
-
             let downloader = HFDownloader()
             try await downloader.download(
                 from: file.url,
-                to: file.destination
-            ) { fileProgress in
-                onProgress((baseBytes + fileProgress * fileSize) / Double(totalBytes))
-            }
-
-            completedBytes += max(file.size, 1)
+                to: file.destination,
+                onProgress: onProgress
+            )
         }
 
         onProgress(1.0)
@@ -95,7 +88,6 @@ final class HFDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Senda
         }
 
         do {
-            // Remove existing file if any
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.moveItem(at: location, to: destination)
             continuation?.resume()

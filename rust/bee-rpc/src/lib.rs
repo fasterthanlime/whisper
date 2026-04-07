@@ -125,7 +125,6 @@ pub struct RepoDownload {
 pub struct RepoFile {
     pub name: String,
     pub url: String,
-    pub size: u64,
 }
 
 // ── Transcription types ────────────────────────────────────────────────
