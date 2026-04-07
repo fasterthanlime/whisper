@@ -7,7 +7,7 @@
 //! | Variable | Purpose | Default |
 //! |----------|---------|---------|
 //! | `BEE_VAD_DIR` | Silero VAD model directory | `{cache}/aitytech--Silero-VAD-v5-MLX` |
-//! | `BEE_TOKENIZER_PATH` | Path to `tokenizer.json` | `{model_dir}/tokenizer.json` |
+//! | `BEE_TOKENIZER_DIR` | Directory with tokenizer files | `{model_dir}` |
 //! | `BEE_ALIGNER_DIR` | Forced-aligner model directory | First match in `{cache}/mlx-community--Qwen3-ForcedAligner-*` |
 //! | `BEE_FFI_LOG_PATH` | Log file path (set by Swift before dlopen) | `/tmp/bee.log` |
 
@@ -61,7 +61,7 @@ pub(crate) fn find_vad_dir(cache_base: &Path) -> Option<PathBuf> {
 /// Resolve paths for the ASR engine, checking env var overrides first.
 ///
 /// Environment variables (all optional, for development/testing):
-/// - `BEE_TOKENIZER_PATH`: path to `tokenizer.json`. Default: `{model_dir}/tokenizer.json`.
+/// - `BEE_TOKENIZER_DIR`: directory containing tokenizer files. Default: `{model_dir}`.
 /// - `BEE_ALIGNER_DIR`: path to the forced-aligner model directory.
 ///   Default: first existing candidate in `{cache_base}/mlx-community--Qwen3-ForcedAligner-*`.
 ///
@@ -70,17 +70,11 @@ fn resolve_engine_config(
     model_dir: &Path,
     cache_base: &Path,
 ) -> Result<EngineConfig<'static>, String> {
-    let tokenizer_path: PathBuf = if let Ok(p) = std::env::var("BEE_TOKENIZER_PATH") {
+    let tokenizer_dir: PathBuf = if let Ok(p) = std::env::var("BEE_TOKENIZER_DIR") {
         PathBuf::from(p)
     } else {
-        model_dir.join("tokenizer.json")
+        model_dir.to_path_buf()
     };
-    if !tokenizer_path.exists() {
-        return Err(format!(
-            "tokenizer not found at {}",
-            tokenizer_path.display()
-        ));
-    }
 
     let aligner_dir: PathBuf = if let Ok(p) = std::env::var("BEE_ALIGNER_DIR") {
         PathBuf::from(p)
@@ -98,12 +92,12 @@ fn resolve_engine_config(
 
     // Leak the PathBufs to get 'static references (engine lives for process lifetime)
     let model_dir: &'static Path = Box::leak(model_dir.to_path_buf().into_boxed_path());
-    let tokenizer_path: &'static Path = Box::leak(tokenizer_path.into_boxed_path());
+    let tokenizer_dir: &'static Path = Box::leak(tokenizer_dir.into_boxed_path());
     let aligner_dir: &'static Path = Box::leak(aligner_dir.into_boxed_path());
 
     Ok(EngineConfig {
         model_dir,
-        tokenizer_path,
+        tokenizer_dir,
         aligner_dir,
     })
 }
@@ -148,9 +142,16 @@ pub(crate) fn required_downloads() -> Vec<RepoDownload> {
                     url: hf_file_url("mlx-community/Qwen3-ASR-1.7B-4bit", "config.json"),
                 },
                 RepoFile {
-                    name: "tokenizer.json".into(),
-                    url: hf_file_url("mlx-community/Qwen3-ASR-1.7B-4bit", "tokenizer.json"),
-
+                    name: "vocab.json".into(),
+                    url: hf_file_url("mlx-community/Qwen3-ASR-1.7B-4bit", "vocab.json"),
+                },
+                RepoFile {
+                    name: "merges.txt".into(),
+                    url: hf_file_url("mlx-community/Qwen3-ASR-1.7B-4bit", "merges.txt"),
+                },
+                RepoFile {
+                    name: "tokenizer_config.json".into(),
+                    url: hf_file_url("mlx-community/Qwen3-ASR-1.7B-4bit", "tokenizer_config.json"),
                 },
                 RepoFile {
                     name: "model.safetensors".into(),

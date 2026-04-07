@@ -113,7 +113,7 @@ struct DebugOverlay: View {
     private var modelLabel: String {
         switch appState.modelStatus {
         case .notLoaded: "not loaded"
-        case .downloading(let p): "downloading \(Int(p * 100))%"
+        case .downloading(let p, let model): "downloading \(model) \(Int(p * 100))%"
         case .loading: "loading..."
         case .loaded: "ready"
         case .error(let e): "error: \(e.prefix(30))"

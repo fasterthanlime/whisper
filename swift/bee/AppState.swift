@@ -886,9 +886,9 @@ final class AppState {
                 let downloaded = try await HFDownloader.downloadMissing(
                     repos: repos,
                     cacheDir: cacheURL
-                ) { progress in
+                ) { progress, model in
                     Task { @MainActor in
-                        self.modelStatus = .downloading(progress: progress)
+                        self.modelStatus = .downloading(progress: progress, model: model)
                     }
                 }
                 if downloaded > 0 {
@@ -1662,7 +1662,7 @@ final class AppState {
 
 enum ModelStatus: Equatable {
     case notLoaded
-    case downloading(progress: Double)
+    case downloading(progress: Double, model: String)
     case loading
     case loaded
     case error(String)

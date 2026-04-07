@@ -143,6 +143,33 @@ pub struct Update {
 
 pub use bee_types::AlignedWord;
 
+/// Load a tokenizer from a directory. Tries `tokenizer.json` first (consolidated
+/// HuggingFace format), then falls back to building from `vocab.json` + `merges.txt`.
+fn load_tokenizer(dir: &Path) -> Result<tokenizers::Tokenizer, mlx_rs::error::Exception> {
+    let consolidated = dir.join("tokenizer.json");
+    if consolidated.exists() {
+        return tokenizers::Tokenizer::from_file(&consolidated)
+            .map_err(|e| mlx_rs::error::Exception::custom(format!("load tokenizer.json: {e}")));
+    }
+
+    let vocab_path = dir.join("vocab.json");
+    let merges_path = dir.join("merges.txt");
+    if vocab_path.exists() && merges_path.exists() {
+        let bpe = tokenizers::models::bpe::BPE::from_file(
+            vocab_path.to_str().unwrap(),
+            merges_path.to_str().unwrap(),
+        )
+        .build()
+        .map_err(|e| mlx_rs::error::Exception::custom(format!("build BPE tokenizer: {e}")))?;
+        return Ok(tokenizers::Tokenizer::new(bpe));
+    }
+
+    Err(mlx_rs::error::Exception::custom(format!(
+        "no tokenizer found in {} (need tokenizer.json or vocab.json + merges.txt)",
+        dir.display()
+    )))
+}
+
 // ── Engine ──────────────────────────────────────────────────────────────
 
 /// Paths required to load an engine.
@@ -150,8 +177,9 @@ pub struct EngineConfig<'a> {
     /// Directory containing `config.json` and `*.safetensors` for the
     /// ASR model weights.
     pub model_dir: &'a Path,
-    /// Path to `tokenizer.json`.
-    pub tokenizer_path: &'a Path,
+    /// Directory containing tokenizer files — either a single `tokenizer.json`,
+    /// or `vocab.json` + `merges.txt` (GPT-2 style BPE).
+    pub tokenizer_dir: &'a Path,
     /// Directory containing the forced aligner model weights.
     pub aligner_dir: &'a Path,
 }
@@ -192,8 +220,7 @@ impl Engine {
             stats.bits,
         );
 
-        let tokenizer = tokenizers::Tokenizer::from_file(config.tokenizer_path)
-            .map_err(|e| Exception::custom(format!("load tokenizer: {e}")))?;
+        let tokenizer = load_tokenizer(config.tokenizer_dir)?;
 
         let aligner = ForcedAligner::load(config.aligner_dir, tokenizer.clone())?;
 

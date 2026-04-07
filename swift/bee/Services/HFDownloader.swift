@@ -17,33 +17,30 @@ final class HFDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Senda
     static func downloadMissing(
         repos: [RepoDownload],
         cacheDir: URL,
-        onProgress: @escaping (Double) -> Void
+        onProgress: @escaping (_ progress: Double, _ model: String) -> Void
     ) async throws -> Int {
-        var filesToDownload: [(url: String, destination: URL)] = []
+        var totalDownloaded = 0
         for repo in repos {
             let repoDir = cacheDir.appendingPathComponent(repo.localDir)
             try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+            let modelName = repo.repoId.components(separatedBy: "/").last ?? repo.repoId
+
             for file in repo.files {
                 let dest = repoDir.appendingPathComponent(file.name)
-                if !FileManager.default.fileExists(atPath: dest.path) {
-                    filesToDownload.append((url: file.url, destination: dest))
+                if FileManager.default.fileExists(atPath: dest.path) { continue }
+
+                let downloader = HFDownloader()
+                try await downloader.download(
+                    from: file.url,
+                    to: dest
+                ) { fileProgress in
+                    onProgress(fileProgress, modelName)
                 }
+                totalDownloaded += 1
             }
         }
 
-        if filesToDownload.isEmpty { return 0 }
-
-        for file in filesToDownload {
-            let downloader = HFDownloader()
-            try await downloader.download(
-                from: file.url,
-                to: file.destination,
-                onProgress: onProgress
-            )
-        }
-
-        onProgress(1.0)
-        return filesToDownload.count
+        return totalDownloaded
     }
 
     private func download(

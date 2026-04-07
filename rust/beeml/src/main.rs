@@ -3134,9 +3134,9 @@ async fn main() -> Result<()> {
     let model_dir = env::var("BEE_ASR_MODEL_DIR")
         .map(PathBuf::from)
         .context("BEE_ASR_MODEL_DIR must be set")?;
-    let tokenizer_path = env::var("BEE_TOKENIZER_PATH")
+    let tokenizer_dir = env::var("BEE_TOKENIZER_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| model_dir.join("tokenizer.json"));
+        .unwrap_or_else(|_| model_dir.clone());
     let aligner_dir = env::var("BEE_ALIGNER_DIR")
         .map(PathBuf::from)
         .context("BEE_ALIGNER_DIR must be set")?;
@@ -3144,7 +3144,7 @@ async fn main() -> Result<()> {
     info!(model_dir = %model_dir.display(), "loading ASR engine");
     let engine = Engine::load(&EngineConfig {
         model_dir: &model_dir,
-        tokenizer_path: &tokenizer_path,
+        tokenizer_dir: &tokenizer_dir,
         aligner_dir: &aligner_dir,
     })
     .context("loading engine")?;

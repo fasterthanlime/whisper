@@ -10,6 +10,31 @@ struct MenuBarView: View {
                 InputDeviceList(appState: appState)
                     .padding(.horizontal, 6)
 
+                if let statusLine = activeStatusLine {
+                    Divider().padding(.horizontal, 2)
+                    HStack(spacing: 6) {
+                        switch appState.modelStatus {
+                        case .downloading:
+                            ProgressView()
+                                .controlSize(.small)
+                        case .loading:
+                            ProgressView()
+                                .controlSize(.small)
+                        case .error:
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                                .font(.caption)
+                        default:
+                            EmptyView()
+                        }
+                        Text(statusLine)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                }
 
                 Divider().padding(.horizontal, 2)
                 if appState.transcriptionHistory.isEmpty {
@@ -145,6 +170,19 @@ struct MenuBarView: View {
             }
             .keyboardShortcut("d", modifiers: [.command])
             .hidden()
+        }
+    }
+
+    /// Status line shown in the menu bar popup — nil when there's nothing to report.
+    private var activeStatusLine: String? {
+        switch appState.modelStatus {
+        case .loading: return "Loading model…"
+        case .downloading(let progress, let model):
+            let pct = Int(progress * 100)
+            return "Downloading \(model)… \(pct)%"
+        case .error(let message): return "Error: \(message)"
+        case .notLoaded: return "Model not loaded"
+        case .loaded: return nil
         }
     }
 
@@ -380,7 +418,7 @@ private struct BeeOverviewView: View {
             switch appState.modelStatus {
             case .loaded: return "Ready"
             case .loading: return "Loading model..."
-            case .downloading(let p): return "Downloading (\(Int(p * 100))%)..."
+            case .downloading(let p, let model): return "Downloading \(model) (\(Int(p * 100))%)..."
             case .notLoaded: return "No model loaded"
             case .error(let e): return "Error: \(e)"
             }
@@ -654,6 +692,7 @@ private struct TranscriptionSettingsView: View {
     @State private var tryMeText = ""
     @FocusState private var editorFocused: Bool
     @State private var pipelineExpanded = false
+    @State private var advancedParamsExpanded = false
     @State private var mockCPU: Double = 18
     @State private var mockGPU: Double = 61
     @State private var mockMemMB: Double = 387
@@ -735,7 +774,7 @@ private struct TranscriptionSettingsView: View {
                     }
                 }
 
-                SettingsCard("Parameters") {
+                DisclosureGroup("Advanced Parameters", isExpanded: $advancedParamsExpanded) {
                     VStack(spacing: 10) {
                         ParamSlider(
                             label: "Chunk size",
@@ -790,7 +829,10 @@ private struct TranscriptionSettingsView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 6)
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
 
                 Divider()
 
@@ -866,7 +908,7 @@ private struct TranscriptionSettingsView: View {
     private var modelLabel: String {
         switch appState.modelStatus {
         case .notLoaded: "not loaded"
-        case .downloading(let p): "downloading \(Int(p * 100))%"
+        case .downloading(let p, _): "downloading \(Int(p * 100))%"
         case .loading: "loading..."
         case .loaded: AppState.defaultModel.displayName
         case .error(let e): "error: \(e.prefix(30))"

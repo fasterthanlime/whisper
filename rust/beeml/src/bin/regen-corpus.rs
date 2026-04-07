@@ -18,8 +18,8 @@ fn main() -> anyhow::Result<()> {
 
     let model_dir = std::env::var("BEE_ASR_MODEL_DIR")
         .map_err(|_| anyhow::anyhow!("BEE_ASR_MODEL_DIR not set"))?;
-    let tokenizer_path = std::env::var("BEE_TOKENIZER_PATH")
-        .map_err(|_| anyhow::anyhow!("BEE_TOKENIZER_PATH not set"))?;
+    let tokenizer_dir = std::env::var("BEE_TOKENIZER_DIR")
+        .unwrap_or_else(|_| model_dir.clone());
     let aligner_dir =
         std::env::var("BEE_ALIGNER_DIR").map_err(|_| anyhow::anyhow!("BEE_ALIGNER_DIR not set"))?;
 
@@ -36,7 +36,7 @@ fn main() -> anyhow::Result<()> {
     let t0 = Instant::now();
     let engine = Engine::load(&EngineConfig {
         model_dir: Path::new(&model_dir),
-        tokenizer_path: Path::new(&tokenizer_path),
+        tokenizer_dir: Path::new(&tokenizer_dir),
         aligner_dir: Path::new(&aligner_dir),
     })?;
     println!("Engine loaded in {:.0}ms", t0.elapsed().as_millis());

@@ -241,7 +241,12 @@ final class StatusBarController: NSObject {
             case .idle: false
             }
 
-        button.alphaValue = isReady ? 1.0 : (hasError ? 1.0 : 0.4)
+        let isLoadingOrDownloading: Bool =
+            switch appState.modelStatus {
+            case .loading, .downloading: true
+            default: false
+            }
+        button.alphaValue = isReady ? 1.0 : (hasError || isLoadingOrDownloading ? 1.0 : 0.4)
 
         let target: CGFloat = isActive ? 1 : 0
         guard abs(animationProgress - target) > 0.01 else { return }
@@ -278,10 +283,50 @@ final class StatusBarController: NSObject {
         else { return }
 
         let hasError = appState?.modelStatus.hasError ?? false
+        let isLoadingOrDownloading: Bool =
+            switch appState?.modelStatus {
+            case .loading, .downloading: true
+            default: false
+            }
         let p = animationProgress
-        if p < 0.01 && !hasError {
+        if p < 0.01 && !hasError && !isLoadingOrDownloading {
             baseIcon.isTemplate = true
             button.image = baseIcon
+            return
+        }
+
+        if p < 0.01 && isLoadingOrDownloading {
+            // Loading/downloading: show bee + orange dot
+            let iconSize = baseIcon.size
+            let canvasSize = NSSize(width: Self.itemWidth, height: iconSize.height)
+            let dotSize: CGFloat = 6
+            let isDark = button.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let iconColor: NSColor = isDark ? .white : .black
+            let tinted = baseIcon.copy() as! NSImage
+            tinted.lockFocus()
+            iconColor.set()
+            NSRect(origin: .zero, size: tinted.size).fill(using: .sourceAtop)
+            tinted.unlockFocus()
+            let composed = NSImage(size: canvasSize, flipped: false) { rect in
+                let beeRect = NSRect(
+                    x: rect.midX - iconSize.width / 2 - 3,
+                    y: (rect.height - iconSize.height) / 2,
+                    width: iconSize.width,
+                    height: iconSize.height
+                )
+                tinted.draw(in: beeRect)
+                NSColor.systemOrange.setFill()
+                let dotRect = NSRect(
+                    x: beeRect.maxX - 1,
+                    y: beeRect.maxY - dotSize - 1,
+                    width: dotSize,
+                    height: dotSize
+                )
+                NSBezierPath(ovalIn: dotRect).fill()
+                return true
+            }
+            composed.isTemplate = false
+            button.image = composed
             return
         }
 
