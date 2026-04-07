@@ -1,3 +1,4 @@
+import os
 import SwiftUI
 
 struct DebugOverlay: View {
@@ -65,6 +66,9 @@ struct DebugOverlay: View {
                     .foregroundStyle(.green)
                 DiagnosticsView(diag: diag, transcriptionService: appState.transcriptionService)
             }
+
+            Divider()
+            CorrectionTestView(appState: appState)
         }
         .padding(8)
         .frame(width: 300, alignment: .leading)
@@ -263,6 +267,178 @@ struct DiagnosticsView: View {
                 .truncationMode(.tail)
         }
     }
+}
+
+// MARK: - Correction Test
+
+private let corrTestLogger = Logger(subsystem: "fasterthanlime.bee", category: "CorrectionTest")
+
+struct CorrectionTestView: View {
+    let appState: AppState
+
+    @State private var corpusDir: URL?
+    @State private var isRunning = false
+    @State private var statusText: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("correction test")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(.purple)
+
+            HStack(spacing: 8) {
+                if corpusDir == nil {
+                    Button("Pick corpus dir") {
+                        let panel = NSOpenPanel()
+                        panel.canChooseDirectories = true
+                        panel.canChooseFiles = false
+                        panel.message = "Select the corpus audio directory (data/phonetic-seed/audio)"
+                        if panel.runModal() == .OK {
+                            corpusDir = panel.url
+                        }
+                    }
+                    .font(.system(size: 10, weight: .semibold))
+                } else {
+                    Button("Test Correction") {
+                        guard !isRunning else { return }
+                        isRunning = true
+                        statusText = "picking file..."
+                        Task {
+                            await runCorrectionTest()
+                            isRunning = false
+                        }
+                    }
+                    .font(.system(size: 10, weight: .semibold))
+                    .disabled(isRunning)
+
+                    Button("Change dir") {
+                        corpusDir = nil
+                    }
+                    .font(.system(size: 10, weight: .semibold))
+                }
+            }
+
+            if let statusText {
+                Text(statusText)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.yellow)
+                    .lineLimit(5)
+                    .padding(.leading, 66)
+            }
+        }
+    }
+
+    private func runCorrectionTest() async {
+        guard let dir = corpusDir else { return }
+
+        // List OGG files
+        let files: [String]
+        do {
+            let contents = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            files = contents.filter { $0.hasSuffix(".ogg") }
+        } catch {
+            statusText = "failed to list dir: \(error)"
+            return
+        }
+
+        guard let randomFile = files.randomElement() else {
+            statusText = "no .ogg files found"
+            return
+        }
+
+        let oggPath = dir.appendingPathComponent(randomFile).path
+        statusText = "converting \(randomFile)..."
+        corrTestLogger.info("Selected: \(randomFile)")
+
+        // Convert OGG to WAV via ffmpeg
+        guard let wavPath = convertOggToWav(oggPath: oggPath) else {
+            statusText = "ffmpeg failed for \(randomFile)"
+            return
+        }
+        defer { try? FileManager.default.removeItem(atPath: wavPath) }
+
+        // Load samples
+        let samples = loadWavSamples(path: wavPath)
+        guard !samples.isEmpty else {
+            statusText = "empty audio: \(randomFile)"
+            return
+        }
+
+        statusText = "transcribing \(samples.count) samples..."
+        corrTestLogger.info("Loaded \(samples.count) samples from \(randomFile)")
+
+        // Create streaming session, feed in 1-second chunks, finish
+        let ts = appState.transcriptionService
+        guard let session = await ts.createSession() else {
+            statusText = "failed to create session"
+            return
+        }
+
+        let chunkSize = 16000 // 1 second at 16kHz
+        var offset = 0
+        var feedCount = 0
+        while offset < samples.count {
+            let end = min(offset + chunkSize, samples.count)
+            let chunk = Array(samples[offset..<end])
+            _ = await ts.feed(session: session, samples: chunk)
+            offset = end
+            feedCount += 1
+        }
+
+        statusText = "finalizing (\(feedCount) feeds)..."
+        let transcript = await ts.finish(session: session) ?? ""
+
+        if transcript.isEmpty {
+            statusText = "empty transcript from \(randomFile)"
+            return
+        }
+
+        corrTestLogger.info("Transcript: \(transcript)")
+        statusText = "correcting: \"\(transcript.prefix(60))\"..."
+
+        // Run correction
+        let cs = appState.correctionService
+        let corrOutput = await cs.process(text: transcript, appId: "")
+
+        if let corrOutput, !corrOutput.edits.isEmpty {
+            statusText = "\(randomFile)\n\"\(transcript.prefix(60))\"\n\(corrOutput.edits.count) correction(s)"
+            corrTestLogger.info("Found \(corrOutput.edits.count) correction(s)")
+
+            // Show the correction panel
+            CorrectionPanel.shared.show(
+                output: corrOutput,
+                correctionService: cs,
+                inputClient: appState.inputClient
+            )
+        } else {
+            statusText = "\(randomFile)\n\"\(transcript.prefix(80))\"\nno corrections"
+        }
+    }
+}
+
+private func convertOggToWav(oggPath: String) -> String? {
+    let wavPath = NSTemporaryDirectory() + UUID().uuidString + ".wav"
+
+    // Find ffmpeg
+    let ffmpegPaths = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+    guard let ffmpeg = ffmpegPaths.first(where: { FileManager.default.fileExists(atPath: $0) }) else {
+        corrTestLogger.error("ffmpeg not found")
+        return nil
+    }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: ffmpeg)
+    process.arguments = ["-i", oggPath, "-ar", "16000", "-ac", "1", "-f", "wav", wavPath, "-y"]
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+        process.waitUntilExit()
+    } catch {
+        corrTestLogger.error("ffmpeg error: \(error)")
+        return nil
+    }
+    return process.terminationStatus == 0 ? wavPath : nil
 }
 
 /// Load a 16-bit PCM WAV as float32 samples.
