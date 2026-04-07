@@ -1,7 +1,7 @@
 use bee_transcribe::Session;
 
 pub(crate) struct SessionInner {
-    pub(crate) session: Session<'static>,
+    pub(crate) session: Option<Session<'static>>,
 }
 
 // SAFETY: Session contains MLX arrays (Metal buffers) accessed sequentially.

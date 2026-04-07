@@ -197,7 +197,7 @@ impl bee_rpc::Bee for BeeService {
         let session = Self::make_session(engine, lang);
         self.inner.sessions.insert(
             id.clone(),
-            Arc::new(tokio::sync::Mutex::new(SessionInner { session })),
+            Arc::new(tokio::sync::Mutex::new(SessionInner { session: Some(session) })),
         );
 
         Ok(id)
@@ -209,7 +209,7 @@ impl bee_rpc::Bee for BeeService {
         let t0 = std::time::Instant::now();
         let result = tokio::task::spawn_blocking(move || {
             let mut guard = session.blocking_lock();
-            guard.session.feed(&samples)
+            guard.session.as_mut().expect("BUG: feed on finished session").feed(&samples)
         })
         .await
         .expect("spawn_blocking panicked");
@@ -251,11 +251,9 @@ impl bee_rpc::Bee for BeeService {
 
         let t0 = std::time::Instant::now();
         let result = tokio::task::spawn_blocking(move || {
-            let Ok(mutex) = Arc::try_unwrap(session_arc) else {
-                panic!("BUG: session Arc still held during finish");
-            };
-            let inner = mutex.into_inner();
-            inner.session.finish()
+            let mut guard = session_arc.blocking_lock();
+            let session = guard.session.take().expect("BUG: finish on already-finished session");
+            session.finish()
         })
         .await
         .expect("spawn_blocking panicked");
@@ -289,7 +287,7 @@ impl bee_rpc::Bee for BeeService {
         let mut guard = session.lock().await;
 
         info!("set_language: {session_id} → {language}");
-        guard.session = Self::make_session(engine, Language(language));
+        guard.session = Some(Self::make_session(engine, Language(language)));
         Ok(true)
     }
 
