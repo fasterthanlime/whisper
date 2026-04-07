@@ -51,24 +51,31 @@ fn on_load() {
             let _ = tracing::subscriber::set_global_default(subscriber);
         }
     }
-    ffi_log("[bee-ffi] dylib loaded, spawning runtime thread");
+    info!("bee-ffi: dylib loaded, spawning runtime thread");
     std::thread::spawn(|| {
+        info!("bee-ffi: runtime thread started");
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build();
         let Ok(runtime) = runtime else {
-            ffi_log("[bee-ffi] failed to create tokio runtime");
+            tracing::error!("bee-ffi: failed to create tokio runtime");
             return;
         };
+        info!("bee-ffi: tokio runtime created");
 
         runtime.block_on(async {
-            ffi_log("[bee-ffi] runtime thread: waiting for accept");
-            let Ok(link) = bee_ffi_endpoint::accept().await else {
-                ffi_log("[bee-ffi] runtime thread: accept failed");
-                return;
-            };
-            ffi_log("[bee-ffi] runtime thread: link accepted");
+            info!("bee-ffi: waiting for accept");
+            let link = bee_ffi_endpoint::accept().await;
+            match &link {
+                Ok(_) => info!("bee-ffi: accept succeeded, got link"),
+                Err(e) => {
+                    tracing::error!("bee-ffi: accept failed: {e}");
+                    return;
+                }
+            }
+            let link = link.unwrap();
 
+            info!("bee-ffi: calling acceptor_on + establish");
             let service = BeeService::new();
             let establish = acceptor_on(link)
                 .on_connection(BeeDispatcher::new(service))
@@ -77,21 +84,20 @@ fn on_load() {
 
             match establish {
                 Ok(client) => {
-                    info!("bee-ffi: vox session established");
-                    ffi_log("[bee-ffi] runtime thread: session established");
+                    info!("bee-ffi: session established, waiting for caller close");
                     client.caller.closed().await;
-                    ffi_log("[bee-ffi] runtime thread: caller closed");
+                    info!("bee-ffi: caller closed, shutting down");
                     if let Some(session) = client.session.as_ref() {
                         let _ = session.shutdown();
+                        info!("bee-ffi: session shutdown complete");
                     }
                 }
                 Err(error) => {
-                    ffi_log(&format!(
-                        "[bee-ffi] runtime thread: establish failed: {error}"
-                    ));
+                    tracing::error!("bee-ffi: establish failed: {error}");
                 }
             }
         });
+        info!("bee-ffi: runtime thread exiting");
     });
 }
 
