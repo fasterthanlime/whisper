@@ -1,7 +1,8 @@
 //! bee-ffi — vox-ffi service exposing the Bee engine to Swift.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bee_phonetic::{
     enumerate_transcript_spans_with, feature_tokens_for_ipa, query_index, score_shortlist,
@@ -100,9 +101,9 @@ fn on_load() {
 // ── BeeService impl ───────────────────────────────────────────────────
 
 struct BeeServiceInner {
-    engine: Mutex<Option<AsrEngine>>,
+    engine: OnceLock<AsrEngine>,
     sessions: Mutex<std::collections::HashMap<String, AsrSession>>,
-    next_session_id: Mutex<u64>,
+    next_session_id: AtomicU64,
     correction: Mutex<Option<CorrectionEngine>>,
 }
 
@@ -115,9 +116,9 @@ impl BeeService {
     fn new() -> Self {
         Self {
             inner: Arc::new(BeeServiceInner {
-                engine: Mutex::new(None),
+                engine: OnceLock::new(),
                 sessions: Mutex::new(std::collections::HashMap::new()),
-                next_session_id: Mutex::new(1),
+                next_session_id: AtomicU64::new(1),
                 correction: Mutex::new(None),
             }),
         }
@@ -135,7 +136,7 @@ impl bee_rpc::Bee for BeeService {
 
         match load_engine(&model_dir, &cache_base) {
             Ok(engine) => {
-                *self.inner.engine.lock().unwrap() = Some(engine);
+                let _ = self.inner.engine.set(engine);
                 String::new()
             }
             Err(e) => e,
@@ -143,8 +144,7 @@ impl bee_rpc::Bee for BeeService {
     }
 
     async fn create_session(&self, language: String) -> String {
-        let guard = self.inner.engine.lock().unwrap();
-        let Some(engine) = guard.as_ref() else {
+        let Some(engine) = self.inner.engine.get() else {
             return String::new();
         };
 
@@ -168,9 +168,8 @@ impl bee_rpc::Bee for BeeService {
             }
         }
 
-        let mut id_counter = self.inner.next_session_id.lock().unwrap();
-        let id = format!("session-{}", *id_counter);
-        *id_counter += 1;
+        let id_num = self.inner.next_session_id.fetch_add(1, Ordering::Relaxed);
+        let id = format!("session-{id_num}");
 
         self.inner.sessions.lock().unwrap().insert(
             id.clone(),
@@ -266,8 +265,7 @@ impl bee_rpc::Bee for BeeService {
             return false;
         }
 
-        let guard = self.inner.engine.lock().unwrap();
-        let Some(engine) = guard.as_ref() else {
+        let Some(engine) = self.inner.engine.get() else {
             return false;
         };
 
@@ -302,8 +300,7 @@ impl bee_rpc::Bee for BeeService {
     }
 
     async fn transcribe_samples(&self, samples: Vec<f32>) -> String {
-        let guard = self.inner.engine.lock().unwrap();
-        let Some(engine) = guard.as_ref() else {
+        let Some(engine) = self.inner.engine.get() else {
             return "error: engine not loaded".into();
         };
 
@@ -326,8 +323,7 @@ impl bee_rpc::Bee for BeeService {
     }
 
     async fn get_stats(&self) -> EngineStats {
-        let guard = self.inner.engine.lock().unwrap();
-        match guard.as_ref() {
+        match self.inner.engine.get() {
             Some(engine) => {
                 let s = engine.stats.get();
                 EngineStats {
