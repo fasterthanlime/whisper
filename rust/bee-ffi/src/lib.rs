@@ -58,7 +58,7 @@ fn on_load() {
             let service = BeeService::new();
             let establish = acceptor_on(link)
                 .on_connection(BeeDispatcher::new(service))
-                .establish::<bee_rpc::BeeClient>()
+                .establish::<vox::NoopClient>()
                 .await;
 
             match establish {
