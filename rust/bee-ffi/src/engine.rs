@@ -194,15 +194,6 @@ pub(crate) fn required_downloads() -> Vec<RepoDownload> {
                         "mlx-community/Qwen3-ForcedAligner-0.6B-4bit",
                         "model.safetensors",
                     ),
-
-                },
-                RepoFile {
-                    name: "tokenizer.json".into(),
-                    url: hf_file_url(
-                        "mlx-community/Qwen3-ForcedAligner-0.6B-4bit",
-                        "tokenizer.json",
-                    ),
-
                 },
             ],
         },
