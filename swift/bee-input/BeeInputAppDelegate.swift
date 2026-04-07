@@ -7,10 +7,18 @@ private func beeLogPath() -> String {
     )?.appendingPathComponent("bee.log").path ?? "/tmp/bee.log"
 }
 
+private func beeTimestamp() -> String {
+    let now = Date()
+    let cal = Calendar.current
+    let dc = cal.dateComponents([.year, .month, .day, .hour, .minute, .second, .nanosecond], from: now)
+    return String(format: "%04d-%02d-%02dT%02d:%02d:%02d.%06dZ",
+                  dc.year!, dc.month!, dc.day!, dc.hour!, dc.minute!, dc.second!,
+                  dc.nanosecond! / 1000)
+}
+
 func beeInputLog(_ msg: String) {
     let path = beeLogPath()
-    let ts = ProcessInfo.processInfo.systemUptime
-    let line = String(format: "[%.3f] IME: %@\n", ts, msg)
+    let line = "\(beeTimestamp())  INFO IME: \(msg)\n"
     if let data = line.data(using: .utf8),
         let fh = FileHandle(forWritingAtPath: path)
     {
