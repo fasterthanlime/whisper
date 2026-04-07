@@ -41,7 +41,10 @@ fn on_load() {
             .open(&path)
         {
             let subscriber = tracing_subscriber::fmt()
-                .with_max_level(tracing::Level::TRACE)
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                )
                 .with_writer(file)
                 .with_ansi(false)
                 .finish();
