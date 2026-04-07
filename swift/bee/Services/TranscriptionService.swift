@@ -42,14 +42,25 @@ final class TranscriptionService: @unchecked Sendable {
 
     // MARK: - Streaming Session
 
-    struct SessionConfig: Sendable {
+    struct StreamingSessionConfig: Sendable {
         var language: String? = nil
+        var chunkDuration: Float = 0
+        var vadThreshold: Float = 0
+        var rollbackTokens: UInt32 = 0
+        var commitTokenCount: UInt32 = 0
     }
 
-    func createSession(_ config: SessionConfig = SessionConfig()) async -> StreamingSession? {
+    func createSession(_ config: StreamingSessionConfig = StreamingSessionConfig()) async -> StreamingSession? {
         do {
             let client = try await client()
-            let sessionId = try await client.createSession(language: config.language ?? "").get()
+            let rpcConfig = SessionConfig(
+                language: config.language ?? "",
+                chunkDuration: config.chunkDuration,
+                vadThreshold: config.vadThreshold,
+                rollbackTokens: config.rollbackTokens,
+                commitTokenCount: config.commitTokenCount
+            )
+            let sessionId = try await client.createSession(opts: rpcConfig).get()
             return StreamingSession(id: sessionId)
         } catch {
             Self.logger.error("createSession failed: \(error)")

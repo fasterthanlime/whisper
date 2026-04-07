@@ -66,7 +66,7 @@ pub trait Bee {
     // ── Transcription ──────────────────────────────────────────────────
 
     /// Create a transcription session, returns session ID.
-    async fn create_session(&self, language: String) -> Result<String, BeeError>;
+    async fn create_session(&self, opts: SessionConfig) -> Result<String, BeeError>;
 
     /// Feed audio samples to a session.
     async fn feed(&self, session_id: String, samples: Vec<f32>) -> Result<Option<FeedResult>, BeeError>;
@@ -130,6 +130,23 @@ pub enum BeeError {
     CorrectionError { message: String },
     /// Not yet implemented.
     NotImplemented,
+}
+
+// ── Session config ─────────────────────────────────────────────────────
+
+/// Configuration for creating a transcription session.
+#[derive(Debug, Clone, Facet)]
+pub struct SessionConfig {
+    /// Language code (e.g. "en", "auto"). Empty = auto-detect.
+    pub language: String,
+    /// Seconds of audio per processing chunk. 0 = use default (0.4).
+    pub chunk_duration: f32,
+    /// VAD speech probability threshold (0.0-1.0). 0 = use default (0.5).
+    pub vad_threshold: f32,
+    /// How many recent tokens the model may revise each step. 0 = use default (5).
+    pub rollback_tokens: u32,
+    /// Fixed token count before commit+rotate. 0 = use default (12).
+    pub commit_token_count: u32,
 }
 
 // ── Model types ────────────────────────────────────────────────────────

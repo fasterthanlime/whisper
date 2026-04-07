@@ -13,6 +13,7 @@ use bee_rpc::{
     FeedResult, RepoDownload,
 };
 use bee_transcribe::{Language, SessionOptions};
+
 use bee_types::SpanContext;
 use dashmap::DashMap;
 use tracing::info;
@@ -147,11 +148,25 @@ impl BeeService {
     }
 
     /// Create a new ASR session with VAD, returning the raw Session.
-    fn make_session(engine: &AsrEngine, language: Language) -> bee_transcribe::Session<'static> {
-        let opts = SessionOptions {
-            language,
-            ..SessionOptions::default()
+    fn make_session(engine: &AsrEngine, config: &bee_rpc::SessionConfig) -> bee_transcribe::Session<'static> {
+        let defaults = SessionOptions::default();
+        let lang = if config.language.is_empty() {
+            Language::default()
+        } else {
+            Language(config.language.clone())
         };
+        let opts = SessionOptions {
+            language: lang,
+            chunk_duration: if config.chunk_duration > 0.0 { config.chunk_duration } else { defaults.chunk_duration },
+            vad_threshold: if config.vad_threshold > 0.0 { config.vad_threshold } else { defaults.vad_threshold },
+            rollback_tokens: if config.rollback_tokens > 0 { config.rollback_tokens as usize } else { defaults.rollback_tokens },
+            commit_token_count: if config.commit_token_count > 0 { config.commit_token_count as usize } else { defaults.commit_token_count },
+            ..defaults
+        };
+        info!(
+            "make_session: chunk={:.2}s vad_thresh={:.2} rollback={} commit={}",
+            opts.chunk_duration, opts.vad_threshold, opts.rollback_tokens, opts.commit_token_count,
+        );
         let mut session = engine.inner.session(opts);
         if let Some(ref tensors) = engine.vad_tensors {
             match bee_vad::SileroVad::from_tensors(tensors) {
@@ -181,23 +196,17 @@ impl bee_rpc::Bee for BeeService {
         Ok(true)
     }
 
-    async fn create_session(&self, language: String) -> Result<String, BeeError> {
+    async fn create_session(&self, config: bee_rpc::SessionConfig) -> Result<String, BeeError> {
         let engine = self.engine()?;
-
-        let lang = if language.is_empty() {
-            Language::default()
-        } else {
-            Language(language)
-        };
 
         let id_num = self.inner.next_session_id.fetch_add(1, Ordering::Relaxed);
         let id = format!("session-{id_num}");
-        info!("create_session: {id} language={}", lang.0);
+        info!("create_session: {id} language={}", config.language);
 
-        let session = Self::make_session(engine, lang);
+        let session = Self::make_session(engine, &config);
         self.inner.sessions.insert(
             id.clone(),
-            Arc::new(tokio::sync::Mutex::new(SessionInner { session: Some(session) })),
+            Arc::new(tokio::sync::Mutex::new(SessionInner { session: Some(session), config })),
         );
 
         Ok(id)
@@ -288,13 +297,21 @@ impl bee_rpc::Bee for BeeService {
         let mut guard = session.lock().await;
 
         info!("set_language: {session_id} → {language}");
-        guard.session = Some(Self::make_session(engine, Language(language)));
+        guard.config.language = language;
+        guard.session = Some(Self::make_session(engine, &guard.config));
         Ok(true)
     }
 
     async fn transcribe_samples(&self, samples: Vec<f32>) -> Result<String, BeeError> {
         let engine = self.engine()?;
-        let mut session = Self::make_session(engine, Language::default());
+        let default_config = bee_rpc::SessionConfig {
+            language: String::new(),
+            chunk_duration: 0.0,
+            vad_threshold: 0.0,
+            rollback_tokens: 0,
+            commit_token_count: 0,
+        };
+        let mut session = Self::make_session(engine, &default_config);
 
         // feed + finish are CPU/GPU intensive
         let result = tokio::task::spawn_blocking(move || {

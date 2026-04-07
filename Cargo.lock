@@ -246,6 +246,7 @@ dependencies = [
  "mlx-rs",
  "serde_json",
  "tokenizers",
+ "tracing",
 ]
 
 [[package]]

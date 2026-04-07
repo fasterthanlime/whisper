@@ -129,7 +129,7 @@ actor Session {
     private var animationMorphSpeed: Float = 1.0
     private var animationAppendSpeed: Float = 1.0
 
-    func start(language: String?, asrConfig: TranscriptionService.SessionConfig, animationMorphSpeed: Float = 1.0, animationAppendSpeed: Float = 1.0) async {
+    func start(language: String?, asrConfig: TranscriptionService.StreamingSessionConfig, animationMorphSpeed: Float = 1.0, animationAppendSpeed: Float = 1.0) async {
         self.animationMorphSpeed = animationMorphSpeed
         self.animationAppendSpeed = animationAppendSpeed
         logger.info("[\(self.id)] Starting session")

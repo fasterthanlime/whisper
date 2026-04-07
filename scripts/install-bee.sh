@@ -104,5 +104,5 @@ run_step "Installing beeInput to ~/Library/Input Methods" \
 
 run_step "Restarting beeInput" "pkill beeInput || true"
 run_step "Killing running bee" "pkill bee || true"
-sleep 1
-run_step "Launching bee" "open -a /Applications/bee.app"
+# sleep 1
+# run_step "Launching bee" "open -a /Applications/bee.app"

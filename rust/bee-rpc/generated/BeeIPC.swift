@@ -55,6 +55,22 @@ public enum BeeError: Codable, Sendable, Error {
     case notImplemented
 }
 
+public struct SessionConfig: Codable, Sendable {
+    public var language: String
+    public var chunkDuration: Float
+    public var vadThreshold: Float
+    public var rollbackTokens: UInt32
+    public var commitTokenCount: UInt32
+
+    nonisolated public init(language: String, chunkDuration: Float, vadThreshold: Float, rollbackTokens: UInt32, commitTokenCount: UInt32) {
+        self.language = language
+        self.chunkDuration = chunkDuration
+        self.vadThreshold = vadThreshold
+        self.rollbackTokens = rollbackTokens
+        self.commitTokenCount = commitTokenCount
+    }
+}
+
 public struct AlignedWord: Codable, Sendable {
     public var word: String
     public var start: Double
@@ -183,6 +199,14 @@ nonisolated internal func encodeBeeError(_ value: BeeError, into buffer: inout B
     }
 }
 
+nonisolated internal func encodeSessionConfig(_ value: SessionConfig, into buffer: inout ByteBuffer) {
+    encodeString(value.language, into: &buffer)
+    encodeF32(value.chunkDuration, into: &buffer)
+    encodeF32(value.vadThreshold, into: &buffer)
+    encodeU32(value.rollbackTokens, into: &buffer)
+    encodeU32(value.commitTokenCount, into: &buffer)
+}
+
 nonisolated internal func encodeAlignedWord(_ value: AlignedWord, into buffer: inout ByteBuffer) {
     encodeString(value.word, into: &buffer)
     encodeF64(value.start, into: &buffer)
@@ -239,7 +263,7 @@ public protocol BeeCaller {
     ///  Load ASR engine from the given cache dir.
     func loadEngine(cacheDir: String) async throws -> Result<Bool, BeeError>
     ///  Create a transcription session, returns session ID.
-    func createSession(language: String) async throws -> Result<String, BeeError>
+    func createSession(opts: SessionConfig) async throws -> Result<String, BeeError>
     ///  Feed audio samples to a session.
     func feed(sessionId: String, samples: [Float]) async throws -> Result<FeedResult?, BeeError>
     ///  Finalize a session, returns final transcription.
@@ -326,9 +350,9 @@ public final class BeeClient: BeeCaller, Sendable {
             })
     }
 
-    public func createSession(language: String) async throws -> Result<String, BeeError> {
+    public func createSession(opts: SessionConfig) async throws -> Result<String, BeeError> {
         var buffer = ByteBufferAllocator().buffer(capacity: 64)
-        encodeString(language, into: &buffer)
+        encodeSessionConfig(opts, into: &buffer)
         let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
         let schemaInfo = ClientSchemaInfo(methodInfo: bee_method_schemas[0xed77a6d793863a25]!, schemaRegistry: bee_schema_registry)
         let response = try await connection.call(methodId: 0xed77a6d793863a25, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
@@ -701,7 +725,7 @@ public protocol BeeHandler: Sendable {
     ///  Load ASR engine from the given cache dir.
     func loadEngine(cacheDir: String) async throws -> Result<Bool, BeeError>
     ///  Create a transcription session, returns session ID.
-    func createSession(language: String) async throws -> Result<String, BeeError>
+    func createSession(opts: SessionConfig) async throws -> Result<String, BeeError>
     ///  Feed audio samples to a session.
     func feed(sessionId: String, samples: [Float]) async throws -> Result<FeedResult?, BeeError>
     ///  Finalize a session, returns final transcription.
@@ -868,9 +892,14 @@ public final class BeeDispatcher: ServiceDispatcher {
         }
         let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
         do {
-            let language = try decodeString(from: &buffer)
+            let _opts_language = try decodeString(from: &buffer)
+            let _opts_chunkDuration = try decodeF32(from: &buffer)
+            let _opts_vadThreshold = try decodeF32(from: &buffer)
+            let _opts_rollbackTokens = try decodeU32(from: &buffer)
+            let _opts_commitTokenCount = try decodeU32(from: &buffer)
+            let opts = SessionConfig(language: _opts_language, chunkDuration: _opts_chunkDuration, vadThreshold: _opts_vadThreshold, rollbackTokens: _opts_rollbackTokens, commitTokenCount: _opts_commitTokenCount)
             do {
-                let result = try await handler.createSession(language: language)
+                let result = try await handler.createSession(opts: opts)
                 let _encoded: [UInt8] = {
                     var buffer = ByteBufferAllocator().buffer(capacity: 64)
                     switch result {
@@ -1173,7 +1202,7 @@ public final class BeeDispatcher: ServiceDispatcher {
 public let bee_schemas: [String: MethodBindingSchema] = [
     "requiredDownloads": MethodBindingSchema(args: []),
     "loadEngine": MethodBindingSchema(args: [.string]),
-    "createSession": MethodBindingSchema(args: [.string]),
+    "createSession": MethodBindingSchema(args: [.struct(fields: [("language", .string), ("chunk_duration", .f32), ("vad_threshold", .f32), ("rollback_tokens", .u32), ("commit_token_count", .u32)])]),
     "feed": MethodBindingSchema(args: [.string, .vec(element: .f32)]),
     "finishSession": MethodBindingSchema(args: [.string]),
     "setLanguage": MethodBindingSchema(args: [.string, .string]),
@@ -1203,6 +1232,7 @@ nonisolated(unsafe) public let bee_schema_registry: [UInt64: Schema] = [
     0x6a31d1dd6bec4d20: Schema(id: 0x6a31d1dd6bec4d20, typeParams: [], kind: .struct(name: "CorrectionOutput", fields: [FieldSchema(name: "session_id", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "best_text", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "edits", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0x5c000f00fa144db4)]), required: true)])),
     0x6d7dce914ee150e8: Schema(id: 0x6d7dce914ee150e8, typeParams: [], kind: .primitive(.string)),
     0x6ec4adf14402f13d: Schema(id: 0x6ec4adf14402f13d, typeParams: [], kind: .struct(name: "EngineStats", fields: [FieldSchema(name: "cpu_percent", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "gpu_percent", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "vram_used_mb", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "ram_used_mb", typeRef: .concrete(0x8e02f623d1b2310c), required: true)])),
+    0x715e96e611ad7d16: Schema(id: 0x715e96e611ad7d16, typeParams: [], kind: .struct(name: "SessionConfig", fields: [FieldSchema(name: "language", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "chunk_duration", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "vad_threshold", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "rollback_tokens", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "commit_token_count", typeRef: .concrete(0x281c5be4f2ee63b4), required: true)])),
     0x8083f12c0c95579b: Schema(id: 0x8083f12c0c95579b, typeParams: [], kind: .struct(name: "FeedResult", fields: [FieldSchema(name: "text", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "committed_utf16_len", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "alignments", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0xf0d30c1c928667ef)]), required: true), FieldSchema(name: "is_final", typeRef: .concrete(0x178367a87f66fb46), required: true)])),
     0x8e02f623d1b2310c: Schema(id: 0x8e02f623d1b2310c, typeParams: [], kind: .primitive(.f32)),
     0x915c6fb5b64f270b: Schema(id: 0x915c6fb5b64f270b, typeParams: ["T0", "T1", "T2", "T3"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2"), .var(name: "T3")])),
@@ -1228,8 +1258,8 @@ nonisolated(unsafe) public let bee_method_schemas: [UInt64: MethodSchemaInfo] = 
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
     ),
     0xed77a6d793863a25: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0x6847ab90feda71c1],
-        argsRoot: .generic(0x6847ab90feda71c1, args: [.concrete(0x6d7dce914ee150e8)]),
+        argsSchemaIds: [0x6d7dce914ee150e8, 0x8e02f623d1b2310c, 0x281c5be4f2ee63b4, 0x715e96e611ad7d16, 0x6847ab90feda71c1],
+        argsRoot: .generic(0x6847ab90feda71c1, args: [.concrete(0x715e96e611ad7d16)]),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x285872d3b3eded20],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6d7dce914ee150e8), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
     ),

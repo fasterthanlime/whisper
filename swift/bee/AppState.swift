@@ -481,8 +481,12 @@ final class AppState {
             duckVolume()
             startPendingTimer(session: session)
             startIMEAckTimeoutIfNeeded(session: session)
-            let config = TranscriptionService.SessionConfig(
-                language: detectLanguage()
+            let config = TranscriptionService.StreamingSessionConfig(
+                language: detectLanguage(),
+                chunkDuration: chunkSizeSec,
+                vadThreshold: 0,
+                rollbackTokens: rollbackTokenNum,
+                commitTokenCount: commitTokenCount
             )
             beeLog("APP: handleROptDown done, dispatching Tasks")
             // IME activation on MainActor — fires immediately, no actor hop
