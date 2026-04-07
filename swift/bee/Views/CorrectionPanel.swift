@@ -18,7 +18,7 @@ final class CorrectionPanel {
         dismiss()
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 200),
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 200),
             styleMask: [.nonactivatingPanel, .fullSizeContentView, .titled, .closable],
             backing: .buffered,
             defer: false
@@ -33,18 +33,17 @@ final class CorrectionPanel {
 
         let view = CorrectionTrackView(
             output: output,
-            onApply: { [weak self] resolutions in
-                // Send teaching signals
+            onApply: { [weak self] resolutions, customEdits in
+                // Send teaching signals for model edits
                 let teachData = resolutions.map { (editId: $0.key, accepted: $0.value) }
                 Task {
                     await correctionService.teach(sessionId: output.sessionId, resolutions: teachData)
                     await correctionService.save()
                 }
 
-                // Rebuild final text from resolutions
-                let finalText = Self.rebuildText(output: output, resolutions: resolutions)
+                // Rebuild final text from resolutions + custom edits
+                let finalText = Self.rebuildText(output: output, resolutions: resolutions, customEdits: customEdits)
                 if finalText != output.bestText {
-                    // Text needs replacing — send via IPC
                     inputClient.replaceText(
                         sessionId: output.sessionId,
                         oldText: output.bestText,
@@ -84,22 +83,39 @@ final class CorrectionPanel {
         panel = nil
     }
 
-    /// Rebuild the output text applying the user's resolutions.
-    /// If a resolution is `true` (accepted), use the replacement; otherwise keep original.
+    /// Rebuild the output text applying the user's resolutions and custom edits.
     static func rebuildText(
         output: CorrectionService.Output,
-        resolutions: [String: Bool]
+        resolutions: [String: Bool],
+        customEdits: [CorrectionTrackView.CustomEdit] = []
     ) -> String {
-        // Start with the original text, apply edits in reverse order
-        var chars = Array(output.originalText)
-        let sortedEdits = output.edits.sorted { $0.spanStart > $1.spanStart }
+        // Collect all edits (model + custom) as (start, end, replacement), sorted in reverse
+        struct EditRange: Comparable {
+            let start: Int
+            let end: Int
+            let replacement: String
+            static func < (lhs: EditRange, rhs: EditRange) -> Bool { lhs.start > rhs.start }
+        }
 
-        for edit in sortedEdits {
+        var allEdits: [EditRange] = []
+
+        for edit in output.edits {
             let accepted = resolutions[edit.editId] ?? true
             let replacement = accepted ? edit.replacement : edit.original
-            let start = chars.index(chars.startIndex, offsetBy: Int(edit.spanStart))
-            let end = chars.index(chars.startIndex, offsetBy: Int(edit.spanEnd))
-            chars.replaceSubrange(start..<end, with: replacement)
+            allEdits.append(EditRange(start: Int(edit.spanStart), end: Int(edit.spanEnd), replacement: replacement))
+        }
+
+        for custom in customEdits {
+            allEdits.append(EditRange(start: custom.charStart, end: custom.charEnd, replacement: custom.replacement))
+        }
+
+        allEdits.sort()
+
+        var chars = Array(output.originalText)
+        for edit in allEdits {
+            let start = chars.index(chars.startIndex, offsetBy: edit.start)
+            let end = chars.index(chars.startIndex, offsetBy: edit.end)
+            chars.replaceSubrange(start..<end, with: edit.replacement)
         }
 
         return String(chars)
