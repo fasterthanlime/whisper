@@ -159,9 +159,20 @@ fn load_tokenizer(dir: &Path) -> Result<tokenizers::Tokenizer, mlx_rs::error::Ex
             vocab_path.to_str().unwrap(),
             merges_path.to_str().unwrap(),
         )
+        .byte_fallback(true)
         .build()
         .map_err(|e| mlx_rs::error::Exception::custom(format!("build BPE tokenizer: {e}")))?;
-        return Ok(tokenizers::Tokenizer::new(bpe));
+        let mut tokenizer = tokenizers::Tokenizer::new(bpe);
+
+        // GPT-2 style BPE uses byte-level pre-tokenizer and decoder to handle
+        // the Ġ (U+0120) → space mapping and other byte-level encodings.
+        tokenizer.with_pre_tokenizer(Some(
+            tokenizers::pre_tokenizers::byte_level::ByteLevel::new(false, true, false),
+        ));
+        tokenizer.with_decoder(Some(
+            tokenizers::decoders::byte_level::ByteLevel::default(),
+        ));
+        return Ok(tokenizer);
     }
 
     Err(mlx_rs::error::Exception::custom(format!(

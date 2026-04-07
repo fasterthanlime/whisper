@@ -1,15 +1,8 @@
 //! ASR engine loading and model download manifest.
 //!
-//! # Environment variables
-//!
-//! All optional — used for development/testing to override default paths:
-//!
-//! | Variable | Purpose | Default |
-//! |----------|---------|---------|
-//! | `BEE_VAD_DIR` | Silero VAD model directory | `{cache}/aitytech--Silero-VAD-v5-MLX` |
-//! | `BEE_TOKENIZER_DIR` | Directory with tokenizer files | `{model_dir}` |
-//! | `BEE_ALIGNER_DIR` | Forced-aligner model directory | First match in `{cache}/mlx-community--Qwen3-ForcedAligner-*` |
-//! | `BEE_FFI_LOG_PATH` | Log file path (set by Swift before dlopen) | `/tmp/bee.log` |
+//! All paths are derived from the sandbox cache directory passed by Swift.
+//! Env var overrides (`BEE_VAD_DIR`, `BEE_ALIGNER_DIR`, etc.) are for CLI
+//! tools only — the dylib must not read them (sandbox blocks outside paths).
 
 use std::path::{Path, PathBuf};
 
@@ -38,18 +31,11 @@ pub(crate) struct AsrEngine {
 unsafe impl Send for AsrEngine {}
 unsafe impl Sync for AsrEngine {}
 
-/// Locate the Silero VAD model directory.
+/// Locate the Silero VAD model directory within the cache.
 ///
-/// Checks `BEE_VAD_DIR` env var first, then falls back to
-/// `{cache_base}/aitytech--Silero-VAD-v5-MLX`. Returns `None` if neither exists
-/// (VAD is optional — sessions work without it, just no silence detection).
+/// Returns `None` if not found (VAD is optional — sessions work without it,
+/// just no silence detection).
 pub(crate) fn find_vad_dir(cache_base: &Path) -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("BEE_VAD_DIR") {
-        let p = PathBuf::from(dir);
-        if p.exists() {
-            return Some(p);
-        }
-    }
     let dir = cache_base.join("aitytech--Silero-VAD-v5-MLX");
     if dir.exists() {
         Some(dir)
@@ -58,27 +44,19 @@ pub(crate) fn find_vad_dir(cache_base: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Resolve paths for the ASR engine, checking env var overrides first.
-///
-/// Environment variables (all optional, for development/testing):
-/// - `BEE_TOKENIZER_DIR`: directory containing tokenizer files. Default: `{model_dir}`.
-/// - `BEE_ALIGNER_DIR`: path to the forced-aligner model directory.
-///   Default: first existing candidate in `{cache_base}/mlx-community--Qwen3-ForcedAligner-*`.
+/// Resolve paths for the ASR engine from the sandbox cache directory.
 ///
 /// Paths are `Box::leak`ed to `'static` since the engine lives for the process lifetime.
+///
+/// Note: env var overrides (`BEE_TOKENIZER_DIR`, `BEE_ALIGNER_DIR`, etc.) are handled
+/// by CLI tools (beeml, transcribe) directly — the dylib uses only sandbox-safe paths.
 fn resolve_engine_config(
     model_dir: &Path,
     cache_base: &Path,
 ) -> Result<EngineConfig<'static>, String> {
-    let tokenizer_dir: PathBuf = if let Ok(p) = std::env::var("BEE_TOKENIZER_DIR") {
-        PathBuf::from(p)
-    } else {
-        model_dir.to_path_buf()
-    };
+    let tokenizer_dir = model_dir.to_path_buf();
 
-    let aligner_dir: PathBuf = if let Ok(p) = std::env::var("BEE_ALIGNER_DIR") {
-        PathBuf::from(p)
-    } else {
+    let aligner_dir: PathBuf = {
         let candidates = [
             "mlx-community--Qwen3-ForcedAligner-0.6B-4bit",
             "Qwen--Qwen3-ForcedAligner-0.6B",
