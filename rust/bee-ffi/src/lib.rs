@@ -157,6 +157,10 @@ impl bee_rpc::Bee for BeeService {
             Language(language)
         };
 
+        let id_num = self.inner.next_session_id.fetch_add(1, Ordering::Relaxed);
+        let id = format!("session-{id_num}");
+        tracing::info!("create_session: {id} language={}", lang.0);
+
         let opts = SessionOptions {
             language: lang,
             ..SessionOptions::default()
@@ -170,9 +174,6 @@ impl bee_rpc::Bee for BeeService {
                 Err(e) => tracing::warn!("Failed to create VAD: {e}"),
             }
         }
-
-        let id_num = self.inner.next_session_id.fetch_add(1, Ordering::Relaxed);
-        let id = format!("session-{id_num}");
 
         self.inner.sessions.lock().unwrap().insert(
             id.clone(),
@@ -200,10 +201,14 @@ impl bee_rpc::Bee for BeeService {
             match sessions.remove(&session_id) {
                 Some(s) if !s.finished => s,
                 Some(s) => {
+                    tracing::warn!("feed: session {session_id} already finished");
                     sessions.insert(session_id, s);
                     return empty_result;
                 }
-                None => return empty_result,
+                None => {
+                    tracing::warn!("feed: session {session_id} not found");
+                    return empty_result;
+                }
             }
         };
 
@@ -243,12 +248,16 @@ impl bee_rpc::Bee for BeeService {
     }
 
     async fn finish_session(&self, session_id: String) -> String {
+        tracing::info!("finish_session: {session_id}");
         // Take session out of map so we can drop the lock during inference
         let mut session = {
             let mut sessions = self.inner.sessions.lock().unwrap();
             match sessions.remove(&session_id) {
                 Some(s) => s,
-                None => return String::new(),
+                None => {
+                    tracing::warn!("finish_session: {session_id} not found");
+                    return String::new();
+                }
             }
         };
 

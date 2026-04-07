@@ -13,14 +13,12 @@ private func beeVoxSocketPath() -> String? {
 
 private final class ImeImpl: ImeHandler, @unchecked Sendable {
     func setMarkedText(sessionId: String, text: String) async throws -> Bool {
-        beeInputLog("VOXIPC: setMarkedText session=\(sessionId.prefix(8))")
         guard let id = UUID(uuidString: sessionId) else { return false }
         await MainActor.run { BeeIMEBridgeState.shared.setMarkedText(text, sessionID: id) }
         return true
     }
 
     func commitText(sessionId: String, text: String) async throws -> Bool {
-        beeInputLog("VOXIPC: commitText session=\(sessionId.prefix(8))")
         guard let id = UUID(uuidString: sessionId) else { return false }
         await MainActor.run { BeeIMEBridgeState.shared.commitText(text, submit: false, sessionID: id) }
         return true

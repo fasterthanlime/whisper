@@ -24,9 +24,6 @@ final class BeeIMESession {
     // MARK: - Text handling
 
     func handleSetMarkedText(_ text: String) {
-        let hasClient = controller?.client() != nil
-        beeInputLog(
-            "handleSetMarkedText: \(text.prefix(40).debugDescription) hasClient=\(hasClient)")
         guard let client = controller?.client() else {
             beeInputLog("handleSetMarkedText: no client, dropping")
             return

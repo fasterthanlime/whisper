@@ -73,7 +73,6 @@ final class BeeInputClient: Sendable {
     // MARK: - IME Commands
 
     func setMarkedText(_ text: String, sessionID: UUID) {
-        beeLog("setMarkedText → vox session=\(sessionID.uuidString.prefix(8))")
         Task { await BeeIPCServer.shared.setMarkedText(sessionId: sessionID.uuidString, text: text) }
     }
 
