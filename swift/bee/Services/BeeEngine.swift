@@ -34,9 +34,11 @@ actor BeeEngine {
             return devPath
         }
 
-        // Fallback
-        let fallback = URL(fileURLWithPath: Bundle.main.privateFrameworksPath!)
-            .appendingPathComponent("libbee_ffi.dylib")
+        // Fallback: assume Frameworks dir next to executable
+        let fallback = Bundle.main.executableURL!
+            .deletingLastPathComponent()  // Contents/MacOS
+            .deletingLastPathComponent()  // Contents
+            .appendingPathComponent("Frameworks/libbee_ffi.dylib")
         beeLog("BEE-ENGINE: using fallback path \(fallback.path)")
         return fallback
     }

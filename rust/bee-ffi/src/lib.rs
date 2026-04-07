@@ -188,26 +188,27 @@ impl bee_rpc::Bee for BeeService {
     }
 
     async fn feed(&self, session_id: String, samples: Vec<f32>) -> FeedResult {
-        let mut sessions = self.inner.sessions.lock().unwrap();
-        let Some(session) = sessions.get_mut(&session_id) else {
-            return FeedResult {
-                text: String::new(),
-                committed_utf16_len: 0,
-                alignments: vec![],
-                is_final: false,
-            };
+        let empty_result = FeedResult {
+            text: String::new(),
+            committed_utf16_len: 0,
+            alignments: vec![],
+            is_final: false,
         };
 
-        if session.finished {
-            return FeedResult {
-                text: String::new(),
-                committed_utf16_len: 0,
-                alignments: vec![],
-                is_final: false,
-            };
-        }
+        // Take session out of map so we can drop the lock during inference
+        let mut session = {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            match sessions.remove(&session_id) {
+                Some(s) if !s.finished => s,
+                Some(s) => {
+                    sessions.insert(session_id, s);
+                    return empty_result;
+                }
+                None => return empty_result,
+            }
+        };
 
-        match session.session.feed(&samples) {
+        let result = match session.session.feed(&samples) {
             Ok(Some(update)) => {
                 session.last_text = update.text.clone();
                 let committed_utf16_len =
@@ -235,13 +236,21 @@ impl bee_rpc::Bee for BeeService {
                     is_final: false,
                 }
             }
-        }
+        };
+
+        // Put session back
+        self.inner.sessions.lock().unwrap().insert(session_id, session);
+        result
     }
 
     async fn finish_session(&self, session_id: String) -> String {
-        let mut sessions = self.inner.sessions.lock().unwrap();
-        let Some(mut session) = sessions.remove(&session_id) else {
-            return String::new();
+        // Take session out of map so we can drop the lock during inference
+        let mut session = {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            match sessions.remove(&session_id) {
+                Some(s) => s,
+                None => return String::new(),
+            }
         };
 
         if session.finished {
@@ -249,23 +258,53 @@ impl bee_rpc::Bee for BeeService {
         }
         session.finished = true;
 
-        let arc = session._engine.clone();
-        let engine_ref: &Engine = &arc;
-        let engine_static: &'static Engine = unsafe { std::mem::transmute(engine_ref) };
-        let real_session = std::mem::replace(
-            &mut session.session,
-            engine_static.session(SessionOptions::default()),
-        );
-
-        match real_session.finish() {
+        match session.session.finish() {
             Ok(update) => update.text,
             Err(e) => format!("error: {e}"),
         }
     }
 
     async fn set_language(&self, session_id: String, language: String) -> bool {
-        let sessions = self.inner.sessions.lock().unwrap();
-        sessions.contains_key(&session_id) && !language.is_empty()
+        if language.is_empty() {
+            return false;
+        }
+
+        let guard = self.inner.engine.lock().unwrap();
+        let Some(engine) = guard.as_ref() else {
+            return false;
+        };
+
+        let mut sessions = self.inner.sessions.lock().unwrap();
+        let Some(old_session) = sessions.remove(&session_id) else {
+            return false;
+        };
+
+        let opts = SessionOptions {
+            language: Language(language),
+            ..SessionOptions::default()
+        };
+
+        let engine_ref: &Engine = &engine.inner;
+        let engine_static: &'static Engine = unsafe { std::mem::transmute(engine_ref) };
+        let mut new_session = engine_static.session(opts);
+
+        if let Some(ref tensors) = engine.vad_tensors {
+            if let Ok(vad) = bee_vad::SileroVad::from_tensors(tensors) {
+                new_session.set_vad(vad);
+            }
+        }
+
+        sessions.insert(
+            session_id,
+            AsrSession {
+                _engine: old_session._engine,
+                session: new_session,
+                last_text: String::new(),
+                finished: false,
+            },
+        );
+
+        true
     }
 
     async fn transcribe_samples(&self, samples: Vec<f32>) -> String {

@@ -17,39 +17,40 @@ final class HFDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Senda
         onProgress: @escaping (Double) -> Void
     ) async throws -> Int {
         // Collect all files that need downloading
-        var filesToDownload: [(url: String, destination: URL)] = []
+        var filesToDownload: [(url: String, destination: URL, size: UInt64)] = []
         for repo in repos {
             let repoDir = cacheDir.appendingPathComponent(repo.localDir)
-            if FileManager.default.fileExists(atPath: repoDir.path) {
-                continue
-            }
             try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
             for file in repo.files {
                 let dest = repoDir.appendingPathComponent(file.name)
                 if !FileManager.default.fileExists(atPath: dest.path) {
-                    filesToDownload.append((url: file.url, destination: dest))
+                    filesToDownload.append((url: file.url, destination: dest, size: file.size))
                 }
             }
         }
 
         if filesToDownload.isEmpty { return 0 }
 
-        let total = filesToDownload.count
-        for (index, file) in filesToDownload.enumerated() {
-            let baseProgress = Double(index) / Double(total)
-            let fileWeight = 1.0 / Double(total)
+        let totalBytes = filesToDownload.reduce(UInt64(0)) { $0 + max($1.size, 1) }
+        var completedBytes: UInt64 = 0
+
+        for file in filesToDownload {
+            let fileSize = Double(max(file.size, 1))
+            let baseBytes = Double(completedBytes)
 
             let downloader = HFDownloader()
             try await downloader.download(
                 from: file.url,
                 to: file.destination
             ) { fileProgress in
-                onProgress(baseProgress + fileProgress * fileWeight)
+                onProgress((baseBytes + fileProgress * fileSize) / Double(totalBytes))
             }
+
+            completedBytes += max(file.size, 1)
         }
 
         onProgress(1.0)
-        return total
+        return filesToDownload.count
     }
 
     private func download(
@@ -80,6 +81,15 @@ final class HFDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Senda
     ) {
         guard let destination = destinationURL else {
             continuation?.resume(throwing: URLError(.cannotCreateFile))
+            continuation = nil
+            return
+        }
+
+        // Check HTTP status code
+        if let httpResponse = downloadTask.response as? HTTPURLResponse,
+           !(200..<300).contains(httpResponse.statusCode) {
+            continuation?.resume(throwing: URLError(.init(rawValue: httpResponse.statusCode),
+                userInfo: [NSLocalizedDescriptionKey: "HTTP \(httpResponse.statusCode) for \(downloadTask.originalRequest?.url?.absoluteString ?? "unknown")"]))
             continuation = nil
             return
         }

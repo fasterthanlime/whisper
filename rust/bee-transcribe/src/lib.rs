@@ -174,8 +174,9 @@ unsafe impl Sync for Engine {}
 impl Engine {
     /// Load an engine from explicit paths.
     pub fn load(config: &EngineConfig<'_>) -> Result<Self, Exception> {
-        let config_str = std::fs::read_to_string(config.model_dir.join("config.json"))
-            .map_err(|e| Exception::custom(format!("read config: {e}")))?;
+        let config_path = config.model_dir.join("config.json");
+        let config_str = std::fs::read_to_string(&config_path)
+            .map_err(|e| Exception::custom(format!("read config: {e} at {}", config_path.display())))?;
         let asr_config: AsrConfig = serde_json::from_str(&config_str)
             .map_err(|e| Exception::custom(format!("parse config: {e}")))?;
 
