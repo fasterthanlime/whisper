@@ -1,12 +1,265 @@
-//! FFI layer for bee-transcribe — C API for streaming speech-to-text.
+//! FFI layer for bee — vox-ffi service + legacy C API.
 
 use std::ffi::{c_char, c_float, c_uint, CStr, CString};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
+use bee_rpc::{BeeDispatcher, FeedResult, RepoDownload, RepoFile};
 use bee_transcribe::{Engine, EngineConfig, Language, Session, SessionOptions};
+use tracing::info;
+use vox::acceptor_on;
+use vox_ffi::declare_link_endpoint;
+
+// ── Vox-FFI endpoint ───────────────────────────────────────────────────
+
+declare_link_endpoint!(pub mod bee_ffi_endpoint { export = bee_ffi_v1_vtable; });
+
+static VOX_BOOTSTRAPPED: AtomicBool = AtomicBool::new(false);
+
+fn bootstrap_service_once() {
+    if VOX_BOOTSTRAPPED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    ffi_log("[bee-ffi] bootstrap_service_once: spawning runtime thread");
+    std::thread::spawn(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build();
+        let Ok(runtime) = runtime else {
+            ffi_log("[bee-ffi] failed to create tokio runtime");
+            return;
+        };
+
+        runtime.block_on(async {
+            ffi_log("[bee-ffi] runtime thread: waiting for accept");
+            let Ok(link) = bee_ffi_endpoint::accept().await else {
+                ffi_log("[bee-ffi] runtime thread: accept failed");
+                return;
+            };
+            ffi_log("[bee-ffi] runtime thread: link accepted");
+
+            let service = BeeService::new();
+            let establish = acceptor_on(link)
+                .on_connection(BeeDispatcher::new(service))
+                .establish::<bee_rpc::BeeClient>()
+                .await;
+
+            match establish {
+                Ok(client) => {
+                    info!("bee-ffi: vox session established");
+                    ffi_log("[bee-ffi] runtime thread: session established");
+                    client.caller.closed().await;
+                    ffi_log("[bee-ffi] runtime thread: caller closed");
+                    if let Some(session) = client.session.as_ref() {
+                        let _ = session.shutdown();
+                    }
+                }
+                Err(error) => {
+                    ffi_log(&format!("[bee-ffi] runtime thread: establish failed: {error}"));
+                }
+            }
+        });
+    });
+
+    // Give the runtime thread a moment to start accepting
+    std::thread::sleep(Duration::from_millis(10));
+}
+
+// ── BeeService impl ───────────────────────────────────────────────────
+
+struct BeeServiceInner {
+    engine: Mutex<Option<AsrEngine>>,
+    sessions: Mutex<std::collections::HashMap<String, AsrSession>>,
+    next_session_id: Mutex<u64>,
+}
+
+#[derive(Clone)]
+struct BeeService {
+    inner: Arc<BeeServiceInner>,
+}
+
+impl BeeService {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(BeeServiceInner {
+                engine: Mutex::new(None),
+                sessions: Mutex::new(std::collections::HashMap::new()),
+                next_session_id: Mutex::new(1),
+            }),
+        }
+    }
+}
+
+const HF_BASE: &str = "https://huggingface.co";
+
+fn hf_file_url(repo_id: &str, filename: &str) -> String {
+    format!("{HF_BASE}/{repo_id}/resolve/main/{filename}")
+}
+
+impl bee_rpc::Bee for BeeService {
+    async fn required_downloads(&self) -> Vec<RepoDownload> {
+        vec![
+            RepoDownload {
+                repo_id: "mlx-community/Qwen3-ASR-1.7B-4bit".into(),
+                local_dir: "mlx-community--Qwen3-ASR-1.7B-4bit".into(),
+                files: vec![
+                    RepoFile { name: "config.json".into(), url: hf_file_url("mlx-community/Qwen3-ASR-1.7B-4bit", "config.json"), size: 0 },
+                    RepoFile { name: "tokenizer.json".into(), url: hf_file_url("mlx-community/Qwen3-ASR-1.7B-4bit", "tokenizer.json"), size: 0 },
+                    RepoFile { name: "model.safetensors".into(), url: hf_file_url("mlx-community/Qwen3-ASR-1.7B-4bit", "model.safetensors"), size: 0 },
+                    RepoFile { name: "generation_config.json".into(), url: hf_file_url("mlx-community/Qwen3-ASR-1.7B-4bit", "generation_config.json"), size: 0 },
+                    RepoFile { name: "preprocessor_config.json".into(), url: hf_file_url("mlx-community/Qwen3-ASR-1.7B-4bit", "preprocessor_config.json"), size: 0 },
+                ],
+            },
+            RepoDownload {
+                repo_id: "mlx-community/Qwen3-ForcedAligner-0.6B-4bit".into(),
+                local_dir: "mlx-community--Qwen3-ForcedAligner-0.6B-4bit".into(),
+                files: vec![
+                    RepoFile { name: "config.json".into(), url: hf_file_url("mlx-community/Qwen3-ForcedAligner-0.6B-4bit", "config.json"), size: 0 },
+                    RepoFile { name: "model.safetensors".into(), url: hf_file_url("mlx-community/Qwen3-ForcedAligner-0.6B-4bit", "model.safetensors"), size: 0 },
+                    RepoFile { name: "tokenizer.json".into(), url: hf_file_url("mlx-community/Qwen3-ForcedAligner-0.6B-4bit", "tokenizer.json"), size: 0 },
+                ],
+            },
+            RepoDownload {
+                repo_id: "aitytech/Silero-VAD-v5-MLX".into(),
+                local_dir: "aitytech--Silero-VAD-v5-MLX".into(),
+                files: vec![
+                    RepoFile { name: "model.safetensors".into(), url: hf_file_url("aitytech/Silero-VAD-v5-MLX", "model.safetensors"), size: 0 },
+                ],
+            },
+        ]
+    }
+
+    async fn load_engine(&self, cache_dir: String) -> String {
+        let cache_base = PathBuf::from(&cache_dir);
+        let model_dir = cache_base.join("mlx-community--Qwen3-ASR-1.7B-4bit");
+
+        match load_engine(&model_dir, &cache_base) {
+            Ok(engine) => {
+                *self.inner.engine.lock().unwrap() = Some(engine);
+                String::new()
+            }
+            Err(e) => e,
+        }
+    }
+
+    async fn create_session(&self, language: String) -> String {
+        let guard = self.inner.engine.lock().unwrap();
+        let Some(engine) = guard.as_ref() else {
+            return String::new();
+        };
+
+        let lang = if language.is_empty() {
+            Language::default()
+        } else {
+            Language(language)
+        };
+
+        let opts = SessionOptions {
+            language: lang,
+            ..SessionOptions::default()
+        };
+
+        let engine_ref: &Engine = &engine.inner;
+        let engine_static: &'static Engine = unsafe { std::mem::transmute(engine_ref) };
+        let mut session = engine_static.session(opts);
+
+        if let Some(ref tensors) = engine.vad_tensors {
+            match bee_vad::SileroVad::from_tensors(tensors) {
+                Ok(vad) => session.set_vad(vad),
+                Err(e) => ffi_log(&format!("Failed to create VAD: {e}")),
+            }
+        }
+
+        let mut id_counter = self.inner.next_session_id.lock().unwrap();
+        let id = format!("session-{}", *id_counter);
+        *id_counter += 1;
+
+        self.inner.sessions.lock().unwrap().insert(
+            id.clone(),
+            AsrSession {
+                _engine: engine.inner.clone(),
+                session,
+                last_text: String::new(),
+                finished: false,
+            },
+        );
+
+        id
+    }
+
+    async fn feed(&self, session_id: String, samples: Vec<f32>) -> FeedResult {
+        let mut sessions = self.inner.sessions.lock().unwrap();
+        let Some(session) = sessions.get_mut(&session_id) else {
+            return FeedResult {
+                text: String::new(),
+                is_final: false,
+            };
+        };
+
+        if session.finished {
+            return FeedResult {
+                text: String::new(),
+                is_final: false,
+            };
+        }
+
+        match session.session.feed(&samples) {
+            Ok(Some(update)) => {
+                session.last_text = update.text.clone();
+                FeedResult {
+                    text: update.text,
+                    is_final: false,
+                }
+            }
+            Ok(None) => FeedResult {
+                text: session.last_text.clone(),
+                is_final: false,
+            },
+            Err(e) => {
+                ffi_log(&format!("FEED error: {e}"));
+                FeedResult {
+                    text: format!("error: {e}"),
+                    is_final: false,
+                }
+            }
+        }
+    }
+
+    async fn finish_session(&self, session_id: String) -> String {
+        let mut sessions = self.inner.sessions.lock().unwrap();
+        let Some(mut session) = sessions.remove(&session_id) else {
+            return String::new();
+        };
+
+        if session.finished {
+            return session.last_text;
+        }
+        session.finished = true;
+
+        let arc = session._engine.clone();
+        let engine_ref: &Engine = &arc;
+        let engine_static: &'static Engine = unsafe { std::mem::transmute(engine_ref) };
+        let real_session = std::mem::replace(
+            &mut session.session,
+            engine_static.session(SessionOptions::default()),
+        );
+
+        match real_session.finish() {
+            Ok(update) => update.text,
+            Err(e) => format!("error: {e}"),
+        }
+    }
+}
+
+// Trigger bootstrap when the vtable is first accessed
+#[unsafe(no_mangle)]
+pub extern "C" fn bee_ffi_bootstrap() {
+    bootstrap_service_once();
+}
 
 static INIT_LOGGER: Once = Once::new();
 

@@ -13,3 +13,4 @@ path = "src/lib.rs"
 [dependencies]
 vox = { path = "../../../vox/rust/vox" }
 vox-codegen = { path = "../../../vox/rust/vox-codegen" }
+facet = { version = "0.44.3", features = ["reflect"] }

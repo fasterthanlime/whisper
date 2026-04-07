@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 bee-correct = { path = "../bee-correct" }
@@ -12,12 +12,18 @@ bee-phonetic = { path = "../bee-phonetic" }
 bee-transcribe = { path = "../bee-transcribe" }
 bee-types = { path = "../bee-types" }
 bee-vad = { path = "../bee-vad" }
+bee-rpc = { path = "../bee-rpc" }
 mlx-rs.workspace = true
 facet-json = "0.44"
 log = "0.4"
 env_logger = "0.11"
 serde_json = "1"
 libc = "0.2"
+vox = { path = "../../../vox/rust/vox", features = ["runtime"] }
+vox-ffi = { path = "../../../vox/rust/vox-ffi" }
+tokio = { version = "1", features = ["rt"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [build-dependencies]
 cbindgen = "0.28"

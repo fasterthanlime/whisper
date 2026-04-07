@@ -877,10 +877,40 @@ final class AppState {
                 await MainActor.run {
                     self.refreshInputDevices(reason: "permission-granted")
                 }
+
+                // Connect to Rust via vox-ffi and check for required downloads
+                let beeEngine = BeeEngine()
+                try await beeEngine.connect()
+                beeLog("APP: vox-ffi connected")
+
+                let repos = try await beeEngine.requiredDownloads()
+                let cacheURL = URL(fileURLWithPath: cacheDir)
+                try FileManager.default.createDirectory(at: cacheURL, withIntermediateDirectories: true)
+
+                let downloaded = try await HFDownloader.downloadMissing(
+                    repos: repos,
+                    cacheDir: cacheURL
+                ) { progress in
+                    Task { @MainActor in
+                        self.modelStatus = .downloading(progress: progress)
+                    }
+                }
+                if downloaded > 0 {
+                    beeLog("APP: downloaded \(downloaded) files")
+                }
+
+                await MainActor.run {
+                    self.modelStatus = .loading
+                }
+
+                // Load the engine via the existing C FFI path
                 try await transcriptionService.loadModel(
                     model: model,
-                    cacheDir: STTModelDefinition.cacheDirectory
+                    cacheDir: cacheDir
                 )
+
+                // Shut down the vox session (no longer needed after download check)
+                await beeEngine.shutdown()
 
                 // Load correction engine if dataset directory exists
                 if let datasetDir = ProcessInfo.processInfo.environment["BEE_CORRECTION_DATASET_DIR"] {

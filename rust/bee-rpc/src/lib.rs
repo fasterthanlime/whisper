@@ -1,3 +1,4 @@
+use facet::Facet;
 use vox::service;
 
 /// Methods the IME exposes — app calls into IME.
@@ -47,4 +48,57 @@ pub trait App {
         key_code: u32,
         characters: String,
     ) -> bool;
+}
+
+/// The main bee service — replaces all C FFI.
+/// Swift (initiator/client) talks to Rust (acceptor/server) over vox-ffi.
+#[service]
+pub trait Bee {
+    /// Full manifest of all required model repos.
+    /// Swift checks locally which ones are already present and skips them.
+    async fn required_downloads(&self) -> Vec<RepoDownload>;
+
+    /// Load ASR engine from the given cache dir.
+    /// Returns empty string on success, error message on failure.
+    async fn load_engine(&self, cache_dir: String) -> String;
+
+    /// Create a transcription session, returns session ID.
+    async fn create_session(&self, language: String) -> String;
+
+    /// Feed audio samples to a session.
+    async fn feed(&self, session_id: String, samples: Vec<f32>) -> FeedResult;
+
+    /// Finalize a session, returns final transcription.
+    async fn finish_session(&self, session_id: String) -> String;
+}
+
+/// A HuggingFace repo that needs to be downloaded.
+#[derive(Debug, Clone, Facet)]
+pub struct RepoDownload {
+    /// e.g. "mlx-community/Qwen3-ASR-1.7B-4bit"
+    pub repo_id: String,
+    /// Local directory name under cache_dir, e.g. "mlx-community--Qwen3-ASR-1.7B-4bit"
+    pub local_dir: String,
+    /// Files to download
+    pub files: Vec<RepoFile>,
+}
+
+/// A single file within a HuggingFace repo.
+#[derive(Debug, Clone, Facet)]
+pub struct RepoFile {
+    /// Filename, e.g. "model-00001-of-00002.safetensors"
+    pub name: String,
+    /// Full download URL
+    pub url: String,
+    /// Expected size in bytes (0 if unknown)
+    pub size: u64,
+}
+
+/// Result of feeding audio samples to a transcription session.
+#[derive(Debug, Clone, Facet)]
+pub struct FeedResult {
+    /// Current transcription text
+    pub text: String,
+    /// Whether this is a finalized segment
+    pub is_final: bool,
 }

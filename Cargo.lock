@@ -169,6 +169,7 @@ version = "0.1.0"
 dependencies = [
  "bee-correct",
  "bee-phonetic",
+ "bee-rpc",
  "bee-transcribe",
  "bee-types",
  "bee-vad",
@@ -179,6 +180,11 @@ dependencies = [
  "log",
  "mlx-rs",
  "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "vox",
+ "vox-ffi",
 ]
 
 [[package]]
@@ -218,6 +224,7 @@ dependencies = [
 name = "bee-rpc"
 version = "0.1.0"
 dependencies = [
+ "facet",
  "vox",
  "vox-codegen",
 ]
@@ -3013,6 +3020,13 @@ dependencies = [
  "vox-types",
  "wasm-bindgen-futures",
  "zerocopy",
+]
+
+[[package]]
+name = "vox-ffi"
+version = "0.3.1"
+dependencies = [
+ "vox-types",
 ]
 
 [[package]]

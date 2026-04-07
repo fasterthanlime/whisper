@@ -7,6 +7,7 @@ fn main() {
     let services = [
         ("ImeIPC", bee_rpc::ime_service_descriptor()),
         ("AppIPC", bee_rpc::app_service_descriptor()),
+        ("BeeIPC", bee_rpc::bee_service_descriptor()),
     ];
 
     for (name, descriptor) in services {

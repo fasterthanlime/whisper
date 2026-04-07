@@ -1,0 +1,145 @@
+import Foundation
+import VoxRuntime
+
+/// Manages the vox-ffi connection to the Rust bee-ffi dylib.
+/// Provides typed access to the Bee service (model downloads, engine loading, transcription).
+actor BeeEngine {
+    private var client: BeeClient?
+    private var sessionHandle: SessionHandle?
+    private var driverTask: Task<Void, Error>?
+
+    /// Path to the libbee_ffi.dylib — checks app bundle first, then build output.
+    private static func libraryURL() -> URL {
+        // In the installed app: Contents/Frameworks/libbee_ffi.dylib
+        if let frameworksPath = Bundle.main.privateFrameworksPath {
+            let bundled = URL(fileURLWithPath: frameworksPath)
+                .appendingPathComponent("libbee_ffi.dylib")
+            if FileManager.default.fileExists(atPath: bundled.path) {
+                return bundled
+            }
+        }
+
+        // During development: target/release/libbee_ffi.dylib relative to project root
+        let executableURL = Bundle.main.executableURL!
+        let projectRoot = executableURL
+            .deletingLastPathComponent()  // Contents/MacOS
+            .deletingLastPathComponent()  // Contents
+            .deletingLastPathComponent()  // *.app
+            .deletingLastPathComponent()  // build dir
+        let devPath = projectRoot.appendingPathComponent("target/release/libbee_ffi.dylib")
+        if FileManager.default.fileExists(atPath: devPath.path) {
+            return devPath
+        }
+
+        // Fallback
+        return URL(fileURLWithPath: Bundle.main.privateFrameworksPath!)
+            .appendingPathComponent("libbee_ffi.dylib")
+    }
+
+    /// Connect to the Rust bee-ffi service via vox-ffi.
+    func connect() async throws {
+        let rust = try FfiDynamicLibrary(path: Self.libraryURL())
+        let endpoint = FfiEndpoint()
+        let connector = try endpoint.connector(
+            peer: rust.loadVtable(symbol: "bee_ffi_v1_vtable")
+        )
+
+        let session = try await VoxRuntime.Session.initiator(
+            connector,
+            dispatcher: NoopBeeDispatcher(),
+            resumable: false
+        )
+
+        self.sessionHandle = session.handle
+        self.driverTask = Task {
+            try await session.run()
+        }
+
+        self.client = BeeClient(connection: session.connection)
+    }
+
+    /// Get the full manifest of required model repos from Rust.
+    func requiredDownloads() async throws -> [RepoDownload] {
+        guard let client else { throw BeeEngineError.notConnected }
+        return try await client.requiredDownloads()
+    }
+
+    /// Load the ASR engine from the given cache directory.
+    func loadEngine(cacheDir: String) async throws {
+        guard let client else { throw BeeEngineError.notConnected }
+        let result = try await client.loadEngine(cacheDir: cacheDir)
+        if !result.isEmpty {
+            throw BeeEngineError.loadFailed(result)
+        }
+    }
+
+    /// Create a transcription session.
+    func createSession(language: String = "") async throws -> String {
+        guard let client else { throw BeeEngineError.notConnected }
+        let sessionId = try await client.createSession(language: language)
+        if sessionId.isEmpty {
+            throw BeeEngineError.noEngine
+        }
+        return sessionId
+    }
+
+    /// Feed audio samples to a session.
+    func feed(sessionId: String, samples: [Float]) async throws -> FeedResult {
+        guard let client else { throw BeeEngineError.notConnected }
+        return try await client.feed(sessionId: sessionId, samples: samples)
+    }
+
+    /// Finalize a session and get the final transcription.
+    func finishSession(sessionId: String) async throws -> String {
+        guard let client else { throw BeeEngineError.notConnected }
+        return try await client.finishSession(sessionId: sessionId)
+    }
+
+    /// Shut down the vox session.
+    func shutdown() {
+        sessionHandle?.shutdown()
+        driverTask?.cancel()
+        client = nil
+        sessionHandle = nil
+        driverTask = nil
+    }
+
+    deinit {
+        sessionHandle?.shutdown()
+        driverTask?.cancel()
+    }
+}
+
+enum BeeEngineError: LocalizedError {
+    case notConnected
+    case loadFailed(String)
+    case noEngine
+
+    var errorDescription: String? {
+        switch self {
+        case .notConnected: "BeeEngine is not connected"
+        case .loadFailed(let msg): "Engine load failed: \(msg)"
+        case .noEngine: "No engine loaded"
+        }
+    }
+}
+
+/// Swift is purely a client — this dispatcher rejects all incoming calls.
+private struct NoopBeeDispatcher: ServiceDispatcher {
+    func dispatch(
+        methodId: UInt64,
+        payload: [UInt8],
+        requestId: UInt64,
+        registry: ChannelRegistry,
+        schemaSendTracker: SchemaSendTracker,
+        taskTx: @escaping @Sendable (TaskMessage) -> Void
+    ) async {
+        taskTx(.response(requestId: requestId, payload: encodeUnknownMethodError()))
+    }
+
+    func retryPolicy(methodId: UInt64) -> RetryPolicy {
+        .volatile
+    }
+
+    func preregister(methodId: UInt64, payload: [UInt8], registry: ChannelRegistry) async {}
+}

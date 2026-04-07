@@ -54,6 +54,8 @@ typedef struct AsrFeedResult {
   char *debug_json;
 } AsrFeedResult;
 
+void bee_ffi_bootstrap(void);
+
 /**
  * Set the path for FFI diagnostic logs. Call this before loading any engine.
  * Pass NULL to disable file logging.

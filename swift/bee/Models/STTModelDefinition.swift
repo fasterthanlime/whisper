@@ -95,6 +95,6 @@ struct STTModelDefinition: Identifiable, Hashable {
 
     static var cacheDirectory: String {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        return caches.appendingPathComponent("qwen3-asr").path
+        return caches.appendingPathComponent("models").path
     }
 }

@@ -30,7 +30,6 @@ bee-*.zip
 default.profraw
 target/
 logs/
-models/
 output*.wav
 target/
 voices/*.wav
