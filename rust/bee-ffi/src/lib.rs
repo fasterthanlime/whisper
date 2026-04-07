@@ -33,6 +33,10 @@ declare_link_endpoint!(pub mod bee_ffi_endpoint { export = bee_ffi_v1_vtable; })
 
 #[ctor::ctor]
 fn on_load() {
+    // Read log path from environment (set by Swift before dlopen)
+    if let Ok(path) = std::env::var("BEE_FFI_LOG_PATH") {
+        *FFI_LOG_PATH.lock().unwrap() = Some(PathBuf::from(path));
+    }
     ffi_log("[bee-ffi] dylib loaded, spawning runtime thread");
     std::thread::spawn(|| {
         let runtime = tokio::runtime::Builder::new_current_thread()

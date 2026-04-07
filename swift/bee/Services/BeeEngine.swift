@@ -39,6 +39,13 @@ actor BeeEngine {
     /// Connect to the Rust bee-ffi service via vox-ffi.
     func connect() async throws {
         let libURL = Self.libraryURL()
+
+        // Tell Rust where to log (must be set before dlopen triggers #[ctor])
+        let logPath = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "B2N6FSRTPV.group.fasterthanlime.bee"
+        )?.appendingPathComponent("bee.log").path ?? "/tmp/bee.log"
+        setenv("BEE_FFI_LOG_PATH", logPath, 1)
+
         let rust = try FfiDynamicLibrary(path: libURL)
 
         let endpoint = FfiEndpoint()
