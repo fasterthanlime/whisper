@@ -468,6 +468,13 @@ impl<'a> Session<'a> {
         )?;
 
         // Combine prefix + generated
+        let prefix_len = prefix_ids.as_ref().map_or(0, |p| p.len());
+        tracing::debug!(
+            "decode_step: generated={} prefix={prefix_len} prompt_len={}",
+            generated.len(),
+            prompt.len(),
+        );
+
         let (all_ids, all_logprobs): (Vec<u32>, Vec<TokenLogprob>) = if let Some(prefix) = prefix_ids {
             // Prefix tokens reuse their previous logprobs; generated tokens get fresh ones.
             let prefix_len = prefix.len();
@@ -490,6 +497,12 @@ impl<'a> Session<'a> {
                 logprobs,
             )
         };
+
+        tracing::debug!(
+            "decode_step: total_ids={} (prefix={prefix_len} + generated={})",
+            all_ids.len(),
+            generated.len(),
+        );
 
         self.token_ids = all_ids;
         self.token_logprobs = all_logprobs;
