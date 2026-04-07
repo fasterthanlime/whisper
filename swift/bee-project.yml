@@ -74,6 +74,9 @@ targets:
         link: false
       - package: vox
         product: VoxRuntime
+      - framework: ../target/release/libbee_ffi.dylib
+        embed: true
+        link: false
 
   beeInput:
     type: application

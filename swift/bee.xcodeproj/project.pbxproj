@@ -40,6 +40,7 @@
 		8811BC0A824B6F88EECA270F /* BeeIMEBridgeState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42C5774A124F08F4B8474598 /* BeeIMEBridgeState.swift */; };
 		89ADF5F490B96085E99E510C /* SoundEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4E52C13C56D37363BA384EF /* SoundEffects.swift */; };
 		91A2574EE93AFF4F5950C8FC /* CorrectionPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF3630E31F22F3AB02E54791 /* CorrectionPanel.swift */; };
+		9507898201F11E07D746BB84 /* libbee_ffi.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 8FA92522ED6614B03C6ADB2B /* libbee_ffi.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		9C1BE5C87EF9D320ABAD3456 /* BeeEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 328695B8DD9282F31F86CBE4 /* BeeEngine.swift */; };
 		A0F9BEBEB9261B95F371C39B /* VoxRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = EF1B861B1D04035E64E28C57 /* VoxRuntime */; };
 		A89EB81687A6FFE36871EF8F /* bee-cancel.wav in Resources */ = {isa = PBXBuildFile; fileRef = 37F08633E13558AA02437706 /* bee-cancel.wav */; };
@@ -69,6 +70,20 @@
 			remoteInfo = beeInput;
 		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		0D3F1DD615E13236CD9DDC04 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				9507898201F11E07D746BB84 /* libbee_ffi.dylib in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		0300BA95CC38B38C4330297E /* beeInput.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = beeInput.entitlements; sourceTree = "<group>"; };
@@ -106,6 +121,7 @@
 		7059CA841745C6E21DA830A3 /* BeeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeApp.swift; sourceTree = "<group>"; };
 		7E5A6F63A58FCE8C3DE7926B /* CorrectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CorrectionService.swift; sourceTree = "<group>"; };
 		8597D72025F09D1E04C3B095 /* DebugPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugPanel.swift; sourceTree = "<group>"; };
+		8FA92522ED6614B03C6ADB2B /* libbee_ffi.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libbee_ffi.dylib; path = ../target/release/libbee_ffi.dylib; sourceTree = "<group>"; };
 		977266C3895F1E154E74F051 /* HotkeyMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyMonitor.swift; sourceTree = "<group>"; };
 		A4E52C13C56D37363BA384EF /* SoundEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundEffects.swift; sourceTree = "<group>"; };
 		ACC2C13E80A8EB858DA92EC7 /* bee.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = bee.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -245,6 +261,7 @@
 			isa = PBXGroup;
 			children = (
 				44D01D1FC50FBE993FD0716F /* InputMethodKit.framework */,
+				8FA92522ED6614B03C6ADB2B /* libbee_ffi.dylib */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -316,6 +333,7 @@
 				198A194B415B1DC8B9969EE0 /* Sources */,
 				32B125BC2E0C12F049D06B2E /* Resources */,
 				8064876F46E169AA46B16AC0 /* Frameworks */,
+				0D3F1DD615E13236CD9DDC04 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -518,6 +536,10 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"../target/release\"",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../rust/bee-ffi/include";
 				INFOPLIST_KEY_ATSApplicationFontsPath = Fonts;
@@ -644,6 +666,10 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"../target/release\"",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../rust/bee-ffi/include";
 				INFOPLIST_KEY_ATSApplicationFontsPath = Fonts;

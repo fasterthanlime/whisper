@@ -99,7 +99,6 @@ printf '%s\n' "${GREEN}${BOLD}All Swift targets built${RESET}"
 
 run_step "Installing bee to /Applications/bee.app" "rsync -a --delete \"$BUILD_DIR/bee.app/\" /Applications/bee.app/"
 run_step "Copying mlx.metallib into app bundle" "cp \"$MLX_SYS_PREFIX/lib/mlx.metallib\" /Applications/bee.app/Contents/MacOS/mlx.metallib"
-run_step "Copying libbee_ffi.dylib into app bundle" "mkdir -p /Applications/bee.app/Contents/Frameworks && cp \"$PROJECT_ROOT/target/release/libbee_ffi.dylib\" /Applications/bee.app/Contents/Frameworks/"
 run_step "Installing beeInput to ~/Library/Input Methods" \
   "rm -rf \"$INPUT_METHOD_DIR/beeInput.app\" && cp -r \"$BUILD_DIR/beeInput.app\" \"$INPUT_METHOD_DIR/\""
 
