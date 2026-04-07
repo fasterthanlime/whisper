@@ -1,236 +1,117 @@
 import Foundation
 import os
 
-/// Wraps the Rust qwen3-asr-ffi library for streaming transcription.
+/// Wraps the Rust bee-ffi service via vox-ffi for streaming transcription.
 final class TranscriptionService: @unchecked Sendable {
     private static let logger = Logger(
         subsystem: "fasterthanlime.bee",
         category: "TranscriptionService"
     )
 
-    private var engine: OpaquePointer?
+    private let engine: BeeEngine
     private let lock = NSLock()
+    private var loaded = false
+
+    init(engine: BeeEngine) {
+        self.engine = engine
+    }
 
     var isLoaded: Bool {
-        lock.withLock { engine != nil }
+        lock.withLock { loaded }
     }
 
     // MARK: - Model Loading
 
-    func loadModel(model: STTModelDefinition, cacheDir: String) async throws {
-        unloadModel()
-
-        // Point the Rust FFI at our shared group-container log file.
-        let ffiLogPath = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "B2N6FSRTPV.group.fasterthanlime.bee"
-        )?.appendingPathComponent("bee.log").path ?? "/tmp/bee.log"
-        ffiLogPath.withCString { asr_set_log_path($0) }
-
-        let format = model.format
-
-        let loadedEngine: OpaquePointer = try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                var err: UnsafeMutablePointer<CChar>?
-                let ptr: OpaquePointer?
-
-                ptr = cacheDir.withCString { cacheDirPtr in
-                    let paths = AsrModelPaths(cache_dir: cacheDirPtr)
-                    switch format {
-                    case .safetensors:
-                        return asr_engine_from_pretrained(model.repoID, paths, &err)
-                    case .gguf(let ggufRepoID, let ggufFilename, let baseRepoID):
-                        return asr_engine_from_gguf(baseRepoID, ggufRepoID, ggufFilename, paths, &err)
-                    }
-                }
-
-                if let ptr {
-                    continuation.resume(returning: ptr)
-                } else {
-                    let message = err.flatMap { String(cString: $0, encoding: .utf8) } ?? "unknown error"
-                    err.flatMap { asr_string_free($0) }
-                    continuation.resume(throwing: TranscriptionError.loadFailed(message))
-                }
-            }
-        }
-
-        lock.withLock { engine = loadedEngine }
-        Self.logger.info("Model loaded: \(model.displayName, privacy: .public)")
-    }
-
-    func getStats() -> AsrEngineStats {
-        guard let e = lock.withLock({ engine }) else {
-            return AsrEngineStats(cpu_percent: 0, gpu_percent: 0, vram_used_mb: 0, ram_used_mb: 0)
-        }
-        return asr_engine_get_stats(e)
+    func loadModel(cacheDir: String) async throws {
+        try await engine.loadEngine(cacheDir: cacheDir)
+        lock.withLock { loaded = true }
+        Self.logger.info("Model loaded via vox-ffi")
     }
 
     func unloadModel() {
-        let e = lock.withLock { () -> OpaquePointer? in
-            let e = engine
-            engine = nil
-            return e
-        }
-        if let e { asr_engine_free(e) }
+        lock.withLock { loaded = false }
     }
 
     // MARK: - Streaming Session
 
     struct SessionConfig: Sendable {
-        var chunkSizeSec: Float = 0.5
-        var sessionDurationSec: Float = 120.0
         var language: String? = nil
-        var commitTokenCount: UInt32 = 0       // 0 = use Rust default (12)
-        var rollbackTokenNum: UInt32 = 0       // 0 = use Rust default (5)
-        var maxNewTokensStreaming: UInt32 = 0  // 0 = use Rust default (32)
-        var maxNewTokensFinal: UInt32 = 0      // 0 = use Rust default (512)
     }
 
-    func createSession(_ config: SessionConfig = SessionConfig()) -> StreamingSession? {
-        lock.lock()
-        guard let engine else {
-            lock.unlock()
+    func createSession(_ config: SessionConfig = SessionConfig()) async -> StreamingSession? {
+        do {
+            let sessionId = try await engine.createSession(language: config.language ?? "")
+            return StreamingSession(id: sessionId)
+        } catch {
+            Self.logger.error("createSession failed: \(error)")
             return nil
         }
-        lock.unlock()
+    }
 
-        func makeSession(langPtr: UnsafePointer<CChar>?) -> StreamingSession? {
-            let opts = AsrSessionOptions(
-                chunk_size_sec: config.chunkSizeSec,
-                session_duration_sec: config.sessionDurationSec,
-                language: langPtr,
-                prompt: nil,
-                unfixed_chunk_num: 0,
-                unfixed_token_num: config.commitTokenCount,
-                rollback_token_num: config.rollbackTokenNum,
-                max_new_tokens_streaming: config.maxNewTokensStreaming,
-                max_new_tokens_final: config.maxNewTokensFinal
+    func feed(session: StreamingSession, samples: [Float]) async -> StreamingUpdate? {
+        do {
+            let result = try await engine.feed(sessionId: session.id, samples: samples)
+            if result.text.isEmpty { return nil }
+            return StreamingUpdate(
+                text: result.text,
+                committedUTF16Count: Int(result.committedUtf16Len),
+                detectedLanguage: nil,
+                alignments: result.alignments,
+                debugJSON: nil
             )
-            guard let session = asr_session_create(engine, opts) else { return nil }
-            return StreamingSession(ptr: session)
-        }
-
-        if let language = config.language {
-            return language.withCString { makeSession(langPtr: $0) }
-        }
-        return makeSession(langPtr: nil)
-    }
-
-    func feed(session: StreamingSession, samples: [Float]) -> StreamingUpdate? {
-        feedImpl(session: session, samples: samples, finalizing: false)
-    }
-
-    func feedFinalizing(session: StreamingSession, samples: [Float]) -> StreamingUpdate? {
-        feedImpl(session: session, samples: samples, finalizing: true)
-    }
-
-    private func feedImpl(session: StreamingSession, samples: [Float], finalizing: Bool) -> StreamingUpdate? {
-        var err: UnsafeMutablePointer<CChar>?
-        let result: AsrFeedResult = samples.withUnsafeBufferPointer { buf in
-            if finalizing {
-                return asr_session_feed_finalizing(session.ptr, buf.baseAddress, UInt(buf.count), &err)
-            } else {
-                return asr_session_feed(session.ptr, buf.baseAddress, UInt(buf.count), &err)
-            }
-        }
-
-        if let err {
-            let msg = String(cString: err, encoding: .utf8) ?? "unknown"
-            asr_string_free(err)
-            Self.logger.error("feed error: \(msg, privacy: .public)")
-            // Still free the result (debug_json may be non-null even on error)
-            asr_feed_result_free(result)
+        } catch {
+            Self.logger.error("feed error: \(error)")
             return nil
         }
-
-        guard result.text != nil else {
-            asr_feed_result_free(result)
-            return nil
-        }
-
-        let text = String(cString: result.text)
-        let committedUTF16 = min(Int(result.committed_utf16_len), (text as NSString).length)
-        let alignmentsJSON = result.alignments_json.map { String(cString: $0) }
-        let debugJSON = result.debug_json.map { String(cString: $0) }
-
-        asr_feed_result_free(result)
-
-        return StreamingUpdate(
-            text: text,
-            committedUTF16Count: committedUTF16,
-            detectedLanguage: nil,
-            alignmentsJSON: alignmentsJSON,
-            debugJSON: debugJSON
-        )
     }
 
-    func finish(session: StreamingSession) -> String? {
-        var err: UnsafeMutablePointer<CChar>?
-        let result = asr_session_finish(session.ptr, &err)
-
-        if let err {
-            let msg = String(cString: err, encoding: .utf8) ?? "unknown"
-            asr_string_free(err)
-            Self.logger.error("finish error: \(msg, privacy: .public)")
-            return nil
-        }
-
-        guard let result else { return nil }
-        let text = String(cString: result)
-        asr_string_free(result)
-        return text
+    func feedFinalizing(session: StreamingSession, samples: [Float]) async -> StreamingUpdate? {
+        return await feed(session: session, samples: samples)
     }
 
-    /// Single-shot transcription of raw 16kHz f32 samples (non-streaming).
-    func transcribeSamples(_ samples: [Float]) -> String? {
-        lock.lock()
-        guard let engine else { lock.unlock(); return nil }
-        lock.unlock()
-
-        var err: UnsafeMutablePointer<CChar>?
-        let result = samples.withUnsafeBufferPointer { buf in
-            asr_engine_transcribe_samples(engine, buf.baseAddress, UInt(buf.count), &err)
-        }
-
-        if let err {
-            let msg = String(cString: err, encoding: .utf8) ?? "unknown"
-            asr_string_free(err)
-            Self.logger.error("transcribeSamples error: \(msg, privacy: .public)")
+    func finish(session: StreamingSession) async -> String? {
+        do {
+            let text = try await engine.finishSession(sessionId: session.id)
+            return text.isEmpty ? nil : text
+        } catch {
+            Self.logger.error("finish error: \(error)")
             return nil
         }
-
-        guard let result else { return nil }
-        let text = String(cString: result)
-        asr_string_free(result)
-        return text
     }
 
-    func setLanguage(session: StreamingSession, language: String?) -> Bool {
-        var err: UnsafeMutablePointer<CChar>?
-        let success: Bool = {
-            guard let language else {
-                return asr_session_set_language(session.ptr, nil, &err)
-            }
-            return language.withCString { asr_session_set_language(session.ptr, $0, &err) }
-        }()
-
-        if let err {
-            let msg = String(cString: err, encoding: .utf8) ?? "unknown"
-            asr_string_free(err)
-            Self.logger.error("setLanguage error: \(msg, privacy: .public)")
+    func setLanguage(session: StreamingSession, language: String?) async -> Bool {
+        guard let language, !language.isEmpty else { return true }
+        do {
+            return try await engine.setLanguage(sessionId: session.id, language: language)
+        } catch {
+            Self.logger.error("setLanguage error: \(error)")
             return false
         }
-        return success
     }
 
-    deinit {
-        if let engine { asr_engine_free(engine) }
+    func getStats() async -> EngineStats? {
+        do {
+            return try await engine.getStats()
+        } catch {
+            Self.logger.error("getStats error: \(error)")
+            return nil
+        }
+    }
+
+    func transcribeSamples(_ samples: [Float]) async -> String? {
+        do {
+            let result = try await engine.transcribeSamples(samples: samples)
+            return result.isEmpty ? nil : result
+        } catch {
+            Self.logger.error("transcribeSamples error: \(error)")
+            return nil
+        }
     }
 }
 
 final class StreamingSession: @unchecked Sendable {
-    let ptr: OpaquePointer
-    init(ptr: OpaquePointer) { self.ptr = ptr }
-    deinit { asr_session_free(ptr) }
+    let id: String
+    init(id: String) { self.id = id }
 }
 
 enum TranscriptionError: LocalizedError {

@@ -215,21 +215,7 @@ struct DiagnosticsView: View {
                     }
 
                     if let transcriptionService {
-                        Button(isBatchRunning ? "Running..." : "Re-transcribe (batch)") {
-                            guard !isBatchRunning else { return }
-                            isBatchRunning = true
-                            batchResult = nil
-                            Task.detached {
-                                let samples = loadWavSamples(path: diag.audioWavPath)
-                                let result = transcriptionService.transcribeSamples(samples)
-                                await MainActor.run {
-                                    batchResult = result ?? "(empty)"
-                                    isBatchRunning = false
-                                }
-                            }
-                        }
-                        .font(.system(size: 10, weight: .semibold))
-                        .disabled(isBatchRunning)
+                        // TODO: add single-shot transcription to Bee service
                     }
 
                     Button("Reveal") {

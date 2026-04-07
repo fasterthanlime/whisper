@@ -14,3 +14,4 @@ path = "src/lib.rs"
 vox = { path = "../../../vox/rust/vox" }
 vox-codegen = { path = "../../../vox/rust/vox-codegen" }
 facet = { version = "0.44.3", features = ["reflect"] }
+bee-types = { path = "../bee-types" }

@@ -163,7 +163,7 @@ actor Session {
         // ASR: create session
         var config = asrConfig
         config.language = language
-        let asrSession = transcriptionService.createSession(config)
+        let asrSession = await transcriptionService.createSession(config)
         asr = asrSession != nil ? .streaming : .idle
 
         // --- Capture Task ---
@@ -320,9 +320,9 @@ actor Session {
                     let update: StreamingUpdate?
                     if endMode != nil {
                         // Last feed — use feedFinalizing
-                        update = ts.feedFinalizing(session: asrSession, samples: batch)
+                        update = await ts.feedFinalizing(session: asrSession, samples: batch)
                     } else {
-                        update = ts.feed(session: asrSession, samples: batch)
+                        update = await ts.feed(session: asrSession, samples: batch)
                     }
                     let feedUs = Int((ProcessInfo.processInfo.systemUptime - t0) * 1_000_000)
 
@@ -341,7 +341,7 @@ actor Session {
                 // End of stream — finalize
                 if let endMode {
                     let t0 = ProcessInfo.processInfo.systemUptime
-                    let result = ts.finish(session: asrSession)
+                    let result = await ts.finish(session: asrSession)
                     let finalizeUs = Int((ProcessInfo.processInfo.systemUptime - t0) * 1_000_000)
 
                     let rawText = result?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

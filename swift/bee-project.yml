@@ -36,27 +36,11 @@ targets:
         INFOPLIST_KEY_ATSApplicationFontsPath: Fonts
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Bee needs microphone access for voice-to-text dictation."
         SWIFT_VERSION: "6.0"
-        SWIFT_OBJC_BRIDGING_HEADER: bee/bee-Bridging-Header.h
         SWIFT_APPROACHABLE_CONCURRENCY: YES
         SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
         SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
         ENABLE_APP_SANDBOX: YES
         ENABLE_HARDENED_RUNTIME: YES
-        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/../rust/bee-ffi/include"
-        LIBRARY_SEARCH_PATHS: "$(PROJECT_DIR)/../target/release"
-        OTHER_LDFLAGS:
-          - "-lbee_ffi"
-          - "-lc++"
-          - "-framework"
-          - Metal
-          - "-framework"
-          - MetalPerformanceShaders
-          - "-framework"
-          - Accelerate
-          - "-framework"
-          - Security
-          - "-framework"
-          - SystemConfiguration
         CODE_SIGN_ENTITLEMENTS: bee/bee.entitlements
         PROVISIONING_PROFILE_SPECIFIER: Bee Development
     entitlements:

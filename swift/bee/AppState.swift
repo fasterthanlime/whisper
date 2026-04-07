@@ -64,6 +64,7 @@ final class AppState {
 
     // Shared infrastructure
     let audioEngine: AudioEngine
+    let beeEngine: BeeEngine
     let transcriptionService: TranscriptionService
     let correctionService: CorrectionService
     let inputClient: BeeInputClient
@@ -385,11 +386,13 @@ final class AppState {
 
     init(
         audioEngine: AudioEngine,
+        beeEngine: BeeEngine,
         transcriptionService: TranscriptionService,
         correctionService: CorrectionService,
         inputClient: BeeInputClient
     ) {
         self.audioEngine = audioEngine
+        self.beeEngine = beeEngine
         self.transcriptionService = transcriptionService
         self.correctionService = correctionService
         self.inputClient = inputClient
@@ -853,9 +856,8 @@ final class AppState {
         ?? STTModelDefinition.default
 
     func loadModelAtStartup() {
-        let model = Self.defaultModel
         let cacheDir = STTModelDefinition.cacheDirectory
-        beeLog("APP: loading model \(model.displayName) from cache=\(cacheDir)")
+        beeLog("APP: loading model from cache=\(cacheDir)")
         modelStatus = .loading
         SoundEffects.shared.warmUp()
 
@@ -878,11 +880,11 @@ final class AppState {
                     self.refreshInputDevices(reason: "permission-granted")
                 }
 
-                // Connect to Rust via vox-ffi and check for required downloads
-                let beeEngine = BeeEngine()
+                // Connect to Rust via vox-ffi
                 try await beeEngine.connect()
                 beeLog("APP: vox-ffi connected")
 
+                // Check for required downloads
                 let repos = try await beeEngine.requiredDownloads()
                 let cacheURL = URL(fileURLWithPath: cacheDir)
                 try FileManager.default.createDirectory(at: cacheURL, withIntermediateDirectories: true)
@@ -903,14 +905,8 @@ final class AppState {
                     self.modelStatus = .loading
                 }
 
-                // Load the engine via the existing C FFI path
-                try await transcriptionService.loadModel(
-                    model: model,
-                    cacheDir: cacheDir
-                )
-
-                // Shut down the vox session (no longer needed after download check)
-                await beeEngine.shutdown()
+                // Load engine via vox-ffi
+                try await transcriptionService.loadModel(cacheDir: cacheDir)
 
                 // Load correction engine if dataset directory exists
                 if let datasetDir = ProcessInfo.processInfo.environment["BEE_CORRECTION_DATASET_DIR"] {

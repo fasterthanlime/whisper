@@ -95,6 +95,51 @@ actor BeeEngine {
         return try await client.finishSession(sessionId: sessionId)
     }
 
+    /// Set the language for a session.
+    func setLanguage(sessionId: String, language: String) async throws -> Bool {
+        guard let client else { throw BeeEngineError.notConnected }
+        return try await client.setLanguage(sessionId: sessionId, language: language)
+    }
+
+    /// Single-shot transcription of raw 16kHz f32 samples.
+    func transcribeSamples(samples: [Float]) async throws -> String {
+        guard let client else { throw BeeEngineError.notConnected }
+        return try await client.transcribeSamples(samples: samples)
+    }
+
+    /// Get engine resource usage stats.
+    func getStats() async throws -> EngineStats {
+        guard let client else { throw BeeEngineError.notConnected }
+        return try await client.getStats()
+    }
+
+    /// Load the correction engine.
+    func correctLoad(datasetDir: String, eventsPath: String, gateThreshold: Float, rankerThreshold: Float) async throws {
+        guard let client else { throw BeeEngineError.notConnected }
+        let result = try await client.correctLoad(datasetDir: datasetDir, eventsPath: eventsPath, gateThreshold: gateThreshold, rankerThreshold: rankerThreshold)
+        if !result.isEmpty {
+            throw BeeEngineError.loadFailed(result)
+        }
+    }
+
+    /// Run correction on text.
+    func correctProcess(text: String, appId: String) async throws -> CorrectionOutput {
+        guard let client else { throw BeeEngineError.notConnected }
+        return try await client.correctProcess(text: text, appId: appId)
+    }
+
+    /// Teach the correction engine from user resolutions.
+    func correctTeach(sessionId: String, resolutions: [EditResolution]) async throws {
+        guard let client else { throw BeeEngineError.notConnected }
+        let _ = try await client.correctTeach(sessionId: sessionId, resolutions: resolutions)
+    }
+
+    /// Save correction engine state.
+    func correctSave() async throws {
+        guard let client else { throw BeeEngineError.notConnected }
+        let _ = try await client.correctSave()
+    }
+
     /// Shut down the vox session.
     func shutdown() {
         sessionHandle?.shutdown()

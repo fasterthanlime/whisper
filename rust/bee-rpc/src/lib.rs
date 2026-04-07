@@ -1,3 +1,4 @@
+use bee_types::AlignedWord;
 use facet::Facet;
 use vox::service;
 
@@ -54,13 +55,16 @@ pub trait App {
 /// Swift (initiator/client) talks to Rust (acceptor/server) over vox-ffi.
 #[service]
 pub trait Bee {
+    // ── Model management ───────────────────────────────────────────────
+
     /// Full manifest of all required model repos.
-    /// Swift checks locally which ones are already present and skips them.
     async fn required_downloads(&self) -> Vec<RepoDownload>;
 
     /// Load ASR engine from the given cache dir.
     /// Returns empty string on success, error message on failure.
     async fn load_engine(&self, cache_dir: String) -> String;
+
+    // ── Transcription ──────────────────────────────────────────────────
 
     /// Create a transcription session, returns session ID.
     async fn create_session(&self, language: String) -> String;
@@ -70,35 +74,107 @@ pub trait Bee {
 
     /// Finalize a session, returns final transcription.
     async fn finish_session(&self, session_id: String) -> String;
+
+    /// Set the language for a session.
+    async fn set_language(&self, session_id: String, language: String) -> bool;
+
+    /// Single-shot transcription of raw 16kHz f32 samples.
+    async fn transcribe_samples(&self, samples: Vec<f32>) -> String;
+
+    /// Get engine resource usage stats.
+    async fn get_stats(&self) -> EngineStats;
+
+    // ── Correction ─────────────────────────────────────────────────────
+
+    /// Load the correction engine.
+    /// Returns empty string on success, error message on failure.
+    async fn correct_load(
+        &self,
+        dataset_dir: String,
+        events_path: String,
+        gate_threshold: f32,
+        ranker_threshold: f32,
+    ) -> String;
+
+    /// Run correction on text.
+    async fn correct_process(&self, text: String, app_id: String) -> CorrectionOutput;
+
+    /// Teach the correction engine from user resolutions.
+    async fn correct_teach(
+        &self,
+        session_id: String,
+        resolutions: Vec<EditResolution>,
+    ) -> String;
+
+    /// Save correction engine state to disk.
+    async fn correct_save(&self) -> String;
 }
+
+// ── Model types ────────────────────────────────────────────────────────
 
 /// A HuggingFace repo that needs to be downloaded.
 #[derive(Debug, Clone, Facet)]
 pub struct RepoDownload {
-    /// e.g. "mlx-community/Qwen3-ASR-1.7B-4bit"
     pub repo_id: String,
-    /// Local directory name under cache_dir, e.g. "mlx-community--Qwen3-ASR-1.7B-4bit"
     pub local_dir: String,
-    /// Files to download
     pub files: Vec<RepoFile>,
 }
 
 /// A single file within a HuggingFace repo.
 #[derive(Debug, Clone, Facet)]
 pub struct RepoFile {
-    /// Filename, e.g. "model-00001-of-00002.safetensors"
     pub name: String,
-    /// Full download URL
     pub url: String,
-    /// Expected size in bytes (0 if unknown)
     pub size: u64,
 }
+
+// ── Transcription types ────────────────────────────────────────────────
 
 /// Result of feeding audio samples to a transcription session.
 #[derive(Debug, Clone, Facet)]
 pub struct FeedResult {
-    /// Current transcription text
     pub text: String,
-    /// Whether this is a finalized segment
+    pub committed_utf16_len: u32,
+    pub alignments: Vec<AlignedWord>,
     pub is_final: bool,
+}
+
+/// Engine resource usage stats.
+#[derive(Debug, Clone, Facet)]
+pub struct EngineStats {
+    pub cpu_percent: f32,
+    pub gpu_percent: f32,
+    pub vram_used_mb: f32,
+    pub ram_used_mb: f32,
+}
+
+// ── Correction types ───────────────────────────────────────────────────
+
+/// Output from the correction engine.
+#[derive(Debug, Clone, Facet)]
+pub struct CorrectionOutput {
+    pub session_id: String,
+    pub best_text: String,
+    pub edits: Vec<CorrectionEdit>,
+}
+
+/// A single correction edit.
+#[derive(Debug, Clone, Facet)]
+pub struct CorrectionEdit {
+    pub edit_id: String,
+    pub span_start: u32,
+    pub span_end: u32,
+    pub original: String,
+    pub replacement: String,
+    pub term: String,
+    pub alias_id: i32,
+    pub ranker_prob: f64,
+    pub gate_prob: f64,
+}
+
+/// User resolution for a correction edit.
+#[derive(Debug, Clone, Facet)]
+pub struct EditResolution {
+    pub edit_id: String,
+    pub accepted: bool,
 }

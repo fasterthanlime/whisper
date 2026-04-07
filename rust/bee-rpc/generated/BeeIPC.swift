@@ -13,6 +13,13 @@ public enum BeeMethodId {
     public static let createSession: UInt64 = 0xed77a6d793863a25
     public static let feed: UInt64 = 0xc7e28a8816c1bc83
     public static let finishSession: UInt64 = 0x416a48f228b25310
+    public static let setLanguage: UInt64 = 0xefb09d27037e41ed
+    public static let transcribeSamples: UInt64 = 0xbb649049c66f9f90
+    public static let getStats: UInt64 = 0xac27f8b9cda1c89f
+    public static let correctLoad: UInt64 = 0xc6ef90e080c66309
+    public static let correctProcess: UInt64 = 0xd383d61a2c875e84
+    public static let correctTeach: UInt64 = 0x2163f1014480c2db
+    public static let correctSave: UInt64 = 0xa5b4730fb9dbaa99
 }
 
 // MARK: - Bee Types
@@ -41,13 +48,97 @@ public struct RepoDownload: Codable, Sendable {
     }
 }
 
+public struct AlignedWord: Codable, Sendable {
+    public var word: String
+    public var start: Double
+    public var end: Double
+    public var meanLogprob: Float?
+    public var minLogprob: Float?
+    public var meanMargin: Float?
+    public var minMargin: Float?
+
+    public init(word: String, start: Double, end: Double, meanLogprob: Float?, minLogprob: Float?, meanMargin: Float?, minMargin: Float?) {
+        self.word = word
+        self.start = start
+        self.end = end
+        self.meanLogprob = meanLogprob
+        self.minLogprob = minLogprob
+        self.meanMargin = meanMargin
+        self.minMargin = minMargin
+    }
+}
+
 public struct FeedResult: Codable, Sendable {
     public var text: String
+    public var committedUtf16Len: UInt32
+    public var alignments: [AlignedWord]
     public var isFinal: Bool
 
-    public init(text: String, isFinal: Bool) {
+    public init(text: String, committedUtf16Len: UInt32, alignments: [AlignedWord], isFinal: Bool) {
         self.text = text
+        self.committedUtf16Len = committedUtf16Len
+        self.alignments = alignments
         self.isFinal = isFinal
+    }
+}
+
+public struct EngineStats: Codable, Sendable {
+    public var cpuPercent: Float
+    public var gpuPercent: Float
+    public var vramUsedMb: Float
+    public var ramUsedMb: Float
+
+    public init(cpuPercent: Float, gpuPercent: Float, vramUsedMb: Float, ramUsedMb: Float) {
+        self.cpuPercent = cpuPercent
+        self.gpuPercent = gpuPercent
+        self.vramUsedMb = vramUsedMb
+        self.ramUsedMb = ramUsedMb
+    }
+}
+
+public struct CorrectionEdit: Codable, Sendable {
+    public var editId: String
+    public var spanStart: UInt32
+    public var spanEnd: UInt32
+    public var original: String
+    public var replacement: String
+    public var term: String
+    public var aliasId: Int32
+    public var rankerProb: Double
+    public var gateProb: Double
+
+    public init(editId: String, spanStart: UInt32, spanEnd: UInt32, original: String, replacement: String, term: String, aliasId: Int32, rankerProb: Double, gateProb: Double) {
+        self.editId = editId
+        self.spanStart = spanStart
+        self.spanEnd = spanEnd
+        self.original = original
+        self.replacement = replacement
+        self.term = term
+        self.aliasId = aliasId
+        self.rankerProb = rankerProb
+        self.gateProb = gateProb
+    }
+}
+
+public struct CorrectionOutput: Codable, Sendable {
+    public var sessionId: String
+    public var bestText: String
+    public var edits: [CorrectionEdit]
+
+    public init(sessionId: String, bestText: String, edits: [CorrectionEdit]) {
+        self.sessionId = sessionId
+        self.bestText = bestText
+        self.edits = edits
+    }
+}
+
+public struct EditResolution: Codable, Sendable {
+    public var editId: String
+    public var accepted: Bool
+
+    public init(editId: String, accepted: Bool) {
+        self.editId = editId
+        self.accepted = accepted
     }
 }
 
@@ -65,9 +156,51 @@ nonisolated internal func encodeRepoDownload(_ value: RepoDownload, into buffer:
     encodeVec(value.files, into: &buffer, encoder: { val, buf in encodeRepoFile(val, into: &buf) })
 }
 
+nonisolated internal func encodeAlignedWord(_ value: AlignedWord, into buffer: inout ByteBuffer) {
+    encodeString(value.word, into: &buffer)
+    encodeF64(value.start, into: &buffer)
+    encodeF64(value.end, into: &buffer)
+    encodeOption(value.meanLogprob, into: &buffer, encoder: { val, buf in encodeF32(val, into: &buf) })
+    encodeOption(value.minLogprob, into: &buffer, encoder: { val, buf in encodeF32(val, into: &buf) })
+    encodeOption(value.meanMargin, into: &buffer, encoder: { val, buf in encodeF32(val, into: &buf) })
+    encodeOption(value.minMargin, into: &buffer, encoder: { val, buf in encodeF32(val, into: &buf) })
+}
+
 nonisolated internal func encodeFeedResult(_ value: FeedResult, into buffer: inout ByteBuffer) {
     encodeString(value.text, into: &buffer)
+    encodeU32(value.committedUtf16Len, into: &buffer)
+    encodeVec(value.alignments, into: &buffer, encoder: { val, buf in encodeAlignedWord(val, into: &buf) })
     encodeBool(value.isFinal, into: &buffer)
+}
+
+nonisolated internal func encodeEngineStats(_ value: EngineStats, into buffer: inout ByteBuffer) {
+    encodeF32(value.cpuPercent, into: &buffer)
+    encodeF32(value.gpuPercent, into: &buffer)
+    encodeF32(value.vramUsedMb, into: &buffer)
+    encodeF32(value.ramUsedMb, into: &buffer)
+}
+
+nonisolated internal func encodeCorrectionEdit(_ value: CorrectionEdit, into buffer: inout ByteBuffer) {
+    encodeString(value.editId, into: &buffer)
+    encodeU32(value.spanStart, into: &buffer)
+    encodeU32(value.spanEnd, into: &buffer)
+    encodeString(value.original, into: &buffer)
+    encodeString(value.replacement, into: &buffer)
+    encodeString(value.term, into: &buffer)
+    encodeI32(value.aliasId, into: &buffer)
+    encodeF64(value.rankerProb, into: &buffer)
+    encodeF64(value.gateProb, into: &buffer)
+}
+
+nonisolated internal func encodeCorrectionOutput(_ value: CorrectionOutput, into buffer: inout ByteBuffer) {
+    encodeString(value.sessionId, into: &buffer)
+    encodeString(value.bestText, into: &buffer)
+    encodeVec(value.edits, into: &buffer, encoder: { val, buf in encodeCorrectionEdit(val, into: &buf) })
+}
+
+nonisolated internal func encodeEditResolution(_ value: EditResolution, into buffer: inout ByteBuffer) {
+    encodeString(value.editId, into: &buffer)
+    encodeBool(value.accepted, into: &buffer)
 }
 // MARK: - Bee Client
 
@@ -75,7 +208,6 @@ nonisolated internal func encodeFeedResult(_ value: FeedResult, into buffer: ino
 ///  Swift (initiator/client) talks to Rust (acceptor/server) over vox-ffi.
 public protocol BeeCaller {
     ///  Full manifest of all required model repos.
-    ///  Swift checks locally which ones are already present and skips them.
     func requiredDownloads() async throws -> [RepoDownload]
     ///  Load ASR engine from the given cache dir.
     ///  Returns empty string on success, error message on failure.
@@ -86,6 +218,21 @@ public protocol BeeCaller {
     func feed(sessionId: String, samples: [Float]) async throws -> FeedResult
     ///  Finalize a session, returns final transcription.
     func finishSession(sessionId: String) async throws -> String
+    ///  Set the language for a session.
+    func setLanguage(sessionId: String, language: String) async throws -> Bool
+    ///  Single-shot transcription of raw 16kHz f32 samples.
+    func transcribeSamples(samples: [Float]) async throws -> String
+    ///  Get engine resource usage stats.
+    func getStats() async throws -> EngineStats
+    ///  Load the correction engine.
+    ///  Returns empty string on success, error message on failure.
+    func correctLoad(datasetDir: String, eventsPath: String, gateThreshold: Float, rankerThreshold: Float) async throws -> String
+    ///  Run correction on text.
+    func correctProcess(text: String, appId: String) async throws -> CorrectionOutput
+    ///  Teach the correction engine from user resolutions.
+    func correctTeach(sessionId: String, resolutions: [EditResolution]) async throws -> String
+    ///  Save correction engine state to disk.
+    func correctSave() async throws -> String
 }
 
 public final class BeeClient: BeeCaller, Sendable {
@@ -150,8 +297,19 @@ public final class BeeClient: BeeCaller, Sendable {
         let response = try await connection.call(methodId: 0xc7e28a8816c1bc83, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
         return try decodeInfallibleResponse(response) { buf in
             let _result_text = try decodeString(from: &buf)
+            let _result_committedUtf16Len = try decodeU32(from: &buf)
+            let _result_alignments = try decodeVec(from: &buf, decoder: { buf in
+                let _word = try ({ buf in try decodeString(from: &buf) })(&buf)
+                let _start = try ({ buf in try decodeF64(from: &buf) })(&buf)
+                let _end = try ({ buf in try decodeF64(from: &buf) })(&buf)
+                let _meanLogprob = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
+                let _minLogprob = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
+                let _meanMargin = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
+                let _minMargin = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
+                return AlignedWord(word: _word, start: _start, end: _end, meanLogprob: _meanLogprob, minLogprob: _minLogprob, meanMargin: _meanMargin, minMargin: _minMargin)
+            })
             let _result_isFinal = try decodeBool(from: &buf)
-            let result = FeedResult(text: _result_text, isFinal: _result_isFinal)
+            let result = FeedResult(text: _result_text, committedUtf16Len: _result_committedUtf16Len, alignments: _result_alignments, isFinal: _result_isFinal)
             return result
         }
     }
@@ -167,6 +325,110 @@ public final class BeeClient: BeeCaller, Sendable {
             return result
         }
     }
+
+    public func setLanguage(sessionId: String, language: String) async throws -> Bool {
+        var buffer = ByteBufferAllocator().buffer(capacity: 64)
+        encodeString(sessionId, into: &buffer)
+        encodeString(language, into: &buffer)
+        let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
+        let schemaInfo = ClientSchemaInfo(methodInfo: bee_method_schemas[0xefb09d27037e41ed]!, schemaRegistry: bee_schema_registry)
+        let response = try await connection.call(methodId: 0xefb09d27037e41ed, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
+        return try decodeInfallibleResponse(response) { buf in
+            let result = try decodeBool(from: &buf)
+            return result
+        }
+    }
+
+    public func transcribeSamples(samples: [Float]) async throws -> String {
+        var buffer = ByteBufferAllocator().buffer(capacity: 64)
+        encodeVec(samples, into: &buffer, encoder: { val, buf in encodeF32(val, into: &buf) })
+        let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
+        let schemaInfo = ClientSchemaInfo(methodInfo: bee_method_schemas[0xbb649049c66f9f90]!, schemaRegistry: bee_schema_registry)
+        let response = try await connection.call(methodId: 0xbb649049c66f9f90, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
+        return try decodeInfallibleResponse(response) { buf in
+            let result = try decodeString(from: &buf)
+            return result
+        }
+    }
+
+    public func getStats() async throws -> EngineStats {
+        let payload: [UInt8] = []
+        let schemaInfo = ClientSchemaInfo(methodInfo: bee_method_schemas[0xac27f8b9cda1c89f]!, schemaRegistry: bee_schema_registry)
+        let response = try await connection.call(methodId: 0xac27f8b9cda1c89f, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
+        return try decodeInfallibleResponse(response) { buf in
+            let _result_cpuPercent = try decodeF32(from: &buf)
+            let _result_gpuPercent = try decodeF32(from: &buf)
+            let _result_vramUsedMb = try decodeF32(from: &buf)
+            let _result_ramUsedMb = try decodeF32(from: &buf)
+            let result = EngineStats(cpuPercent: _result_cpuPercent, gpuPercent: _result_gpuPercent, vramUsedMb: _result_vramUsedMb, ramUsedMb: _result_ramUsedMb)
+            return result
+        }
+    }
+
+    public func correctLoad(datasetDir: String, eventsPath: String, gateThreshold: Float, rankerThreshold: Float) async throws -> String {
+        var buffer = ByteBufferAllocator().buffer(capacity: 64)
+        encodeString(datasetDir, into: &buffer)
+        encodeString(eventsPath, into: &buffer)
+        encodeF32(gateThreshold, into: &buffer)
+        encodeF32(rankerThreshold, into: &buffer)
+        let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
+        let schemaInfo = ClientSchemaInfo(methodInfo: bee_method_schemas[0xc6ef90e080c66309]!, schemaRegistry: bee_schema_registry)
+        let response = try await connection.call(methodId: 0xc6ef90e080c66309, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
+        return try decodeInfallibleResponse(response) { buf in
+            let result = try decodeString(from: &buf)
+            return result
+        }
+    }
+
+    public func correctProcess(text: String, appId: String) async throws -> CorrectionOutput {
+        var buffer = ByteBufferAllocator().buffer(capacity: 64)
+        encodeString(text, into: &buffer)
+        encodeString(appId, into: &buffer)
+        let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
+        let schemaInfo = ClientSchemaInfo(methodInfo: bee_method_schemas[0xd383d61a2c875e84]!, schemaRegistry: bee_schema_registry)
+        let response = try await connection.call(methodId: 0xd383d61a2c875e84, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
+        return try decodeInfallibleResponse(response) { buf in
+            let _result_sessionId = try decodeString(from: &buf)
+            let _result_bestText = try decodeString(from: &buf)
+            let _result_edits = try decodeVec(from: &buf, decoder: { buf in
+                let _editId = try ({ buf in try decodeString(from: &buf) })(&buf)
+                let _spanStart = try ({ buf in try decodeU32(from: &buf) })(&buf)
+                let _spanEnd = try ({ buf in try decodeU32(from: &buf) })(&buf)
+                let _original = try ({ buf in try decodeString(from: &buf) })(&buf)
+                let _replacement = try ({ buf in try decodeString(from: &buf) })(&buf)
+                let _term = try ({ buf in try decodeString(from: &buf) })(&buf)
+                let _aliasId = try ({ buf in try decodeI32(from: &buf) })(&buf)
+                let _rankerProb = try ({ buf in try decodeF64(from: &buf) })(&buf)
+                let _gateProb = try ({ buf in try decodeF64(from: &buf) })(&buf)
+                return CorrectionEdit(editId: _editId, spanStart: _spanStart, spanEnd: _spanEnd, original: _original, replacement: _replacement, term: _term, aliasId: _aliasId, rankerProb: _rankerProb, gateProb: _gateProb)
+            })
+            let result = CorrectionOutput(sessionId: _result_sessionId, bestText: _result_bestText, edits: _result_edits)
+            return result
+        }
+    }
+
+    public func correctTeach(sessionId: String, resolutions: [EditResolution]) async throws -> String {
+        var buffer = ByteBufferAllocator().buffer(capacity: 64)
+        encodeString(sessionId, into: &buffer)
+        encodeVec(resolutions, into: &buffer, encoder: { val, buf in encodeEditResolution(val, into: &buf) })
+        let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
+        let schemaInfo = ClientSchemaInfo(methodInfo: bee_method_schemas[0x2163f1014480c2db]!, schemaRegistry: bee_schema_registry)
+        let response = try await connection.call(methodId: 0x2163f1014480c2db, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
+        return try decodeInfallibleResponse(response) { buf in
+            let result = try decodeString(from: &buf)
+            return result
+        }
+    }
+
+    public func correctSave() async throws -> String {
+        let payload: [UInt8] = []
+        let schemaInfo = ClientSchemaInfo(methodInfo: bee_method_schemas[0xa5b4730fb9dbaa99]!, schemaRegistry: bee_schema_registry)
+        let response = try await connection.call(methodId: 0xa5b4730fb9dbaa99, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
+        return try decodeInfallibleResponse(response) { buf in
+            let result = try decodeString(from: &buf)
+            return result
+        }
+    }
 }
 
 // MARK: - Bee Server
@@ -175,7 +437,6 @@ public final class BeeClient: BeeCaller, Sendable {
 ///  Swift (initiator/client) talks to Rust (acceptor/server) over vox-ffi.
 public protocol BeeHandler: Sendable {
     ///  Full manifest of all required model repos.
-    ///  Swift checks locally which ones are already present and skips them.
     func requiredDownloads() async throws -> [RepoDownload]
     ///  Load ASR engine from the given cache dir.
     ///  Returns empty string on success, error message on failure.
@@ -186,6 +447,21 @@ public protocol BeeHandler: Sendable {
     func feed(sessionId: String, samples: [Float]) async throws -> FeedResult
     ///  Finalize a session, returns final transcription.
     func finishSession(sessionId: String) async throws -> String
+    ///  Set the language for a session.
+    func setLanguage(sessionId: String, language: String) async throws -> Bool
+    ///  Single-shot transcription of raw 16kHz f32 samples.
+    func transcribeSamples(samples: [Float]) async throws -> String
+    ///  Get engine resource usage stats.
+    func getStats() async throws -> EngineStats
+    ///  Load the correction engine.
+    ///  Returns empty string on success, error message on failure.
+    func correctLoad(datasetDir: String, eventsPath: String, gateThreshold: Float, rankerThreshold: Float) async throws -> String
+    ///  Run correction on text.
+    func correctProcess(text: String, appId: String) async throws -> CorrectionOutput
+    ///  Teach the correction engine from user resolutions.
+    func correctTeach(sessionId: String, resolutions: [EditResolution]) async throws -> String
+    ///  Save correction engine state to disk.
+    func correctSave() async throws -> String
 }
 
 public final class BeeDispatcher: ServiceDispatcher {
@@ -214,6 +490,20 @@ public final class BeeDispatcher: ServiceDispatcher {
             await dispatch_feed(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0x416a48f228b25310:
             await dispatch_finishSession(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
+        case 0xefb09d27037e41ed:
+            await dispatch_setLanguage(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
+        case 0xbb649049c66f9f90:
+            await dispatch_transcribeSamples(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
+        case 0xac27f8b9cda1c89f:
+            await dispatch_getStats(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
+        case 0xc6ef90e080c66309:
+            await dispatch_correctLoad(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
+        case 0xd383d61a2c875e84:
+            await dispatch_correctProcess(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
+        case 0x2163f1014480c2db:
+            await dispatch_correctTeach(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
+        case 0xa5b4730fb9dbaa99:
+            await dispatch_correctSave(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         default:
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
         }
@@ -230,6 +520,20 @@ public final class BeeDispatcher: ServiceDispatcher {
         case 0xc7e28a8816c1bc83:
             return .volatile
         case 0x416a48f228b25310:
+            return .volatile
+        case 0xefb09d27037e41ed:
+            return .volatile
+        case 0xbb649049c66f9f90:
+            return .volatile
+        case 0xac27f8b9cda1c89f:
+            return .volatile
+        case 0xc6ef90e080c66309:
+            return .volatile
+        case 0xd383d61a2c875e84:
+            return .volatile
+        case 0x2163f1014480c2db:
+            return .volatile
+        case 0xa5b4730fb9dbaa99:
             return .volatile
         default:
             return .volatile
@@ -348,6 +652,154 @@ public final class BeeDispatcher: ServiceDispatcher {
         }
     }
 
+    private func dispatch_setLanguage(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
+        guard let methodInfo = methodSchemas[methodId] else {
+            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
+            return
+        }
+        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
+        do {
+            let sessionId = try decodeString(from: &buffer)
+            let language = try decodeString(from: &buffer)
+            do {
+                let result = try await handler.setLanguage(sessionId: sessionId, language: language)
+                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
+                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
+            } catch {
+                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+            }
+        } catch {
+            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+        }
+    }
+
+    private func dispatch_transcribeSamples(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
+        guard let methodInfo = methodSchemas[methodId] else {
+            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
+            return
+        }
+        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
+        do {
+            let samples = try decodeVec(from: &buffer, decoder: { buf in try decodeF32(from: &buf) })
+            do {
+                let result = try await handler.transcribeSamples(samples: samples)
+                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeString(val, into: &buf) })
+                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
+            } catch {
+                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+            }
+        } catch {
+            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+        }
+    }
+
+    private func dispatch_getStats(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
+        guard let methodInfo = methodSchemas[methodId] else {
+            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
+            return
+        }
+        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
+        do {
+            do {
+                let result = try await handler.getStats()
+                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeEngineStats(val, into: &buf) })
+                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
+            } catch {
+                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+            }
+        } catch {
+            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+        }
+    }
+
+    private func dispatch_correctLoad(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
+        guard let methodInfo = methodSchemas[methodId] else {
+            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
+            return
+        }
+        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
+        do {
+            let datasetDir = try decodeString(from: &buffer)
+            let eventsPath = try decodeString(from: &buffer)
+            let gateThreshold = try decodeF32(from: &buffer)
+            let rankerThreshold = try decodeF32(from: &buffer)
+            do {
+                let result = try await handler.correctLoad(datasetDir: datasetDir, eventsPath: eventsPath, gateThreshold: gateThreshold, rankerThreshold: rankerThreshold)
+                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeString(val, into: &buf) })
+                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
+            } catch {
+                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+            }
+        } catch {
+            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+        }
+    }
+
+    private func dispatch_correctProcess(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
+        guard let methodInfo = methodSchemas[methodId] else {
+            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
+            return
+        }
+        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
+        do {
+            let text = try decodeString(from: &buffer)
+            let appId = try decodeString(from: &buffer)
+            do {
+                let result = try await handler.correctProcess(text: text, appId: appId)
+                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeCorrectionOutput(val, into: &buf) })
+                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
+            } catch {
+                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+            }
+        } catch {
+            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+        }
+    }
+
+    private func dispatch_correctTeach(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
+        guard let methodInfo = methodSchemas[methodId] else {
+            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
+            return
+        }
+        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
+        do {
+            let sessionId = try decodeString(from: &buffer)
+            let resolutions = try decodeVec(from: &buffer, decoder: { buf in
+                let _editId = try ({ buf in try decodeString(from: &buf) })(&buf)
+                let _accepted = try ({ buf in try decodeBool(from: &buf) })(&buf)
+                return EditResolution(editId: _editId, accepted: _accepted)
+            })
+            do {
+                let result = try await handler.correctTeach(sessionId: sessionId, resolutions: resolutions)
+                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeString(val, into: &buf) })
+                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
+            } catch {
+                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+            }
+        } catch {
+            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+        }
+    }
+
+    private func dispatch_correctSave(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
+        guard let methodInfo = methodSchemas[methodId] else {
+            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
+            return
+        }
+        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
+        do {
+            do {
+                let result = try await handler.correctSave()
+                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeString(val, into: &buf) })
+                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
+            } catch {
+                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+            }
+        } catch {
+            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+        }
+    }
+
 }
 
 // MARK: - Bee Schemas
@@ -358,25 +810,41 @@ public let bee_schemas: [String: MethodBindingSchema] = [
     "createSession": MethodBindingSchema(args: [.string]),
     "feed": MethodBindingSchema(args: [.string, .vec(element: .f32)]),
     "finishSession": MethodBindingSchema(args: [.string]),
+    "setLanguage": MethodBindingSchema(args: [.string, .string]),
+    "transcribeSamples": MethodBindingSchema(args: [.vec(element: .f32)]),
+    "getStats": MethodBindingSchema(args: []),
+    "correctLoad": MethodBindingSchema(args: [.string, .string, .f32, .f32]),
+    "correctProcess": MethodBindingSchema(args: [.string, .string]),
+    "correctTeach": MethodBindingSchema(args: [.string, .vec(element: .struct(fields: [("edit_id", .string), ("accepted", .bool)]))]),
+    "correctSave": MethodBindingSchema(args: []),
 ]
 
 /// Global schema registry containing all schemas for this service.
 nonisolated(unsafe) public let bee_schema_registry: [UInt64: Schema] = [
-    0x00d9b8c9fa91f4da: Schema(id: 0x00d9b8c9fa91f4da, typeParams: [], kind: .struct(name: "FeedResult", fields: [FieldSchema(name: "text", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "is_final", typeRef: .concrete(0x178367a87f66fb46), required: true)])),
     0x0a96b404b4d79d67: Schema(id: 0x0a96b404b4d79d67, typeParams: ["T"], kind: .list(element: .var(name: "T"))),
     0x178367a87f66fb46: Schema(id: 0x178367a87f66fb46, typeParams: [], kind: .primitive(.bool)),
     0x281c5be4f2ee63b4: Schema(id: 0x281c5be4f2ee63b4, typeParams: [], kind: .primitive(.u32)),
+    0x361f4536eee9f991: Schema(id: 0x361f4536eee9f991, typeParams: [], kind: .primitive(.i32)),
+    0x3f2e589db81e95bf: Schema(id: 0x3f2e589db81e95bf, typeParams: [], kind: .primitive(.f64)),
     0x42046de663beeef0: Schema(id: 0x42046de663beeef0, typeParams: ["T", "E"], kind: .enum(name: "Result", variants: [VariantSchema(name: "Ok", index: 0, payload: .newtype(typeRef: .var(name: "T"))), VariantSchema(name: "Err", index: 1, payload: .newtype(typeRef: .var(name: "E")))])),
     0x4cf4b2aeb98a1939: Schema(id: 0x4cf4b2aeb98a1939, typeParams: ["E"], kind: .enum(name: "VoxError", variants: [VariantSchema(name: "User", index: 0, payload: .newtype(typeRef: .var(name: "E"))), VariantSchema(name: "UnknownMethod", index: 1, payload: .unit), VariantSchema(name: "InvalidPayload", index: 2, payload: .newtype(typeRef: .concrete(0x6d7dce914ee150e8))), VariantSchema(name: "Cancelled", index: 3, payload: .unit), VariantSchema(name: "ConnectionClosed", index: 4, payload: .unit), VariantSchema(name: "SessionShutdown", index: 5, payload: .unit), VariantSchema(name: "SendFailed", index: 6, payload: .unit), VariantSchema(name: "Indeterminate", index: 7, payload: .unit)])),
+    0x5c000f00fa144db4: Schema(id: 0x5c000f00fa144db4, typeParams: [], kind: .struct(name: "CorrectionEdit", fields: [FieldSchema(name: "edit_id", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "span_start", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "span_end", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "original", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "replacement", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "term", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "alias_id", typeRef: .concrete(0x361f4536eee9f991), required: true), FieldSchema(name: "ranker_prob", typeRef: .concrete(0x3f2e589db81e95bf), required: true), FieldSchema(name: "gate_prob", typeRef: .concrete(0x3f2e589db81e95bf), required: true)])),
     0x5db70a394660f3e6: Schema(id: 0x5db70a394660f3e6, typeParams: [], kind: .primitive(.never)),
     0x6847ab90feda71c1: Schema(id: 0x6847ab90feda71c1, typeParams: ["T0"], kind: .tuple(elements: [.var(name: "T0")])),
+    0x6a31d1dd6bec4d20: Schema(id: 0x6a31d1dd6bec4d20, typeParams: [], kind: .struct(name: "CorrectionOutput", fields: [FieldSchema(name: "session_id", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "best_text", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "edits", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0x5c000f00fa144db4)]), required: true)])),
     0x6d7dce914ee150e8: Schema(id: 0x6d7dce914ee150e8, typeParams: [], kind: .primitive(.string)),
+    0x6ec4adf14402f13d: Schema(id: 0x6ec4adf14402f13d, typeParams: [], kind: .struct(name: "EngineStats", fields: [FieldSchema(name: "cpu_percent", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "gpu_percent", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "vram_used_mb", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "ram_used_mb", typeRef: .concrete(0x8e02f623d1b2310c), required: true)])),
     0x7881b2b6e54aaf59: Schema(id: 0x7881b2b6e54aaf59, typeParams: [], kind: .struct(name: "RepoDownload", fields: [FieldSchema(name: "repo_id", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "local_dir", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "files", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0xf59a1caa17fdc1b4)]), required: true)])),
+    0x8083f12c0c95579b: Schema(id: 0x8083f12c0c95579b, typeParams: [], kind: .struct(name: "FeedResult", fields: [FieldSchema(name: "text", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "committed_utf16_len", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "alignments", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0xf0d30c1c928667ef)]), required: true), FieldSchema(name: "is_final", typeRef: .concrete(0x178367a87f66fb46), required: true)])),
     0x8e02f623d1b2310c: Schema(id: 0x8e02f623d1b2310c, typeParams: [], kind: .primitive(.f32)),
+    0x915c6fb5b64f270b: Schema(id: 0x915c6fb5b64f270b, typeParams: ["T0", "T1", "T2", "T3"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2"), .var(name: "T3")])),
     0xba0496aa8cee7a4c: Schema(id: 0xba0496aa8cee7a4c, typeParams: ["T0", "T1"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1")])),
     0xbc5c33249a2dc720: Schema(id: 0xbc5c33249a2dc720, typeParams: [], kind: .primitive(.unit)),
     0xd9356298b81639ac: Schema(id: 0xd9356298b81639ac, typeParams: [], kind: .primitive(.u64)),
+    0xdcafd4de6b7969bb: Schema(id: 0xdcafd4de6b7969bb, typeParams: ["T"], kind: .option(element: .var(name: "T"))),
+    0xf0d30c1c928667ef: Schema(id: 0xf0d30c1c928667ef, typeParams: [], kind: .struct(name: "AlignedWord", fields: [FieldSchema(name: "word", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "start", typeRef: .concrete(0x3f2e589db81e95bf), required: true), FieldSchema(name: "end", typeRef: .concrete(0x3f2e589db81e95bf), required: true), FieldSchema(name: "mean_logprob", typeRef: .generic(0xdcafd4de6b7969bb, args: [.concrete(0x8e02f623d1b2310c)]), required: true), FieldSchema(name: "min_logprob", typeRef: .generic(0xdcafd4de6b7969bb, args: [.concrete(0x8e02f623d1b2310c)]), required: true), FieldSchema(name: "mean_margin", typeRef: .generic(0xdcafd4de6b7969bb, args: [.concrete(0x8e02f623d1b2310c)]), required: true), FieldSchema(name: "min_margin", typeRef: .generic(0xdcafd4de6b7969bb, args: [.concrete(0x8e02f623d1b2310c)]), required: true)])),
     0xf59a1caa17fdc1b4: Schema(id: 0xf59a1caa17fdc1b4, typeParams: [], kind: .struct(name: "RepoFile", fields: [FieldSchema(name: "name", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "url", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "size", typeRef: .concrete(0xd9356298b81639ac), required: true)])),
+    0xf92331d26d0aabc4: Schema(id: 0xf92331d26d0aabc4, typeParams: [], kind: .struct(name: "EditResolution", fields: [FieldSchema(name: "edit_id", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "accepted", typeRef: .concrete(0x178367a87f66fb46), required: true)])),
 ]
 
 /// Per-method schema information for wire protocol.
@@ -402,12 +870,54 @@ nonisolated(unsafe) public let bee_method_schemas: [UInt64: MethodSchemaInfo] = 
     0xc7e28a8816c1bc83: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0x8e02f623d1b2310c, 0x0a96b404b4d79d67, 0xba0496aa8cee7a4c],
         argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .generic(0x0a96b404b4d79d67, args: [.concrete(0x8e02f623d1b2310c)])]),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x00d9b8c9fa91f4da],
-        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x00d9b8c9fa91f4da), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xdcafd4de6b7969bb, 0xf0d30c1c928667ef, 0x0a96b404b4d79d67, 0x8083f12c0c95579b],
+        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x8083f12c0c95579b), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),
     0x416a48f228b25310: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0x6847ab90feda71c1],
         argsRoot: .generic(0x6847ab90feda71c1, args: [.concrete(0x6d7dce914ee150e8)]),
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
+        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6d7dce914ee150e8), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
+    ),
+    0xefb09d27037e41ed: MethodSchemaInfo(
+        argsSchemaIds: [0x6d7dce914ee150e8, 0xba0496aa8cee7a4c],
+        argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8)]),
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
+        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
+    ),
+    0xbb649049c66f9f90: MethodSchemaInfo(
+        argsSchemaIds: [0x8e02f623d1b2310c, 0x0a96b404b4d79d67, 0x6847ab90feda71c1],
+        argsRoot: .generic(0x6847ab90feda71c1, args: [.generic(0x0a96b404b4d79d67, args: [.concrete(0x8e02f623d1b2310c)])]),
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
+        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6d7dce914ee150e8), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
+    ),
+    0xac27f8b9cda1c89f: MethodSchemaInfo(
+        argsSchemaIds: [0xbc5c33249a2dc720],
+        argsRoot: .concrete(0xbc5c33249a2dc720),
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x8e02f623d1b2310c, 0x6ec4adf14402f13d],
+        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6ec4adf14402f13d), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
+    ),
+    0xc6ef90e080c66309: MethodSchemaInfo(
+        argsSchemaIds: [0x6d7dce914ee150e8, 0x8e02f623d1b2310c, 0x915c6fb5b64f270b],
+        argsRoot: .generic(0x915c6fb5b64f270b, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8), .concrete(0x8e02f623d1b2310c), .concrete(0x8e02f623d1b2310c)]),
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
+        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6d7dce914ee150e8), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
+    ),
+    0xd383d61a2c875e84: MethodSchemaInfo(
+        argsSchemaIds: [0x6d7dce914ee150e8, 0xba0496aa8cee7a4c],
+        argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8)]),
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x361f4536eee9f991, 0x3f2e589db81e95bf, 0x5c000f00fa144db4, 0x0a96b404b4d79d67, 0x6a31d1dd6bec4d20],
+        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6a31d1dd6bec4d20), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
+    ),
+    0x2163f1014480c2db: MethodSchemaInfo(
+        argsSchemaIds: [0x6d7dce914ee150e8, 0x178367a87f66fb46, 0xf92331d26d0aabc4, 0x0a96b404b4d79d67, 0xba0496aa8cee7a4c],
+        argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .generic(0x0a96b404b4d79d67, args: [.concrete(0xf92331d26d0aabc4)])]),
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
+        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6d7dce914ee150e8), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
+    ),
+    0xa5b4730fb9dbaa99: MethodSchemaInfo(
+        argsSchemaIds: [0xbc5c33249a2dc720],
+        argsRoot: .concrete(0xbc5c33249a2dc720),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6d7dce914ee150e8), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),
