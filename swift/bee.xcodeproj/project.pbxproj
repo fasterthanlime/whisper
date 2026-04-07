@@ -74,6 +74,7 @@
 		11AEEB5B847C6933C564D6EC /* BeeVoxIMEClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeVoxIMEClient.swift; sourceTree = "<group>"; };
 		150E7F5961D4B0D13C2D78C8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		1C71D5EE1E044D47FB362F47 /* bee-recording-started.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "bee-recording-started.wav"; sourceTree = "<group>"; };
+		1D74784C745546436F8D6A2F /* vox */ = {isa = PBXFileReference; lastKnownFileType = folder; name = vox; path = ../../vox; sourceTree = SOURCE_ROOT; };
 		221AD035A01421E2640E350E /* AudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngine.swift; sourceTree = "<group>"; };
 		2A7D3D2469CBFB9FF5D9FD91 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		2B25DCFC5934E57F7D465EDE /* BeeIPCServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeIPCServer.swift; sourceTree = "<group>"; };
@@ -172,6 +173,14 @@
 			path = "vox-shared";
 			sourceTree = "<group>";
 		};
+		375CBC6C8C7D824A670D0CD8 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				1D74784C745546436F8D6A2F /* vox */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
 		3C4755D7171C9A5834B9180D /* bee-input */ = {
 			isa = PBXGroup;
 			children = (
@@ -267,6 +276,7 @@
 				B5B81CB48103AC5B7169DEE4 /* bee */,
 				5F140DA35DA28E6DC02B219D /* bee-broker */,
 				3C4755D7171C9A5834B9180D /* bee-input */,
+				375CBC6C8C7D824A670D0CD8 /* Packages */,
 				A29E6926A89DC7C05360F73E /* shared */,
 				33F39B0FB3877056B6DC99EB /* vox-shared */,
 				AC2E63CD19B3E255DCD31E1C /* Frameworks */,
@@ -377,7 +387,7 @@
 			mainGroup = CC665285516FF0C09607452E;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				690A6C8DBBE7B3742D760635 /* XCRemoteSwiftPackageReference "vox" */,
+				BA30397BE821BC694FA1AC62 /* XCLocalSwiftPackageReference "../../vox" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 697DD1AAABC63BCBFAE29FDB /* Products */;
@@ -823,26 +833,20 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		690A6C8DBBE7B3742D760635 /* XCRemoteSwiftPackageReference "vox" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/bearcove/vox.git";
-			requirement = {
-				kind = revision;
-				revision = 901eeba8c3e08b0009604a1954ba5aa7f0a76289;
-			};
+/* Begin XCLocalSwiftPackageReference section */
+		BA30397BE821BC694FA1AC62 /* XCLocalSwiftPackageReference "../../vox" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../vox;
 		};
-/* End XCRemoteSwiftPackageReference section */
+/* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		EF1B861B1D04035E64E28C57 /* VoxRuntime */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 690A6C8DBBE7B3742D760635 /* XCRemoteSwiftPackageReference "vox" */;
 			productName = VoxRuntime;
 		};
 		F0443A793174C93FF149DD12 /* VoxRuntime */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 690A6C8DBBE7B3742D760635 /* XCRemoteSwiftPackageReference "vox" */;
 			productName = VoxRuntime;
 		};
 /* End XCSwiftPackageProductDependency section */

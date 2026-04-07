@@ -854,6 +854,8 @@ final class AppState {
 
     func loadModelAtStartup() {
         let model = Self.defaultModel
+        let cacheDir = STTModelDefinition.cacheDirectory
+        beeLog("APP: loading model \(model.displayName) from cache=\(cacheDir)")
         modelStatus = .loading
         SoundEffects.shared.warmUp()
 
@@ -899,6 +901,7 @@ final class AppState {
                     self.applyWarmPolicyForCurrentState()
                 }
             } catch {
+                beeLog("APP: model load failed: \(error)")
                 await MainActor.run {
                     self.modelStatus = .error(error.localizedDescription)
                 }
@@ -1643,6 +1646,16 @@ enum ModelStatus: Equatable {
     case loading
     case loaded
     case error(String)
+
+    var hasError: Bool {
+        if case .error = self { return true }
+        return false
+    }
+
+    var errorMessage: String? {
+        if case .error(let msg) = self { return msg }
+        return nil
+    }
 }
 
 private struct ParkedOverlayView: View {

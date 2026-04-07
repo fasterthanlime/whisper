@@ -223,6 +223,7 @@ struct BeeSettingsView: View {
                         Label("Audio", systemImage: "waveform")
                             .tag(SidebarItem.audio)
                         Label("Transcription", systemImage: "text.quote")
+                            .badge(appState.modelStatus.hasError ? 1 : 0)
                             .tag(SidebarItem.transcription)
                         Label("General", systemImage: "gearshape")
                             .tag(SidebarItem.general)
@@ -393,6 +394,7 @@ private struct BeeOverviewView: View {
     private var stateColor: Color {
         switch appState.hotkeyState {
         case .idle:
+            if appState.modelStatus.hasError { return .red }
             return appState.modelStatus == .loaded ? .green : .gray
         case .held, .released:
             return .orange
@@ -661,6 +663,34 @@ private struct TranscriptionSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
+                if let errorMsg = appState.modelStatus.errorMessage {
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                            .font(.title3)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Model failed to load")
+                                .font(.headline)
+                            Text(errorMsg)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                        Spacer()
+                        Button("Retry") {
+                            appState.loadModelAtStartup()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(.red.opacity(0.08))
+                            .strokeBorder(.red.opacity(0.2), lineWidth: 1)
+                    )
+                }
+
                 SettingsCard("Try it out") {
                     VStack(spacing: 10) {
                         TextEditor(text: $tryMeText)

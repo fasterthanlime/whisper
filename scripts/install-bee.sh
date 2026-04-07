@@ -65,24 +65,35 @@ run_step() {
 }
 
 run_step "Building MLX Rust FFI (release)" "cd \"$PROJECT_ROOT/rust\" && cargo build --release -p bee-ffi"
-run_step "Generating Xcode project" "cd \"$SWIFT_DIR\" && xcodegen generate --spec \"$XCODE_SPEC\""
+if [[ "${BEE_REGEN:-}" == "1" ]]; then
+  run_step "Generating Xcode project" "cd \"$SWIFT_DIR\" && xcodegen generate --spec \"$XCODE_SPEC\""
+fi
 banner "Building bee (+ embedded beeInput) (Release)"
-rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 # beeInput is a dependency of bee and gets embedded automatically; no separate scheme needed.
-if ! (cd "$SWIFT_DIR" && xcodebuild \
-  -project "$XCODE_PROJECT" \
-  -scheme bee \
-  -configuration Release \
-  CONFIGURATION_BUILD_DIR="$BUILD_DIR" \
-  -derivedDataPath "$BUILD_DIR/DerivedData" \
-  -clonedSourcePackagesDirPath "$BUILD_DIR/SourcePackages" \
-  -parallelizeTargets \
-  -jobs "$(sysctl -n hw.ncpu)" \
-  -skipPackageUpdates \
-  build 2>&1 | xcbeautify); then
-  printf '%s\n' "${RED}${BOLD}Swift build failed${RESET}"
-  exit 1
+xcodebuild_args=(
+  -project "$XCODE_PROJECT"
+  -scheme bee
+  -configuration Release
+  CONFIGURATION_BUILD_DIR="$BUILD_DIR"
+  -derivedDataPath "$BUILD_DIR/DerivedData"
+  -clonedSourcePackagesDirPath "$BUILD_DIR/SourcePackages"
+  -parallelizeTargets
+  -jobs "$(sysctl -n hw.ncpu)"
+  -skipPackageUpdates
+  build
+)
+if [[ "${BEE_BUILD_TIMING:-}" == "1" ]]; then
+  xcodebuild_args+=(-showBuildTimingSummary)
+  if ! (cd "$SWIFT_DIR" && xcodebuild "${xcodebuild_args[@]}" 2>&1); then
+    printf '%s\n' "${RED}${BOLD}Swift build failed${RESET}"
+    exit 1
+  fi
+else
+  if ! (cd "$SWIFT_DIR" && xcodebuild "${xcodebuild_args[@]}" 2>&1 | xcbeautify); then
+    printf '%s\n' "${RED}${BOLD}Swift build failed${RESET}"
+    exit 1
+  fi
 fi
 printf '%s\n' "${GREEN}${BOLD}All Swift targets built${RESET}"
 

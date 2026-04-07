@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 extension Notification.Name {
-    static let beeOpenMainWindowRequest = Notification.Name("fasterthanlime.bee.openMainWindowRequest")
+    static let beeOpenMainWindowRequest = Notification.Name(
+        "fasterthanlime.bee.openMainWindowRequest")
 }
 
 /// Stores the SwiftUI openSettings action so it can be called from outside SwiftUI.
@@ -52,7 +53,9 @@ final class BeeLifecycleDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
     }
 
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool)
+        -> Bool
+    {
         NotificationCenter.default.post(name: .beeOpenMainWindowRequest, object: nil)
         return false
     }
@@ -65,7 +68,6 @@ final class BeeLifecycleDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.post(name: .beeOpenMainWindowRequest, object: nil)
     }
 }
-
 
 /// Borderless panel that closes when it loses focus — replaces NSPopover
 /// for reliable positioning when content resizes.
@@ -144,7 +146,9 @@ final class StatusBarController: NSObject {
 
     private func showPanel() {
         guard let appState, let button = statusItem.button, let buttonWindow = button.window else {
-            beeLog("MENUBAR: showPanel guard failed (appState=\(appState != nil), button=\(statusItem.button != nil))")
+            beeLog(
+                "MENUBAR: showPanel guard failed (appState=\(appState != nil), button=\(statusItem.button != nil))"
+            )
             return
         }
 
@@ -174,13 +178,15 @@ final class StatusBarController: NSObject {
         }
 
         // Close when clicking outside
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [
+            .leftMouseDown, .rightMouseDown,
+        ]) { [weak self] _ in
             self?.closePanel()
         }
 
         // Close on Escape
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53 { // Escape
+            if event.keyCode == 53 {  // Escape
                 self?.closePanel()
                 return nil
             }
@@ -188,13 +194,16 @@ final class StatusBarController: NSObject {
         }
     }
 
-    private func positionPanel(_ panel: NSPanel, relativeTo button: NSStatusBarButton, in buttonWindow: NSWindow) {
+    private func positionPanel(
+        _ panel: NSPanel, relativeTo button: NSStatusBarButton, in buttonWindow: NSWindow
+    ) {
         let buttonRect = button.convert(button.bounds, to: nil)
         let screenRect = buttonWindow.convertToScreen(buttonRect)
-        let contentSize = panel.contentView?.fittingSize ?? NSSize(width: Self.panelWidth, height: 200)
+        let contentSize =
+            panel.contentView?.fittingSize ?? NSSize(width: Self.panelWidth, height: 200)
 
         let x = screenRect.midX - contentSize.width / 2
-        let y = screenRect.minY - contentSize.height - 4 // 4pt gap
+        let y = screenRect.minY - contentSize.height - 4  // 4pt gap
 
         panel.setContentSize(contentSize)
         panel.setFrameOrigin(NSPoint(x: x, y: y))
@@ -225,12 +234,14 @@ final class StatusBarController: NSObject {
     @objc func updateIcon() {
         guard let appState, let button = statusItem.button else { return }
         let isReady = appState.imeReady && appState.modelStatus == .loaded
-        let isActive: Bool = switch appState.hotkeyState {
-        case .held, .released, .pushToTalk, .locked, .lockedOptionHeld: true
-        case .idle: false
-        }
+        let hasError = appState.modelStatus.hasError
+        let isActive: Bool =
+            switch appState.hotkeyState {
+            case .held, .released, .pushToTalk, .locked, .lockedOptionHeld: true
+            case .idle: false
+            }
 
-        button.alphaValue = isReady ? 1.0 : 0.4
+        button.alphaValue = isReady ? 1.0 : (hasError ? 1.0 : 0.4)
 
         let target: CGFloat = isActive ? 1 : 0
         guard abs(animationProgress - target) > 0.01 else { return }
@@ -240,8 +251,12 @@ final class StatusBarController: NSObject {
         let startTime = CACurrentMediaTime()
         let duration: CFTimeInterval = 0.15
 
-        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
-            guard let self else { timer.invalidate(); return }
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) {
+            [weak self] timer in
+            guard let self else {
+                timer.invalidate()
+                return
+            }
             let elapsed = CACurrentMediaTime() - startTime
             let t = min(1, Float(elapsed / duration))
             let smooth = CGFloat(t * t * (3 - 2 * t))
@@ -259,12 +274,49 @@ final class StatusBarController: NSObject {
 
     private func renderIcon() {
         guard let button = statusItem.button,
-              let baseIcon = NSImage(named: "MenuBarIcon") else { return }
+            let baseIcon = NSImage(named: "MenuBarIcon")
+        else { return }
 
+        let hasError = appState?.modelStatus.hasError ?? false
         let p = animationProgress
-        if p < 0.01 {
+        if p < 0.01 && !hasError {
             baseIcon.isTemplate = true
             button.image = baseIcon
+            return
+        }
+
+        if p < 0.01 && hasError {
+            // Idle with error: show bee + red dot
+            let iconSize = baseIcon.size
+            let canvasSize = NSSize(width: Self.itemWidth, height: iconSize.height)
+            let dotSize: CGFloat = 6
+            let isDark = button.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let iconColor: NSColor = isDark ? .white : .black
+            let tinted = baseIcon.copy() as! NSImage
+            tinted.lockFocus()
+            iconColor.set()
+            NSRect(origin: .zero, size: tinted.size).fill(using: .sourceAtop)
+            tinted.unlockFocus()
+            let composed = NSImage(size: canvasSize, flipped: false) { rect in
+                let beeRect = NSRect(
+                    x: rect.midX - iconSize.width / 2 - 3,
+                    y: (rect.height - iconSize.height) / 2,
+                    width: iconSize.width,
+                    height: iconSize.height
+                )
+                tinted.draw(in: beeRect)
+                NSColor.systemRed.setFill()
+                let dotRect = NSRect(
+                    x: beeRect.maxX - 1,
+                    y: beeRect.maxY - dotSize - 1,
+                    width: dotSize,
+                    height: dotSize
+                )
+                NSBezierPath(ovalIn: dotRect).fill()
+                return true
+            }
+            composed.isTemplate = false
+            button.image = composed
             return
         }
 

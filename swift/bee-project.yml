@@ -15,8 +15,7 @@ settings:
 
 packages:
   vox:
-    url: https://github.com/bearcove/vox.git
-    revision: 901eeba8c3e08b0009604a1954ba5aa7f0a76289
+    path: ../../vox
 
 targets:
   bee:

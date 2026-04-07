@@ -76,17 +76,19 @@ final class BeeIPCServer {
         beeLog("VOXIPC: accepting at \(path)")
 
         Task { [weak self] in
-            guard let self else { return }
-            do {
-                let session = try await VoxRuntime.Session.acceptor(
-                    acceptor, dispatcher: dispatcher, resumable: false)
-                beeLog("VOXIPC: IME connected")
-                self.imeClient = ImeClient(connection: session.connection)
-                try await session.run()
-            } catch {
-                beeLog("VOXIPC: session error: \(error)")
+            while let self {
+                do {
+                    let session = try await VoxRuntime.Session.acceptor(
+                        acceptor, dispatcher: dispatcher, resumable: false)
+                    beeLog("VOXIPC: IME connected")
+                    self.imeClient = ImeClient(connection: session.connection)
+                    try await session.run()
+                } catch {
+                    beeLog("VOXIPC: session error: \(error)")
+                }
+                self.imeClient = nil
+                beeLog("VOXIPC: re-accepting")
             }
-            self.imeClient = nil
         }
     }
 
