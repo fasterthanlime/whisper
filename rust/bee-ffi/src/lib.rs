@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 use bee_phonetic::{
     enumerate_transcript_spans_with, feature_tokens_for_ipa, query_index, score_shortlist,
@@ -110,7 +110,7 @@ struct BeeServiceInner {
     engine: OnceLock<AsrEngine>,
     sessions: SessionMap,
     next_session_id: AtomicU64,
-    correction: Mutex<Option<CorrectionEngine>>,
+    correction: tokio::sync::Mutex<Option<CorrectionEngine>>,
 }
 
 #[derive(Clone)]
@@ -125,7 +125,7 @@ impl BeeService {
                 engine: OnceLock::new(),
                 sessions: DashMap::new(),
                 next_session_id: AtomicU64::new(1),
-                correction: Mutex::new(None),
+                correction: tokio::sync::Mutex::new(None),
             }),
         }
     }
@@ -353,114 +353,119 @@ impl bee_rpc::Bee for BeeService {
                     BeeError::CorrectionError { message: e }
                 })?;
         info!("correct_load: success");
-        *self.inner.correction.lock().unwrap() = Some(engine);
+        *self.inner.correction.lock().await = Some(engine);
         Ok(true)
     }
 
     async fn correct_process(&self, text: String, app_id: String) -> CorrectionOutput {
-        let mut guard = self.inner.correction.lock().unwrap();
-        let Some(engine) = guard.as_mut() else {
-            tracing::warn!("correct_process: correction engine not loaded, passing through");
-            return CorrectionOutput {
-                session_id: String::new(),
-                best_text: text,
-                edits: vec![],
-            };
-        };
-
-        let app_id_opt = if app_id.is_empty() {
-            None
-        } else {
-            Some(app_id)
-        };
-
-        let spans = enumerate_transcript_spans_with(
-            &text,
-            3,
-            None::<&[bee_types::TranscriptAlignmentToken]>,
-            |span_text| engine.g2p.ipa_tokens(span_text).ok().flatten(),
-        );
-
-        let mut edits = Vec::new();
-        let session_id = format!(
-            "{:x}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        );
-
-        for span in &spans {
-            let query = RetrievalQuery {
-                text: span.text.clone(),
-                ipa_tokens: span.ipa_tokens.clone(),
-                reduced_ipa_tokens: span.reduced_ipa_tokens.clone(),
-                feature_tokens: feature_tokens_for_ipa(&span.ipa_tokens),
-                token_count: (span.token_end - span.token_start) as u8,
-            };
-            let shortlist = query_index(&engine.index, &query, 50);
-            if shortlist.is_empty() {
-                continue;
-            }
-            let scored = score_shortlist(span, &shortlist, &engine.index);
-            if scored.is_empty() {
-                continue;
-            }
-
-            let candidates_with_flags: Vec<_> = scored
-                .iter()
-                .map(|c| {
-                    let flags = engine
-                        .index
-                        .aliases
-                        .iter()
-                        .find(|a| a.alias_id == c.alias_id)
-                        .map(|a| a.identifier_flags.clone())
-                        .unwrap_or_default();
-                    (c.clone(), flags)
-                })
-                .collect();
-
-            let ctx =
-                bee_correct::judge::extract_span_context(&text, span.char_start, span.char_end);
-            let ctx = SpanContext {
-                app_id: app_id_opt.clone(),
-                ..ctx
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut guard = inner.correction.blocking_lock();
+            let Some(engine) = guard.as_mut() else {
+                tracing::warn!("correct_process: correction engine not loaded, passing through");
+                return CorrectionOutput {
+                    session_id: String::new(),
+                    best_text: text,
+                    edits: vec![],
+                };
             };
 
-            let decision = engine.judge.score_span(span, &candidates_with_flags, &ctx);
+            let app_id_opt = if app_id.is_empty() {
+                None
+            } else {
+                Some(app_id)
+            };
 
-            if let Some(ref chosen) = decision.chosen {
-                edits.push(CorrectionEdit {
-                    edit_id: format!("e{}", edits.len()),
-                    span_start: span.char_start as u32,
-                    span_end: span.char_end as u32,
-                    original: span.text.clone(),
-                    replacement: chosen.replacement_text.clone(),
-                    term: chosen.term.clone(),
-                    alias_id: chosen.alias_id as i32,
-                    ranker_prob: chosen.ranker_prob as f64,
-                    gate_prob: decision.gate_prob as f64,
-                });
+            let spans = enumerate_transcript_spans_with(
+                &text,
+                3,
+                None::<&[bee_types::TranscriptAlignmentToken]>,
+                |span_text| engine.g2p.ipa_tokens(span_text).ok().flatten(),
+            );
+
+            let mut edits = Vec::new();
+            let session_id = format!(
+                "{:x}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            );
+
+            for span in &spans {
+                let query = RetrievalQuery {
+                    text: span.text.clone(),
+                    ipa_tokens: span.ipa_tokens.clone(),
+                    reduced_ipa_tokens: span.reduced_ipa_tokens.clone(),
+                    feature_tokens: feature_tokens_for_ipa(&span.ipa_tokens),
+                    token_count: (span.token_end - span.token_start) as u8,
+                };
+                let shortlist = query_index(&engine.index, &query, 50);
+                if shortlist.is_empty() {
+                    continue;
+                }
+                let scored = score_shortlist(span, &shortlist, &engine.index);
+                if scored.is_empty() {
+                    continue;
+                }
+
+                let candidates_with_flags: Vec<_> = scored
+                    .iter()
+                    .map(|c| {
+                        let flags = engine
+                            .index
+                            .aliases
+                            .iter()
+                            .find(|a| a.alias_id == c.alias_id)
+                            .map(|a| a.identifier_flags.clone())
+                            .unwrap_or_default();
+                        (c.clone(), flags)
+                    })
+                    .collect();
+
+                let ctx =
+                    bee_correct::judge::extract_span_context(&text, span.char_start, span.char_end);
+                let ctx = SpanContext {
+                    app_id: app_id_opt.clone(),
+                    ..ctx
+                };
+
+                let decision = engine.judge.score_span(span, &candidates_with_flags, &ctx);
+
+                if let Some(ref chosen) = decision.chosen {
+                    edits.push(CorrectionEdit {
+                        edit_id: format!("e{}", edits.len()),
+                        span_start: span.char_start as u32,
+                        span_end: span.char_end as u32,
+                        original: span.text.clone(),
+                        replacement: chosen.replacement_text.clone(),
+                        term: chosen.term.clone(),
+                        alias_id: chosen.alias_id as i32,
+                        ranker_prob: chosen.ranker_prob as f64,
+                        gate_prob: decision.gate_prob as f64,
+                    });
+                }
             }
-        }
 
-        let mut best_text = text.clone();
-        let mut offset: i64 = 0;
-        for edit in &edits {
-            let start = edit.span_start as usize;
-            let end = edit.span_end as usize;
-            let adj_start = (start as i64 + offset) as usize;
-            let adj_end = (end as i64 + offset) as usize;
-            best_text.replace_range(adj_start..adj_end, &edit.replacement);
-            offset += edit.replacement.len() as i64 - (end - start) as i64;
-        }
+            let mut best_text = text.clone();
+            let mut offset: i64 = 0;
+            for edit in &edits {
+                let start = edit.span_start as usize;
+                let end = edit.span_end as usize;
+                let adj_start = (start as i64 + offset) as usize;
+                let adj_end = (end as i64 + offset) as usize;
+                best_text.replace_range(adj_start..adj_end, &edit.replacement);
+                offset += edit.replacement.len() as i64 - (end - start) as i64;
+            }
 
-        CorrectionOutput {
-            session_id,
-            best_text,
-            edits,
-        }
+            CorrectionOutput {
+                session_id,
+                best_text,
+                edits,
+            }
+        })
+        .await
+        .expect("spawn_blocking panicked")
     }
 
     async fn correct_teach(
