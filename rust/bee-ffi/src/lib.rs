@@ -246,6 +246,7 @@ impl bee_rpc::Bee for BeeService {
             committed_utf16_len,
             alignments: update.alignments,
             is_final: false,
+            detected_language: update.detected_language,
         }))
     }
 

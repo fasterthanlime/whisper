@@ -96,12 +96,14 @@ public struct FeedResult: Codable, Sendable {
     public var committedUtf16Len: UInt32
     public var alignments: [AlignedWord]
     public var isFinal: Bool
+    public var detectedLanguage: String
 
-    nonisolated public init(text: String, committedUtf16Len: UInt32, alignments: [AlignedWord], isFinal: Bool) {
+    nonisolated public init(text: String, committedUtf16Len: UInt32, alignments: [AlignedWord], isFinal: Bool, detectedLanguage: String) {
         self.text = text
         self.committedUtf16Len = committedUtf16Len
         self.alignments = alignments
         self.isFinal = isFinal
+        self.detectedLanguage = detectedLanguage
     }
 }
 
@@ -222,6 +224,7 @@ nonisolated internal func encodeFeedResult(_ value: FeedResult, into buffer: ino
     encodeU32(value.committedUtf16Len, into: &buffer)
     encodeVec(value.alignments, into: &buffer, encoder: { val, buf in encodeAlignedWord(val, into: &buf) })
     encodeBool(value.isFinal, into: &buffer)
+    encodeString(value.detectedLanguage, into: &buffer)
 }
 
 nonisolated internal func encodeEngineStats(_ value: EngineStats, into buffer: inout ByteBuffer) {
@@ -411,7 +414,8 @@ public final class BeeClient: BeeCaller, Sendable {
                     return AlignedWord(word: _word, start: _start, end: _end, meanLogprob: _meanLogprob, minLogprob: _minLogprob, meanMargin: _meanMargin, minMargin: _minMargin)
                 }) })(&buf)
                     let _isFinal = try ({ buf in try decodeBool(from: &buf) })(&buf)
-                    return FeedResult(text: _text, committedUtf16Len: _committedUtf16Len, alignments: _alignments, isFinal: _isFinal)
+                    let _detectedLanguage = try ({ buf in try decodeString(from: &buf) })(&buf)
+                    return FeedResult(text: _text, committedUtf16Len: _committedUtf16Len, alignments: _alignments, isFinal: _isFinal, detectedLanguage: _detectedLanguage)
                 })
                 return value
             },
@@ -1233,9 +1237,9 @@ nonisolated(unsafe) public let bee_schema_registry: [UInt64: Schema] = [
     0x6d7dce914ee150e8: Schema(id: 0x6d7dce914ee150e8, typeParams: [], kind: .primitive(.string)),
     0x6ec4adf14402f13d: Schema(id: 0x6ec4adf14402f13d, typeParams: [], kind: .struct(name: "EngineStats", fields: [FieldSchema(name: "cpu_percent", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "gpu_percent", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "vram_used_mb", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "ram_used_mb", typeRef: .concrete(0x8e02f623d1b2310c), required: true)])),
     0x715e96e611ad7d16: Schema(id: 0x715e96e611ad7d16, typeParams: [], kind: .struct(name: "SessionConfig", fields: [FieldSchema(name: "language", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "chunk_duration", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "vad_threshold", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "rollback_tokens", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "commit_token_count", typeRef: .concrete(0x281c5be4f2ee63b4), required: true)])),
-    0x8083f12c0c95579b: Schema(id: 0x8083f12c0c95579b, typeParams: [], kind: .struct(name: "FeedResult", fields: [FieldSchema(name: "text", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "committed_utf16_len", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "alignments", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0xf0d30c1c928667ef)]), required: true), FieldSchema(name: "is_final", typeRef: .concrete(0x178367a87f66fb46), required: true)])),
     0x8e02f623d1b2310c: Schema(id: 0x8e02f623d1b2310c, typeParams: [], kind: .primitive(.f32)),
     0x915c6fb5b64f270b: Schema(id: 0x915c6fb5b64f270b, typeParams: ["T0", "T1", "T2", "T3"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2"), .var(name: "T3")])),
+    0x9d430384fa68b98c: Schema(id: 0x9d430384fa68b98c, typeParams: [], kind: .struct(name: "FeedResult", fields: [FieldSchema(name: "text", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "committed_utf16_len", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "alignments", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0xf0d30c1c928667ef)]), required: true), FieldSchema(name: "is_final", typeRef: .concrete(0x178367a87f66fb46), required: true), FieldSchema(name: "detected_language", typeRef: .concrete(0x6d7dce914ee150e8), required: true)])),
     0xba0496aa8cee7a4c: Schema(id: 0xba0496aa8cee7a4c, typeParams: ["T0", "T1"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1")])),
     0xbc5c33249a2dc720: Schema(id: 0xbc5c33249a2dc720, typeParams: [], kind: .primitive(.unit)),
     0xdcafd4de6b7969bb: Schema(id: 0xdcafd4de6b7969bb, typeParams: ["T"], kind: .option(element: .var(name: "T"))),
@@ -1266,8 +1270,8 @@ nonisolated(unsafe) public let bee_method_schemas: [UInt64: MethodSchemaInfo] = 
     0xc7e28a8816c1bc83: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0x8e02f623d1b2310c, 0x0a96b404b4d79d67, 0xba0496aa8cee7a4c],
         argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .generic(0x0a96b404b4d79d67, args: [.concrete(0x8e02f623d1b2310c)])]),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xdcafd4de6b7969bb, 0xf0d30c1c928667ef, 0x0a96b404b4d79d67, 0x8083f12c0c95579b, 0x285872d3b3eded20],
-        responseRoot: .generic(0x42046de663beeef0, args: [.generic(0xdcafd4de6b7969bb, args: [.concrete(0x8083f12c0c95579b)]), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xdcafd4de6b7969bb, 0xf0d30c1c928667ef, 0x0a96b404b4d79d67, 0x9d430384fa68b98c, 0x285872d3b3eded20],
+        responseRoot: .generic(0x42046de663beeef0, args: [.generic(0xdcafd4de6b7969bb, args: [.concrete(0x9d430384fa68b98c)]), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
     ),
     0x416a48f228b25310: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0x6847ab90feda71c1],

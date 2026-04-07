@@ -76,7 +76,7 @@ impl Language {
 
 impl Default for Language {
     fn default() -> Self {
-        Language("auto".into())
+        Language(String::new())
     }
 }
 
@@ -139,6 +139,9 @@ pub struct Update {
 
     /// Word-level timestamps for committed words.
     pub alignments: Vec<AlignedWord>,
+
+    /// Language detected by the model (empty if language was forced).
+    pub detected_language: String,
 }
 
 pub use bee_types::AlignedWord;
@@ -246,9 +249,18 @@ impl Engine {
     pub fn session(&self, options: SessionOptions) -> Session<'_> {
         let chunk_size_samples = (options.chunk_duration * 16000.0) as usize;
 
-        let lang_header = format!("language {}", options.language.as_str());
-        let language_tokens = tokenize_to_i32(&self.tokenizer, &lang_header);
-        let asr_text_tokens = tokenize_to_i32(&self.tokenizer, "<asr_text>");
+        // When language is empty, omit the language prefix entirely and let the
+        // model detect the language (matching the reference Python implementation).
+        // When a specific language is set, force it with "language {name}<asr_text>".
+        let (language_tokens, asr_text_tokens) = if options.language.as_str().is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            let lang_header = format!("language {}", options.language.as_str());
+            (
+                tokenize_to_i32(&self.tokenizer, &lang_header),
+                tokenize_to_i32(&self.tokenizer, "<asr_text>"),
+            )
+        };
 
         Session {
             engine: self,
@@ -269,6 +281,7 @@ impl Engine {
             asr_text_tokens,
             options,
             speech_detected: false,
+            detected_language: String::new(),
         }
     }
 }
@@ -306,6 +319,8 @@ pub struct Session<'a> {
 
     options: SessionOptions,
     speech_detected: bool,
+    /// Language detected by the model in auto-detect mode.
+    detected_language: String,
 }
 
 impl<'a> Session<'a> {
@@ -504,8 +519,14 @@ impl<'a> Session<'a> {
             generated.len(),
         );
 
-        self.token_ids = all_ids;
-        self.token_logprobs = all_logprobs;
+        // If the model returned EOS immediately (no generated tokens and no prefix),
+        // preserve the existing transcription rather than wiping it.
+        if all_ids.is_empty() && !self.token_ids.is_empty() {
+            tracing::debug!("decode_step: EOS with no output, preserving {} existing tokens", self.token_ids.len());
+        } else {
+            self.token_ids = all_ids;
+            self.token_logprobs = all_logprobs;
+        }
 
         // KV cache dropped here; return freed buffers to the system
         drop(cache);
@@ -639,13 +660,26 @@ impl<'a> Session<'a> {
     /// tokenizer preserves whitespace across commit boundaries. The
     /// committed_len is derived from decoding just the committed tokens
     /// within the same full decode.
-    fn make_update(&self) -> Update {
+    fn make_update(&mut self) -> Update {
         let all_ids = self.full_token_ids();
-        let text = self
+        let raw_text = self
             .engine
             .tokenizer
             .decode(&all_ids, true)
             .unwrap_or_default();
+
+        // In auto-detect mode (no language forced), the model outputs
+        // "language English<asr_text>actual text". Parse and strip it.
+        let text = if self.options.language.as_str().is_empty() {
+            if let Some((lang, rest)) = parse_language_prefix(&raw_text) {
+                self.detected_language = lang;
+                rest
+            } else {
+                raw_text
+            }
+        } else {
+            raw_text
+        };
 
         // Committed length = decode committed tokens in the same context
         let committed_len = if self.committed_tokens.is_empty() {
@@ -666,11 +700,47 @@ impl<'a> Session<'a> {
             text,
             committed_len,
             alignments: self.committed_alignments.clone(),
+            detected_language: self.detected_language.clone(),
         }
     }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
+
+const ASR_TEXT_TAG: &str = "<asr_text>";
+const LANG_PREFIX: &str = "language ";
+
+/// Parse "language English<asr_text>actual text" → Some(("English", "actual text")).
+/// Returns None if the format doesn't match.
+fn parse_language_prefix(text: &str) -> Option<(String, String)> {
+    // Look for <asr_text> tag
+    if let Some(split_pos) = text.find(ASR_TEXT_TAG) {
+        let meta = &text[..split_pos];
+        let rest = &text[split_pos + ASR_TEXT_TAG.len()..];
+
+        // Extract language from "language X" prefix
+        let lang = meta
+            .lines()
+            .find_map(|line| {
+                let trimmed = line.trim();
+                if trimmed.to_lowercase().starts_with(LANG_PREFIX) {
+                    Some(trimmed[LANG_PREFIX.len()..].trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        Some((lang, rest.to_string()))
+    } else if text.starts_with(LANG_PREFIX) {
+        // No <asr_text> tag but starts with "language X" — model may have
+        // output just the language without the tag yet (early chunks)
+        // Don't strip in this case, wait for the tag
+        None
+    } else {
+        None
+    }
+}
 
 /// Compute per-word logprob statistics by mapping decoder tokens to aligner words.
 ///

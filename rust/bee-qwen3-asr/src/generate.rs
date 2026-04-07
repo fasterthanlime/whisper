@@ -177,13 +177,19 @@ pub fn prefill_and_decode(
     // Position after prefill: prompt tokens are in the cache
     let mut position = start_position + seq_len;
 
+    let simple_token = argmax(&logits)?;
     let tlp = argmax_with_logprob(&logits)?;
     let mut token = tlp.token_id;
+    if simple_token != token {
+        tracing::error!(
+            "TOKEN MISMATCH: argmax={simple_token} vs argmax_with_logprob={token}"
+        );
+    }
     let mut generated = Vec::new();
     let mut logprobs = Vec::new();
 
     tracing::debug!(
-        "prefill_and_decode: first_token={token} logprob={:.3} is_eos={} prompt_len={seq_len} max_new={max_new_tokens}",
+        "prefill_and_decode: first_token={token} (simple={simple_token}) logprob={:.3} is_eos={} prompt_len={seq_len} max_new={max_new_tokens}",
         tlp.logprob,
         is_eos(token),
     );

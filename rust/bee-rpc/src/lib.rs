@@ -175,6 +175,8 @@ pub struct FeedResult {
     pub committed_utf16_len: u32,
     pub alignments: Vec<AlignedWord>,
     pub is_final: bool,
+    /// Language detected by the model (empty if language was forced).
+    pub detected_language: String,
 }
 
 /// Engine resource usage stats.
