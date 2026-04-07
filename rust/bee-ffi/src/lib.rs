@@ -35,7 +35,21 @@ declare_link_endpoint!(pub mod bee_ffi_endpoint { export = bee_ffi_v1_vtable; })
 fn on_load() {
     // Read log path from environment (set by Swift before dlopen)
     if let Ok(path) = std::env::var("BEE_FFI_LOG_PATH") {
-        *FFI_LOG_PATH.lock().unwrap() = Some(PathBuf::from(path));
+        *FFI_LOG_PATH.lock().unwrap() = Some(PathBuf::from(&path));
+
+        // Set up tracing subscriber writing to the same log file
+        if let Ok(file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(file)
+                .with_ansi(false)
+                .finish();
+            let _ = tracing::subscriber::set_global_default(subscriber);
+        }
     }
     ffi_log("[bee-ffi] dylib loaded, spawning runtime thread");
     std::thread::spawn(|| {
