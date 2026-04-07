@@ -108,6 +108,12 @@ pub(crate) fn load_engine(model_dir: &Path, cache_base: &Path) -> Result<AsrEngi
         .map_err(|e| format!("Failed to set MLX cache limit: {e}"))?;
 
     let config = resolve_engine_config(model_dir, cache_base)?;
+    tracing::info!(
+        "Engine config: model={}, tokenizer={}, aligner={}",
+        config.model_dir.display(),
+        config.tokenizer_dir.display(),
+        config.aligner_dir.display(),
+    );
     let engine = Engine::load(&config).map_err(|e| format!("load engine: {e}"))?;
 
     let vad_tensors = find_vad_dir(cache_base).and_then(|d| {

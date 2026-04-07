@@ -41,8 +41,9 @@ pub struct ForcedAligner {
 impl ForcedAligner {
     /// Load a forced aligner from a model directory.
     pub fn load(model_dir: &Path, tokenizer: tokenizers::Tokenizer) -> Result<Self, Exception> {
-        let config_str = std::fs::read_to_string(model_dir.join("config.json"))
-            .map_err(|e| Exception::custom(format!("read config: {e}")))?;
+        let config_path = model_dir.join("config.json");
+        let config_str = std::fs::read_to_string(&config_path)
+            .map_err(|e| Exception::custom(format!("read config: {e} at {}", config_path.display())))?;
         let config: AsrConfig = serde_json::from_str(&config_str)
             .map_err(|e| Exception::custom(format!("parse config: {e}")))?;
 
