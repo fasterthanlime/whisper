@@ -5,6 +5,7 @@ import VoxRuntime
 /// Provides typed access to the Bee service (model downloads, engine loading, transcription).
 actor BeeEngine {
     private var rust: FfiDynamicLibrary?
+    private var endpoint: FfiEndpoint?
     private var client: BeeClient?
     private var sessionHandle: SessionHandle?
     private var driverTask: Task<Void, Error>?
@@ -57,6 +58,7 @@ actor BeeEngine {
         beeLog("BEE-ENGINE: dylib loaded, loading vtable")
 
         let endpoint = FfiEndpoint()
+        self.endpoint = endpoint
         let vtable = try rust.loadVtable(symbol: "bee_ffi_v1_vtable")
         beeLog("BEE-ENGINE: vtable loaded, connecting")
 
@@ -173,6 +175,7 @@ actor BeeEngine {
         client = nil
         sessionHandle = nil
         driverTask = nil
+        endpoint = nil
         rust = nil
     }
 
