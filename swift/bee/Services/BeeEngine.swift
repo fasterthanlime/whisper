@@ -44,7 +44,10 @@ actor BeeEngine {
     }
 
     /// Connect to the Rust bee-ffi service via vox-ffi.
+    /// No-op if already connected (FFI link cannot be re-established).
     func connect() async throws {
+        if client != nil { return }
+
         let libURL = Self.libraryURL()
         beeLog("BEE-ENGINE: loading dylib from \(libURL.path)")
 
