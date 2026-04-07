@@ -22,6 +22,7 @@ libc = "0.2"
 vox = { path = "../../../vox/rust/vox", features = ["runtime"] }
 vox-ffi = { path = "../../../vox/rust/vox-ffi" }
 tokio = { version = "1", features = ["rt"] }
+ctor = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

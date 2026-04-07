@@ -41,19 +41,6 @@ actor BeeEngine {
         let libURL = Self.libraryURL()
         let rust = try FfiDynamicLibrary(path: libURL)
 
-        // Bootstrap the Rust acceptor thread before connecting.
-        // The dylib exports `bee_ffi_bootstrap` which starts the tokio runtime
-        // and begins accepting the vox-ffi link.
-        libURL.path.withCString { path in
-            guard let handle = dlopen(path, RTLD_NOW | RTLD_NOLOAD) else { return }
-            defer { dlclose(handle) }
-            typealias BootstrapFn = @convention(c) () -> Void
-            if let sym = dlsym(handle, "bee_ffi_bootstrap") {
-                let bootstrap = unsafeBitCast(sym, to: BootstrapFn.self)
-                bootstrap()
-            }
-        }
-
         let endpoint = FfiEndpoint()
         let connector = try endpoint.connector(
             peer: rust.loadVtable(symbol: "bee_ffi_v1_vtable")

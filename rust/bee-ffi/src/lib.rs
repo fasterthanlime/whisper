@@ -2,9 +2,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use bee_phonetic::{
     enumerate_transcript_spans_with, feature_tokens_for_ipa, query_index, score_shortlist,
@@ -33,14 +31,9 @@ use session::AsrSession;
 
 declare_link_endpoint!(pub mod bee_ffi_endpoint { export = bee_ffi_v1_vtable; });
 
-static VOX_BOOTSTRAPPED: AtomicBool = AtomicBool::new(false);
-
-fn bootstrap_service_once() {
-    if VOX_BOOTSTRAPPED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-
-    ffi_log("[bee-ffi] bootstrap_service_once: spawning runtime thread");
+#[ctor::ctor]
+fn on_load() {
+    ffi_log("[bee-ffi] dylib loaded, spawning runtime thread");
     std::thread::spawn(|| {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -82,15 +75,6 @@ fn bootstrap_service_once() {
             }
         });
     });
-
-    // Give the runtime thread a moment to start accepting
-    std::thread::sleep(Duration::from_millis(10));
-}
-
-// Trigger bootstrap when the vtable is first accessed
-#[unsafe(no_mangle)]
-pub extern "C" fn bee_ffi_bootstrap() {
-    bootstrap_service_once();
 }
 
 // ── BeeService impl ───────────────────────────────────────────────────
