@@ -1,17 +1,21 @@
-//! FFI layer for bee — vox-ffi service + legacy C API.
+//! bee-ffi — vox-ffi service exposing the Bee engine to Swift.
 
-use std::ffi::{c_char, c_float, c_uint, CStr, CString};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Once};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use bee_phonetic::{
+    enumerate_transcript_spans_with, feature_tokens_for_ipa, query_index, score_shortlist,
+    RetrievalQuery,
+};
 use bee_rpc::{
     BeeDispatcher, CorrectionEdit, CorrectionOutput, EditResolution, EngineStats, FeedResult,
-    RepoDownload, RepoFile,
+    RepoDownload,
 };
-use bee_transcribe::{Engine, EngineConfig, Language, Session, SessionOptions};
+use bee_transcribe::{Engine, Language, SessionOptions};
+use bee_types::SpanContext;
 use tracing::info;
 use vox::acceptor_on;
 use vox_ffi::declare_link_endpoint;
@@ -20,6 +24,10 @@ mod correct;
 mod engine;
 mod session;
 mod stats;
+
+use correct::{load_correction_engine, CorrectionEngine};
+use engine::{load_engine, AsrEngine};
+use session::AsrSession;
 
 // ── Vox-FFI endpoint ───────────────────────────────────────────────────
 
@@ -79,6 +87,12 @@ fn bootstrap_service_once() {
     std::thread::sleep(Duration::from_millis(10));
 }
 
+// Trigger bootstrap when the vtable is first accessed
+#[unsafe(no_mangle)]
+pub extern "C" fn bee_ffi_bootstrap() {
+    bootstrap_service_once();
+}
+
 // ── BeeService impl ───────────────────────────────────────────────────
 
 struct BeeServiceInner {
@@ -104,12 +118,6 @@ impl BeeService {
             }),
         }
     }
-}
-
-const HF_BASE: &str = "https://huggingface.co";
-
-fn hf_file_url(repo_id: &str, filename: &str) -> String {
-    format!("{HF_BASE}/{repo_id}/resolve/main/{filename}")
 }
 
 impl bee_rpc::Bee for BeeService {
@@ -252,8 +260,6 @@ impl bee_rpc::Bee for BeeService {
     }
 
     async fn set_language(&self, session_id: String, language: String) -> bool {
-        // Language is set at session creation — changing mid-session isn't supported
-        // by the engine, but we accept the call gracefully.
         let sessions = self.inner.sessions.lock().unwrap();
         sessions.contains_key(&session_id) && !language.is_empty()
     }
@@ -452,33 +458,26 @@ impl bee_rpc::Bee for BeeService {
     }
 }
 
-// Trigger bootstrap when the vtable is first accessed
-#[unsafe(no_mangle)]
-pub extern "C" fn bee_ffi_bootstrap() {
-    bootstrap_service_once();
-}
-
-static INIT_LOGGER: Once = Once::new();
-
-fn init_logger() {
-    INIT_LOGGER.call_once(|| {
-        env_logger::init();
-    });
-}
+// ── Logging ───────────────────────────────────────────────────────────
 
 static FFI_LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-/// Set the path for FFI diagnostic logs. Call this before loading any engine.
-/// Pass NULL to disable file logging.
-#[unsafe(no_mangle)]
-pub extern "C" fn asr_set_log_path(path: *const c_char) {
-    let mut guard = FFI_LOG_PATH.lock().unwrap();
-    if path.is_null() {
-        *guard = None;
-    } else {
-        let s = unsafe { CStr::from_ptr(path) };
-        if let Ok(s) = s.to_str() {
-            *guard = Some(PathBuf::from(s));
-        }
+pub(crate) fn ffi_log(msg: &str) {
+    let path = FFI_LOG_PATH.lock().unwrap().clone();
+    let Some(path) = path else { return };
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(
+            f,
+            "[{:.3}] FFI: {}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64(),
+            msg
+        );
     }
 }

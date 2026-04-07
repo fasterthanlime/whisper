@@ -481,15 +481,9 @@ final class AppState {
             duckVolume()
             startPendingTimer(session: session)
             startIMEAckTimeoutIfNeeded(session: session)
-            let tokenBudget = commitTokenCount + rollbackTokenNum
             let config = TranscriptionService.SessionConfig(
-                chunkSizeSec: chunkSizeSec,
-                commitTokenCount: commitTokenCount,
-                rollbackTokenNum: rollbackTokenNum,
-                maxNewTokensStreaming: tokenBudget,
-                maxNewTokensFinal: tokenBudget
+                language: detectLanguage()
             )
-            let language = detectLanguage()
             beeLog("APP: handleROptDown done, dispatching Tasks")
             // IME activation on MainActor — fires immediately, no actor hop
             Task { @MainActor in
@@ -502,7 +496,7 @@ final class AppState {
             // Audio/ASR pipeline on Session actor — runs in parallel
             Task {
                 beeLog("APP: Session Task started")
-                await session.start(language: language, asrConfig: config, animationMorphSpeed: animationMorphSpeed, animationAppendSpeed: animationAppendSpeed)
+                await session.start(language: config.language, asrConfig: config, animationMorphSpeed: animationMorphSpeed, animationAppendSpeed: animationAppendSpeed)
             }
             return false  // not swallowed
 

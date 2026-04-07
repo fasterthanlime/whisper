@@ -1,40 +1,31 @@
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct AsrEngineStats {
-    pub cpu_percent: c_float,
-    pub gpu_percent: c_float,
-    pub vram_used_mb: c_float,
-    pub ram_used_mb: c_float,
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Stats {
+    pub(crate) cpu_percent: f32,
+    pub(crate) gpu_percent: f32,
+    pub(crate) vram_used_mb: f32,
+    pub(crate) ram_used_mb: f32,
 }
 
-impl Default for AsrEngineStats {
-    fn default() -> Self {
-        Self {
-            cpu_percent: 0.0,
-            gpu_percent: 0.0,
-            vram_used_mb: 0.0,
-            ram_used_mb: 0.0,
-        }
-    }
-}
-
-struct StatsSampler {
-    latest: Arc<Mutex<AsrEngineStats>>,
+pub(crate) struct StatsSampler {
+    latest: Arc<Mutex<Stats>>,
 }
 
 impl StatsSampler {
     // EMA smoothing factor: α=0.25 at 400ms → time constant ~1.4s
     const ALPHA: f32 = 0.25;
 
-    fn new() -> Self {
-        let latest = Arc::new(Mutex::new(AsrEngineStats::default()));
+    pub(crate) fn new() -> Self {
+        let latest = Arc::new(Mutex::new(Stats::default()));
         let shared = Arc::clone(&latest);
         std::thread::Builder::new()
             .name("bee-stats".into())
             .spawn(move || {
                 let mut last_cpu_us: u64 = 0;
                 let mut last_wall = Instant::now();
-                let mut smooth = AsrEngineStats::default();
+                let mut smooth = Stats::default();
 
                 loop {
                     std::thread::sleep(Duration::from_millis(400));
@@ -69,7 +60,7 @@ impl StatsSampler {
         Self { latest }
     }
 
-    fn get(&self) -> AsrEngineStats {
+    pub(crate) fn get(&self) -> Stats {
         self.latest.lock().map(|s| *s).unwrap_or_default()
     }
 }
@@ -85,7 +76,6 @@ fn process_cpu_us() -> u64 {
 }
 
 fn process_ram_mb() -> f32 {
-    // proc_pidinfo(PROC_PIDTASKINFO) gives current resident set size.
     #[repr(C)]
     struct ProcTaskinfo {
         pti_virtual_size: u64,
@@ -138,44 +128,44 @@ fn process_ram_mb() -> f32 {
 #[allow(non_upper_case_globals, non_snake_case)]
 mod iokit {
     use std::ffi::{c_char, c_void};
-    pub(crate) type IoServiceT = u32;
-    pub(crate) const IO_OBJECT_NULL: IoServiceT = 0;
-    pub(crate) const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
-    pub(crate) const K_CF_NUMBER_SINT64_TYPE: i32 = 4;
+    pub(super) type IoServiceT = u32;
+    pub(super) const IO_OBJECT_NULL: IoServiceT = 0;
+    pub(super) const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+    pub(super) const K_CF_NUMBER_SINT64_TYPE: i32 = 4;
 
     #[link(name = "IOKit", kind = "framework")]
     unsafe extern "C" {
-        pub(crate) fn IOServiceMatching(name: *const c_char) -> *mut c_void;
-        pub(crate) fn IOServiceGetMatchingService(
+        pub(super) fn IOServiceMatching(name: *const c_char) -> *mut c_void;
+        pub(super) fn IOServiceGetMatchingService(
             masterPort: IoServiceT,
             matching: *mut c_void,
         ) -> IoServiceT;
-        pub(crate) fn IORegistryEntryCreateCFProperties(
+        pub(super) fn IORegistryEntryCreateCFProperties(
             entry: IoServiceT,
             properties: *mut *mut c_void,
             allocator: *const c_void,
             options: u32,
         ) -> i32;
-        pub(crate) fn IOObjectRelease(object: IoServiceT) -> i32;
+        pub(super) fn IOObjectRelease(object: IoServiceT) -> i32;
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
     unsafe extern "C" {
-        pub(crate) fn CFStringCreateWithCString(
+        pub(super) fn CFStringCreateWithCString(
             alloc: *const c_void,
             c_str: *const c_char,
             encoding: u32,
         ) -> *mut c_void;
-        pub(crate) fn CFDictionaryGetValue(
+        pub(super) fn CFDictionaryGetValue(
             the_dict: *const c_void,
             key: *const c_void,
         ) -> *const c_void;
-        pub(crate) fn CFNumberGetValue(
+        pub(super) fn CFNumberGetValue(
             number: *const c_void,
             the_type: i32,
             value_ptr: *mut c_void,
         ) -> bool;
-        pub(crate) fn CFRelease(cf: *const c_void);
+        pub(super) fn CFRelease(cf: *const c_void);
     }
 }
 

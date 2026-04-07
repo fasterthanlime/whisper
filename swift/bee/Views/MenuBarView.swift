@@ -839,12 +839,14 @@ private struct TranscriptionSettingsView: View {
     }
 
     private func updateStats() {
-        // TODO: add stats to Bee service
-        withAnimation(.easeInOut(duration: 0.4)) {
-            mockCPU = 0
-            mockGPU = 0
-            mockMemMB = 0
-            mockRamMB = 0
+        Task {
+            guard let stats = await appState.transcriptionService.getStats() else { return }
+            withAnimation(.easeInOut(duration: 0.4)) {
+                mockCPU = Double(stats.cpuPercent)
+                mockGPU = Double(stats.gpuPercent)
+                mockMemMB = Double(stats.vramUsedMb)
+                mockRamMB = Double(stats.ramUsedMb)
+            }
         }
     }
 

@@ -398,7 +398,7 @@ struct BeeApp: App {
         let audioEngine = AudioEngine()
         let beeEngine = BeeEngine()
         let transcriptionService = TranscriptionService(engine: beeEngine)
-        let correctionService = CorrectionService()
+        let correctionService = CorrectionService(engine: beeEngine)
         let inputClient = BeeInputClient()
         let state = AppState(
             audioEngine: audioEngine,

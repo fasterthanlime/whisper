@@ -347,7 +347,7 @@ actor Session {
                     let rawText = result?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
                     // Apply corrections if engine is available
-                    let corrOutput = cs?.process(text: rawText, appId: appBundleId)
+                    let corrOutput = await cs?.process(text: rawText, appId: appBundleId)
                     corrOutRef.set(corrOutput)
                     let finalText = corrOutput?.bestText ?? rawText
 
@@ -871,7 +871,7 @@ struct StreamingUpdate: Sendable {
     let text: String
     let committedUTF16Count: Int
     let detectedLanguage: String?
-    let alignmentsJSON: String?
+    let alignments: [AlignedWord]
     let debugJSON: String?
 }
 

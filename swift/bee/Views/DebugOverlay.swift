@@ -215,7 +215,22 @@ struct DiagnosticsView: View {
                     }
 
                     if let transcriptionService {
-                        // TODO: add single-shot transcription to Bee service
+                        Button("Re-transcribe") {
+                            guard !isBatchRunning else { return }
+                            isBatchRunning = true
+                            Task {
+                                let samples = loadWavSamples(path: diag.audioWavPath)
+                                if !samples.isEmpty {
+                                    let result = await transcriptionService.transcribeSamples(samples)
+                                    batchResult = result ?? "(no result)"
+                                } else {
+                                    batchResult = "(failed to load audio)"
+                                }
+                                isBatchRunning = false
+                            }
+                        }
+                        .font(.system(size: 10, weight: .semibold))
+                        .disabled(isBatchRunning)
                     }
 
                     Button("Reveal") {

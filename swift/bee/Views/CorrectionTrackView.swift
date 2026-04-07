@@ -21,7 +21,7 @@ struct CorrectionTrackView: View {
         // Default: all corrections accepted
         var initial: [String: Bool] = [:]
         for edit in output.edits {
-            initial[edit.edit_id] = true
+            initial[edit.editId] = true
         }
         _resolutions = State(initialValue: initial)
     }
@@ -51,13 +51,13 @@ struct CorrectionTrackView: View {
                             .id(id)
 
                     case .edit(let id, let edit):
-                        let accepted = resolutions[edit.edit_id] ?? true
+                        let accepted = resolutions[edit.editId] ?? true
                         EditLaneView(
                             original: edit.original,
                             replacement: edit.replacement,
                             accepted: accepted
                         ) {
-                            resolutions[edit.edit_id] = !accepted
+                            resolutions[edit.editId] = !accepted
                         }
                         .id(id)
                     }
@@ -73,12 +73,12 @@ struct CorrectionTrackView: View {
                 Spacer()
                 Button("Reject All") {
                     for edit in output.edits {
-                        resolutions[edit.edit_id] = false
+                        resolutions[edit.editId] = false
                     }
                 }
                 Button("Accept All") {
                     for edit in output.edits {
-                        resolutions[edit.edit_id] = true
+                        resolutions[edit.editId] = true
                     }
                 }
                 Button("Apply") { onApply(resolutions) }
@@ -95,7 +95,7 @@ struct CorrectionTrackView: View {
 
     enum Segment {
         case plain(id: String, text: String)
-        case edit(id: String, edit: CorrectionService.Edit)
+        case edit(id: String, edit: CorrectionEdit)
 
         var id: String {
             switch self {
@@ -107,14 +107,14 @@ struct CorrectionTrackView: View {
 
     var segments: [Segment] {
         let text = output.originalText
-        let sortedEdits = output.edits.sorted { $0.span_start < $1.span_start }
+        let sortedEdits = output.edits.sorted { $0.spanStart < $1.spanStart }
         var result: [Segment] = []
         var cursor = text.startIndex
 
         for (i, edit) in sortedEdits.enumerated() {
-            let spanStart = text.index(text.startIndex, offsetBy: edit.span_start, limitedBy: text.endIndex)
+            let spanStart = text.index(text.startIndex, offsetBy: Int(edit.spanStart), limitedBy: text.endIndex)
                 ?? text.endIndex
-            let spanEnd = text.index(text.startIndex, offsetBy: edit.span_end, limitedBy: text.endIndex)
+            let spanEnd = text.index(text.startIndex, offsetBy: Int(edit.spanEnd), limitedBy: text.endIndex)
                 ?? text.endIndex
 
             // Plain text before this edit

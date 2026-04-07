@@ -36,8 +36,10 @@ final class CorrectionPanel {
             onApply: { [weak self] resolutions in
                 // Send teaching signals
                 let teachData = resolutions.map { (editId: $0.key, accepted: $0.value) }
-                correctionService.teach(sessionId: output.sessionId, resolutions: teachData)
-                correctionService.save()
+                Task {
+                    await correctionService.teach(sessionId: output.sessionId, resolutions: teachData)
+                    await correctionService.save()
+                }
 
                 // Rebuild final text from resolutions
                 let finalText = Self.rebuildText(output: output, resolutions: resolutions)
@@ -90,13 +92,13 @@ final class CorrectionPanel {
     ) -> String {
         // Start with the original text, apply edits in reverse order
         var chars = Array(output.originalText)
-        let sortedEdits = output.edits.sorted { $0.span_start > $1.span_start }
+        let sortedEdits = output.edits.sorted { $0.spanStart > $1.spanStart }
 
         for edit in sortedEdits {
-            let accepted = resolutions[edit.edit_id] ?? true
+            let accepted = resolutions[edit.editId] ?? true
             let replacement = accepted ? edit.replacement : edit.original
-            let start = chars.index(chars.startIndex, offsetBy: edit.span_start)
-            let end = chars.index(chars.startIndex, offsetBy: edit.span_end)
+            let start = chars.index(chars.startIndex, offsetBy: Int(edit.spanStart))
+            let end = chars.index(chars.startIndex, offsetBy: Int(edit.spanEnd))
             chars.replaceSubrange(start..<end, with: replacement)
         }
 

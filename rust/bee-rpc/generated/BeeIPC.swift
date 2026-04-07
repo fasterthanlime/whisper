@@ -29,7 +29,7 @@ public struct RepoFile: Codable, Sendable {
     public var url: String
     public var size: UInt64
 
-    public init(name: String, url: String, size: UInt64) {
+    nonisolated public init(name: String, url: String, size: UInt64) {
         self.name = name
         self.url = url
         self.size = size
@@ -41,7 +41,7 @@ public struct RepoDownload: Codable, Sendable {
     public var localDir: String
     public var files: [RepoFile]
 
-    public init(repoId: String, localDir: String, files: [RepoFile]) {
+    nonisolated public init(repoId: String, localDir: String, files: [RepoFile]) {
         self.repoId = repoId
         self.localDir = localDir
         self.files = files
@@ -57,7 +57,7 @@ public struct AlignedWord: Codable, Sendable {
     public var meanMargin: Float?
     public var minMargin: Float?
 
-    public init(word: String, start: Double, end: Double, meanLogprob: Float?, minLogprob: Float?, meanMargin: Float?, minMargin: Float?) {
+    nonisolated public init(word: String, start: Double, end: Double, meanLogprob: Float?, minLogprob: Float?, meanMargin: Float?, minMargin: Float?) {
         self.word = word
         self.start = start
         self.end = end
@@ -74,7 +74,7 @@ public struct FeedResult: Codable, Sendable {
     public var alignments: [AlignedWord]
     public var isFinal: Bool
 
-    public init(text: String, committedUtf16Len: UInt32, alignments: [AlignedWord], isFinal: Bool) {
+    nonisolated public init(text: String, committedUtf16Len: UInt32, alignments: [AlignedWord], isFinal: Bool) {
         self.text = text
         self.committedUtf16Len = committedUtf16Len
         self.alignments = alignments
@@ -88,7 +88,7 @@ public struct EngineStats: Codable, Sendable {
     public var vramUsedMb: Float
     public var ramUsedMb: Float
 
-    public init(cpuPercent: Float, gpuPercent: Float, vramUsedMb: Float, ramUsedMb: Float) {
+    nonisolated public init(cpuPercent: Float, gpuPercent: Float, vramUsedMb: Float, ramUsedMb: Float) {
         self.cpuPercent = cpuPercent
         self.gpuPercent = gpuPercent
         self.vramUsedMb = vramUsedMb
@@ -107,7 +107,7 @@ public struct CorrectionEdit: Codable, Sendable {
     public var rankerProb: Double
     public var gateProb: Double
 
-    public init(editId: String, spanStart: UInt32, spanEnd: UInt32, original: String, replacement: String, term: String, aliasId: Int32, rankerProb: Double, gateProb: Double) {
+    nonisolated public init(editId: String, spanStart: UInt32, spanEnd: UInt32, original: String, replacement: String, term: String, aliasId: Int32, rankerProb: Double, gateProb: Double) {
         self.editId = editId
         self.spanStart = spanStart
         self.spanEnd = spanEnd
@@ -125,7 +125,7 @@ public struct CorrectionOutput: Codable, Sendable {
     public var bestText: String
     public var edits: [CorrectionEdit]
 
-    public init(sessionId: String, bestText: String, edits: [CorrectionEdit]) {
+    nonisolated public init(sessionId: String, bestText: String, edits: [CorrectionEdit]) {
         self.sessionId = sessionId
         self.bestText = bestText
         self.edits = edits
@@ -136,7 +136,7 @@ public struct EditResolution: Codable, Sendable {
     public var editId: String
     public var accepted: Bool
 
-    public init(editId: String, accepted: Bool) {
+    nonisolated public init(editId: String, accepted: Bool) {
         self.editId = editId
         self.accepted = accepted
     }
