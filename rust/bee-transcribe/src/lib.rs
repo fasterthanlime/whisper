@@ -668,15 +668,11 @@ impl<'a> Session<'a> {
             .decode(&all_ids, true)
             .unwrap_or_default();
 
-        // In auto-detect mode (no language forced), the model outputs
-        // "language English<asr_text>actual text". Parse and strip it.
+        // In auto-detect mode, the model outputs "language English<asr_text>actual text".
         let text = if self.options.language.as_str().is_empty() {
-            if let Some((lang, rest)) = parse_language_prefix(&raw_text) {
-                self.detected_language = lang;
-                rest
-            } else {
-                raw_text
-            }
+            let (lang, rest) = parse_language_prefix(&raw_text);
+            self.detected_language = lang;
+            rest
         } else {
             raw_text
         };
@@ -708,37 +704,16 @@ impl<'a> Session<'a> {
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 const ASR_TEXT_TAG: &str = "<asr_text>";
-const LANG_PREFIX: &str = "language ";
 
-/// Parse "language English<asr_text>actual text" → Some(("English", "actual text")).
-/// Returns None if the format doesn't match.
-fn parse_language_prefix(text: &str) -> Option<(String, String)> {
-    // Look for <asr_text> tag
+/// Split model output by `<asr_text>`. Before = language, after = text.
+/// If no `<asr_text>` tag, there's no text yet (returns empty text).
+fn parse_language_prefix(text: &str) -> (String, String) {
     if let Some(split_pos) = text.find(ASR_TEXT_TAG) {
-        let meta = &text[..split_pos];
-        let rest = &text[split_pos + ASR_TEXT_TAG.len()..];
-
-        // Extract language from "language X" prefix
-        let lang = meta
-            .lines()
-            .find_map(|line| {
-                let trimmed = line.trim();
-                if trimmed.to_lowercase().starts_with(LANG_PREFIX) {
-                    Some(trimmed[LANG_PREFIX.len()..].trim().to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_default();
-
-        Some((lang, rest.to_string()))
-    } else if text.starts_with(LANG_PREFIX) {
-        // No <asr_text> tag but starts with "language X" — model may have
-        // output just the language without the tag yet (early chunks)
-        // Don't strip in this case, wait for the tag
-        None
+        let lang = text[..split_pos].trim().to_string();
+        let rest = text[split_pos + ASR_TEXT_TAG.len()..].to_string();
+        (lang, rest)
     } else {
-        None
+        (text.trim().to_string(), String::new())
     }
 }
 
