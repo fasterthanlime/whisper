@@ -270,7 +270,7 @@ impl bee_rpc::Bee for BeeService {
         };
 
         let mut sessions = self.inner.sessions.lock().unwrap();
-        let Some(old_session) = sessions.remove(&session_id) else {
+        let Some(_old_session) = sessions.remove(&session_id) else {
             return false;
         };
 

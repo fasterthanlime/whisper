@@ -8,12 +8,11 @@ pub(crate) struct CorrectionEngine {
     pub(crate) judge: TwoStageJudge,
     pub(crate) index: PhoneticIndex,
     pub(crate) g2p: CachedEspeakG2p,
-    pub(crate) events_path: Option<PathBuf>,
 }
 
 pub(crate) fn load_correction_engine(
     dataset_dir: &Path,
-    events_path: Option<PathBuf>,
+    _events_path: Option<PathBuf>,
     gate_threshold: f32,
     ranker_threshold: f32,
 ) -> Result<CorrectionEngine, String> {
@@ -38,6 +37,5 @@ pub(crate) fn load_correction_engine(
         judge,
         index,
         g2p,
-        events_path,
     })
 }

@@ -649,7 +649,7 @@ fn word_logprob_stats(
 
     // Decode each token to find its text contribution
     let mut per_token_texts: Vec<String> = Vec::with_capacity(token_ids.len());
-    for (i, &tid) in token_ids.iter().enumerate() {
+    for (i, _) in token_ids.iter().enumerate() {
         // Decode [0..=i] minus [0..i] to get just this token's contribution
         let with = tokenizer.decode(&token_ids[..=i], true).unwrap_or_default();
         let without = if i > 0 {
@@ -723,25 +723,6 @@ fn compute_rms(samples: &[f32]) -> f32 {
     }
     let sum_sq: f32 = samples.iter().map(|&s| s * s).sum();
     (sum_sq / samples.len() as f32).sqrt()
-}
-
-/// Walk backwards from `max_tokens` to find a token count where the
-/// decoded text ends at a word boundary (space or punctuation).
-fn find_word_boundary(
-    token_ids: &[u32],
-    max_tokens: usize,
-    tokenizer: &tokenizers::Tokenizer,
-) -> Option<(usize, String)> {
-    let mut n = max_tokens.min(token_ids.len());
-    while n > 0 {
-        let text = tokenizer.decode(&token_ids[..n], true).unwrap_or_default();
-        let trimmed = text.trim_end();
-        if trimmed.is_empty() || matches!(trimmed.chars().last(), Some(c) if !c.is_alphanumeric()) {
-            return Some((n, text));
-        }
-        n -= 1;
-    }
-    None
 }
 
 /// Decode WAV bytes to 16kHz mono f32 samples.

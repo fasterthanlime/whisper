@@ -70,38 +70,6 @@ pub const SPARSE_OFFSET: u64 = 1000;
 /// Hash space for sparse context features.
 const SPARSE_BUCKETS: u64 = 1 << 14; // 16384
 
-const BASE_WEIGHTS: &[(u64, f64)] = &[
-    (0, 0.0),    // bias
-    (1, 1.8),    // acceptance_score
-    (2, 1.2),    // phonetic_score
-    (3, 0.8),    // coarse_score
-    (4, 0.6),    // token_score
-    (5, 0.5),    // feature_score
-    (6, 0.3),    // feature_bonus
-    (7, 0.3),    // best_view_score
-    (8, 0.15),   // cross_view_support
-    (9, 0.12),   // qgram_overlap
-    (10, 0.05),  // total_qgram_overlap
-    (11, 0.15),  // token_count_match
-    (12, 0.25),  // phone_closeness
-    (13, 0.08),  // alias_source_spoken
-    (14, 0.06),  // alias_source_identifier
-    (15, -0.04), // alias_source_confusion
-    (16, 0.04),  // identifier_acronym
-    (17, 0.04),  // identifier_digits
-    (18, 0.02),  // identifier_snake
-    (19, 0.02),  // identifier_camel
-    (20, 0.02),  // identifier_symbol
-    (21, 0.10),  // short_guard_passed
-    (22, 0.10),  // low_content_guard_passed
-    (23, 0.20),  // acceptance_floor_passed
-    (24, 0.30),  // verified
-    (25, 0.02),  // span_token_count
-    (26, 0.02),  // span_phone_count
-    (27, -0.30), // span_low_content
-    // ASR uncertainty: no base weights (start at 0, learn from data)
-];
-
 /// Threshold for the judge to accept a candidate replacement.
 /// If no candidate's probability exceeds this, keep original.
 const ACCEPT_THRESHOLD: f32 = 0.5;
@@ -1279,7 +1247,7 @@ pub fn build_gate_features(
 /// Each candidate gets candidate-specific + candidate-relative features.
 /// NO span-level ASR or context features (those belong to Stage A).
 pub fn build_ranker_features(
-    span: &TranscriptSpan,
+    _span: &TranscriptSpan,
     candidates: &[(CandidateFeatureRow, IdentifierFlags)],
     memory: &TermMemory,
 ) -> Vec<JudgeExample> {
