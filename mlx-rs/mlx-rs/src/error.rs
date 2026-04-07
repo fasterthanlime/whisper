@@ -241,7 +241,9 @@ extern "C" fn default_mlx_error_handler(msg: *const c_char, _data: *mut std::ffi
 #[no_mangle]
 extern "C" fn noop_mlx_error_handler_data_deleter(_data: *mut std::ffi::c_void) {}
 
-pub(crate) fn setup_mlx_error_handler() {
+/// Install a non-fatal MLX error handler that stores the error message
+/// instead of calling `exit(255)`.
+pub fn setup_mlx_error_handler() {
     let handler = default_mlx_error_handler;
     let data_ptr = LAST_MLX_ERROR.with(|last_error| last_error.as_ptr() as *mut std::ffi::c_void);
     let dtor = noop_mlx_error_handler_data_deleter;

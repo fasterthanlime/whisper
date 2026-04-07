@@ -95,16 +95,3 @@ targets:
       - package: vox
         product: VoxRuntime
 
-  beeBroker:
-    type: tool
-    platform: macOS
-    sources:
-      - path: bee-broker
-      - path: shared
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: fasterthanlime.bee.broker
-        PRODUCT_NAME: beeBroker
-        SWIFT_VERSION: "5.0"
-        ENABLE_APP_SANDBOX: NO
-        ENABLE_HARDENED_RUNTIME: YES

@@ -14,15 +14,13 @@ extern "C" {
     fn mlx_clear_cache() -> std::ffi::c_int;
 }
 
-/// Ensure MLX's error handler is installed (replaces the default handler
-/// which calls `exit(255)` on any error).
+/// Install the mlx-rs error handler, replacing the default C handler
+/// which calls `exit(255)` on any error.
 fn ensure_mlx_error_handler() {
     use std::sync::Once;
     static INIT: Once = Once::new();
     INIT.call_once(|| {
-        // Force mlx-rs to install its error handler by performing
-        // a trivial operation that triggers lazy init.
-        let _ = mlx_rs::Array::from_slice(&[0.0f32], &[1]);
+        mlx_rs::error::setup_mlx_error_handler();
     });
 }
 

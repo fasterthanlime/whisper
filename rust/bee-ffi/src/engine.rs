@@ -83,9 +83,8 @@ fn resolve_engine_config(
 
 pub(crate) fn load_engine(model_dir: &Path, cache_base: &Path) -> Result<AsrEngine, String> {
     // Cap MLX's Metal buffer cache at 2GB to prevent unbounded memory growth
-    if let Err(e) = bee_transcribe::set_mlx_cache_limit(2 * 1024 * 1024 * 1024) {
-        tracing::warn!("Failed to set MLX cache limit: {e}");
-    }
+    bee_transcribe::set_mlx_cache_limit(2 * 1024 * 1024 * 1024)
+        .map_err(|e| format!("Failed to set MLX cache limit: {e}"))?;
 
     let config = resolve_engine_config(model_dir, cache_base)?;
     let engine = Engine::load(&config).map_err(|e| format!("load engine: {e}"))?;
