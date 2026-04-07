@@ -4,6 +4,7 @@ import VoxRuntime
 /// Manages the vox-ffi connection to the Rust bee-ffi dylib.
 /// Provides typed access to the Bee service (model downloads, engine loading, transcription).
 actor BeeEngine {
+    private var rust: FfiDynamicLibrary?
     private var client: BeeClient?
     private var sessionHandle: SessionHandle?
     private var driverTask: Task<Void, Error>?
@@ -47,6 +48,7 @@ actor BeeEngine {
         setenv("BEE_FFI_LOG_PATH", logPath, 1)
 
         let rust = try FfiDynamicLibrary(path: libURL)
+        self.rust = rust
 
         let endpoint = FfiEndpoint()
         let connector = try endpoint.connector(
@@ -156,6 +158,7 @@ actor BeeEngine {
         client = nil
         sessionHandle = nil
         driverTask = nil
+        rust = nil
     }
 
     deinit {
