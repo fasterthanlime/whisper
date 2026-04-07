@@ -14,9 +14,22 @@ extern "C" {
     fn mlx_clear_cache() -> std::ffi::c_int;
 }
 
+/// Ensure MLX's error handler is installed (replaces the default handler
+/// which calls `exit(255)` on any error).
+fn ensure_mlx_error_handler() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        // Force mlx-rs to install its error handler by performing
+        // a trivial operation that triggers lazy init.
+        let _ = mlx_rs::Array::from_slice(&[0.0f32], &[1]);
+    });
+}
+
 /// Release unused MLX Metal buffers from the pool back to the system.
 /// Safe to call concurrently — only frees buffers with no live references.
 pub fn clear_mlx_cache() {
+    ensure_mlx_error_handler();
     unsafe {
         mlx_clear_cache();
     }
@@ -25,6 +38,7 @@ pub fn clear_mlx_cache() {
 /// Set the MLX Metal buffer cache limit. Buffers beyond this are returned
 /// to the system instead of being pooled for reuse.
 pub fn set_mlx_cache_limit(limit: usize) -> usize {
+    ensure_mlx_error_handler();
     let mut prev = 0usize;
     unsafe {
         mlx_set_cache_limit(&mut prev, limit);
