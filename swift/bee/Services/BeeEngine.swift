@@ -40,6 +40,7 @@ actor BeeEngine {
     /// Connect to the Rust bee-ffi service via vox-ffi.
     func connect() async throws {
         let libURL = Self.libraryURL()
+        beeLog("BEE-ENGINE: loading dylib from \(libURL.path)")
 
         // Tell Rust where to log (must be set before dlopen triggers #[ctor])
         let logPath = FileManager.default.containerURL(
@@ -49,24 +50,34 @@ actor BeeEngine {
 
         let rust = try FfiDynamicLibrary(path: libURL)
         self.rust = rust
+        beeLog("BEE-ENGINE: dylib loaded, loading vtable")
 
         let endpoint = FfiEndpoint()
-        let connector = try endpoint.connector(
-            peer: rust.loadVtable(symbol: "bee_ffi_v1_vtable")
-        )
+        let vtable = try rust.loadVtable(symbol: "bee_ffi_v1_vtable")
+        beeLog("BEE-ENGINE: vtable loaded, connecting")
+
+        let connector = try endpoint.connector(peer: vtable)
+        beeLog("BEE-ENGINE: connector created, initiating session")
 
         let session = try await VoxRuntime.Session.initiator(
             connector,
             dispatcher: NoopBeeDispatcher(),
             resumable: false
         )
+        beeLog("BEE-ENGINE: session established")
 
         self.sessionHandle = session.handle
         self.driverTask = Task {
-            try await session.run()
+            do {
+                try await session.run()
+                beeLog("BEE-ENGINE: driver task completed normally")
+            } catch {
+                beeLog("BEE-ENGINE: driver task failed: \(error)")
+            }
         }
 
         self.client = BeeClient(connection: session.connection)
+        beeLog("BEE-ENGINE: client ready")
     }
 
     /// Get the full manifest of required model repos from Rust.
