@@ -569,6 +569,14 @@ pub trait CorrectionEventSink {
     fn log_event(&mut self, event: &CorrectionEvent);
 }
 
+/// Sink that captures a single event (used by `teach_span_event`).
+struct CaptureEventSink(Option<CorrectionEvent>);
+impl CorrectionEventSink for CaptureEventSink {
+    fn log_event(&mut self, event: &CorrectionEvent) {
+        self.0 = Some(event.clone());
+    }
+}
+
 /// Decision output from the two-stage judge.
 #[derive(Clone, Debug)]
 pub struct SpanDecision {
@@ -778,6 +786,20 @@ impl TwoStageJudge {
             all_candidate_terms: all_terms,
             chosen_alias_id,
         });
+    }
+
+    /// Like `teach_span`, but returns the event instead of writing to a sink.
+    /// Useful when the caller IS the sink (avoids borrow conflict).
+    pub fn teach_span_event(
+        &mut self,
+        span: &TranscriptSpan,
+        candidates: &[(CandidateFeatureRow, IdentifierFlags)],
+        chosen_alias_id: Option<u32>,
+        ctx: &SpanContext,
+    ) -> CorrectionEvent {
+        let mut capture = CaptureEventSink(None);
+        self.teach_span(span, candidates, chosen_alias_id, ctx, &mut capture);
+        capture.0.expect("teach_span always logs one event")
     }
 
     /// Gate probability for diagnostics.

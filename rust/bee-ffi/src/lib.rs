@@ -411,6 +411,8 @@ impl bee_rpc::Bee for BeeService {
                     .as_nanos()
             );
 
+            let mut session_pending = std::collections::HashMap::new();
+
             for span in &spans {
                 let query = RetrievalQuery {
                     text: span.text.clone(),
@@ -452,8 +454,9 @@ impl bee_rpc::Bee for BeeService {
                 let decision = engine.judge.score_span(span, &candidates_with_flags, &ctx);
 
                 if let Some(ref chosen) = decision.chosen {
+                    let edit_id = format!("e{}", edits.len());
                     edits.push(CorrectionEdit {
-                        edit_id: format!("e{}", edits.len()),
+                        edit_id: edit_id.clone(),
                         span_start: span.char_start as u32,
                         span_end: span.char_end as u32,
                         original: span.text.clone(),
@@ -463,6 +466,17 @@ impl bee_rpc::Bee for BeeService {
                         ranker_prob: chosen.ranker_prob as f64,
                         gate_prob: decision.gate_prob as f64,
                     });
+
+                    // Stash for correct_teach
+                    session_pending.insert(
+                        edit_id,
+                        crate::correct::PendingEdit {
+                            span: span.clone(),
+                            candidates: candidates_with_flags,
+                            ctx,
+                            chosen_alias_id: Some(chosen.alias_id),
+                        },
+                    );
                 }
             }
 
@@ -477,6 +491,12 @@ impl bee_rpc::Bee for BeeService {
                 offset += edit.replacement.len() as i64 - (end - start) as i64;
             }
 
+            if !session_pending.is_empty() {
+                engine
+                    .pending
+                    .insert(session_id.clone(), session_pending);
+            }
+
             CorrectionOutput {
                 session_id,
                 best_text,
@@ -489,13 +509,106 @@ impl bee_rpc::Bee for BeeService {
 
     async fn correct_teach(
         &self,
-        _session_id: String,
-        _resolutions: Vec<EditResolution>,
+        session_id: String,
+        resolutions: Vec<EditResolution>,
     ) -> Result<bool, BeeError> {
-        Err(BeeError::NotImplemented)
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut guard = inner.correction.blocking_lock();
+            let Some(engine) = guard.as_mut() else {
+                return Err(BeeError::CorrectionError {
+                    message: "correction engine not loaded".into(),
+                });
+            };
+
+            let session_edits = engine.pending.remove(&session_id).ok_or_else(|| {
+                BeeError::CorrectionError {
+                    message: format!("no pending edits for session {session_id}"),
+                }
+            })?;
+
+            for res in &resolutions {
+                let Some(pending) = session_edits.get(&res.edit_id) else {
+                    tracing::warn!(
+                        "correct_teach: unknown edit_id {} in session {}",
+                        res.edit_id,
+                        session_id
+                    );
+                    continue;
+                };
+
+                let chosen = if res.accepted {
+                    pending.chosen_alias_id
+                } else {
+                    None
+                };
+
+                // teach_span needs &mut self for judge AND &mut self for sink,
+                // but CorrectionEngine is both. Split the borrow:
+                // collect the event manually instead.
+                let event = engine.judge.teach_span_event(
+                    &pending.span,
+                    &pending.candidates,
+                    chosen,
+                    &pending.ctx,
+                );
+                engine.event_log.push(event);
+            }
+
+            tracing::info!(
+                session_id,
+                resolutions = resolutions.len(),
+                "correct_teach: applied"
+            );
+            Ok(true)
+        })
+        .await
+        .expect("spawn_blocking panicked")
     }
 
     async fn correct_save(&self) -> Result<bool, BeeError> {
-        Err(BeeError::NotImplemented)
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut guard = inner.correction.blocking_lock();
+            let Some(engine) = guard.as_mut() else {
+                return Err(BeeError::CorrectionError {
+                    message: "correction engine not loaded".into(),
+                });
+            };
+
+            let Some(ref path) = engine.events_path else {
+                tracing::warn!("correct_save: no events_path configured, skipping");
+                return Ok(true);
+            };
+
+            // Append new events to file
+            use std::io::Write;
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .map_err(|e| BeeError::CorrectionError {
+                    message: format!("open events file: {e}"),
+                })?;
+            let mut writer = std::io::BufWriter::new(file);
+            for event in engine.event_log.drain(..) {
+                let json = facet_json::to_string(&event).map_err(|e| {
+                    BeeError::CorrectionError {
+                        message: format!("serialize event: {e}"),
+                    }
+                })?;
+                writeln!(writer, "{json}").map_err(|e| BeeError::CorrectionError {
+                    message: format!("write event: {e}"),
+                })?;
+            }
+            writer.flush().map_err(|e| BeeError::CorrectionError {
+                message: format!("flush events: {e}"),
+            })?;
+
+            tracing::info!("correct_save: events flushed to {}", path.display());
+            Ok(true)
+        })
+        .await
+        .expect("spawn_blocking panicked")
     }
 }
