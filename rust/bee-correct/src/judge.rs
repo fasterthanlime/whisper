@@ -631,13 +631,35 @@ pub struct RankedCandidate {
     pub ranker_prob: f32,
 }
 
-/// Two-stage judge: span gate (should we correct?) + candidate ranker (which candidate?).
+/// Two-stage correction judge using online-learned sparse linear models.
+///
+/// **Stage A — Gate:** A span-level binary classifier that decides whether a
+/// transcript span should be corrected at all. Uses aggregate signals (ASR
+/// uncertainty, phonetic similarity of best candidates, memory of past
+/// corrections). If `gate_prob < gate_threshold`, the span is left as-is.
+///
+/// **Stage B — Ranker:** A candidate-level classifier that scores each
+/// replacement candidate. Uses per-candidate features (phonetic distance,
+/// frequency, identifier flags). The highest-scoring candidate is chosen
+/// only if `ranker_prob >= ranker_threshold`.
+///
+/// Both models are FTRL-Proximal learners ([`SparseFtrl`]) that update online
+/// from user feedback via [`teach_span`](Self::teach_span). They start from
+/// seeded weights (hand-tuned priors) and adapt to the user's vocabulary.
+///
+/// A [`TermMemory`] tracks historical accept/reject counts per term, providing
+/// memory-based features (e.g. "user accepted 'Kubernetes' 5 times").
 #[derive(Clone, Debug)]
 pub struct TwoStageJudge {
+    /// Stage A: span-level "should we correct?" classifier.
     gate: SparseFtrl,
+    /// Stage B: candidate-level "which replacement?" classifier.
     ranker: SparseFtrl,
+    /// Historical accept/reject counts per term, used as features.
     memory: TermMemory,
+    /// Minimum gate probability to attempt correction (typically 0.3–0.7).
     pub gate_threshold: f32,
+    /// Minimum ranker probability to accept a candidate (typically 0.3–0.7).
     pub ranker_threshold: f32,
 }
 

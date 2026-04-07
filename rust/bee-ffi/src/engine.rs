@@ -1,5 +1,17 @@
+//! ASR engine loading and model download manifest.
+//!
+//! # Environment variables
+//!
+//! All optional — used for development/testing to override default paths:
+//!
+//! | Variable | Purpose | Default |
+//! |----------|---------|---------|
+//! | `BEE_VAD_DIR` | Silero VAD model directory | `{cache}/aitytech--Silero-VAD-v5-MLX` |
+//! | `BEE_TOKENIZER_PATH` | Path to `tokenizer.json` | `{model_dir}/tokenizer.json` |
+//! | `BEE_ALIGNER_DIR` | Forced-aligner model directory | First match in `{cache}/mlx-community--Qwen3-ForcedAligner-*` |
+//! | `BEE_FFI_LOG_PATH` | Log file path (set by Swift before dlopen) | `/tmp/bee.log` |
+
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use bee_rpc::{RepoDownload, RepoFile};
 use bee_transcribe::{Engine, EngineConfig};
@@ -13,7 +25,9 @@ fn hf_file_url(repo_id: &str, filename: &str) -> String {
 }
 
 pub(crate) struct AsrEngine {
-    pub(crate) inner: Arc<Engine>,
+    /// Leaked via `Box::leak` — lives for process lifetime. Gives us a genuine
+    /// `&'static Engine` so sessions can borrow it without transmute.
+    pub(crate) inner: &'static Engine,
     /// Pre-loaded VAD tensors (loaded once, cloned per session).
     pub(crate) vad_tensors: Option<std::collections::HashMap<String, mlx_rs::Array>>,
     pub(crate) stats: StatsSampler,
@@ -24,6 +38,11 @@ pub(crate) struct AsrEngine {
 unsafe impl Send for AsrEngine {}
 unsafe impl Sync for AsrEngine {}
 
+/// Locate the Silero VAD model directory.
+///
+/// Checks `BEE_VAD_DIR` env var first, then falls back to
+/// `{cache_base}/aitytech--Silero-VAD-v5-MLX`. Returns `None` if neither exists
+/// (VAD is optional — sessions work without it, just no silence detection).
 pub(crate) fn find_vad_dir(cache_base: &Path) -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("BEE_VAD_DIR") {
         let p = PathBuf::from(dir);
@@ -39,6 +58,14 @@ pub(crate) fn find_vad_dir(cache_base: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Resolve paths for the ASR engine, checking env var overrides first.
+///
+/// Environment variables (all optional, for development/testing):
+/// - `BEE_TOKENIZER_PATH`: path to `tokenizer.json`. Default: `{model_dir}/tokenizer.json`.
+/// - `BEE_ALIGNER_DIR`: path to the forced-aligner model directory.
+///   Default: first existing candidate in `{cache_base}/mlx-community--Qwen3-ForcedAligner-*`.
+///
+/// Paths are `Box::leak`ed to `'static` since the engine lives for the process lifetime.
 fn resolve_engine_config(
     model_dir: &Path,
     cache_base: &Path,
@@ -104,7 +131,7 @@ pub(crate) fn load_engine(model_dir: &Path, cache_base: &Path) -> Result<AsrEngi
     });
 
     Ok(AsrEngine {
-        inner: Arc::new(engine),
+        inner: Box::leak(Box::new(engine)),
         vad_tensors,
         stats: StatsSampler::new(),
     })

@@ -11,7 +11,7 @@ use bee_rpc::{
     BeeDispatcher, CorrectionEdit, CorrectionOutput, EditResolution, EngineStats, FeedResult,
     RepoDownload,
 };
-use bee_transcribe::{Engine, Language, SessionOptions};
+use bee_transcribe::{Language, SessionOptions};
 use bee_types::SpanContext;
 use tracing::info;
 use vox::acceptor_on;
@@ -159,9 +159,7 @@ impl bee_rpc::Bee for BeeService {
             ..SessionOptions::default()
         };
 
-        let engine_ref: &Engine = &engine.inner;
-        let engine_static: &'static Engine = unsafe { std::mem::transmute(engine_ref) };
-        let mut session = engine_static.session(opts);
+        let mut session = engine.inner.session(opts);
 
         if let Some(ref tensors) = engine.vad_tensors {
             match bee_vad::SileroVad::from_tensors(tensors) {
@@ -177,7 +175,6 @@ impl bee_rpc::Bee for BeeService {
         self.inner.sessions.lock().unwrap().insert(
             id.clone(),
             AsrSession {
-                _engine: engine.inner.clone(),
                 session,
                 last_text: String::new(),
                 finished: false,
@@ -284,9 +281,7 @@ impl bee_rpc::Bee for BeeService {
             ..SessionOptions::default()
         };
 
-        let engine_ref: &Engine = &engine.inner;
-        let engine_static: &'static Engine = unsafe { std::mem::transmute(engine_ref) };
-        let mut new_session = engine_static.session(opts);
+        let mut new_session = engine.inner.session(opts);
 
         if let Some(ref tensors) = engine.vad_tensors {
             if let Ok(vad) = bee_vad::SileroVad::from_tensors(tensors) {
@@ -297,7 +292,6 @@ impl bee_rpc::Bee for BeeService {
         sessions.insert(
             session_id,
             AsrSession {
-                _engine: old_session._engine,
                 session: new_session,
                 last_text: String::new(),
                 finished: false,
@@ -313,9 +307,7 @@ impl bee_rpc::Bee for BeeService {
             return "error: engine not loaded".into();
         };
 
-        let engine_ref: &Engine = &engine.inner;
-        let engine_static: &'static Engine = unsafe { std::mem::transmute(engine_ref) };
-        let mut session = engine_static.session(SessionOptions::default());
+        let mut session = engine.inner.session(SessionOptions::default());
 
         if let Some(ref tensors) = engine.vad_tensors {
             if let Ok(vad) = bee_vad::SileroVad::from_tensors(tensors) {
@@ -467,7 +459,10 @@ impl bee_rpc::Bee for BeeService {
             }
         }
 
-        // Build best text by applying edits
+        // Build best text by applying edits in order (edits are sorted by span_start).
+        // Each replacement may shift subsequent positions: if we replace "teh" (3 chars)
+        // with "the" (3 chars), offset stays 0. If we replace "NY" (2) with "New York" (8),
+        // offset grows by +6 and all later positions must be adjusted.
         let mut best_text = text.clone();
         let mut offset: i64 = 0;
         for edit in &edits {

@@ -33,6 +33,12 @@ pub struct Feature {
 }
 
 impl SparseFtrl {
+    /// Create a new FTRL optimizer.
+    ///
+    /// - `alpha`: learning rate (higher = faster adaptation, more noise). Typical: 0.1–1.0.
+    /// - `beta`: learning rate smoothing (higher = more conservative early updates). Typical: 1.0.
+    /// - `l1`: L1 regularization (drives unused weights to zero → sparsity). Typical: 0.0001.
+    /// - `l2`: L2 regularization (prevents large weights). Typical: 0.001.
     pub fn new(alpha: f64, beta: f64, l1: f64, l2: f64) -> Self {
         Self {
             accumulators: HashMap::new(),
@@ -49,7 +55,10 @@ impl SparseFtrl {
         self.frozen.extend(indices);
     }
 
-    /// Compute the weight for a single feature from its accumulators.
+    /// Compute the weight for a single feature from its (z, n) accumulators.
+    ///
+    /// Applies L1 proximal thresholding: if |z| ≤ l1, the weight is zero
+    /// (soft-thresholding for sparsity). Otherwise, w = -(z - sign(z)·l1) / (l2 + (β + √n) / α).
     fn weight_for(&self, index: u64) -> f64 {
         let Some(&(z, n)) = self.accumulators.get(&index) else {
             return 0.0;

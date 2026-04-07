@@ -1,12 +1,7 @@
-use std::sync::Arc;
-
-use bee_transcribe::{Engine, Session};
+use bee_transcribe::Session;
 
 pub(crate) struct AsrSession {
-    // We store the Arc to keep the engine alive. The Session borrows it
-    // via a raw pointer with 'static lifetime — safe because the Arc
-    // guarantees the engine outlives the session.
-    pub(crate) _engine: Arc<Engine>,
+    /// Borrows the `&'static Engine` (Box::leaked in `load_engine`).
     pub(crate) session: Session<'static>,
     pub(crate) last_text: String,
     pub(crate) finished: bool,

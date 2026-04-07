@@ -1,3 +1,10 @@
+//! Real-time resource monitoring for the ASR engine.
+//!
+//! A background thread samples CPU, RAM, GPU, and VRAM every 400ms using
+//! platform APIs (libc `getrusage`/`proc_pidinfo`, IOKit `AGXAccelerator`).
+//! Readings are EMA-smoothed (α=0.25, ~1.4s time constant) and exposed
+//! via [`StatsSampler::get()`].
+
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -65,6 +72,7 @@ impl StatsSampler {
     }
 }
 
+/// Total user + system CPU time for this process, in microseconds (via `getrusage`).
 fn process_cpu_us() -> u64 {
     unsafe {
         let mut usage: libc::rusage = std::mem::zeroed();
@@ -75,6 +83,7 @@ fn process_cpu_us() -> u64 {
     }
 }
 
+/// Resident memory of this process in MB (via `proc_pidinfo` / `PROC_PIDTASKINFO`).
 fn process_ram_mb() -> f32 {
     #[repr(C)]
     struct ProcTaskinfo {
@@ -197,6 +206,12 @@ fn cf_dict_i64(dict: *const std::ffi::c_void, key: &str) -> Option<i64> {
     Some(out)
 }
 
+/// Query GPU utilization and VRAM usage via IOKit's `AGXAccelerator` service.
+///
+/// Returns `(gpu_percent, vram_mb)` or `None` if the IOKit service is unavailable
+/// (e.g. no discrete GPU, or missing entitlement). Reads the `PerformanceStatistics`
+/// dictionary from the IORegistry, extracting `"Device Utilization %"` and
+/// `"In use system memory"`.
 fn sample_gpu_iokit() -> Option<(f32, f32)> {
     use iokit::*;
     use std::ffi::CString;
