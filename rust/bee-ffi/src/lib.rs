@@ -402,7 +402,6 @@ impl bee_rpc::Bee for BeeService {
                 |span_text| engine.g2p.ipa_tokens(span_text).ok().flatten(),
             );
 
-            let mut edits = Vec::new();
             let session_id = format!(
                 "{:x}",
                 std::time::SystemTime::now()
@@ -411,7 +410,16 @@ impl bee_rpc::Bee for BeeService {
                     .as_nanos()
             );
 
-            let mut session_pending = std::collections::HashMap::new();
+            // Phase 1: score all spans, collect candidates
+            struct ScoredEdit {
+                span: bee_types::TranscriptSpan,
+                candidates: Vec<(bee_phonetic::phonetic_verify::CandidateFeatureRow, bee_types::IdentifierFlags)>,
+                ctx: SpanContext,
+                edit: CorrectionEdit,
+                score: f64,
+            }
+
+            let mut candidates: Vec<ScoredEdit> = Vec::new();
 
             for span in &spans {
                 let query = RetrievalQuery {
@@ -454,31 +462,60 @@ impl bee_rpc::Bee for BeeService {
                 let decision = engine.judge.score_span(span, &candidates_with_flags, &ctx);
 
                 if let Some(ref chosen) = decision.chosen {
-                    let edit_id = format!("e{}", edits.len());
-                    edits.push(CorrectionEdit {
-                        edit_id: edit_id.clone(),
-                        span_start: span.char_start as u32,
-                        span_end: span.char_end as u32,
-                        original: span.text.clone(),
-                        replacement: chosen.replacement_text.clone(),
-                        term: chosen.term.clone(),
-                        alias_id: chosen.alias_id as i32,
-                        ranker_prob: chosen.ranker_prob as f64,
-                        gate_prob: decision.gate_prob as f64,
-                    });
-
-                    // Stash for correct_teach
-                    session_pending.insert(
-                        edit_id,
-                        crate::correct::PendingEdit {
-                            span: span.clone(),
-                            candidates: candidates_with_flags,
-                            ctx,
-                            chosen_alias_id: Some(chosen.alias_id),
+                    let score = decision.gate_prob as f64 * chosen.ranker_prob as f64;
+                    candidates.push(ScoredEdit {
+                        span: span.clone(),
+                        candidates: candidates_with_flags,
+                        ctx,
+                        edit: CorrectionEdit {
+                            edit_id: String::new(), // assigned after selection
+                            span_start: span.char_start as u32,
+                            span_end: span.char_end as u32,
+                            original: span.text.clone(),
+                            replacement: chosen.replacement_text.clone(),
+                            term: chosen.term.clone(),
+                            alias_id: chosen.alias_id as i32,
+                            ranker_prob: chosen.ranker_prob as f64,
+                            gate_prob: decision.gate_prob as f64,
                         },
-                    );
+                        score,
+                    });
                 }
             }
+
+            // Phase 2: greedy non-overlapping selection, best score first
+            candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
+
+            let mut edits = Vec::new();
+            let mut session_pending = std::collections::HashMap::new();
+            let mut claimed: Vec<(usize, usize)> = Vec::new();
+
+            for mut cand in candidates {
+                let cs = cand.span.char_start;
+                let ce = cand.span.char_end;
+                if claimed.iter().any(|&(s, e)| cs < e && ce > s) {
+                    continue;
+                }
+                claimed.push((cs, ce));
+
+                let edit_id = format!("e{}", edits.len());
+                let alias_id = cand.edit.alias_id as u32;
+                cand.edit.edit_id = edit_id.clone();
+                edits.push(cand.edit);
+
+                session_pending.insert(
+                    edit_id,
+                    crate::correct::PendingEdit {
+                        span: cand.span,
+                        candidates: cand.candidates,
+                        ctx: cand.ctx,
+                        chosen_alias_id: Some(alias_id),
+                    },
+                );
+            }
+
+            // Sort edits by position for correct text composition
+            edits.sort_by_key(|e| e.span_start);
 
             let mut best_text = text.clone();
             let mut offset: i64 = 0;

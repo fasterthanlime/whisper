@@ -909,17 +909,24 @@ final class AppState {
                 // Load engine via vox-ffi
                 try await transcriptionService.loadModel(cacheDir: cacheDir)
 
-                // Load correction engine if dataset directory exists
-                if let datasetDir = ProcessInfo.processInfo.environment["BEE_CORRECTION_DATASET_DIR"] {
-                    let eventsPath = ProcessInfo.processInfo.environment["BEE_CORRECTION_EVENTS_PATH"]
-                    do {
-                        try await correctionService.load(
-                            datasetDir: datasetDir,
-                            eventsPath: eventsPath
-                        )
-                        beeLog("APP: correction engine loaded from \(datasetDir)")
-                    } catch {
-                        beeLog("APP: correction engine failed to load: \(error)")
+                // Load correction engine from group container dataset
+                if let groupContainer = FileManager.default.containerURL(
+                    forSecurityApplicationGroupIdentifier: "B2N6FSRTPV.group.fasterthanlime.bee"
+                ) {
+                    let datasetDir = groupContainer.appendingPathComponent("phonetic-seed").path
+                    let eventsPath = groupContainer.appendingPathComponent("correction-events.jsonl").path
+                    if FileManager.default.fileExists(atPath: datasetDir) {
+                        do {
+                            try await correctionService.load(
+                                datasetDir: datasetDir,
+                                eventsPath: eventsPath
+                            )
+                            beeLog("APP: correction engine loaded from \(datasetDir)")
+                        } catch {
+                            beeLog("APP: correction engine failed to load: \(error)")
+                        }
+                    } else {
+                        beeLog("APP: phonetic-seed dataset not found at \(datasetDir) — run install-bee.sh to copy it")
                     }
                 }
 

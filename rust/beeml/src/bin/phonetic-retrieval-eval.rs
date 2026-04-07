@@ -151,7 +151,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     dataset.validate()?;
 
     let index = dataset.phonetic_index();
-    let mut g2p = CachedEspeakG2p::english_with_persist_path(Some(eval_g2p_cache_path()))?;
+    let target_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target");
+    let mut g2p = CachedEspeakG2p::english_with_persist_path(&target_dir, Some(eval_g2p_cache_path()))?;
     let mut summary = EvalSummary::default();
     let mut counter_summary = CounterexampleSummary::default();
     let mut timings = EvalTimings::default();

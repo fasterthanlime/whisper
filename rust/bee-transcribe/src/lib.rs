@@ -668,14 +668,13 @@ impl<'a> Session<'a> {
             .decode(&all_ids, true)
             .unwrap_or_default();
 
-        // In auto-detect mode, the model outputs "language English<asr_text>actual text".
-        let text = if self.options.language.as_str().is_empty() {
-            let (lang, rest) = parse_language_prefix(&raw_text);
+        tracing::debug!("make_update: raw_text={raw_text:?} token_count={}", all_ids.len());
+
+        // The model may output "language English<asr_text>actual text" — always strip.
+        let (lang, text) = parse_language_prefix(&raw_text);
+        if !lang.is_empty() {
             self.detected_language = lang;
-            rest
-        } else {
-            raw_text
-        };
+        }
 
         // Committed length = decode committed tokens in the same context
         let committed_len = if self.committed_tokens.is_empty() {
@@ -705,16 +704,41 @@ impl<'a> Session<'a> {
 
 const ASR_TEXT_TAG: &str = "<asr_text>";
 
-/// Split model output by `<asr_text>`. Before = language, after = text.
-/// If no `<asr_text>` tag, there's no text yet (returns empty text).
+/// Strip model-inserted language prefix and `<asr_text>` tag.
+///
+/// The model may output any combination of:
+///   "language English<asr_text>Hello"
+///   "language EnglishHello"        (tag omitted)
+///   "Hello"                        (no prefix at all)
+///   "language None<asr_text>"      (empty audio)
 fn parse_language_prefix(text: &str) -> (String, String) {
-    if let Some(split_pos) = text.find(ASR_TEXT_TAG) {
-        let lang = text[..split_pos].trim().to_string();
-        let rest = text[split_pos + ASR_TEXT_TAG.len()..].to_string();
-        (lang, rest)
-    } else {
-        (text.trim().to_string(), String::new())
+    // 1. Remove <asr_text> tag if present
+    let s = text.trim().replace(ASR_TEXT_TAG, "");
+    let s = s.trim();
+    if s.is_empty() {
+        return (String::new(), String::new());
     }
+
+    // 2. Strip "language Xyz" prefix if present
+    let Some(rest) = s.strip_prefix("language ") else {
+        return (String::new(), s.to_string());
+    };
+    let lang_end = rest
+        .find(|c: char| !c.is_ascii_alphabetic())
+        .unwrap_or(rest.len());
+    let lang = &rest[..lang_end];
+    let text_part = rest[lang_end..].trim();
+
+    if lang.eq_ignore_ascii_case("none") && text_part.is_empty() {
+        return (String::new(), String::new());
+    }
+
+    let lang = if lang.eq_ignore_ascii_case("none") {
+        ""
+    } else {
+        lang
+    };
+    (lang.to_string(), text_part.to_string())
 }
 
 /// Compute per-word logprob statistics by mapping decoder tokens to aligner words.

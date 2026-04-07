@@ -15,12 +15,12 @@ pub struct CachedEspeakG2p {
 }
 
 impl CachedEspeakG2p {
-    pub fn english() -> Result<Self> {
-        Self::english_with_persist_path(None)
+    pub fn english(base_dir: &Path) -> Result<Self> {
+        Self::english_with_persist_path(base_dir, None)
     }
 
-    pub fn english_with_persist_path(persist_path: Option<PathBuf>) -> Result<Self> {
-        let data_dir = bundled_espeak_data_dir("en")?;
+    pub fn english_with_persist_path(base_dir: &Path, persist_path: Option<PathBuf>) -> Result<Self> {
+        let data_dir = bundled_espeak_data_dir(base_dir, "en")?;
         let cache = match persist_path.as_deref() {
             Some(path) => load_cache_file(path)?,
             None => HashMap::new(),
@@ -70,10 +70,8 @@ impl CachedEspeakG2p {
     }
 }
 
-fn bundled_espeak_data_dir(lang: &str) -> Result<PathBuf> {
-    let data_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/espeak-ng-data")
-        .join(lang);
+fn bundled_espeak_data_dir(base_dir: &Path, lang: &str) -> Result<PathBuf> {
+    let data_dir = base_dir.join("espeak-ng-data").join(lang);
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating bundled espeak-ng data dir {}", data_dir.display()))?;
     install_bundled_language(&data_dir, lang)

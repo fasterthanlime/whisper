@@ -67,10 +67,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dataset = SeedDataset::load_canonical()?;
     dataset.validate()?;
     let index = dataset.phonetic_index();
-    let mut g2p = CachedEspeakG2p::english_with_persist_path(Some(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/phonetic-retrieval-eval-g2p-cache.tsv"),
-    ))?;
+    let target_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target");
+    let mut g2p = CachedEspeakG2p::english_with_persist_path(
+        &target_dir,
+        Some(target_dir.join("phonetic-retrieval-eval-g2p-cache.tsv")),
+    )?;
 
     let term_aliases = index
         .aliases

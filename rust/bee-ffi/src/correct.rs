@@ -42,7 +42,7 @@ pub(crate) fn load_correction_engine(
     let dataset = SeedDataset::load(dataset_dir).map_err(|e| format!("load dataset: {e}"))?;
     let index = dataset.phonetic_index();
 
-    let g2p = CachedEspeakG2p::english().map_err(|e| format!("init g2p: {e}"))?;
+    let g2p = CachedEspeakG2p::english(dataset_dir).map_err(|e| format!("init g2p: {e}"))?;
 
     let gt = if gate_threshold > 0.0 {
         gate_threshold

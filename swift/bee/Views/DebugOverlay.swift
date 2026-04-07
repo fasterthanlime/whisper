@@ -1,3 +1,4 @@
+import AVFoundation
 import os
 import SwiftUI
 
@@ -223,7 +224,7 @@ struct DiagnosticsView: View {
                             guard !isBatchRunning else { return }
                             isBatchRunning = true
                             Task {
-                                let samples = loadWavSamples(path: diag.audioWavPath)
+                                let samples = loadAudioSamples(url: URL(fileURLWithPath: diag.audioWavPath))
                                 if !samples.isEmpty {
                                     let result = await transcriptionService.transcribeSamples(samples)
                                     batchResult = result ?? "(no result)"
@@ -292,7 +293,7 @@ struct CorrectionTestView: View {
                         let panel = NSOpenPanel()
                         panel.canChooseDirectories = true
                         panel.canChooseFiles = false
-                        panel.message = "Select the corpus audio directory (data/phonetic-seed/audio)"
+                        panel.message = "Select the corpus WAV directory (data/phonetic-seed/audio-wav)"
                         if panel.runModal() == .OK {
                             corpusDir = panel.url
                         }
@@ -335,7 +336,7 @@ struct CorrectionTestView: View {
         let files: [String]
         do {
             let contents = try FileManager.default.contentsOfDirectory(atPath: dir.path)
-            files = contents.filter { $0.hasSuffix(".ogg") }
+            files = contents.filter { $0.hasSuffix(".wav") }
         } catch {
             statusText = "failed to list dir: \(error)"
             return
@@ -346,19 +347,11 @@ struct CorrectionTestView: View {
             return
         }
 
-        let oggPath = dir.appendingPathComponent(randomFile).path
-        statusText = "converting \(randomFile)..."
+        let wavURL = dir.appendingPathComponent(randomFile)
+        statusText = "loading \(randomFile)..."
         corrTestLogger.info("Selected: \(randomFile)")
 
-        // Convert OGG to WAV via ffmpeg
-        guard let wavPath = convertOggToWav(oggPath: oggPath) else {
-            statusText = "ffmpeg failed for \(randomFile)"
-            return
-        }
-        defer { try? FileManager.default.removeItem(atPath: wavPath) }
-
-        // Load samples
-        let samples = loadWavSamples(path: wavPath)
+        let samples = loadAudioSamples(url: wavURL)
         guard !samples.isEmpty else {
             statusText = "empty audio: \(randomFile)"
             return
@@ -374,19 +367,13 @@ struct CorrectionTestView: View {
             return
         }
 
-        let chunkSize = 16000 // 1 second at 16kHz
-        var offset = 0
-        var feedCount = 0
-        while offset < samples.count {
-            let end = min(offset + chunkSize, samples.count)
-            let chunk = Array(samples[offset..<end])
-            _ = await ts.feed(session: session, samples: chunk)
-            offset = end
-            feedCount += 1
-        }
+        // Feed all samples at once — the session handles chunking internally
+        corrTestLogger.info("Feeding \(samples.count) samples to session \(session.id)")
+        _ = await ts.feed(session: session, samples: samples)
 
-        statusText = "finalizing (\(feedCount) feeds)..."
+        statusText = "finalizing..."
         let transcript = await ts.finish(session: session) ?? ""
+        corrTestLogger.info("Transcript for \(session.id): \"\(transcript)\"")
 
         if transcript.isEmpty {
             statusText = "empty transcript from \(randomFile)"
@@ -416,43 +403,16 @@ struct CorrectionTestView: View {
     }
 }
 
-private func convertOggToWav(oggPath: String) -> String? {
-    let wavPath = NSTemporaryDirectory() + UUID().uuidString + ".wav"
-
-    // Find ffmpeg
-    let ffmpegPaths = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
-    guard let ffmpeg = ffmpegPaths.first(where: { FileManager.default.fileExists(atPath: $0) }) else {
-        corrTestLogger.error("ffmpeg not found")
-        return nil
-    }
-
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: ffmpeg)
-    process.arguments = ["-i", oggPath, "-ar", "16000", "-ac", "1", "-f", "wav", wavPath, "-y"]
-    process.standardOutput = FileHandle.nullDevice
-    process.standardError = FileHandle.nullDevice
+/// Load audio file as 16kHz mono float32 samples using AVAudioFile.
+private func loadAudioSamples(url: URL) -> [Float] {
+    guard let file = try? AVAudioFile(forReading: url) else { return [] }
+    let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
+    guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(file.length)) else { return [] }
     do {
-        try process.run()
-        process.waitUntilExit()
+        try file.read(into: buf)
     } catch {
-        corrTestLogger.error("ffmpeg error: \(error)")
-        return nil
+        return []
     }
-    return process.terminationStatus == 0 ? wavPath : nil
-}
-
-/// Load a 16-bit PCM WAV as float32 samples.
-private func loadWavSamples(path: String) -> [Float] {
-    guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return [] }
-    guard data.count > 44 else { return [] }
-    let pcmData = data.dropFirst(44)
-    var samples: [Float] = []
-    samples.reserveCapacity(pcmData.count / 2)
-    for i in stride(from: 0, to: pcmData.count - 1, by: 2) {
-        let lo = UInt16(pcmData[pcmData.startIndex + i])
-        let hi = UInt16(pcmData[pcmData.startIndex + i + 1])
-        let int16 = Int16(bitPattern: lo | (hi << 8))
-        samples.append(Float(int16) / 32767.0)
-    }
-    return samples
+    guard let data = buf.floatChannelData?[0] else { return [] }
+    return Array(UnsafeBufferPointer(start: data, count: Int(buf.frameLength)))
 }

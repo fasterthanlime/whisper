@@ -102,6 +102,17 @@ run_step "Copying mlx.metallib into app bundle" "cp \"$MLX_SYS_PREFIX/lib/mlx.me
 run_step "Installing beeInput to ~/Library/Input Methods" \
   "rm -rf \"$INPUT_METHOD_DIR/beeInput.app\" && cp -r \"$BUILD_DIR/beeInput.app\" \"$INPUT_METHOD_DIR/\""
 
+GROUP_CONTAINER="$HOME/Library/Group Containers/B2N6FSRTPV.group.fasterthanlime.bee"
+DATASET_SRC="$PROJECT_ROOT/data/phonetic-seed"
+DATASET_DST="$GROUP_CONTAINER/phonetic-seed"
+
+if [ -d "$DATASET_SRC" ]; then
+  run_step "Copying phonetic-seed dataset to Group Container" \
+    "mkdir -p \"$DATASET_DST\" && rsync -a --delete \"$DATASET_SRC/\" \"$DATASET_DST/\""
+else
+  printf '%s\n' "${YELLOW}Skipping phonetic-seed copy (not found at $DATASET_SRC)${RESET}"
+fi
+
 run_step "Restarting beeInput" "pkill beeInput || true"
 run_step "Killing running bee" "pkill bee || true"
 # sleep 1

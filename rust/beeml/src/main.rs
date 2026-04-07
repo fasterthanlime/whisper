@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -3183,7 +3183,7 @@ async fn main() -> Result<()> {
             index,
             dataset,
             counterexamples,
-            g2p: Mutex::new(CachedEspeakG2p::english().context("initializing g2p engine")?),
+            g2p: Mutex::new(CachedEspeakG2p::english(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target").as_ref()).context("initializing g2p engine")?),
             judge: Mutex::new(judge),
             event_log_path,
         }),
