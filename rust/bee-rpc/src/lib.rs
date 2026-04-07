@@ -61,25 +61,28 @@ pub trait Bee {
     async fn required_downloads(&self) -> Vec<RepoDownload>;
 
     /// Load ASR engine from the given cache dir.
-    /// Returns empty string on success, error message on failure.
-    async fn load_engine(&self, cache_dir: String) -> String;
+    async fn load_engine(&self, cache_dir: String) -> Result<bool, BeeError>;
 
     // ── Transcription ──────────────────────────────────────────────────
 
     /// Create a transcription session, returns session ID.
-    async fn create_session(&self, language: String) -> String;
+    async fn create_session(&self, language: String) -> Result<String, BeeError>;
 
     /// Feed audio samples to a session.
-    async fn feed(&self, session_id: String, samples: Vec<f32>) -> FeedResult;
+    async fn feed(&self, session_id: String, samples: Vec<f32>) -> Result<Option<FeedResult>, BeeError>;
 
     /// Finalize a session, returns final transcription.
-    async fn finish_session(&self, session_id: String) -> String;
+    async fn finish_session(&self, session_id: String) -> Result<String, BeeError>;
 
     /// Set the language for a session.
-    async fn set_language(&self, session_id: String, language: String) -> bool;
+    async fn set_language(
+        &self,
+        session_id: String,
+        language: String,
+    ) -> Result<bool, BeeError>;
 
     /// Single-shot transcription of raw 16kHz f32 samples.
-    async fn transcribe_samples(&self, samples: Vec<f32>) -> String;
+    async fn transcribe_samples(&self, samples: Vec<f32>) -> Result<String, BeeError>;
 
     /// Get engine resource usage stats.
     async fn get_stats(&self) -> EngineStats;
@@ -87,14 +90,13 @@ pub trait Bee {
     // ── Correction ─────────────────────────────────────────────────────
 
     /// Load the correction engine.
-    /// Returns empty string on success, error message on failure.
     async fn correct_load(
         &self,
         dataset_dir: String,
         events_path: String,
         gate_threshold: f32,
         ranker_threshold: f32,
-    ) -> String;
+    ) -> Result<bool, BeeError>;
 
     /// Run correction on text.
     async fn correct_process(&self, text: String, app_id: String) -> CorrectionOutput;
@@ -104,10 +106,30 @@ pub trait Bee {
         &self,
         session_id: String,
         resolutions: Vec<EditResolution>,
-    ) -> String;
+    ) -> Result<bool, BeeError>;
 
     /// Save correction engine state to disk.
-    async fn correct_save(&self) -> String;
+    async fn correct_save(&self) -> Result<bool, BeeError>;
+}
+
+// ── Error type ────────────────────────────────────────────────────────
+
+/// Errors returned by the Bee service.
+#[derive(Debug, Clone, Facet)]
+#[repr(u8)]
+pub enum BeeError {
+    /// Engine not loaded yet.
+    EngineNotLoaded,
+    /// Session not found (already finished or never created).
+    SessionNotFound { session_id: String },
+    /// Engine failed to load.
+    LoadFailed { message: String },
+    /// Transcription error (feed or finish).
+    TranscriptionError { message: String },
+    /// Correction engine error.
+    CorrectionError { message: String },
+    /// Not yet implemented.
+    NotImplemented,
 }
 
 // ── Model types ────────────────────────────────────────────────────────

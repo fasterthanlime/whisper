@@ -15,17 +15,15 @@ final class CorrectionService: @unchecked Sendable {
         let edits: [CorrectionEdit]
     }
 
-    enum LoadError: LocalizedError {
-        case failed(String)
-        var errorDescription: String? {
-            switch self {
-            case .failed(let msg): "Correction engine load failed: \(msg)"
-            }
-        }
-    }
-
     init(engine: BeeEngine) {
         self.engine = engine
+    }
+
+    private func client() async throws -> BeeClient {
+        guard let client = await engine.client else {
+            throw BeeError.engineNotLoaded
+        }
+        return client
     }
 
     // MARK: - Lifecycle
@@ -34,12 +32,13 @@ final class CorrectionService: @unchecked Sendable {
         datasetDir: String, eventsPath: String?,
         gateThreshold: Float = 0.5, rankerThreshold: Float = 0.2
     ) async throws {
-        try await engine.correctLoad(
+        let client = try await client()
+        try await client.correctLoad(
             datasetDir: datasetDir,
             eventsPath: eventsPath ?? "",
             gateThreshold: gateThreshold,
             rankerThreshold: rankerThreshold
-        )
+        ).get()
         lock.withLock { loaded = true }
         logger.info("Correction engine loaded")
     }
@@ -52,7 +51,8 @@ final class CorrectionService: @unchecked Sendable {
 
     func process(text: String, appId: String?) async -> Output? {
         do {
-            let result = try await engine.correctProcess(text: text, appId: appId ?? "")
+            let client = try await client()
+            let result = try await client.correctProcess(text: text, appId: appId ?? "")
             if result.edits.isEmpty {
                 return nil
             }
@@ -78,7 +78,8 @@ final class CorrectionService: @unchecked Sendable {
             EditResolution(editId: r.editId, accepted: r.accepted)
         }
         do {
-            try await engine.correctTeach(sessionId: sessionId, resolutions: editResolutions)
+            let client = try await client()
+            try await client.correctTeach(sessionId: sessionId, resolutions: editResolutions).get()
         } catch {
             logger.error("teach error: \(error)")
         }
@@ -86,7 +87,8 @@ final class CorrectionService: @unchecked Sendable {
 
     func save() async {
         do {
-            try await engine.correctSave()
+            let client = try await client()
+            try await client.correctSave().get()
         } catch {
             logger.error("save error: \(error)")
         }

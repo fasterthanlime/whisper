@@ -1,19 +1,20 @@
 //! bee-ffi — vox-ffi service exposing the Bee engine to Swift.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use bee_phonetic::{
     enumerate_transcript_spans_with, feature_tokens_for_ipa, query_index, score_shortlist,
     RetrievalQuery,
 };
 use bee_rpc::{
-    BeeDispatcher, CorrectionEdit, CorrectionOutput, EditResolution, EngineStats, FeedResult,
-    RepoDownload,
+    BeeDispatcher, BeeError, CorrectionEdit, CorrectionOutput, EditResolution, EngineStats,
+    FeedResult, RepoDownload,
 };
 use bee_transcribe::{Language, SessionOptions};
 use bee_types::SpanContext;
+use dashmap::DashMap;
 use tracing::info;
 use vox::acceptor_on;
 use vox_ffi::declare_link_endpoint;
@@ -25,7 +26,7 @@ mod stats;
 
 use correct::{load_correction_engine, CorrectionEngine};
 use engine::{load_engine, AsrEngine};
-use session::AsrSession;
+use session::SessionInner;
 
 // ── Vox-FFI endpoint ───────────────────────────────────────────────────
 
@@ -103,9 +104,11 @@ fn on_load() {
 
 // ── BeeService impl ───────────────────────────────────────────────────
 
+type SessionMap = DashMap<String, Arc<tokio::sync::Mutex<SessionInner>>>;
+
 struct BeeServiceInner {
     engine: OnceLock<AsrEngine>,
-    sessions: Mutex<std::collections::HashMap<String, AsrSession>>,
+    sessions: SessionMap,
     next_session_id: AtomicU64,
     correction: Mutex<Option<CorrectionEngine>>,
 }
@@ -120,11 +123,43 @@ impl BeeService {
         Self {
             inner: Arc::new(BeeServiceInner {
                 engine: OnceLock::new(),
-                sessions: Mutex::new(std::collections::HashMap::new()),
+                sessions: DashMap::new(),
                 next_session_id: AtomicU64::new(1),
                 correction: Mutex::new(None),
             }),
         }
+    }
+
+    fn engine(&self) -> Result<&AsrEngine, BeeError> {
+        self.inner.engine.get().ok_or(BeeError::EngineNotLoaded)
+    }
+
+    fn get_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Arc<tokio::sync::Mutex<SessionInner>>, BeeError> {
+        let entry = self.inner.sessions.get(session_id).ok_or_else(|| {
+            BeeError::SessionNotFound {
+                session_id: session_id.to_owned(),
+            }
+        })?;
+        Ok(entry.value().clone())
+    }
+
+    /// Create a new ASR session with VAD, returning the raw Session.
+    fn make_session(engine: &AsrEngine, language: Language) -> bee_transcribe::Session<'static> {
+        let opts = SessionOptions {
+            language,
+            ..SessionOptions::default()
+        };
+        let mut session = engine.inner.session(opts);
+        if let Some(ref tensors) = engine.vad_tensors {
+            match bee_vad::SileroVad::from_tensors(tensors) {
+                Ok(vad) => session.set_vad(vad),
+                Err(e) => tracing::error!("VAD creation failed: {e}"),
+            }
+        }
+        session
     }
 }
 
@@ -133,23 +168,21 @@ impl bee_rpc::Bee for BeeService {
         engine::required_downloads()
     }
 
-    async fn load_engine(&self, cache_dir: String) -> String {
+    async fn load_engine(&self, cache_dir: String) -> Result<bool, BeeError> {
         let cache_base = PathBuf::from(&cache_dir);
         let model_dir = cache_base.join("mlx-community--Qwen3-ASR-1.7B-4bit");
 
-        match load_engine(&model_dir, &cache_base) {
-            Ok(engine) => {
-                let _ = self.inner.engine.set(engine);
-                String::new()
-            }
-            Err(e) => e,
-        }
+        let engine = load_engine(&model_dir, &cache_base).map_err(|e| {
+            tracing::error!("load_engine: {e}");
+            BeeError::LoadFailed { message: e }
+        })?;
+        let _ = self.inner.engine.set(engine);
+        info!("load_engine: success");
+        Ok(true)
     }
 
-    async fn create_session(&self, language: String) -> String {
-        let Some(engine) = self.inner.engine.get() else {
-            return String::new();
-        };
+    async fn create_session(&self, language: String) -> Result<String, BeeError> {
+        let engine = self.engine()?;
 
         let lang = if language.is_empty() {
             Language::default()
@@ -159,179 +192,128 @@ impl bee_rpc::Bee for BeeService {
 
         let id_num = self.inner.next_session_id.fetch_add(1, Ordering::Relaxed);
         let id = format!("session-{id_num}");
-        tracing::info!("create_session: {id} language={}", lang.0);
+        info!("create_session: {id} language={}", lang.0);
 
-        let opts = SessionOptions {
-            language: lang,
-            ..SessionOptions::default()
-        };
-
-        let mut session = engine.inner.session(opts);
-
-        if let Some(ref tensors) = engine.vad_tensors {
-            match bee_vad::SileroVad::from_tensors(tensors) {
-                Ok(vad) => session.set_vad(vad),
-                Err(e) => tracing::warn!("Failed to create VAD: {e}"),
-            }
-        }
-
-        self.inner.sessions.lock().unwrap().insert(
+        let session = Self::make_session(engine, lang);
+        self.inner.sessions.insert(
             id.clone(),
-            AsrSession {
-                session,
-                last_text: String::new(),
-                finished: false,
-            },
+            Arc::new(tokio::sync::Mutex::new(SessionInner { session })),
         );
 
-        id
+        Ok(id)
     }
 
-    async fn feed(&self, session_id: String, samples: Vec<f32>) -> FeedResult {
-        let empty_result = FeedResult {
-            text: String::new(),
-            committed_utf16_len: 0,
-            alignments: vec![],
+    async fn feed(&self, session_id: String, samples: Vec<f32>) -> Result<Option<FeedResult>, BeeError> {
+        let session = self.get_session(&session_id)?;
+
+        let t0 = std::time::Instant::now();
+        let result = tokio::task::spawn_blocking(move || {
+            let mut guard = session.blocking_lock();
+            guard.session.feed(&samples)
+        })
+        .await
+        .expect("spawn_blocking panicked");
+        let elapsed = t0.elapsed();
+
+        let update = result.map_err(|e| {
+            tracing::error!("feed: session {session_id} error: {e}");
+            BeeError::TranscriptionError {
+                message: e.to_string(),
+            }
+        })?;
+
+        let Some(update) = update else {
+            tracing::debug!("feed: {session_id} no update ({elapsed:.1?})");
+            return Ok(None);
+        };
+
+        let committed_utf16_len =
+            update.text[..update.committed_len].encode_utf16().count() as u32;
+        info!("feed: {session_id} {elapsed:.1?} committed_utf16={committed_utf16_len}");
+
+        Ok(Some(FeedResult {
+            text: update.text,
+            committed_utf16_len,
+            alignments: update.alignments,
             is_final: false,
-        };
-
-        // Take session out of map so we can drop the lock during inference
-        let mut session = {
-            let mut sessions = self.inner.sessions.lock().unwrap();
-            match sessions.remove(&session_id) {
-                Some(s) if !s.finished => s,
-                Some(s) => {
-                    tracing::warn!("feed: session {session_id} already finished");
-                    sessions.insert(session_id, s);
-                    return empty_result;
-                }
-                None => {
-                    tracing::warn!("feed: session {session_id} not found");
-                    return empty_result;
-                }
-            }
-        };
-
-        let result = match session.session.feed(&samples) {
-            Ok(Some(update)) => {
-                session.last_text = update.text.clone();
-                let committed_utf16_len =
-                    update.text[..update.committed_len].encode_utf16().count() as u32;
-                let alignments = update.alignments.clone();
-                FeedResult {
-                    text: update.text,
-                    committed_utf16_len,
-                    alignments,
-                    is_final: false,
-                }
-            }
-            Ok(None) => FeedResult {
-                text: session.last_text.clone(),
-                committed_utf16_len: 0,
-                alignments: vec![],
-                is_final: false,
-            },
-            Err(e) => {
-                tracing::error!("FEED error: {e}");
-                FeedResult {
-                    text: format!("error: {e}"),
-                    committed_utf16_len: 0,
-                    alignments: vec![],
-                    is_final: false,
-                }
-            }
-        };
-
-        // Put session back
-        self.inner.sessions.lock().unwrap().insert(session_id, session);
-        result
+        }))
     }
 
-    async fn finish_session(&self, session_id: String) -> String {
-        tracing::info!("finish_session: {session_id}");
-        // Take session out of map so we can drop the lock during inference
-        let mut session = {
-            let mut sessions = self.inner.sessions.lock().unwrap();
-            match sessions.remove(&session_id) {
-                Some(s) => s,
-                None => {
-                    tracing::warn!("finish_session: {session_id} not found");
-                    return String::new();
+    async fn finish_session(&self, session_id: String) -> Result<String, BeeError> {
+        info!("finish_session: {session_id}");
+
+        let (_, session_arc) =
+            self.inner.sessions.remove(&session_id).ok_or_else(|| {
+                BeeError::SessionNotFound {
+                    session_id: session_id.clone(),
                 }
+            })?;
+
+        let t0 = std::time::Instant::now();
+        let result = tokio::task::spawn_blocking(move || {
+            let Ok(mutex) = Arc::try_unwrap(session_arc) else {
+                panic!("BUG: session Arc still held during finish");
+            };
+            let inner = mutex.into_inner();
+            inner.session.finish()
+        })
+        .await
+        .expect("spawn_blocking panicked");
+        let elapsed = t0.elapsed();
+
+        let update = result.map_err(|e| {
+            tracing::error!("finish_session: {session_id} error: {e} ({elapsed:.1?})");
+            BeeError::TranscriptionError {
+                message: e.to_string(),
             }
-        };
+        })?;
 
-        if session.finished {
-            return session.last_text;
-        }
-        session.finished = true;
-
-        match session.session.finish() {
-            Ok(update) => update.text,
-            Err(e) => format!("error: {e}"),
-        }
+        let text_preview: String = update.text.chars().take(80).collect();
+        info!("finish_session: {session_id} {elapsed:.1?} → {text_preview:?}");
+        Ok(update.text)
     }
 
-    async fn set_language(&self, session_id: String, language: String) -> bool {
+    async fn set_language(
+        &self,
+        session_id: String,
+        language: String,
+    ) -> Result<bool, BeeError> {
         if language.is_empty() {
-            return false;
+            return Err(BeeError::TranscriptionError {
+                message: "empty language".into(),
+            });
         }
 
-        let Some(engine) = self.inner.engine.get() else {
-            return false;
-        };
+        let engine = self.engine()?;
+        let session = self.get_session(&session_id)?;
+        let mut guard = session.lock().await;
 
-        let mut sessions = self.inner.sessions.lock().unwrap();
-        let Some(_old_session) = sessions.remove(&session_id) else {
-            return false;
-        };
-
-        let opts = SessionOptions {
-            language: Language(language),
-            ..SessionOptions::default()
-        };
-
-        let mut new_session = engine.inner.session(opts);
-
-        if let Some(ref tensors) = engine.vad_tensors {
-            if let Ok(vad) = bee_vad::SileroVad::from_tensors(tensors) {
-                new_session.set_vad(vad);
-            }
-        }
-
-        sessions.insert(
-            session_id,
-            AsrSession {
-                session: new_session,
-                last_text: String::new(),
-                finished: false,
-            },
-        );
-
-        true
+        info!("set_language: {session_id} → {language}");
+        guard.session = Self::make_session(engine, Language(language));
+        Ok(true)
     }
 
-    async fn transcribe_samples(&self, samples: Vec<f32>) -> String {
-        let Some(engine) = self.inner.engine.get() else {
-            return "error: engine not loaded".into();
-        };
+    async fn transcribe_samples(&self, samples: Vec<f32>) -> Result<String, BeeError> {
+        let engine = self.engine()?;
+        let mut session = Self::make_session(engine, Language::default());
 
-        let mut session = engine.inner.session(SessionOptions::default());
+        // feed + finish are CPU/GPU intensive
+        let result = tokio::task::spawn_blocking(move || {
+            session.feed(&samples).map_err(|e| {
+                BeeError::TranscriptionError {
+                    message: format!("feed: {e}"),
+                }
+            })?;
+            session.finish().map_err(|e| {
+                BeeError::TranscriptionError {
+                    message: format!("finish: {e}"),
+                }
+            })
+        })
+        .await
+        .expect("spawn_blocking panicked")?;
 
-        if let Some(ref tensors) = engine.vad_tensors {
-            if let Ok(vad) = bee_vad::SileroVad::from_tensors(tensors) {
-                session.set_vad(vad);
-            }
-        }
-
-        if let Err(e) = session.feed(&samples) {
-            return format!("error: {e}");
-        }
-
-        match session.finish() {
-            Ok(update) => update.text,
-            Err(e) => format!("error: {e}"),
-        }
+        Ok(result.text)
     }
 
     async fn get_stats(&self) -> EngineStats {
@@ -360,29 +342,27 @@ impl bee_rpc::Bee for BeeService {
         events_path: String,
         gate_threshold: f32,
         ranker_threshold: f32,
-    ) -> String {
+    ) -> Result<bool, BeeError> {
         let events = if events_path.is_empty() {
             None
         } else {
             Some(PathBuf::from(events_path))
         };
-        match load_correction_engine(
-            Path::new(&dataset_dir),
-            events,
-            gate_threshold,
-            ranker_threshold,
-        ) {
-            Ok(engine) => {
-                *self.inner.correction.lock().unwrap() = Some(engine);
-                String::new()
-            }
-            Err(e) => e,
-        }
+        let engine =
+            load_correction_engine(Path::new(&dataset_dir), events, gate_threshold, ranker_threshold)
+                .map_err(|e| {
+                    tracing::error!("correct_load: {e}");
+                    BeeError::CorrectionError { message: e }
+                })?;
+        info!("correct_load: success");
+        *self.inner.correction.lock().unwrap() = Some(engine);
+        Ok(true)
     }
 
     async fn correct_process(&self, text: String, app_id: String) -> CorrectionOutput {
         let mut guard = self.inner.correction.lock().unwrap();
         let Some(engine) = guard.as_mut() else {
+            tracing::warn!("correct_process: correction engine not loaded, passing through");
             return CorrectionOutput {
                 session_id: String::new(),
                 best_text: text,
@@ -467,10 +447,6 @@ impl bee_rpc::Bee for BeeService {
             }
         }
 
-        // Build best text by applying edits in order (edits are sorted by span_start).
-        // Each replacement may shift subsequent positions: if we replace "teh" (3 chars)
-        // with "the" (3 chars), offset stays 0. If we replace "NY" (2) with "New York" (8),
-        // offset grows by +6 and all later positions must be adjusted.
         let mut best_text = text.clone();
         let mut offset: i64 = 0;
         for edit in &edits {
@@ -493,14 +469,11 @@ impl bee_rpc::Bee for BeeService {
         &self,
         _session_id: String,
         _resolutions: Vec<EditResolution>,
-    ) -> String {
-        // TODO: implement teaching from stable session IDs
-        String::new()
+    ) -> Result<bool, BeeError> {
+        Err(BeeError::NotImplemented)
     }
 
-    async fn correct_save(&self) -> String {
-        // TODO: implement persistence (weights + memory + events)
-        String::new()
+    async fn correct_save(&self) -> Result<bool, BeeError> {
+        Err(BeeError::NotImplemented)
     }
 }
-

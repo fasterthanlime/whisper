@@ -879,7 +879,10 @@ final class AppState {
                 beeLog("APP: vox-ffi connected")
 
                 // Check for required downloads
-                let repos = try await beeEngine.requiredDownloads()
+                guard let beeClient = await beeEngine.client else {
+                    throw BeeError.engineNotLoaded
+                }
+                let repos = try await beeClient.requiredDownloads()
                 let cacheURL = URL(fileURLWithPath: cacheDir)
                 try FileManager.default.createDirectory(at: cacheURL, withIntermediateDirectories: true)
 
