@@ -70,7 +70,17 @@ banner "Building bee (+ embedded beeInput) (Release)"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 # beeInput is a dependency of bee and gets embedded automatically; no separate scheme needed.
-if ! (cd "$SWIFT_DIR" && xcodebuild -project "$XCODE_PROJECT" -scheme bee -configuration Release CONFIGURATION_BUILD_DIR="$BUILD_DIR" -derivedDataPath "$BUILD_DIR/DerivedData" build 2>&1 | xcbeautify); then
+if ! (cd "$SWIFT_DIR" && xcodebuild \
+  -project "$XCODE_PROJECT" \
+  -scheme bee \
+  -configuration Release \
+  CONFIGURATION_BUILD_DIR="$BUILD_DIR" \
+  -derivedDataPath "$BUILD_DIR/DerivedData" \
+  -clonedSourcePackagesDirPath "$BUILD_DIR/SourcePackages" \
+  -parallelizeTargets \
+  -jobs "$(sysctl -n hw.ncpu)" \
+  -skipPackageUpdates \
+  build 2>&1 | xcbeautify); then
   printf '%s\n' "${RED}${BOLD}Swift build failed${RESET}"
   exit 1
 fi
