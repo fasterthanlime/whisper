@@ -70,27 +70,7 @@ banner "Building bee (+ embedded beeInput) (Release)"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 # beeInput is a dependency of bee and gets embedded automatically; no separate scheme needed.
-schemes=(bee)
-pids=()
-logs=()
-for scheme in "${schemes[@]}"; do
-  logfile="$BUILD_DIR/$scheme-build.log"
-  logs+=("$logfile")
-  (cd "$SWIFT_DIR" && xcodebuild -project "$XCODE_PROJECT" -scheme "$scheme" -configuration Release CONFIGURATION_BUILD_DIR="$BUILD_DIR" -derivedDataPath "$BUILD_DIR/DerivedData-$scheme" build >"$logfile" 2>&1) &
-  pids+=($!)
-done
-failed=0
-for i in "${!pids[@]}"; do
-  if ! wait "${pids[$i]}"; then
-    failed=1
-    printf '%s\n' "${RED}${BOLD}Build failed: ${schemes[$i]}${RESET}"
-    printf '%s\n' "${YELLOW}Log: ${logs[$i]}${RESET}"
-    grep -E '^.*error:' "${logs[$i]}" | head -20 || tail -20 "${logs[$i]}"
-  else
-    printf '%s\n' "${GREEN}Built: ${schemes[$i]}${RESET}"
-  fi
-done
-if [ "$failed" -ne 0 ]; then
+if ! (cd "$SWIFT_DIR" && xcodebuild -project "$XCODE_PROJECT" -scheme bee -configuration Release CONFIGURATION_BUILD_DIR="$BUILD_DIR" -derivedDataPath "$BUILD_DIR/DerivedData" build 2>&1 | xcbeautify); then
   printf '%s\n' "${RED}${BOLD}Swift build failed${RESET}"
   exit 1
 fi
