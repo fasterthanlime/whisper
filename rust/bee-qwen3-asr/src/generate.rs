@@ -182,6 +182,12 @@ pub fn prefill_and_decode(
     let mut generated = Vec::new();
     let mut logprobs = Vec::new();
 
+    tracing::debug!(
+        "prefill_and_decode: first_token={token} logprob={:.3} is_eos={} prompt_len={seq_len} max_new={max_new_tokens}",
+        tlp.logprob,
+        is_eos(token),
+    );
+
     if is_eos(token) || max_new_tokens <= 1 {
         // EOS on first token — nothing added to cache beyond prompt
         if !is_eos(token) {
