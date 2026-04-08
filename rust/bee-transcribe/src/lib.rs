@@ -249,17 +249,17 @@ impl Engine {
     pub fn session(&self, options: SessionOptions) -> Session<'_> {
         let chunk_size_samples = (options.chunk_duration * 16000.0) as usize;
 
+        // Always resolve <asr_text> token ID for splitting output.
+        let asr_text_tokens = tokenize_to_i32(&self.tokenizer, "<asr_text>");
+
         // When language is empty, omit the language prefix entirely and let the
         // model detect the language (matching the reference Python implementation).
         // When a specific language is set, force it with "language {name}<asr_text>".
-        let (language_tokens, asr_text_tokens) = if options.language.as_str().is_empty() {
-            (Vec::new(), Vec::new())
+        let language_tokens = if options.language.as_str().is_empty() {
+            Vec::new()
         } else {
             let lang_header = format!("language {}", options.language.as_str());
-            (
-                tokenize_to_i32(&self.tokenizer, &lang_header),
-                tokenize_to_i32(&self.tokenizer, "<asr_text>"),
-            )
+            tokenize_to_i32(&self.tokenizer, &lang_header)
         };
 
         Session {
@@ -662,24 +662,33 @@ impl<'a> Session<'a> {
     /// within the same full decode.
     fn make_update(&mut self) -> Update {
         let all_ids = self.full_token_ids();
-        let raw_text = self
-            .engine
-            .tokenizer
-            .decode(&all_ids, true)
-            .unwrap_or_default();
 
-        tracing::debug!("make_update: raw_text={raw_text:?} token_count={}", all_ids.len());
+        // Split at the <asr_text> token — metadata before, text after.
+        let asr_text_id = self.asr_text_tokens.first().map(|&id| id as u32);
+        let (text, detected_lang) = if let Some(tag_pos) = asr_text_id.and_then(|tid| all_ids.iter().position(|&id| id == tid)) {
+            let meta_ids = &all_ids[..tag_pos];
+            let text_ids = &all_ids[tag_pos + 1..];
+            let meta = self.engine.tokenizer.decode(meta_ids, true).unwrap_or_default();
+            let text = self.engine.tokenizer.decode(text_ids, true).unwrap_or_default();
 
-        // Log individual tokens to diagnose missing <asr_text> tag
-        for (i, &id) in all_ids.iter().enumerate() {
-            let tok_str = self.engine.tokenizer.decode(&[id], false).unwrap_or_default();
-            tracing::info!("  token[{i}]: id={id} → {tok_str:?}");
-        }
+            // Extract language from metadata (e.g. "language English")
+            let lang = meta.trim()
+                .strip_prefix("language ")
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.eq_ignore_ascii_case("none"))
+                .unwrap_or_default();
 
-        // The model may output "language English<asr_text>actual text" — always strip.
-        let (lang, text) = parse_language_prefix(&raw_text);
-        if !lang.is_empty() {
-            self.detected_language = lang;
+            tracing::debug!("make_update: lang={lang:?} text={text:?} (split at token {tag_pos})");
+            (text, lang)
+        } else {
+            // No <asr_text> token — decode everything as text
+            let text = self.engine.tokenizer.decode(&all_ids, true).unwrap_or_default();
+            tracing::debug!("make_update: no <asr_text> token, raw_text={text:?}");
+            (text, String::new())
+        };
+
+        if !detected_lang.is_empty() {
+            self.detected_language = detected_lang;
         }
 
         // Committed length = decode committed tokens in the same context
@@ -708,43 +717,6 @@ impl<'a> Session<'a> {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-const ASR_TEXT_TAG: &str = "<asr_text>";
-
-/// Strip model-inserted language prefix and `<asr_text>` tag.
-///
-/// The `<asr_text>` tag is the reliable delimiter between metadata and text.
-/// Without it, we return the raw string as pure text (no stripping).
-fn parse_language_prefix(text: &str) -> (String, String) {
-    let s = text.trim();
-    if s.is_empty() {
-        return (String::new(), String::new());
-    }
-
-    // Split on <asr_text> — the only reliable delimiter
-    let Some(split_pos) = s.find(ASR_TEXT_TAG) else {
-        // No tag — return as pure text, don't try to guess where lang ends
-        return (String::new(), s.to_string());
-    };
-
-    let meta = &s[..split_pos];
-    let text_part = &s[split_pos + ASR_TEXT_TAG.len()..];
-
-    // Extract language from metadata
-    let lang = meta
-        .strip_prefix("language ")
-        .map(|l| l.trim())
-        .unwrap_or("");
-
-    if lang.eq_ignore_ascii_case("none") {
-        let t = text_part.trim();
-        if t.is_empty() {
-            return (String::new(), String::new());
-        }
-        return (String::new(), t.to_string());
-    }
-
-    (lang.to_string(), text_part.to_string())
-}
 
 /// Compute per-word logprob statistics by mapping decoder tokens to aligner words.
 ///
