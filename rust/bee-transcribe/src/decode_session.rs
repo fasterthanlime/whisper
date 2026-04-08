@@ -55,6 +55,11 @@ impl DecodeSession {
         }
     }
 
+    /// Update the rollback window size (for adaptive rollback).
+    pub fn set_rollback(&mut self, rollback: TokenCount) {
+        self.rollback_tokens = rollback;
+    }
+
     /// Append audio samples to this sub-session.
     pub fn append_audio(&mut self, chunk: &AudioBuffer) {
         self.audio.append(chunk);

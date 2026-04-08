@@ -23,6 +23,8 @@ use crate::{FinishResult, SharedCorrectionEngine};
 struct BufferedCommit {
     raw_text: String,
     words: Vec<AlignedWord>,
+    /// The aligned token entries, deferred until flush.
+    aligned: TextBuffer,
 }
 
 pub struct SessionV2<'a> {
@@ -214,7 +216,25 @@ impl<'a> SessionV2<'a> {
         }
     }
 
+    /// Adaptive rollback: start small and grow with token count, capping at the configured max.
+    /// This ensures at least 1 fixed prefix token once we have 2+ text tokens,
+    /// preventing full rewrites of short utterances.
+    fn effective_rollback(&self) -> usize {
+        let text_count = self.decode.text_tokens().len();
+        let max = self.options.rollback_tokens;
+        if text_count <= 1 {
+            0
+        } else {
+            // Reserve at least 1 fixed token as prefix
+            (text_count - 1).min(max)
+        }
+    }
+
     fn decode_and_maybe_commit(&mut self, max_tokens: usize) -> Result<(), Exception> {
+        // Update rollback window before decode so compute_prefix uses the adaptive value
+        let rollback = self.effective_rollback();
+        self.decode.set_rollback(text_buffer::TokenCount(rollback));
+
         let language = self.effective_language().to_owned();
         self.decode
             .decode_step(self.model, self.tokenizer, &language, max_tokens)?;
@@ -228,13 +248,14 @@ impl<'a> SessionV2<'a> {
         self.pending
             .replace(self.decode.pending_entries(self.tokenizer));
 
-        // Check if enough fixed tokens to try committing
+        // Check if enough fixed tokens to try committing (use adaptive rollback)
         let text_count = self.decode.text_tokens().len();
-        let fixed = text_count.saturating_sub(self.options.rollback_tokens);
+        let rollback = self.effective_rollback();
+        let fixed = text_count.saturating_sub(rollback);
         tracing::debug!(
             text_tokens = text_count,
             fixed,
-            rollback = self.options.rollback_tokens,
+            rollback,
             commit_threshold = self.options.commit_token_count * 2,
             "decode_and_maybe_commit: token counts"
         );
@@ -287,9 +308,8 @@ impl<'a> SessionV2<'a> {
                 self.buffered_commit = Some(BufferedCommit {
                     raw_text,
                     words: new_words,
+                    aligned,
                 });
-
-                self.committed.append(aligned);
                 // Refresh pending after rotation
                 self.pending
                     .replace(self.decode.pending_entries(self.tokenizer));
@@ -319,6 +339,9 @@ impl<'a> SessionV2<'a> {
                     "correction: processed buffered chunk"
                 );
             }
+            // Now that correction has processed this chunk, move the aligned
+            // tokens into the committed buffer (for make_update's word iteration).
+            self.committed.append(buffered.aligned);
             self.prev_raw_words = buffered.words;
         }
     }
@@ -375,17 +398,30 @@ impl<'a> SessionV2<'a> {
             text.push_str(&buffered.raw_text);
         }
 
-        // Decode pending tokens as one block
-        let pending_ids = self.pending.token_ids();
-        if !pending_ids.is_empty() {
-            let pending_text = self
-                .tokenizer
-                .decode(&pending_ids, true)
-                .unwrap_or_default();
-            if !text.is_empty() && !pending_text.starts_with(' ') {
-                text.push(' ');
+        // Decode pending tokens, trimming trailing low-confidence ones.
+        // This prevents uncertain tokens from flickering in the UI.
+        let pending_entries = self.pending.entries();
+        if !pending_entries.is_empty() {
+            const CONFIDENCE_GATE: f32 = -1.0; // logprob threshold (~37% probability)
+            let confident_count = pending_entries
+                .iter()
+                .rposition(|e| e.token.logprob >= CONFIDENCE_GATE)
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            if confident_count > 0 {
+                let pending_ids: Vec<_> = pending_entries[..confident_count]
+                    .iter()
+                    .map(|e| e.token.id)
+                    .collect();
+                let pending_text = self
+                    .tokenizer
+                    .decode(&pending_ids, true)
+                    .unwrap_or_default();
+                if !text.is_empty() && !pending_text.starts_with(' ') {
+                    text.push(' ');
+                }
+                text.push_str(&pending_text);
             }
-            text.push_str(&pending_text);
         }
 
         Update {
