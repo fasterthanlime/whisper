@@ -183,8 +183,8 @@ fn run_v2(
     }
 
     let t0 = Instant::now();
-    let final_update = session.finish()?;
-    print_final(&final_update, t0, t_total);
+    let result = session.finish()?;
+    print_final(&result.update, t0, t_total);
     Ok(())
 }
 

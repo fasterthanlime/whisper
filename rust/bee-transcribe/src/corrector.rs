@@ -10,6 +10,8 @@ use bee_phonetic::{
 use bee_rpc::CorrectionEdit;
 use bee_types::{IdentifierFlags, SpanContext};
 
+use bee_types::AlignedWord;
+
 use crate::aligner::AlignedChunk;
 use crate::correct::{CorrectionEngine, PendingEdit};
 
@@ -47,14 +49,30 @@ impl Corrector {
         }
     }
 
-    /// Run correction pipeline on an aligned chunk.
+    /// Run correction pipeline on an aligned chunk (v1 — no neighbor context).
     pub fn process_chunk(
         &mut self,
         engine: &mut CorrectionEngine,
         chunk: &AlignedChunk,
         app_id: Option<&str>,
     ) {
-        let text = &chunk.text;
+        self.process_chunk_with_context(engine, &chunk.text, &chunk.words, &[], &[], app_id);
+    }
+
+    /// Run correction pipeline on a chunk with explicit neighbor context.
+    ///
+    /// Only the chunk text/words are editable — left/right neighbors are
+    /// context-only for `SpanContext` extraction. Spans never cross chunk
+    /// boundaries.
+    pub fn process_chunk_with_context(
+        &mut self,
+        engine: &mut CorrectionEngine,
+        text: &str,
+        words: &[AlignedWord],
+        left_context: &[AlignedWord],
+        right_context: &[AlignedWord],
+        app_id: Option<&str>,
+    ) {
         if text.trim().is_empty() {
             self.committed_text.push_str(text);
             return;
@@ -62,7 +80,7 @@ impl Corrector {
 
         let app_id_opt = app_id.map(|s| s.to_string());
 
-        for (i, w) in chunk.words.iter().enumerate() {
+        for (i, w) in words.iter().enumerate() {
             tracing::debug!(
                 "corrector: word[{i}]={:?} logprob=({:.3},{:.3}) margin=({:.3},{:.3})",
                 w.word,
@@ -74,14 +92,16 @@ impl Corrector {
         }
 
         let spans =
-            enumerate_transcript_spans_with(text, 3, Some(chunk.words.as_slice()), |span_text| {
+            enumerate_transcript_spans_with(text, 3, Some(words), |span_text| {
                 engine.g2p.ipa_tokens(span_text).ok().flatten()
             });
 
         tracing::info!(
-            "corrector: text={:?} spans={}",
+            "corrector: text={:?} spans={} left_ctx={} right_ctx={}",
             text.chars().take(60).collect::<String>(),
-            spans.len()
+            spans.len(),
+            left_context.len(),
+            right_context.len(),
         );
 
         // Phase 1: score all spans, collect candidates
@@ -134,12 +154,20 @@ impl Corrector {
                 })
                 .collect();
 
-            let ctx =
-                bee_correct::judge::extract_span_context(text, span.char_start, span.char_end);
-            let ctx = SpanContext {
-                app_id: app_id_opt.clone(),
-                ..ctx
-            };
+            // Build context from neighboring words (not from string slicing).
+            // Left context: last 2 words from left_context + words before span.
+            // Right context: words after span + first 2 words from right_context.
+            let ctx = extract_span_context_from_words(
+                text,
+                span.char_start,
+                span.char_end,
+                words,
+                span.token_start,
+                span.token_end,
+                left_context,
+                right_context,
+                app_id_opt.clone(),
+            );
 
             let decision = engine.judge.score_span(span, &candidates_with_flags, &ctx);
 
@@ -208,7 +236,7 @@ impl Corrector {
         edits.sort_by_key(|e| e.span_start);
 
         // Apply edits to chunk text
-        let mut corrected = text.clone();
+        let mut corrected = text.to_string();
         let mut offset: i64 = 0;
         for edit in &edits {
             let start = edit.span_start as usize;
@@ -238,5 +266,58 @@ impl Corrector {
     /// Take pending edits for the teach flow. Drains the map.
     pub fn take_pending(&mut self) -> HashMap<String, PendingEdit> {
         std::mem::take(&mut self.pending)
+    }
+}
+
+/// Build `SpanContext` using word-based neighbor context instead of string slicing.
+///
+/// Left context: words before the span within the chunk + neighbor left_context words.
+/// Right context: words after the span within the chunk + neighbor right_context words.
+/// This avoids char-offset surgery across concatenated strings.
+fn extract_span_context_from_words(
+    text: &str,
+    char_start: usize,
+    _char_end: usize,
+    chunk_words: &[AlignedWord],
+    token_start: usize,
+    token_end: usize,
+    left_context: &[AlignedWord],
+    right_context: &[AlignedWord],
+    app_id: Option<String>,
+) -> SpanContext {
+    // Left tokens: words before span in chunk, then neighbor words, take last 2
+    let mut left_tokens: Vec<String> = Vec::new();
+    for w in left_context.iter() {
+        left_tokens.push(w.word.trim().to_ascii_lowercase());
+    }
+    for w in chunk_words.iter().take(token_start) {
+        left_tokens.push(w.word.trim().to_ascii_lowercase());
+    }
+    // Keep only last 2
+    let skip = left_tokens.len().saturating_sub(2);
+    let left_tokens: Vec<String> = left_tokens.into_iter().skip(skip).collect();
+
+    // Right tokens: words after span in chunk, then neighbor words, take first 2
+    let mut right_tokens: Vec<String> = Vec::new();
+    for w in chunk_words.iter().skip(token_end) {
+        right_tokens.push(w.word.trim().to_ascii_lowercase());
+    }
+    for w in right_context.iter() {
+        right_tokens.push(w.word.trim().to_ascii_lowercase());
+    }
+    right_tokens.truncate(2);
+
+    // Sentence start: span is at beginning or after sentence-ending punctuation
+    let before = &text[..char_start];
+    let sentence_start = before.is_empty() || before.trim_end().ends_with(['.', '!', '?']);
+
+    SpanContext {
+        left_tokens,
+        right_tokens,
+        code_like: false,   // ASR speech is not code
+        prose_like: true,
+        list_like: false,
+        sentence_start,
+        app_id,
     }
 }

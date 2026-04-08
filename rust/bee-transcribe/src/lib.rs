@@ -142,12 +142,14 @@ impl Engine {
     ) -> Result<session_v2::SessionV2<'_>, Exception> {
         let vad = SileroVad::from_tensors(&self.vad_tensors)
             .map_err(|e| Exception::custom(format!("vad creation failed: {e}")))?;
+        let correction = self.correction.as_ref().map(|ce| (ce.clone(), Corrector::new()));
         Ok(session_v2::SessionV2::new(
             &self.model,
             &self.tokenizer,
             &self.aligner,
             vad,
             options,
+            correction,
         ))
     }
 
