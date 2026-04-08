@@ -25,7 +25,10 @@ const DIRECT_KEYS: &[(&str, &str)] = &[
         "encoder_embed.convnext.pointwise_conv2.bias",
     ),
     ("encoder_embed.out.bias", "encoder_embed.out.bias"),
-    ("encoder_embed.out_norm.log_scale", "encoder_embed.out_norm.log_scale"),
+    (
+        "encoder_embed.out_norm.log_scale",
+        "encoder_embed.out_norm.log_scale",
+    ),
     ("encoder_embed.out_norm.bias", "encoder_embed.out_norm.bias"),
     ("ctc_output.linear.bias", "ctc_head.linear.bias"),
 ];
@@ -116,221 +119,116 @@ pub fn load_frontend_and_ctc_weights_from_map(
     })
 }
 
-const STAGE0_DIRECT_KEYS: &[(&str, &str)] = &[
-    (
-        "encoder.stage0.layer0.self_attn_weights.in_proj.bias",
-        "self_attn_weights.in_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.feed_forward1.in_proj.bias",
-        "feed_forward1.in_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.feed_forward1.out_proj.bias",
-        "feed_forward1.out_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.nonlin_attention.in_proj.bias",
-        "nonlin_attention.in_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.nonlin_attention.out_proj.bias",
-        "nonlin_attention.out_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.self_attn1.in_proj.bias",
-        "self_attn1.in_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.self_attn1.out_proj.bias",
-        "self_attn1.out_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.conv_module1.in_proj.bias",
-        "conv_module1.in_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.conv_module1.depthwise_conv.bias",
-        "conv_module1.depthwise_conv.bias",
-    ),
-    (
-        "encoder.stage0.layer0.conv_module1.out_proj.bias",
-        "conv_module1.out_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.feed_forward2.in_proj.bias",
-        "feed_forward2.in_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.feed_forward2.out_proj.bias",
-        "feed_forward2.out_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.bypass_mid.bypass_scale",
-        "bypass_mid.bypass_scale",
-    ),
-    (
-        "encoder.stage0.layer0.self_attn2.in_proj.bias",
-        "self_attn2.in_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.self_attn2.out_proj.bias",
-        "self_attn2.out_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.conv_module2.in_proj.bias",
-        "conv_module2.in_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.conv_module2.depthwise_conv.bias",
-        "conv_module2.depthwise_conv.bias",
-    ),
-    (
-        "encoder.stage0.layer0.conv_module2.out_proj.bias",
-        "conv_module2.out_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.feed_forward3.in_proj.bias",
-        "feed_forward3.in_proj.bias",
-    ),
-    (
-        "encoder.stage0.layer0.feed_forward3.out_proj.bias",
-        "feed_forward3.out_proj.bias",
-    ),
-    ("encoder.stage0.layer0.norm.log_scale", "norm.log_scale"),
-    ("encoder.stage0.layer0.norm.bias", "norm.bias"),
-    ("encoder.stage0.layer0.bypass.bypass_scale", "bypass.bypass_scale"),
+const STAGE_LAYER_DIRECT_SUFFIXES: &[&str] = &[
+    "self_attn_weights.in_proj.bias",
+    "feed_forward1.in_proj.bias",
+    "feed_forward1.out_proj.bias",
+    "nonlin_attention.in_proj.bias",
+    "nonlin_attention.out_proj.bias",
+    "self_attn1.in_proj.bias",
+    "self_attn1.out_proj.bias",
+    "conv_module1.in_proj.bias",
+    "conv_module1.depthwise_conv.bias",
+    "conv_module1.out_proj.bias",
+    "feed_forward2.in_proj.bias",
+    "feed_forward2.out_proj.bias",
+    "bypass_mid.bypass_scale",
+    "self_attn2.in_proj.bias",
+    "self_attn2.out_proj.bias",
+    "conv_module2.in_proj.bias",
+    "conv_module2.depthwise_conv.bias",
+    "conv_module2.out_proj.bias",
+    "feed_forward3.in_proj.bias",
+    "feed_forward3.out_proj.bias",
+    "norm.log_scale",
+    "norm.bias",
+    "bypass.bypass_scale",
 ];
 
-const STAGE0_LINEAR_KEYS: &[(&str, &str)] = &[
-    (
-        "encoder.stage0.layer0.self_attn_weights.in_proj.weight",
-        "self_attn_weights.in_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.self_attn_weights.linear_pos.weight",
-        "self_attn_weights.linear_pos.weight",
-    ),
-    (
-        "encoder.stage0.layer0.feed_forward1.in_proj.weight",
-        "feed_forward1.in_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.feed_forward1.out_proj.weight",
-        "feed_forward1.out_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.nonlin_attention.in_proj.weight",
-        "nonlin_attention.in_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.nonlin_attention.out_proj.weight",
-        "nonlin_attention.out_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.self_attn1.in_proj.weight",
-        "self_attn1.in_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.self_attn1.out_proj.weight",
-        "self_attn1.out_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.conv_module1.in_proj.weight",
-        "conv_module1.in_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.conv_module1.out_proj.weight",
-        "conv_module1.out_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.feed_forward2.in_proj.weight",
-        "feed_forward2.in_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.feed_forward2.out_proj.weight",
-        "feed_forward2.out_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.self_attn2.in_proj.weight",
-        "self_attn2.in_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.self_attn2.out_proj.weight",
-        "self_attn2.out_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.conv_module2.in_proj.weight",
-        "conv_module2.in_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.conv_module2.out_proj.weight",
-        "conv_module2.out_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.feed_forward3.in_proj.weight",
-        "feed_forward3.in_proj.weight",
-    ),
-    (
-        "encoder.stage0.layer0.feed_forward3.out_proj.weight",
-        "feed_forward3.out_proj.weight",
-    ),
+const STAGE_LAYER_LINEAR_SUFFIXES: &[&str] = &[
+    "self_attn_weights.in_proj.weight",
+    "self_attn_weights.linear_pos.weight",
+    "feed_forward1.in_proj.weight",
+    "feed_forward1.out_proj.weight",
+    "nonlin_attention.in_proj.weight",
+    "nonlin_attention.out_proj.weight",
+    "self_attn1.in_proj.weight",
+    "self_attn1.out_proj.weight",
+    "conv_module1.in_proj.weight",
+    "conv_module1.out_proj.weight",
+    "feed_forward2.in_proj.weight",
+    "feed_forward2.out_proj.weight",
+    "self_attn2.in_proj.weight",
+    "self_attn2.out_proj.weight",
+    "conv_module2.in_proj.weight",
+    "conv_module2.out_proj.weight",
+    "feed_forward3.in_proj.weight",
+    "feed_forward3.out_proj.weight",
 ];
 
-const STAGE0_CONV1D_KEYS: &[(&str, &str)] = &[
-    (
-        "encoder.stage0.layer0.conv_module1.depthwise_conv.weight",
-        "conv_module1.depthwise_conv.weight",
-    ),
-    (
-        "encoder.stage0.layer0.conv_module2.depthwise_conv.weight",
-        "conv_module2.depthwise_conv.weight",
-    ),
+const STAGE_LAYER_CONV1D_SUFFIXES: &[&str] = &[
+    "conv_module1.depthwise_conv.weight",
+    "conv_module2.depthwise_conv.weight",
 ];
+
+fn stage_layer_key(prefix: &str, suffix: &str) -> String {
+    format!("{prefix}.{suffix}")
+}
 
 pub fn load_stage0_layer_weights_from_map(
     layer: &mut ZipformerEncoderLayer,
+    tensors: &HashMap<String, Array>,
+) -> Result<LoadStats, Exception> {
+    load_stage_layer_weights_from_map(layer, "encoder.stage0.layer0", tensors)
+}
+
+pub fn load_stage_layer_weights_from_map(
+    layer: &mut ZipformerEncoderLayer,
+    source_prefix: &str,
     tensors: &HashMap<String, Array>,
 ) -> Result<LoadStats, Exception> {
     let mut params = layer.parameters_mut().flatten();
     let mut loaded_count = 0usize;
     let mut missing = Vec::new();
 
-    for (src, dst) in STAGE0_DIRECT_KEYS {
-        match tensors.get(*src) {
+    for suffix in STAGE_LAYER_DIRECT_SUFFIXES {
+        let src = stage_layer_key(source_prefix, suffix);
+        match tensors.get(&src) {
             Some(value) => {
-                if let Some(param) = params.get_mut(*dst) {
+                if let Some(param) = params.get_mut(*suffix) {
                     **param = value.clone();
                     loaded_count += 1;
                 }
             }
-            None => missing.push((*src).to_owned()),
+            None => missing.push(src),
         }
     }
 
-    for (src, dst) in STAGE0_LINEAR_KEYS {
-        match tensors.get(*src) {
+    for suffix in STAGE_LAYER_LINEAR_SUFFIXES {
+        let src = stage_layer_key(source_prefix, suffix);
+        match tensors.get(&src) {
             Some(value) => {
                 let transposed = value.transpose_axes(&[1, 0])?;
-                if let Some(param) = params.get_mut(*dst) {
+                if let Some(param) = params.get_mut(*suffix) {
                     **param = transposed;
                     loaded_count += 1;
                 }
             }
-            None => missing.push((*src).to_owned()),
+            None => missing.push(src),
         }
     }
 
-    for (src, dst) in STAGE0_CONV1D_KEYS {
-        match tensors.get(*src) {
+    for suffix in STAGE_LAYER_CONV1D_SUFFIXES {
+        let src = stage_layer_key(source_prefix, suffix);
+        match tensors.get(&src) {
             Some(value) => {
                 let transposed = value.transpose_axes(&[0, 2, 1])?;
-                if let Some(param) = params.get_mut(*dst) {
+                if let Some(param) = params.get_mut(*suffix) {
                     **param = transposed;
                     loaded_count += 1;
                 }
             }
-            None => missing.push((*src).to_owned()),
+            None => missing.push(src),
         }
     }
 

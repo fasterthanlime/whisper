@@ -27,6 +27,8 @@ ADD6 = "/encoder/0/layers.0/Add_6_output_0"
 ADD7 = "/encoder/0/layers.0/Add_7_output_0"
 NORM = "/encoder/0/layers.0/norm/Mul_1_output_0"
 LAYER0_OUTPUT = "/encoder/0/layers.0/bypass/Add_output_0"
+LAYER1_ATTN_WEIGHTS = "/encoder/0/layers.1/self_attn_weights/Softmax_output_0"
+LAYER1_OUTPUT = "/encoder/0/layers.1/bypass/Add_output_0"
 
 
 def ensure_outputs(model_path: Path, output_path: Path) -> Path:
@@ -48,6 +50,8 @@ def ensure_outputs(model_path: Path, output_path: Path) -> Path:
         ADD7,
         NORM,
         LAYER0_OUTPUT,
+        LAYER1_ATTN_WEIGHTS,
+        LAYER1_OUTPUT,
     ]:
         if name not in existing:
             model.graph.output.append(
@@ -99,6 +103,8 @@ def main() -> None:
             ADD7,
             NORM,
             LAYER0_OUTPUT,
+            LAYER1_ATTN_WEIGHTS,
+            LAYER1_OUTPUT,
         ],
         {"x": features, "x_lens": feat_lens},
     )
@@ -117,6 +123,8 @@ def main() -> None:
         add7,
         norm,
         layer0_out,
+        layer1_attn_weights,
+        layer1_out,
     ) = outputs
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -136,6 +144,9 @@ def main() -> None:
             "add7": add7.astype(np.float32),
             "norm": norm.astype(np.float32),
             "layer0_out": layer0_out.astype(np.float32),
+            "layer1_attn_weights": layer1_attn_weights.astype(np.float32),
+            "layer1_out": layer1_out.astype(np.float32),
+            "stage0_out": layer1_out.astype(np.float32),
         },
         str(args.output),
     )

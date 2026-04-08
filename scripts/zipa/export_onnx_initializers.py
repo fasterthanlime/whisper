@@ -27,50 +27,93 @@ NAME_MAP = {
     "encoder_embed.out_norm.bias": "encoder_embed.out_norm.bias",
     "onnx::MatMul_12110": "ctc_output.linear.weight",
     "ctc_output.1.bias": "ctc_output.linear.bias",
-    "onnx::MatMul_11184": "encoder.stage0.layer0.self_attn_weights.in_proj.weight",
-    "encoder.encoders.0.layers.0.self_attn_weights.in_proj.bias": "encoder.stage0.layer0.self_attn_weights.in_proj.bias",
-    "onnx::MatMul_11203": "encoder.stage0.layer0.self_attn_weights.linear_pos.weight",
-    "onnx::MatMul_11210": "encoder.stage0.layer0.feed_forward1.in_proj.weight",
-    "encoder.encoders.0.layers.0.feed_forward1.in_proj.bias": "encoder.stage0.layer0.feed_forward1.in_proj.bias",
-    "onnx::MatMul_11211": "encoder.stage0.layer0.feed_forward1.out_proj.weight",
-    "encoder.encoders.0.layers.0.feed_forward1.out_proj.bias": "encoder.stage0.layer0.feed_forward1.out_proj.bias",
-    "onnx::MatMul_11216": "encoder.stage0.layer0.nonlin_attention.in_proj.weight",
-    "encoder.encoders.0.layers.0.nonlin_attention.in_proj.bias": "encoder.stage0.layer0.nonlin_attention.in_proj.bias",
-    "onnx::MatMul_11220": "encoder.stage0.layer0.nonlin_attention.out_proj.weight",
-    "encoder.encoders.0.layers.0.nonlin_attention.out_proj.bias": "encoder.stage0.layer0.nonlin_attention.out_proj.bias",
-    "onnx::MatMul_11221": "encoder.stage0.layer0.self_attn1.in_proj.weight",
-    "encoder.encoders.0.layers.0.self_attn1.in_proj.bias": "encoder.stage0.layer0.self_attn1.in_proj.bias",
-    "onnx::MatMul_11223": "encoder.stage0.layer0.self_attn1.out_proj.weight",
-    "encoder.encoders.0.layers.0.self_attn1.out_proj.bias": "encoder.stage0.layer0.self_attn1.out_proj.bias",
-    "onnx::MatMul_11224": "encoder.stage0.layer0.conv_module1.in_proj.weight",
-    "encoder.encoders.0.layers.0.conv_module1.in_proj.bias": "encoder.stage0.layer0.conv_module1.in_proj.bias",
-    "encoder.encoders.0.layers.0.conv_module1.depthwise_conv.weight": "encoder.stage0.layer0.conv_module1.depthwise_conv.weight",
-    "encoder.encoders.0.layers.0.conv_module1.depthwise_conv.bias": "encoder.stage0.layer0.conv_module1.depthwise_conv.bias",
-    "onnx::MatMul_11225": "encoder.stage0.layer0.conv_module1.out_proj.weight",
-    "encoder.encoders.0.layers.0.conv_module1.out_proj.bias": "encoder.stage0.layer0.conv_module1.out_proj.bias",
-    "onnx::MatMul_11226": "encoder.stage0.layer0.feed_forward2.in_proj.weight",
-    "encoder.encoders.0.layers.0.feed_forward2.in_proj.bias": "encoder.stage0.layer0.feed_forward2.in_proj.bias",
-    "onnx::MatMul_11227": "encoder.stage0.layer0.feed_forward2.out_proj.weight",
-    "encoder.encoders.0.layers.0.feed_forward2.out_proj.bias": "encoder.stage0.layer0.feed_forward2.out_proj.bias",
-    "encoder.encoders.0.layers.0.bypass_mid.bypass_scale": "encoder.stage0.layer0.bypass_mid.bypass_scale",
-    "onnx::MatMul_11228": "encoder.stage0.layer0.self_attn2.in_proj.weight",
-    "encoder.encoders.0.layers.0.self_attn2.in_proj.bias": "encoder.stage0.layer0.self_attn2.in_proj.bias",
-    "onnx::MatMul_11230": "encoder.stage0.layer0.self_attn2.out_proj.weight",
-    "encoder.encoders.0.layers.0.self_attn2.out_proj.bias": "encoder.stage0.layer0.self_attn2.out_proj.bias",
-    "onnx::MatMul_11231": "encoder.stage0.layer0.conv_module2.in_proj.weight",
-    "encoder.encoders.0.layers.0.conv_module2.in_proj.bias": "encoder.stage0.layer0.conv_module2.in_proj.bias",
-    "encoder.encoders.0.layers.0.conv_module2.depthwise_conv.weight": "encoder.stage0.layer0.conv_module2.depthwise_conv.weight",
-    "encoder.encoders.0.layers.0.conv_module2.depthwise_conv.bias": "encoder.stage0.layer0.conv_module2.depthwise_conv.bias",
-    "onnx::MatMul_11232": "encoder.stage0.layer0.conv_module2.out_proj.weight",
-    "encoder.encoders.0.layers.0.conv_module2.out_proj.bias": "encoder.stage0.layer0.conv_module2.out_proj.bias",
-    "onnx::MatMul_11233": "encoder.stage0.layer0.feed_forward3.in_proj.weight",
-    "encoder.encoders.0.layers.0.feed_forward3.in_proj.bias": "encoder.stage0.layer0.feed_forward3.in_proj.bias",
-    "onnx::MatMul_11234": "encoder.stage0.layer0.feed_forward3.out_proj.weight",
-    "encoder.encoders.0.layers.0.feed_forward3.out_proj.bias": "encoder.stage0.layer0.feed_forward3.out_proj.bias",
-    "encoder.encoders.0.layers.0.norm.log_scale": "encoder.stage0.layer0.norm.log_scale",
-    "encoder.encoders.0.layers.0.norm.bias": "encoder.stage0.layer0.norm.bias",
-    "encoder.encoders.0.layers.0.bypass.bypass_scale": "encoder.stage0.layer0.bypass.bypass_scale",
 }
+
+STAGE0_LAYER_MATMULS = {
+    0: {
+        "self_attn_weights.in_proj.weight": "onnx::MatMul_11184",
+        "self_attn_weights.linear_pos.weight": "onnx::MatMul_11203",
+        "feed_forward1.in_proj.weight": "onnx::MatMul_11210",
+        "feed_forward1.out_proj.weight": "onnx::MatMul_11211",
+        "nonlin_attention.in_proj.weight": "onnx::MatMul_11216",
+        "nonlin_attention.out_proj.weight": "onnx::MatMul_11220",
+        "self_attn1.in_proj.weight": "onnx::MatMul_11221",
+        "self_attn1.out_proj.weight": "onnx::MatMul_11223",
+        "conv_module1.in_proj.weight": "onnx::MatMul_11224",
+        "conv_module1.out_proj.weight": "onnx::MatMul_11225",
+        "feed_forward2.in_proj.weight": "onnx::MatMul_11226",
+        "feed_forward2.out_proj.weight": "onnx::MatMul_11227",
+        "self_attn2.in_proj.weight": "onnx::MatMul_11228",
+        "self_attn2.out_proj.weight": "onnx::MatMul_11230",
+        "conv_module2.in_proj.weight": "onnx::MatMul_11231",
+        "conv_module2.out_proj.weight": "onnx::MatMul_11232",
+        "feed_forward3.in_proj.weight": "onnx::MatMul_11233",
+        "feed_forward3.out_proj.weight": "onnx::MatMul_11234",
+    },
+    1: {
+        "self_attn_weights.in_proj.weight": "onnx::MatMul_11235",
+        "self_attn_weights.linear_pos.weight": "onnx::MatMul_11254",
+        "feed_forward1.in_proj.weight": "onnx::MatMul_11261",
+        "feed_forward1.out_proj.weight": "onnx::MatMul_11262",
+        "nonlin_attention.in_proj.weight": "onnx::MatMul_11267",
+        "nonlin_attention.out_proj.weight": "onnx::MatMul_11271",
+        "self_attn1.in_proj.weight": "onnx::MatMul_11272",
+        "self_attn1.out_proj.weight": "onnx::MatMul_11274",
+        "conv_module1.in_proj.weight": "onnx::MatMul_11275",
+        "conv_module1.out_proj.weight": "onnx::MatMul_11276",
+        "feed_forward2.in_proj.weight": "onnx::MatMul_11277",
+        "feed_forward2.out_proj.weight": "onnx::MatMul_11278",
+        "self_attn2.in_proj.weight": "onnx::MatMul_11279",
+        "self_attn2.out_proj.weight": "onnx::MatMul_11281",
+        "conv_module2.in_proj.weight": "onnx::MatMul_11282",
+        "conv_module2.out_proj.weight": "onnx::MatMul_11283",
+        "feed_forward3.in_proj.weight": "onnx::MatMul_11284",
+        "feed_forward3.out_proj.weight": "onnx::MatMul_11285",
+    },
+}
+
+
+def add_stage0_layer(layer_index: int) -> None:
+    prefix = f"encoder.stage0.layer{layer_index}"
+    source_prefix = f"encoder.encoders.0.layers.{layer_index}"
+    matmuls = STAGE0_LAYER_MATMULS[layer_index]
+
+    for dst_suffix, src_name in matmuls.items():
+        NAME_MAP[src_name] = f"{prefix}.{dst_suffix}"
+
+    direct_suffixes = [
+        "self_attn_weights.in_proj.bias",
+        "feed_forward1.in_proj.bias",
+        "feed_forward1.out_proj.bias",
+        "nonlin_attention.in_proj.bias",
+        "nonlin_attention.out_proj.bias",
+        "self_attn1.in_proj.bias",
+        "self_attn1.out_proj.bias",
+        "conv_module1.in_proj.bias",
+        "conv_module1.depthwise_conv.weight",
+        "conv_module1.depthwise_conv.bias",
+        "conv_module1.out_proj.bias",
+        "feed_forward2.in_proj.bias",
+        "feed_forward2.out_proj.bias",
+        "bypass_mid.bypass_scale",
+        "self_attn2.in_proj.bias",
+        "self_attn2.out_proj.bias",
+        "conv_module2.in_proj.bias",
+        "conv_module2.depthwise_conv.weight",
+        "conv_module2.depthwise_conv.bias",
+        "conv_module2.out_proj.bias",
+        "feed_forward3.in_proj.bias",
+        "feed_forward3.out_proj.bias",
+        "norm.log_scale",
+        "norm.bias",
+        "bypass.bypass_scale",
+    ]
+    for suffix in direct_suffixes:
+        NAME_MAP[f"{source_prefix}.{suffix}"] = f"{prefix}.{suffix}"
+
+
+for stage0_layer_index in range(2):
+    add_stage0_layer(stage0_layer_index)
 
 
 def main() -> None:

@@ -32,7 +32,8 @@ impl CompactRelPositionalEncoding {
         let total = 2 * t - 1;
         let half_dim = self.embed_dim / 2;
         let compression_length = (self.embed_dim as f32).sqrt();
-        let length_scale = self.length_factor * self.embed_dim as f32 / (2.0 * std::f32::consts::PI);
+        let length_scale =
+            self.length_factor * self.embed_dim as f32 / (2.0 * std::f32::consts::PI);
 
         let mut pe = vec![0.0f32; (total * self.embed_dim) as usize];
         for row in 0..total {
@@ -62,7 +63,10 @@ impl CompactRelPositionalEncoding {
                 .copy_from_slice(&pe[src..src + self.embed_dim as usize]);
         }
 
-        Ok(Array::from_slice(&out, &[1, 2 * seq_len - 1, self.embed_dim]))
+        Ok(Array::from_slice(
+            &out,
+            &[1, 2 * seq_len - 1, self.embed_dim],
+        ))
     }
 }
 
@@ -80,7 +84,10 @@ impl BypassModule {
     }
 
     pub fn forward(&self, src_orig: &Array, src: &Array) -> Result<Array, Exception> {
-        src_orig.add(src.subtract(src_orig)?.multiply(self.bypass_scale.as_ref())?)
+        src_orig.add(
+            src.subtract(src_orig)?
+                .multiply(self.bypass_scale.as_ref())?,
+        )
     }
 }
 
@@ -115,11 +122,7 @@ impl RelPositionAttentionWeights {
         })
     }
 
-    pub fn forward_with_position(
-        &self,
-        x: &Array,
-        pos_emb: &Array,
-    ) -> Result<Array, Exception> {
+    pub fn forward_with_position(&self, x: &Array, pos_emb: &Array) -> Result<Array, Exception> {
         let shape = x.shape();
         let seq_len = shape[0];
         let batch_size = shape[1];
@@ -283,7 +286,10 @@ impl ConvolutionModule {
         let gate = nn::sigmoid(proj.index((.., .., channels..(2 * channels))))?;
         let mixed = main.multiply(&gate)?;
         let conv_in = mixed.transpose_axes(&[1, 0, 2])?;
-        let conv_out = self.depthwise_conv.forward(&conv_in)?.transpose_axes(&[1, 0, 2])?;
+        let conv_out = self
+            .depthwise_conv
+            .forward(&conv_in)?
+            .transpose_axes(&[1, 0, 2])?;
         let x = crate::model::swoosh_r(&conv_out)?;
         self.out_proj.forward(&x)
     }
@@ -321,6 +327,7 @@ pub struct ZipformerEncoderLayer {
 pub struct Stage0Encoder {
     pub encoder_pos: CompactRelPositionalEncoding,
     pub layer0: ZipformerEncoderLayer,
+    pub layer1: ZipformerEncoderLayer,
 }
 
 impl Stage0Encoder {
@@ -328,13 +335,15 @@ impl Stage0Encoder {
         Ok(Self {
             encoder_pos: CompactRelPositionalEncoding::new(config.pos_dim as i32, 1.0),
             layer0: ZipformerEncoderLayer::new_for_stage(config, 0)?,
+            layer1: ZipformerEncoderLayer::new_for_stage(config, 0)?,
         })
     }
 
     pub fn forward(&self, src: &Array) -> Result<Array, Exception> {
         let seq_len = src.shape()[0];
         let pos_emb = self.encoder_pos.forward(seq_len, 0)?;
-        self.layer0.forward(src, &pos_emb)
+        let src = self.layer0.forward(src, &pos_emb)?;
+        self.layer1.forward(&src, &pos_emb)
     }
 }
 
@@ -383,7 +392,11 @@ impl ZipformerEncoderLayer {
         let selected_attn_weights = attn_weights.index((0..1, .., .., ..));
 
         let src = src.add(&self.feed_forward1.forward(src)?)?;
-        let src = src.add(&self.nonlin_attention.forward(&src, &selected_attn_weights)?)?;
+        let src = src.add(
+            &self
+                .nonlin_attention
+                .forward(&src, &selected_attn_weights)?,
+        )?;
         let src = src.add(&self.self_attn1.forward(&src, attn_weights)?)?;
         let src = src.add(&self.conv_module1.forward(&src)?)?;
         let src = src.add(&self.feed_forward2.forward(&src)?)?;
@@ -395,11 +408,7 @@ impl ZipformerEncoderLayer {
         self.bypass.forward(&src_orig, &src)
     }
 
-    pub fn forward(
-        &self,
-        src: &Array,
-        pos_emb: &Array,
-    ) -> Result<Array, Exception> {
+    pub fn forward(&self, src: &Array, pos_emb: &Array) -> Result<Array, Exception> {
         let attn_weights = self.self_attn_weights.forward_with_position(src, pos_emb)?;
         self.forward_with_attn_weights(src, &attn_weights)
     }
@@ -418,11 +427,11 @@ fn relative_to_absolute(pos_scores: &Array, seq_len: i32) -> Result<Array, Excep
 #[cfg(test)]
 mod tests {
     use crate::config::{ZipaModelConfig, ZipaVariant};
-    use crate::load::load_stage0_layer_weights_from_map;
+    use crate::load::{load_stage0_layer_weights_from_map, load_stage_layer_weights_from_map};
 
     use super::{CompactRelPositionalEncoding, Stage0Encoder, ZipformerEncoderLayer};
-    use mlx_rs::Array;
     use mlx_rs::ops::indexing::IndexOp;
+    use mlx_rs::Array;
     use std::path::PathBuf;
 
     #[test]
@@ -430,23 +439,41 @@ mod tests {
         let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
         let layer = ZipformerEncoderLayer::new_for_stage(&config, 0).unwrap();
 
-        assert_eq!(layer.self_attn_weights.in_proj.weight.shape(), vec![272, 192]);
-        assert_eq!(layer.self_attn_weights.linear_pos.weight.shape(), vec![16, 48]);
+        assert_eq!(
+            layer.self_attn_weights.in_proj.weight.shape(),
+            vec![272, 192]
+        );
+        assert_eq!(
+            layer.self_attn_weights.linear_pos.weight.shape(),
+            vec![16, 48]
+        );
         assert_eq!(layer.self_attn1.in_proj.weight.shape(), vec![48, 192]);
         assert_eq!(layer.self_attn1.out_proj.weight.shape(), vec![192, 48]);
         assert_eq!(layer.feed_forward1.in_proj.weight.shape(), vec![384, 192]);
         assert_eq!(layer.feed_forward1.out_proj.weight.shape(), vec![192, 384]);
-        assert_eq!(layer.nonlin_attention.in_proj.weight.shape(), vec![432, 192]);
-        assert_eq!(layer.nonlin_attention.out_proj.weight.shape(), vec![192, 144]);
+        assert_eq!(
+            layer.nonlin_attention.in_proj.weight.shape(),
+            vec![432, 192]
+        );
+        assert_eq!(
+            layer.nonlin_attention.out_proj.weight.shape(),
+            vec![192, 144]
+        );
         assert_eq!(layer.conv_module1.in_proj.weight.shape(), vec![384, 192]);
-        assert_eq!(layer.conv_module1.depthwise_conv.weight.shape(), vec![192, 31, 1]);
+        assert_eq!(
+            layer.conv_module1.depthwise_conv.weight.shape(),
+            vec![192, 31, 1]
+        );
         assert_eq!(layer.conv_module1.out_proj.weight.shape(), vec![192, 192]);
         assert_eq!(layer.feed_forward2.in_proj.weight.shape(), vec![512, 192]);
         assert_eq!(layer.feed_forward2.out_proj.weight.shape(), vec![192, 512]);
         assert_eq!(layer.self_attn2.in_proj.weight.shape(), vec![48, 192]);
         assert_eq!(layer.self_attn2.out_proj.weight.shape(), vec![192, 48]);
         assert_eq!(layer.conv_module2.in_proj.weight.shape(), vec![384, 192]);
-        assert_eq!(layer.conv_module2.depthwise_conv.weight.shape(), vec![192, 31, 1]);
+        assert_eq!(
+            layer.conv_module2.depthwise_conv.weight.shape(),
+            vec![192, 31, 1]
+        );
         assert_eq!(layer.conv_module2.out_proj.weight.shape(), vec![192, 192]);
         assert_eq!(layer.feed_forward3.in_proj.weight.shape(), vec![640, 192]);
         assert_eq!(layer.feed_forward3.out_proj.weight.shape(), vec![192, 640]);
@@ -511,7 +538,9 @@ mod tests {
             .unwrap();
         assert_close("attn_weights", &actual_attn, attn_weights);
 
-        let add0 = layer0_in.add(&layer.feed_forward1.forward(layer0_in).unwrap()).unwrap();
+        let add0 = layer0_in
+            .add(&layer.feed_forward1.forward(layer0_in).unwrap())
+            .unwrap();
         assert_close("add0", &add0, tensors.get("add0").unwrap());
 
         let selected_attn_weights = attn_weights.index((0..1, .., .., ..));
@@ -530,10 +559,14 @@ mod tests {
             .unwrap();
         assert_close("add2", &add2, tensors.get("add2").unwrap());
 
-        let add3 = add2.add(&layer.conv_module1.forward(&add2).unwrap()).unwrap();
+        let add3 = add2
+            .add(&layer.conv_module1.forward(&add2).unwrap())
+            .unwrap();
         assert_close("add3", &add3, tensors.get("add3").unwrap());
 
-        let add4 = add3.add(&layer.feed_forward2.forward(&add3).unwrap()).unwrap();
+        let add4 = add3
+            .add(&layer.feed_forward2.forward(&add3).unwrap())
+            .unwrap();
         assert_close("add4", &add4, tensors.get("add4").unwrap());
 
         let mid = layer.bypass_mid.forward(&src_orig, &add4).unwrap();
@@ -544,10 +577,14 @@ mod tests {
             .unwrap();
         assert_close("add5", &add5, tensors.get("add5").unwrap());
 
-        let add6 = add5.add(&layer.conv_module2.forward(&add5).unwrap()).unwrap();
+        let add6 = add5
+            .add(&layer.conv_module2.forward(&add5).unwrap())
+            .unwrap();
         assert_close("add6", &add6, tensors.get("add6").unwrap());
 
-        let add7 = add6.add(&layer.feed_forward3.forward(&add6).unwrap()).unwrap();
+        let add7 = add6
+            .add(&layer.feed_forward3.forward(&add6).unwrap())
+            .unwrap();
         assert_close("add7", &add7, tensors.get("add7").unwrap());
 
         let norm = layer.norm.forward(&add7).unwrap();
@@ -557,7 +594,11 @@ mod tests {
         assert_close("layer0_out", &actual, tensors.get("layer0_out").unwrap());
 
         let full_actual = layer.forward(layer0_in, pos_emb).unwrap();
-        assert_close("layer0_out_full", &full_actual, tensors.get("layer0_out").unwrap());
+        assert_close(
+            "layer0_out_full",
+            &full_actual,
+            tensors.get("layer0_out").unwrap(),
+        );
     }
 
     #[test]
@@ -579,15 +620,66 @@ mod tests {
         let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
         let mut stage0 = Stage0Encoder::new(&config).unwrap();
         let params = Array::load_safetensors(&weights).unwrap();
-        let stats = load_stage0_layer_weights_from_map(&mut stage0.layer0, &params).unwrap();
-        assert!(stats.missing.is_empty(), "missing: {:?}", stats.missing);
+        let layer0_stats = load_stage0_layer_weights_from_map(&mut stage0.layer0, &params).unwrap();
+        assert!(
+            layer0_stats.missing.is_empty(),
+            "missing: {:?}",
+            layer0_stats.missing
+        );
+        let layer1_stats =
+            load_stage_layer_weights_from_map(&mut stage0.layer1, "encoder.stage0.layer1", &params)
+                .unwrap();
+        assert!(
+            layer1_stats.missing.is_empty(),
+            "missing: {:?}",
+            layer1_stats.missing
+        );
 
         let tensors = Array::load_safetensors(&reference).unwrap();
         let layer0_in = tensors.get("layer0_in").unwrap();
-        let expected = tensors.get("layer0_out").unwrap();
+        let expected = tensors.get("stage0_out").unwrap();
 
         let actual = stage0.forward(layer0_in).unwrap();
         assert_close("stage0_wrapper", &actual, expected);
+    }
+
+    #[test]
+    fn stage0_layer1_matches_onnx_reference_when_local_artifacts_exist() {
+        let home = match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home),
+            None => return,
+        };
+        let weights = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/frontend_ctc.safetensors",
+        );
+        let reference = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/authored_282_take_1_layer0_ref.safetensors",
+        );
+        if !(weights.exists() && reference.exists()) {
+            return;
+        }
+
+        let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
+        let mut layer = ZipformerEncoderLayer::new_for_stage(&config, 0).unwrap();
+        let params = Array::load_safetensors(&weights).unwrap();
+        let stats = load_stage_layer_weights_from_map(&mut layer, "encoder.stage0.layer1", &params)
+            .unwrap();
+        assert!(stats.missing.is_empty(), "missing: {:?}", stats.missing);
+
+        let tensors = Array::load_safetensors(&reference).unwrap();
+        let layer_input = tensors.get("layer0_out").unwrap();
+        let pos_emb = tensors.get("pos_emb").unwrap();
+        let expected_attn = tensors.get("layer1_attn_weights").unwrap();
+        let expected = tensors.get("layer1_out").unwrap();
+
+        let actual_attn = layer
+            .self_attn_weights
+            .forward_with_position(layer_input, pos_emb)
+            .unwrap();
+        assert_close("layer1_attn_weights", &actual_attn, expected_attn);
+
+        let actual = layer.forward(layer_input, pos_emb).unwrap();
+        assert_close("layer1_out", &actual, expected);
     }
 
     fn assert_close(name: &str, actual: &Array, expected: &Array) {
