@@ -4,9 +4,10 @@ use bee_transcribe::SessionOptions;
 use bee_zipa_mlx::audio::AudioBuffer;
 use beeml::judge::OnlineJudge;
 use beeml::rpc::{
-    AcceptedEdit, BeeMl, CorpusCapturePlanResult, CorrectionDebugResult, CorrectionRequest,
-    CorrectionResult, DeleteCorpusRecordingRequest, DeleteCorpusRecordingResult, JudgeEvalFailure,
-    ModelSummary, OfflineJudgeEvalRequest, OfflineJudgeEvalResult, PhoneticComparisonRequest,
+    AcceptedEdit, BeeMl, CorpusAlignmentEvalRequest, CorpusAlignmentEvalResult,
+    CorpusCapturePlanResult, CorrectionDebugResult, CorrectionRequest, CorrectionResult,
+    DeleteCorpusRecordingRequest, DeleteCorpusRecordingResult, JudgeEvalFailure, ModelSummary,
+    OfflineJudgeEvalRequest, OfflineJudgeEvalResult, PhoneticComparisonRequest,
     PhoneticComparisonResult, ProbDistribution, RerankerDebugTrace, RetrievalEvalMiss,
     RetrievalEvalTermSummary, RetrievalPrototypeEvalProgress, RetrievalPrototypeEvalRequest,
     RetrievalPrototypeEvalResult, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
@@ -1672,5 +1673,18 @@ impl BeeMl for BeeMlService {
             deleted,
             total_recordings,
         })
+    }
+
+    async fn run_corpus_alignment_eval(
+        &self,
+        request: CorpusAlignmentEvalRequest,
+    ) -> Result<CorpusAlignmentEvalResult, String> {
+        self.eval_corpus_alignment(
+            request.limit.max(1) as usize,
+            request
+                .bucket
+                .as_deref()
+                .filter(|bucket| !bucket.is_empty()),
+        )
     }
 }

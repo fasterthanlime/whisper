@@ -734,6 +734,46 @@ pub struct DeleteCorpusRecordingResult {
     pub total_recordings: u32,
 }
 
+#[derive(Clone, Debug, Facet)]
+pub struct CorpusAlignmentEvalRequest {
+    pub limit: u32,
+    pub bucket: Option<String>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct CorpusAlignmentBucketSummary {
+    pub bucket: String,
+    pub rows: u32,
+    pub utterance_feature_similarity_mean: Option<f32>,
+    pub utterance_similarity_mean: Option<f32>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct CorpusAlignmentEvalRow {
+    pub prompt_id: String,
+    pub ordinal: u32,
+    pub bucket: String,
+    pub term: String,
+    pub prompt_text: String,
+    pub prompt_notes: Option<String>,
+    pub take: u32,
+    pub wav_path: String,
+    pub asr_transcript: String,
+    pub utterance_similarity: Option<f32>,
+    pub utterance_feature_similarity: Option<f32>,
+    pub positive_span_count: u32,
+    pub worst_span_feature_similarity: Option<f32>,
+    pub best_span_delta: Option<f32>,
+    pub trace: Option<TranscribePhoneticTrace>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct CorpusAlignmentEvalResult {
+    pub rows: Vec<CorpusAlignmentEvalRow>,
+    pub bucket_summaries: Vec<CorpusAlignmentBucketSummary>,
+}
+
 #[vox::service]
 pub trait BeeMl {
     async fn transcribe_wav(&self, wav_bytes: Vec<u8>) -> Result<TranscribeWavResult, String>;
@@ -802,4 +842,9 @@ pub trait BeeMl {
         &self,
         request: DeleteCorpusRecordingRequest,
     ) -> Result<DeleteCorpusRecordingResult, String>;
+
+    async fn run_corpus_alignment_eval(
+        &self,
+        request: CorpusAlignmentEvalRequest,
+    ) -> Result<CorpusAlignmentEvalResult, String>;
 }

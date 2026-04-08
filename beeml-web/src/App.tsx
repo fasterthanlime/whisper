@@ -8,12 +8,13 @@ import { OfflineJudgeEvalPanel } from "./components/OfflineJudgeEvalPanel";
 import { CorrectionReviewPanel } from "./components/CorrectionReviewPanel";
 import { PhoneticComparisonPanel } from "./components/PhoneticComparisonPanel";
 import { CorpusCapturePanel } from "./components/CorpusCapturePanel";
+import { CorpusAlignmentEvalPanel } from "./components/CorpusAlignmentEvalPanel";
 
 const WS_URL = "ws://127.0.0.1:9944";
 
 export default function App() {
   const [tab, setTab] = useState<
-    "transcribe" | "retrieval" | "rapid-fire" | "judge-eval" | "offline-eval" | "correction-ui" | "phonetics" | "corpus"
+    "transcribe" | "retrieval" | "rapid-fire" | "judge-eval" | "offline-eval" | "correction-ui" | "phonetics" | "corpus" | "corpus-eval"
   >("correction-ui");
 
   return (
@@ -85,6 +86,14 @@ export default function App() {
           >
             Corpus
           </button>
+          <button
+            role="tab"
+            aria-selected={tab === "corpus-eval"}
+            className={tab === "corpus-eval" ? "primary" : ""}
+            onClick={() => setTab("corpus-eval")}
+          >
+            Corpus Eval
+          </button>
         </div>
       </header>
       <main className="app-main">
@@ -93,6 +102,8 @@ export default function App() {
             <TranscribeDemoPanel wsUrl={WS_URL} />
           ) : tab === "corpus" ? (
             <CorpusCapturePanel wsUrl={WS_URL} />
+          ) : tab === "corpus-eval" ? (
+            <CorpusAlignmentEvalPanel wsUrl={WS_URL} />
           ) : tab === "correction-ui" ? (
             <CorrectionReviewPanel />
           ) : tab === "rapid-fire" ? (

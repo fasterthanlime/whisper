@@ -15,13 +15,14 @@ use bee_zipa_mlx::infer::ZipaInference;
 use beeml::g2p::CachedEspeakG2p;
 use beeml::judge::{OnlineJudge, extract_span_context};
 use beeml::rpc::{
-    FilterDecision, JudgeOptionDebug, JudgeStateDebug, PhoneticComparisonRequest,
-    PhoneticComparisonResult, PhoneticComparisonRow, PhoneticComparisonSummary, RapidFireChoice,
-    RetrievalCandidateDebug, RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest,
-    RetrievalPrototypeProbeResult, SpanDebugTrace, SpanDebugView,
-    TeachRetrievalPrototypeJudgeRequest, TimingBreakdown, TranscribePhoneticAlignmentKind,
-    TranscribePhoneticAlignmentOp, TranscribePhoneticCandidate, TranscribePhoneticSpan,
-    TranscribePhoneticTrace,
+    CorpusAlignmentBucketSummary, CorpusAlignmentEvalResult, CorpusAlignmentEvalRow,
+    CorpusCapturePrompt, FilterDecision, JudgeOptionDebug, JudgeStateDebug,
+    PhoneticComparisonRequest, PhoneticComparisonResult, PhoneticComparisonRow,
+    PhoneticComparisonSummary, RapidFireChoice, RetrievalCandidateDebug,
+    RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
+    SpanDebugTrace, SpanDebugView, TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
+    TranscribePhoneticAlignmentKind, TranscribePhoneticAlignmentOp, TranscribePhoneticCandidate,
+    TranscribePhoneticSpan, TranscribePhoneticTrace,
 };
 
 use crate::offline_eval::*;
@@ -272,6 +273,180 @@ impl BeeMlService {
             utterance_transcript_normalized,
             utterance_alignment: map_alignment_ops(&utterance_alignment.ops),
             spans: phonetic_spans,
+        })
+    }
+
+    pub(crate) fn latest_corpus_recordings(
+        &self,
+        bucket_filter: Option<&str>,
+    ) -> Result<Vec<(CorpusCapturePrompt, beeml::rpc::CorpusCaptureRecording)>, String> {
+        let prompts = self.corpus_capture_prompts();
+        let prompt_map = prompts
+            .into_iter()
+            .filter(|prompt| bucket_filter.is_none_or(|bucket| prompt.bucket == bucket))
+            .map(|prompt| (prompt.prompt_id.clone(), prompt))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let mut latest =
+            std::collections::HashMap::<String, beeml::rpc::CorpusCaptureRecording>::new();
+        for recording in
+            load_corpus_recordings(&self.inner.corpus_dir).map_err(|e| e.to_string())?
+        {
+            if !prompt_map.contains_key(&recording.prompt_id) {
+                continue;
+            }
+            let replace = match latest.get(&recording.prompt_id) {
+                Some(existing) => {
+                    recording.take > existing.take
+                        || (recording.take == existing.take
+                            && recording.created_at_unix_ms > existing.created_at_unix_ms)
+                }
+                None => true,
+            };
+            if replace {
+                latest.insert(recording.prompt_id.clone(), recording);
+            }
+        }
+
+        let mut rows = latest
+            .into_iter()
+            .filter_map(|(prompt_id, recording)| {
+                prompt_map
+                    .get(&prompt_id)
+                    .cloned()
+                    .map(|prompt| (prompt, recording))
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|(left_prompt, _), (right_prompt, _)| {
+            left_prompt.ordinal.cmp(&right_prompt.ordinal)
+        });
+        Ok(rows)
+    }
+
+    pub(crate) fn eval_corpus_alignment(
+        &self,
+        limit: usize,
+        bucket_filter: Option<&str>,
+    ) -> Result<CorpusAlignmentEvalResult, String> {
+        let recordings = self.latest_corpus_recordings(bucket_filter)?;
+        let mut rows = Vec::new();
+
+        for (prompt, recording) in recordings.into_iter().take(limit) {
+            let wav_bytes = std::fs::read(&recording.wav_path)
+                .map_err(|e| format!("reading {}: {e}", recording.wav_path))?;
+            let samples = bee_transcribe::decode_wav(&wav_bytes).map_err(|e| e.to_string())?;
+            let audio = AudioBuffer {
+                samples: samples.clone(),
+                sample_rate_hz: 16_000,
+            };
+
+            let mut session = self
+                .inner
+                .engine
+                .session(bee_transcribe::SessionOptions::default())
+                .map_err(|e| e.to_string())?;
+            session.feed(&samples).map_err(|e| e.to_string())?;
+            let result = session.finish().map_err(|e| e.to_string())?;
+            let update = result.update;
+
+            match self.build_transcribe_phonetic_trace(&audio, &update.text, &update.alignments) {
+                Ok(trace) => {
+                    let positive_span_count = trace
+                        .spans
+                        .iter()
+                        .filter(|span| {
+                            span.candidates
+                                .iter()
+                                .any(|candidate| candidate.similarity_delta.unwrap_or(0.0) > 0.0)
+                        })
+                        .count()
+                        .min(u32::MAX as usize)
+                        as u32;
+                    let worst_span_feature_similarity = trace
+                        .spans
+                        .iter()
+                        .filter_map(|span| span.transcript_feature_similarity)
+                        .min_by(|a, b| a.total_cmp(b));
+                    let best_span_delta = trace
+                        .spans
+                        .iter()
+                        .flat_map(|span| {
+                            span.candidates
+                                .iter()
+                                .filter_map(|candidate| candidate.similarity_delta)
+                        })
+                        .max_by(|a, b| a.total_cmp(b));
+                    rows.push(CorpusAlignmentEvalRow {
+                        prompt_id: prompt.prompt_id,
+                        ordinal: prompt.ordinal,
+                        bucket: prompt.bucket,
+                        term: prompt.term,
+                        prompt_text: prompt.text,
+                        prompt_notes: prompt.prompt_notes,
+                        take: recording.take,
+                        wav_path: recording.wav_path,
+                        asr_transcript: update.text,
+                        utterance_similarity: trace.utterance_similarity,
+                        utterance_feature_similarity: trace.utterance_feature_similarity,
+                        positive_span_count,
+                        worst_span_feature_similarity,
+                        best_span_delta,
+                        trace: Some(trace),
+                        error: None,
+                    });
+                }
+                Err(error) => rows.push(CorpusAlignmentEvalRow {
+                    prompt_id: prompt.prompt_id,
+                    ordinal: prompt.ordinal,
+                    bucket: prompt.bucket,
+                    term: prompt.term,
+                    prompt_text: prompt.text,
+                    prompt_notes: prompt.prompt_notes,
+                    take: recording.take,
+                    wav_path: recording.wav_path,
+                    asr_transcript: update.text,
+                    utterance_similarity: None,
+                    utterance_feature_similarity: None,
+                    positive_span_count: 0,
+                    worst_span_feature_similarity: None,
+                    best_span_delta: None,
+                    trace: None,
+                    error: Some(error),
+                }),
+            }
+        }
+
+        rows.sort_by(|a, b| {
+            a.utterance_feature_similarity
+                .unwrap_or(f32::INFINITY)
+                .total_cmp(&b.utterance_feature_similarity.unwrap_or(f32::INFINITY))
+                .then_with(|| a.ordinal.cmp(&b.ordinal))
+        });
+
+        let mut by_bucket =
+            std::collections::BTreeMap::<String, Vec<&CorpusAlignmentEvalRow>>::new();
+        for row in &rows {
+            by_bucket.entry(row.bucket.clone()).or_default().push(row);
+        }
+        let bucket_summaries = by_bucket
+            .into_iter()
+            .map(|(bucket, bucket_rows)| CorpusAlignmentBucketSummary {
+                bucket,
+                rows: bucket_rows.len().min(u32::MAX as usize) as u32,
+                utterance_feature_similarity_mean: mean_option(
+                    bucket_rows
+                        .iter()
+                        .map(|row| row.utterance_feature_similarity),
+                ),
+                utterance_similarity_mean: mean_option(
+                    bucket_rows.iter().map(|row| row.utterance_similarity),
+                ),
+            })
+            .collect();
+
+        Ok(CorpusAlignmentEvalResult {
+            rows,
+            bucket_summaries,
         })
     }
 
