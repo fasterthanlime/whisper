@@ -271,6 +271,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bee-zipa-mlx"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hound",
+ "mlx-rs",
+ "rustfft",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "beeml"
 version = "0.1.0"
 dependencies = [

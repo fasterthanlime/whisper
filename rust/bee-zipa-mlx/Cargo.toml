@@ -1,0 +1,13 @@
+[package]
+name = "bee-zipa-mlx"
+version = "0.1.0"
+edition = "2021"
+description = "ZIPA inference via MLX on Apple Silicon"
+license = "MIT"
+
+[dependencies]
+anyhow.workspace = true
+hound.workspace = true
+mlx-rs.workspace = true
+rustfft = "6"
+thiserror.workspace = true

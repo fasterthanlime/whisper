@@ -5,6 +5,7 @@ members = [
   "rust/bee-rpc",
   "rust/bee-phonetic",
   "rust/beeml",
+  "rust/bee-zipa-mlx",
   "rust/bee-qwen3-asr",
   "rust/bee-vad",
   "rust/bee-correct",
