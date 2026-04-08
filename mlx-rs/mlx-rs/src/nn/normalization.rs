@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use crate::{
     array,
     error::Exception,
@@ -556,7 +554,8 @@ impl BatchNorm {
     /// Enable training mode by default.
     pub const DEFAULT_TRAINING: bool = true;
 
-    fn stats(x: &Array) -> Result<(Array, Array), Exception> {
+    /// Return statistics
+    pub fn stats(x: &Array) -> Result<(Array, Array), Exception> {
         let reduction_axes = (0..x.ndim() as i32 - 1).collect::<Vec<_>>();
 
         let mean = x.mean_axes(&reduction_axes, None)?;
