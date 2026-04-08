@@ -238,18 +238,29 @@ impl<'a> Session<'a> {
         }
     }
 
-    /// Adaptive rollback: start small and grow with token count, capping at the configured max.
-    /// This ensures at least 1 fixed prefix token once we have 2+ text tokens,
-    /// preventing full rewrites of short utterances.
+    /// Conservative early rollback: before the first committed chunk, keep the
+    /// full configured rewrite window so the model can revise shaky cold-start
+    /// tokens. After the session has rotated once, fall back to the narrower
+    /// adaptive window so later chunks stabilize faster.
     fn effective_rollback(&self) -> usize {
-        let text_count = self.decode.text_tokens().len();
-        let max = self.options.rollback_tokens;
-        if text_count <= 1 {
-            0
-        } else {
-            // Reserve at least 1 fixed token as prefix
-            (text_count - 1).min(max)
-        }
+        compute_effective_rollback(
+            self.has_committed_context(),
+            self.options.rollback_tokens,
+            self.decode.text_tokens().len(),
+        )
+    }
+
+    fn effective_commit_threshold(&self) -> usize {
+        compute_effective_commit_threshold(
+            self.has_committed_context(),
+            self.options.commit_token_count,
+        )
+    }
+
+    fn has_committed_context(&self) -> bool {
+        !self.prev_raw_words.is_empty()
+            || self.buffered_commit.is_some()
+            || !self.committed.is_empty()
     }
 
     fn decode_and_maybe_commit(&mut self, max_tokens: usize) -> Result<(), Exception> {
@@ -274,18 +285,20 @@ impl<'a> Session<'a> {
         let text_count = self.decode.text_tokens().len();
         let rollback = self.effective_rollback();
         let fixed = text_count.saturating_sub(rollback);
+        let commit_threshold = self.effective_commit_threshold();
         tracing::debug!(
             text_tokens = text_count,
             fixed,
             rollback,
-            commit_threshold = self.options.commit_token_count,
+            commit_threshold,
             "decode_and_maybe_commit: token counts"
         );
 
-        if fixed >= self.options.commit_token_count {
+        if fixed >= commit_threshold {
             tracing::info!(
                 commit_n = self.options.commit_token_count,
                 text_tokens = text_count,
+                threshold = commit_threshold,
                 "rotating: committing tokens and starting fresh decode"
             );
             if let Some(aligned) = self.decode.commit(
@@ -548,5 +561,57 @@ impl<'a> Session<'a> {
             ambiguity,
             detected_language: self.detected_language.clone(),
         }
+    }
+}
+
+fn compute_effective_rollback(
+    has_committed_context: bool,
+    configured_rollback: usize,
+    text_token_count: usize,
+) -> usize {
+    if !has_committed_context {
+        configured_rollback
+    } else if text_token_count <= 1 {
+        0
+    } else {
+        (text_token_count - 1).min(configured_rollback)
+    }
+}
+
+fn compute_effective_commit_threshold(
+    has_committed_context: bool,
+    configured_commit_threshold: usize,
+) -> usize {
+    if has_committed_context {
+        configured_commit_threshold
+    } else {
+        configured_commit_threshold * 2
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compute_effective_commit_threshold, compute_effective_rollback};
+
+    #[test]
+    fn cold_start_keeps_full_rollback_window() {
+        assert_eq!(compute_effective_rollback(false, 5, 0), 5);
+        assert_eq!(compute_effective_rollback(false, 5, 2), 5);
+        assert_eq!(compute_effective_rollback(false, 5, 10), 5);
+    }
+
+    #[test]
+    fn post_commit_rollback_shrinks_with_context() {
+        assert_eq!(compute_effective_rollback(true, 5, 0), 0);
+        assert_eq!(compute_effective_rollback(true, 5, 1), 0);
+        assert_eq!(compute_effective_rollback(true, 5, 2), 1);
+        assert_eq!(compute_effective_rollback(true, 5, 4), 3);
+        assert_eq!(compute_effective_rollback(true, 5, 10), 5);
+    }
+
+    #[test]
+    fn cold_start_uses_larger_commit_threshold() {
+        assert_eq!(compute_effective_commit_threshold(false, 12), 24);
+        assert_eq!(compute_effective_commit_threshold(true, 12), 12);
     }
 }
