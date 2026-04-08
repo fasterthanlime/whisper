@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use bee_transcribe::SessionOptions;
+use bee_zipa_mlx::audio::AudioBuffer;
 use beeml::judge::OnlineJudge;
 use beeml::rpc::{
     AcceptedEdit, BeeMl, CorrectionDebugResult, CorrectionRequest, CorrectionResult,
@@ -26,16 +27,24 @@ use crate::util::*;
 impl BeeMl for BeeMlService {
     async fn transcribe_wav(&self, wav_bytes: Vec<u8>) -> Result<TranscribeWavResult, String> {
         let samples = bee_transcribe::decode_wav(&wav_bytes).map_err(|e| e.to_string())?;
+        let audio = AudioBuffer {
+            samples: samples.clone(),
+            sample_rate_hz: 16_000,
+        };
 
         let mut session = self.inner.engine.session(SessionOptions::default()).map_err(|e| e.to_string())?;
 
         session.feed(&samples).map_err(|e| e.to_string())?;
         let result = session.finish().map_err(|e| e.to_string())?;
         let update = result.update;
+        let phonetic_trace = self
+            .build_transcribe_phonetic_trace(&audio, &update.text, &update.alignments)
+            .ok();
 
         Ok(TranscribeWavResult {
             transcript: update.text,
             words: update.alignments,
+            phonetic_trace,
         })
     }
 

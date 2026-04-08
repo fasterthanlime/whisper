@@ -2,6 +2,7 @@ import { useRef, useState, useCallback, useEffect } from "react";
 import type { EvalInspectorData } from "../types";
 import { EvalPlaybackBar } from "./EvalPlaybackBar";
 import { EvalTimeline } from "./EvalTimeline";
+import { PhoneticRescuePanel } from "./PhoneticRescuePanel";
 import { TranscriptComparison } from "./TranscriptComparison";
 
 export function EvalInspector({
@@ -164,6 +165,10 @@ export function EvalInspector({
           corrected={data.prototype.corrected}
           accepted={data.prototype.accepted}
         />
+
+        {data.phoneticTrace ? (
+          <PhoneticRescuePanel trace={data.phoneticTrace} />
+        ) : null}
       </div>
     </div>
   );

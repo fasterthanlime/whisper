@@ -1,10 +1,14 @@
 import { useCallback, useRef, useState } from "react";
 import { channel } from "@bearcove/vox-core";
 import { connectBeeMl } from "../beeml.generated";
-import type { Update, AlignedWord } from "../beeml.generated";
+import type {
+  Update,
+  AlignedWord,
+  TranscribePhoneticTrace as RpcTranscribePhoneticTrace,
+} from "../beeml.generated";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { EvalInspector } from "./EvalInspector";
-import type { EvalInspectorData, TimedToken } from "../types";
+import type { EvalInspectorData, PhoneticRescueTrace, TimedToken } from "../types";
 
 function alignedWordsToTimedTokens(words: AlignedWord[]): TimedToken[] {
   return words.map((word) => ({
@@ -18,7 +22,41 @@ function alignedWordsToTimedTokens(words: AlignedWord[]): TimedToken[] {
   }));
 }
 
-function toInspectorData(transcript: string, words: AlignedWord[]): EvalInspectorData {
+function toPhoneticTrace(trace: RpcTranscribePhoneticTrace): PhoneticRescueTrace {
+  return {
+    utteranceZipaRaw: trace.utterance_zipa_raw,
+    utteranceZipaNormalized: trace.utterance_zipa_normalized,
+    utteranceTranscriptNormalized: trace.utterance_transcript_normalized,
+    utteranceSimilarity: trace.utterance_similarity,
+    utteranceFeatureSimilarity: trace.utterance_feature_similarity,
+    spans: trace.spans.map((span) => ({
+      spanText: span.span_text,
+      tokenStart: span.token_start,
+      tokenEnd: span.token_end,
+      startSec: span.start_sec,
+      endSec: span.end_sec,
+      zipaRaw: span.zipa_raw,
+      zipaNormalized: span.zipa_normalized,
+      transcriptNormalized: span.transcript_normalized,
+      transcriptSimilarity: span.transcript_similarity,
+      transcriptFeatureSimilarity: span.transcript_feature_similarity,
+      candidates: span.candidates.map((candidate) => ({
+        term: candidate.term,
+        aliasText: candidate.alias_text,
+        aliasSource: candidate.alias_source.tag,
+        candidateNormalized: candidate.candidate_normalized,
+        featureSimilarity: candidate.feature_similarity,
+        similarityDelta: candidate.similarity_delta,
+      })),
+    })),
+  };
+}
+
+function toInspectorData(
+  transcript: string,
+  words: AlignedWord[],
+  phoneticTrace?: PhoneticRescueTrace | null,
+): EvalInspectorData {
   const qwenTokens = alignedWordsToTimedTokens(words);
   return {
     transcript,
@@ -29,6 +67,7 @@ function toInspectorData(transcript: string, words: AlignedWord[]): EvalInspecto
       timingSource: "qwen-forced-aligner",
       transcript: qwenTokens,
     },
+    phoneticTrace,
     prototype: {
       corrected: transcript,
       accepted: [],
@@ -103,7 +142,15 @@ export function TranscribeDemoPanel({
         const result = await client.transcribeWav(bytes);
         if (!result.ok) throw new Error(result.error);
 
-        setInspectorData(toInspectorData(result.value.transcript, result.value.words));
+        setInspectorData(
+          toInspectorData(
+            result.value.transcript,
+            result.value.words,
+            result.value.phonetic_trace
+              ? toPhoneticTrace(result.value.phonetic_trace)
+              : null,
+          ),
+        );
         setStatus(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));

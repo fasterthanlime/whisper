@@ -7,6 +7,42 @@ use bee_transcribe::{AlignedWord, Update};
 pub struct TranscribeWavResult {
     pub transcript: String,
     pub words: Vec<AlignedWord>,
+    pub phonetic_trace: Option<TranscribePhoneticTrace>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct TranscribePhoneticCandidate {
+    pub term: String,
+    pub alias_text: String,
+    pub alias_source: AliasSource,
+    pub candidate_normalized: Vec<String>,
+    pub feature_similarity: Option<f32>,
+    pub similarity_delta: Option<f32>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct TranscribePhoneticSpan {
+    pub span_text: String,
+    pub token_start: u32,
+    pub token_end: u32,
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub zipa_raw: Vec<String>,
+    pub zipa_normalized: Vec<String>,
+    pub transcript_normalized: Vec<String>,
+    pub transcript_similarity: Option<f32>,
+    pub transcript_feature_similarity: Option<f32>,
+    pub candidates: Vec<TranscribePhoneticCandidate>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct TranscribePhoneticTrace {
+    pub utterance_zipa_raw: Vec<String>,
+    pub utterance_zipa_normalized: Vec<String>,
+    pub utterance_transcript_normalized: Vec<String>,
+    pub utterance_similarity: Option<f32>,
+    pub utterance_feature_similarity: Option<f32>,
+    pub spans: Vec<TranscribePhoneticSpan>,
 }
 
 #[repr(u8)]

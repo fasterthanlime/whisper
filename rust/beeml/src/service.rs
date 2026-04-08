@@ -9,6 +9,7 @@ use bee_phonetic::{
     PhoneticIndex, RetrievalQuery, SeedDataset, TranscriptAlignmentToken,
 };
 use bee_transcribe::{AlignedWord, Engine};
+use bee_zipa_mlx::audio::AudioBuffer;
 use bee_zipa_mlx::infer::ZipaInference;
 use beeml::g2p::CachedEspeakG2p;
 use beeml::judge::{extract_span_context, OnlineJudge};
@@ -19,6 +20,7 @@ use beeml::rpc::{
     JudgeStateDebug, RapidFireChoice, RetrievalCandidateDebug,
     RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
     SpanDebugTrace, SpanDebugView,
+    TranscribePhoneticCandidate, TranscribePhoneticSpan, TranscribePhoneticTrace,
     TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
 };
 
@@ -60,6 +62,171 @@ pub(crate) struct EvalCase {
 }
 
 impl BeeMlService {
+    pub(crate) fn build_transcribe_phonetic_trace(
+        &self,
+        audio: &AudioBuffer,
+        transcript: &str,
+        words: &[AlignedWord],
+    ) -> Result<TranscribePhoneticTrace, String> {
+        let alignments = words
+            .iter()
+            .map(|word| TranscriptAlignmentToken {
+                start_time: word.start,
+                end_time: word.end,
+                confidence: word.confidence.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        let mut g2p = self
+            .inner
+            .g2p
+            .lock()
+            .map_err(|_| "g2p cache mutex poisoned".to_string())?;
+        let zipa = self
+            .inner
+            .zipa
+            .lock()
+            .map_err(|_| "zipa mutex poisoned".to_string())?;
+
+        let utterance = zipa.infer_audio(audio).map_err(|e| e.to_string())?;
+        let utterance_zipa_raw = utterance
+            .tokens
+            .into_iter()
+            .filter(|token| token != "▁")
+            .collect::<Vec<_>>();
+        let utterance_zipa_normalized = normalize_ipa_for_comparison(&utterance_zipa_raw);
+        let utterance_transcript_raw = g2p
+            .ipa_tokens(transcript)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("espeak produced no tokens for '{transcript}'"))?;
+        let utterance_transcript_normalized =
+            normalize_ipa_for_comparison(&utterance_transcript_raw);
+
+        let spans = enumerate_transcript_spans_with(
+            transcript,
+            3,
+            Some(&alignments[..]),
+            |text| g2p.ipa_tokens(text).ok().flatten(),
+        );
+
+        let mut phonetic_spans = Vec::new();
+        for span in spans {
+            let (Some(start_sec), Some(end_sec)) = (span.start_sec, span.end_sec) else {
+                continue;
+            };
+            let clipped = clip_audio_span(audio, start_sec, end_sec, 0.05);
+            if clipped.samples.is_empty() {
+                continue;
+            }
+            let zipa_span = zipa.infer_audio(&clipped).map_err(|e| e.to_string())?;
+            let zipa_raw = zipa_span
+                .tokens
+                .into_iter()
+                .filter(|token| token != "▁")
+                .collect::<Vec<_>>();
+            if zipa_raw.is_empty() {
+                continue;
+            }
+            let zipa_normalized = normalize_ipa_for_comparison(&zipa_raw);
+            let transcript_raw = g2p
+                .ipa_tokens(&span.text)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("espeak produced no tokens for '{}'", span.text))?;
+            let transcript_normalized = normalize_ipa_for_comparison(&transcript_raw);
+            let transcript_similarity = phoneme_similarity(&zipa_raw, &transcript_raw);
+            let transcript_feature_similarity =
+                feature_similarity(&zipa_normalized, &transcript_normalized);
+
+            let shortlist = query_index(
+                &self.inner.index,
+                &RetrievalQuery {
+                    text: span.text.clone(),
+                    ipa_tokens: span.ipa_tokens.clone(),
+                    reduced_ipa_tokens: span.reduced_ipa_tokens.clone(),
+                    feature_tokens: bee_phonetic::feature_tokens_for_ipa(&span.ipa_tokens),
+                    token_count: (span.token_end - span.token_start) as u8,
+                },
+                8,
+            );
+            let mut scored_rows = score_shortlist(&span, &shortlist, &self.inner.index);
+            scored_rows.sort_by(|a, b| {
+                b.acceptance_score
+                    .total_cmp(&a.acceptance_score)
+                    .then_with(|| b.phonetic_score.total_cmp(&a.phonetic_score))
+            });
+
+            let mut candidates = Vec::new();
+            let mut seen_terms = std::collections::HashSet::new();
+            for scored in scored_rows {
+                let alias = &self.inner.index.aliases[scored.alias_id as usize];
+                if !seen_terms.insert(alias.term.to_ascii_lowercase()) {
+                    continue;
+                }
+                let candidate_raw = g2p
+                    .ipa_tokens(&alias.alias_text)
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| {
+                        format!("espeak produced no tokens for '{}'", alias.alias_text)
+                    })?;
+                let candidate_normalized = normalize_ipa_for_comparison(&candidate_raw);
+                let feature_similarity =
+                    feature_similarity(&zipa_normalized, &candidate_normalized);
+                let similarity_delta = match (feature_similarity, transcript_feature_similarity) {
+                    (Some(candidate), Some(transcript)) => Some(candidate - transcript),
+                    _ => None,
+                };
+                candidates.push(TranscribePhoneticCandidate {
+                    term: alias.term.clone(),
+                    alias_text: alias.alias_text.clone(),
+                    alias_source: map_alias_source(alias.alias_source),
+                    candidate_normalized,
+                    feature_similarity,
+                    similarity_delta,
+                });
+                if candidates.len() >= 5 {
+                    break;
+                }
+            }
+            candidates.sort_by(|a, b| {
+                b.similarity_delta
+                    .unwrap_or(f32::NEG_INFINITY)
+                    .total_cmp(&a.similarity_delta.unwrap_or(f32::NEG_INFINITY))
+            });
+
+            phonetic_spans.push(TranscribePhoneticSpan {
+                span_text: span.text,
+                token_start: span.token_start as u32,
+                token_end: span.token_end as u32,
+                start_sec,
+                end_sec,
+                zipa_raw,
+                zipa_normalized,
+                transcript_normalized,
+                transcript_similarity,
+                transcript_feature_similarity,
+                candidates,
+            });
+        }
+
+        phonetic_spans.sort_by(|a, b| {
+            best_delta(&b.candidates)
+                .total_cmp(&best_delta(&a.candidates))
+                .then_with(|| a.token_start.cmp(&b.token_start))
+        });
+
+        Ok(TranscribePhoneticTrace {
+            utterance_similarity: phoneme_similarity(&utterance_zipa_raw, &utterance_transcript_raw),
+            utterance_feature_similarity: feature_similarity(
+                &utterance_zipa_normalized,
+                &utterance_transcript_normalized,
+            ),
+            utterance_zipa_raw,
+            utterance_zipa_normalized,
+            utterance_transcript_normalized,
+            spans: phonetic_spans,
+        })
+    }
+
     pub(crate) fn run_phonetic_comparison(
         &self,
         request: PhoneticComparisonRequest,
@@ -866,4 +1033,23 @@ fn mean_option(values: impl Iterator<Item = Option<f32>>) -> Option<f32> {
         count += 1;
     }
     (count > 0).then_some(total / count as f32)
+}
+
+fn clip_audio_span(audio: &AudioBuffer, start_sec: f64, end_sec: f64, pad_sec: f64) -> AudioBuffer {
+    let sample_rate = audio.sample_rate_hz as f64;
+    let start = ((start_sec - pad_sec).max(0.0) * sample_rate).floor() as usize;
+    let end = ((end_sec + pad_sec).max(start_sec) * sample_rate)
+        .ceil()
+        .min(audio.samples.len() as f64) as usize;
+    AudioBuffer {
+        samples: audio.samples[start.min(audio.samples.len())..end.min(audio.samples.len())].to_vec(),
+        sample_rate_hz: audio.sample_rate_hz,
+    }
+}
+
+fn best_delta(candidates: &[TranscribePhoneticCandidate]) -> f32 {
+    candidates
+        .iter()
+        .filter_map(|candidate| candidate.similarity_delta)
+        .fold(f32::NEG_INFINITY, f32::max)
 }

@@ -94,6 +94,38 @@ export type PrototypeTrace = {
   reranker?: Reranker | null;
 };
 
+export type PhoneticRescueCandidate = {
+  term: string;
+  aliasText: string;
+  aliasSource: string;
+  candidateNormalized: string[];
+  featureSimilarity?: number | null;
+  similarityDelta?: number | null;
+};
+
+export type PhoneticRescueSpan = {
+  spanText: string;
+  tokenStart: number;
+  tokenEnd: number;
+  startSec: number;
+  endSec: number;
+  zipaRaw: string[];
+  zipaNormalized: string[];
+  transcriptNormalized: string[];
+  transcriptSimilarity?: number | null;
+  transcriptFeatureSimilarity?: number | null;
+  candidates: PhoneticRescueCandidate[];
+};
+
+export type PhoneticRescueTrace = {
+  utteranceZipaRaw: string[];
+  utteranceZipaNormalized: string[];
+  utteranceTranscriptNormalized: string[];
+  utteranceSimilarity?: number | null;
+  utteranceFeatureSimilarity?: number | null;
+  spans: PhoneticRescueSpan[];
+};
+
 /** Canonical inspector data — normalized from any backend response */
 export type EvalInspectorData = {
   transcript: string;
@@ -105,6 +137,7 @@ export type EvalInspectorData = {
   elapsedMs?: number | null;
   alignments: PrototypeAlignments;
   zipaTrace?: unknown;
+  phoneticTrace?: PhoneticRescueTrace | null;
   prototype: PrototypeTrace;
 };
 
