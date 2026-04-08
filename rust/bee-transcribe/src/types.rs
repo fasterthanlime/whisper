@@ -79,14 +79,41 @@ impl Default for SessionOptions {
     }
 }
 
-/// Result of a `feed()` or `finish()` call.
+/// One alternative for a pending ASR token.
 #[derive(Debug, Clone, Facet)]
-pub struct Update {
-    /// Full transcription so far (committed + in-progress tail).
+pub struct TokenAlternative {
+    pub token_id: TokenId,
     pub text: String,
+    pub logit: f32,
+}
 
-    /// Word-level timestamps for committed words.
-    pub alignments: Vec<AlignedWord>,
+/// A pending ASR token with top-k alternatives.
+#[derive(Debug, Clone, Facet)]
+pub struct PendingToken {
+    pub token_id: TokenId,
+    pub text: String,
+    pub concentration: f32,
+    pub margin: f32,
+    pub alternatives: Vec<TokenAlternative>,
+}
+
+/// Native Session snapshot returned by `feed()` and `finish()`.
+#[derive(Debug, Clone, Facet)]
+pub struct SessionSnapshot {
+    /// Fully committed text only.
+    pub committed_text: String,
+
+    /// Uncommitted text (buffered commit + pending decode tail).
+    pub pending_text: String,
+
+    /// Full visible text (`committed_text + pending_text`).
+    pub full_text: String,
+
+    /// Word-level timestamps for committed words only.
+    pub committed_words: Vec<AlignedWord>,
+
+    /// Current pending token alternatives from the decode tail.
+    pub pending_tokens: Vec<PendingToken>,
 
     /// Language detected by the model (empty if language was forced).
     pub detected_language: String,

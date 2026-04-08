@@ -325,27 +325,27 @@ impl bee_rpc::Bee for BeeService {
             .await;
         let elapsed = t0.elapsed();
 
-        let update = result.map_err(|e| {
+        let snapshot = result.map_err(|e| {
             tracing::error!("feed: session {session_id} error: {e}");
             BeeError::TranscriptionError {
                 message: e.to_string(),
             }
         })?;
 
-        let Some(update) = update else {
+        let Some(snapshot) = snapshot else {
             tracing::trace!("feed: {session_id} no update ({elapsed:.1?})");
             return Ok(None);
         };
 
-        let text_preview: String = update.text.chars().take(80).collect();
+        let text_preview: String = snapshot.full_text.chars().take(80).collect();
         info!("feed: {session_id} {elapsed:.1?} text={text_preview:?}");
 
         Ok(Some(FeedResult {
-            text: update.text,
-            committed_utf16_len: 0,
-            alignments: update.alignments,
+            text: snapshot.full_text,
+            committed_utf16_len: snapshot.committed_text.encode_utf16().count() as u32,
+            alignments: snapshot.committed_words,
             is_final: false,
-            detected_language: update.detected_language,
+            detected_language: snapshot.detected_language,
             correction_edits: vec![],
             correction_session_id: String::new(),
         }))
@@ -400,16 +400,16 @@ impl bee_rpc::Bee for BeeService {
             *self.inner.last_corrector.lock().await = Some(corrector);
         }
 
-        let update = finish.update;
-        let text_preview: String = update.text.chars().take(80).collect();
+        let snapshot = finish.snapshot;
+        let text_preview: String = snapshot.full_text.chars().take(80).collect();
         info!("finish_session: {session_id} {elapsed:.1?} → {text_preview:?}");
-        let committed_utf16_len = update.text.encode_utf16().count() as u32;
+        let committed_utf16_len = snapshot.committed_text.encode_utf16().count() as u32;
         Ok(FeedResult {
-            text: update.text,
+            text: snapshot.full_text,
             committed_utf16_len,
-            alignments: update.alignments,
+            alignments: snapshot.committed_words,
             is_final: true,
-            detected_language: update.detected_language,
+            detected_language: snapshot.detected_language,
             correction_edits,
             correction_session_id,
         })
@@ -464,7 +464,7 @@ impl bee_rpc::Bee for BeeService {
             })
             .await?;
 
-        Ok(result.update.text)
+        Ok(result.snapshot.full_text)
     }
 
     async fn get_stats(&self) -> EngineStats {

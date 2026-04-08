@@ -37,7 +37,7 @@ pub type SharedCorrectionEngine = Arc<Mutex<CorrectionEngine>>;
 /// Result of `Session::finish()`. Contains the final update and optionally
 /// the corrector state (for teach/save).
 pub struct FinishResult {
-    pub update: Update,
+    pub snapshot: SessionSnapshot,
     pub corrector: Option<Corrector>,
 }
 

@@ -197,10 +197,10 @@ fn transcribe_file(
     let result = session
         .finish()
         .map_err(|e| anyhow::anyhow!("transcription: {e}"))?;
-    let update = result.update;
+    let snapshot = result.snapshot;
 
-    let words = update
-        .alignments
+    let words = snapshot
+        .committed_words
         .iter()
         .map(|w| RecordingWordAlignment {
             word: w.word.clone(),
@@ -210,7 +210,7 @@ fn transcribe_file(
         })
         .collect();
 
-    Ok((update.text, words))
+    Ok((snapshot.full_text, words))
 }
 
 fn write_jsonl<'a, T: Facet<'a>>(path: &Path, rows: &[T]) -> anyhow::Result<()> {

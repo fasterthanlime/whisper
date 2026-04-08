@@ -16,7 +16,7 @@ use crate::audio_filter::{self, AudioFilterChain};
 use crate::corrector::Corrector;
 use crate::decode_session::DecodeSession;
 use crate::text_buffer::{self, TextBuffer, TokenCount, TokenEntry, TokenId};
-use crate::types::{SessionOptions, Update};
+use crate::types::{PendingToken, SessionOptions, SessionSnapshot, TokenAlternative};
 use crate::{FinishResult, SharedCorrectionEngine};
 
 /// A committed chunk waiting for right-context before correction.
@@ -98,7 +98,7 @@ impl<'a> Session<'a> {
         self.tokenizer
     }
 
-    pub fn feed(&mut self, samples: &[f32]) -> Result<Option<Update>, Exception> {
+    pub fn feed(&mut self, samples: &[f32]) -> Result<Option<SessionSnapshot>, Exception> {
         self.incoming.extend_from_slice(samples);
         tracing::trace!(
             incoming_len = self.incoming.len(),
@@ -125,7 +125,7 @@ impl<'a> Session<'a> {
         }
 
         if did_decode {
-            Ok(Some(self.make_update()))
+            Ok(Some(self.make_snapshot()))
         } else {
             Ok(None)
         }
@@ -209,15 +209,18 @@ impl<'a> Session<'a> {
             self.flush_buffered_commit(&[]);
         }
 
-        let update = self.make_update();
+        let snapshot = self.make_snapshot();
         tracing::info!(
             committed_tokens = self.committed.len().0,
-            text_len = update.text.len(),
-            alignments = update.alignments.len(),
+            text_len = snapshot.full_text.len(),
+            alignments = snapshot.committed_words.len(),
             "finish: done"
         );
         let corrector = self.correction.take().map(|(_, c)| c);
-        Ok(FinishResult { update, corrector })
+        Ok(FinishResult {
+            snapshot,
+            corrector,
+        })
     }
 
     // ── Internal ────────────────────────────────────────────────────
@@ -378,9 +381,10 @@ impl<'a> Session<'a> {
         })
     }
 
-    fn make_update(&self) -> Update {
-        let mut text = String::new();
-        let mut alignments = Vec::new();
+    fn make_snapshot(&self) -> SessionSnapshot {
+        let mut committed_text = String::new();
+        let mut pending_text = String::new();
+        let mut committed_words = Vec::new();
 
         // If correction is active, use corrector's committed text for the
         // corrected portion, then append raw committed words that haven't
@@ -392,7 +396,7 @@ impl<'a> Session<'a> {
             .unwrap_or("");
 
         if !correction_text.is_empty() {
-            text.push_str(correction_text);
+            committed_text.push_str(correction_text);
         }
 
         // Decode committed words for alignments (always needed) and for
@@ -401,21 +405,21 @@ impl<'a> Session<'a> {
             if let Some(aligned) = Self::word_to_aligned(self.tokenizer, entries) {
                 if correction_text.is_empty() {
                     // No corrector — build text from raw words
-                    if !text.is_empty() && !aligned.word.starts_with(' ') {
-                        text.push(' ');
+                    if !committed_text.is_empty() && !aligned.word.starts_with(' ') {
+                        committed_text.push(' ');
                     }
-                    text.push_str(&aligned.word);
+                    committed_text.push_str(&aligned.word);
                 }
-                alignments.push(aligned);
+                committed_words.push(aligned);
             }
         }
 
         // Add buffered commit text (not yet corrected, waiting for right context)
         if let Some(ref buffered) = self.buffered_commit {
-            if !text.is_empty() && !buffered.raw_text.starts_with(' ') {
-                text.push(' ');
+            if !pending_text.is_empty() && !buffered.raw_text.starts_with(' ') {
+                pending_text.push(' ');
             }
-            text.push_str(&buffered.raw_text);
+            pending_text.push_str(&buffered.raw_text);
         }
 
         // Decode pending tokens, trimming trailing low-confidence ones.
@@ -433,20 +437,51 @@ impl<'a> Session<'a> {
                     .iter()
                     .map(|e| e.token.id)
                     .collect();
-                let pending_text = self
+                let decoded_pending = self
                     .tokenizer
                     .decode(&pending_ids, true)
                     .unwrap_or_default();
-                if !text.is_empty() && !pending_text.starts_with(' ') {
-                    text.push(' ');
+                if !decoded_pending.is_empty() {
+                    if !pending_text.is_empty() && !decoded_pending.starts_with(' ') {
+                        pending_text.push(' ');
+                    }
+                    pending_text.push_str(&decoded_pending);
                 }
-                text.push_str(&pending_text);
             }
         }
 
-        Update {
-            text,
-            alignments,
+        let full_text = format!("{committed_text}{pending_text}");
+        let pending_tokens = self
+            .pending_entries()
+            .iter()
+            .map(|entry| PendingToken {
+                token_id: entry.token.id,
+                text: self
+                    .tokenizer
+                    .decode(&[entry.token.id], true)
+                    .unwrap_or_default(),
+                concentration: entry.token.concentration,
+                margin: entry.token.margin,
+                alternatives: entry
+                    .token
+                    .top_ids
+                    .iter()
+                    .zip(entry.token.top_logits.iter())
+                    .map(|(&token_id, &logit)| TokenAlternative {
+                        token_id,
+                        text: self.tokenizer.decode(&[token_id], true).unwrap_or_default(),
+                        logit,
+                    })
+                    .collect(),
+            })
+            .collect();
+
+        SessionSnapshot {
+            committed_text,
+            pending_text,
+            full_text,
+            committed_words,
+            pending_tokens,
             detected_language: self.detected_language.clone(),
         }
     }

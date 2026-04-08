@@ -32,14 +32,14 @@ impl BeeMl for BeeMlService {
         };
 
         let result = self.transcribe_samples_chunked(&samples)?;
-        let update = result.update;
+        let snapshot = result.snapshot;
         let phonetic_trace = self
-            .build_transcribe_phonetic_trace(&audio, &update.text, &update.alignments)
+            .build_transcribe_phonetic_trace(&audio, &snapshot.full_text, &snapshot.committed_words)
             .ok();
 
         Ok(TranscribeWavResult {
-            transcript: update.text,
-            words: update.alignments,
+            transcript: snapshot.full_text,
+            words: snapshot.committed_words,
             phonetic_trace,
         })
     }
@@ -47,7 +47,7 @@ impl BeeMl for BeeMlService {
     async fn stream_transcribe(
         &self,
         _audio_in: Rx<Vec<f32>>,
-        _updates_out: Tx<bee_transcribe::Update>,
+        _updates_out: Tx<bee_transcribe::SessionSnapshot>,
     ) -> Result<(), String> {
         Err("stream_transcribe is temporarily unavailable while beeml migrates to the new correction RPC surface".to_string())
     }
