@@ -7,11 +7,8 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-bee-correct = { path = "../bee-correct" }
-bee-phonetic = { path = "../bee-phonetic" }
 bee-transcribe = { path = "../bee-transcribe" }
 bee-types = { path = "../bee-types" }
-bee-vad = { path = "../bee-vad" }
 bee-rpc = { path = "../bee-rpc" }
 mlx-rs.workspace = true
 facet-json = "0.44"

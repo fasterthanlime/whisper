@@ -167,12 +167,9 @@ dependencies = [
 name = "bee-ffi"
 version = "0.1.0"
 dependencies = [
- "bee-correct",
- "bee-phonetic",
  "bee-rpc",
  "bee-transcribe",
  "bee-types",
- "bee-vad",
  "ctor 0.4.3",
  "dashmap",
  "env_logger",
