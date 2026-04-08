@@ -1,8 +1,10 @@
 use mlx_rs::builder::Builder;
 use mlx_rs::error::Exception;
 use mlx_rs::macros::ModuleParameters;
+use mlx_rs::module::Module;
 use mlx_rs::module::Param;
 use mlx_rs::nn;
+use mlx_rs::ops;
 use mlx_rs::ops::zeros;
 use mlx_rs::Array;
 
@@ -19,9 +21,20 @@ pub struct BiasNorm {
 impl BiasNorm {
     pub fn new(dim: i32) -> Result<Self, Exception> {
         Ok(Self {
-            log_scale: Param::new(zeros::<f32>(&[])?),
+            log_scale: Param::new(Array::from_f32(1.0)),
             bias: Param::new(zeros::<f32>(&[dim])?),
         })
+    }
+
+    pub fn forward(&self, x: &Array) -> Result<Array, Exception> {
+        let bias = self.bias.expand_dims_axes(&[0, 1])?;
+        let centered = x.subtract(&bias)?;
+        let scales = centered
+            .square()?
+            .mean_axis(-1, true)?
+            .rsqrt()?
+            .multiply(self.log_scale.value.exp()?)?;
+        x.multiply(scales)
     }
 }
 
@@ -38,13 +51,22 @@ pub struct ConvNeXtFrontend {
 impl ConvNeXtFrontend {
     pub fn new(channels: i32) -> Result<Self, Exception> {
         Ok(Self {
-            depthwise_conv: nn::Conv2dBuilder::new(channels, channels, (7, 7))
+            depthwise_conv: nn::Conv2dBuilder::new(1, channels, (7, 7))
                 .groups(channels)
                 .padding((3, 3))
                 .build()?,
             pointwise_conv1: nn::Conv2dBuilder::new(channels, channels * 3, (1, 1)).build()?,
             pointwise_conv2: nn::Conv2dBuilder::new(channels * 3, channels, (1, 1)).build()?,
         })
+    }
+
+    pub fn forward(&self, x: &Array) -> Result<Array, Exception> {
+        let bypass = x.clone();
+        let x = self.depthwise_conv.forward(x)?;
+        let x = self.pointwise_conv1.forward(&x)?;
+        let x = swoosh_l(&x)?;
+        let x = self.pointwise_conv2.forward(&x)?;
+        x.add(&bypass)
     }
 }
 
@@ -96,6 +118,23 @@ impl EncoderEmbed {
     pub fn output_frames(input_frames: i32) -> i32 {
         ((input_frames - 7) / 2).max(0)
     }
+
+    pub fn forward(&self, features: &Array) -> Result<Array, Exception> {
+        let x = ops::expand_dims(features, -1)?;
+        let x = self.conv0.forward(&x)?;
+        let x = swoosh_r(&x)?;
+        let x = self.conv1.forward(&x)?;
+        let x = swoosh_r(&x)?;
+        let x = self.conv2.forward(&x)?;
+        let x = swoosh_r(&x)?;
+        let x = self.convnext.forward(&x)?;
+
+        let shape = x.shape();
+        let (b, t, f, c) = (shape[0], shape[1], shape[2], shape[3]);
+        let x = x.transpose_axes(&[0, 1, 3, 2])?.reshape(&[b, t, c * f])?;
+        let x = self.out.forward(&x)?;
+        self.out_norm.forward(&x)
+    }
 }
 
 #[derive(Debug, Clone, ModuleParameters)]
@@ -113,6 +152,10 @@ impl CtcHead {
             )
             .build()?,
         })
+    }
+
+    pub fn forward(&self, x: &Array) -> Result<Array, Exception> {
+        nn::log_softmax(self.linear.forward(x)?, -1)
     }
 }
 
@@ -136,13 +179,33 @@ impl ZipaModel {
         let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
         Self::new(&config)
     }
+
+    pub fn forward_frontend(&self, features: &Array) -> Result<Array, Exception> {
+        self.encoder_embed.forward(features)
+    }
+}
+
+fn swoosh_l(x: &Array) -> Result<Array, Exception> {
+    let zero = Array::from_f32(0.0);
+    ops::logaddexp(&zero, &x.subtract(Array::from_f32(4.0))?)?
+        .subtract(x.multiply(Array::from_f32(0.08))?)?
+        .subtract(Array::from_f32(0.035))
+}
+
+fn swoosh_r(x: &Array) -> Result<Array, Exception> {
+    let zero = Array::from_f32(0.0);
+    ops::logaddexp(&zero, &x.subtract(Array::from_f32(1.0))?)?
+        .subtract(x.multiply(Array::from_f32(0.08))?)?
+        .subtract(Array::from_f32(0.313261687))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{EncoderEmbed, ZipaModel};
     use crate::config::{ZipaModelConfig, ZipaVariant};
+    use mlx_rs::array;
     use mlx_rs::module::ModuleParameters;
+    use mlx_rs::Array;
 
     #[test]
     fn encoder_embed_matches_reference_frontend_shapes() {
@@ -154,7 +217,7 @@ mod tests {
         assert_eq!(model.encoder_embed.conv2.weight.shape(), vec![128, 3, 3, 32]);
         assert_eq!(
             model.encoder_embed.convnext.depthwise_conv.weight.shape(),
-            vec![128, 7, 7, 128]
+            vec![128, 7, 7, 1]
         );
         assert_eq!(model.encoder_embed.convnext.depthwise_conv.groups, 128);
         assert_eq!(
@@ -184,5 +247,21 @@ mod tests {
         assert!(flat.contains_key("encoder_embed.convnext.depthwise_conv.weight"));
         assert!(flat.contains_key("encoder_embed.out_norm.log_scale"));
         assert!(flat.contains_key("ctc_head.linear.weight"));
+    }
+
+    #[test]
+    fn frontend_forward_has_expected_output_shape() {
+        let model = ZipaModel::small_no_diacritics().unwrap();
+        let features = Array::zeros::<f32>(&[1, 120, 80]).unwrap();
+        let out = model.forward_frontend(&features).unwrap();
+        assert_eq!(out.shape(), vec![1, 56, 192]);
+    }
+
+    #[test]
+    fn bias_norm_preserves_shape() {
+        let norm = super::BiasNorm::new(3).unwrap();
+        let x = array!([[[1.0f32, 2.0, 3.0], [4.0, 5.0, 6.0]]]);
+        let y = norm.forward(&x).unwrap();
+        assert_eq!(y.shape(), vec![1, 2, 3]);
     }
 }
