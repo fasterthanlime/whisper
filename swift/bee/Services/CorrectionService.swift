@@ -49,10 +49,10 @@ final class CorrectionService: @unchecked Sendable {
 
     // MARK: - Processing
 
-    func process(text: String, appId: String?) async -> Output? {
+    func process(text: String, words: [AlignedWord], appId: String?) async -> Output? {
         do {
             let client = try await client()
-            let result = try await client.correctProcess(text: text, appId: appId ?? "")
+            let result = try await client.correctProcess(text: text, appId: appId ?? "", words: words)
             if result.edits.isEmpty {
                 return nil
             }

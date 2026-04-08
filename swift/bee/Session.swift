@@ -344,10 +344,11 @@ actor Session {
                     let result = await ts.finish(session: asrSession)
                     let finalizeUs = Int((ProcessInfo.processInfo.systemUptime - t0) * 1_000_000)
 
-                    let rawText = result?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let rawText = result?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let words = result?.alignments ?? []
 
                     // Apply corrections if engine is available
-                    let corrOutput = await cs?.process(text: rawText, appId: appBundleId)
+                    let corrOutput = await cs?.process(text: rawText, words: words, appId: appBundleId)
                     corrOutRef.set(corrOutput)
                     let finalText = corrOutput?.bestText ?? rawText
 

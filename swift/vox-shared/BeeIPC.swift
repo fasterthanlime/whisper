@@ -269,8 +269,8 @@ public protocol BeeCaller {
     func createSession(opts: SessionConfig) async throws -> Result<String, BeeError>
     ///  Feed audio samples to a session.
     func feed(sessionId: String, samples: [Float]) async throws -> Result<FeedResult?, BeeError>
-    ///  Finalize a session, returns final transcription.
-    func finishSession(sessionId: String) async throws -> Result<String, BeeError>
+    ///  Finalize a session, returns final transcription with alignments.
+    func finishSession(sessionId: String) async throws -> Result<FeedResult, BeeError>
     ///  Set the language for a session.
     func setLanguage(sessionId: String, language: String) async throws -> Result<Bool, BeeError>
     ///  Single-shot transcription of raw 16kHz f32 samples.
@@ -279,8 +279,8 @@ public protocol BeeCaller {
     func getStats() async throws -> EngineStats
     ///  Load the correction engine.
     func correctLoad(datasetDir: String, eventsPath: String, gateThreshold: Float, rankerThreshold: Float) async throws -> Result<Bool, BeeError>
-    ///  Run correction on text.
-    func correctProcess(text: String, appId: String) async throws -> CorrectionOutput
+    ///  Run correction on text with per-word ASR confidence data.
+    func correctProcess(text: String, appId: String, words: [AlignedWord]) async throws -> CorrectionOutput
     ///  Teach the correction engine from user resolutions.
     func correctTeach(sessionId: String, resolutions: [EditResolution]) async throws -> Result<Bool, BeeError>
     ///  Save correction engine state to disk.
@@ -446,7 +446,7 @@ public final class BeeClient: BeeCaller, Sendable {
             })
     }
 
-    public func finishSession(sessionId: String) async throws -> Result<String, BeeError> {
+    public func finishSession(sessionId: String) async throws -> Result<FeedResult, BeeError> {
         var buffer = ByteBufferAllocator().buffer(capacity: 64)
         encodeString(sessionId, into: &buffer)
         let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
@@ -454,7 +454,21 @@ public final class BeeClient: BeeCaller, Sendable {
         let response = try await connection.call(methodId: 0x416a48f228b25310, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
         return try decodeFallibleResponse(response,
             decodeOk: { buf in
-                let value = try decodeString(from: &buf)
+                let _value_text = try decodeString(from: &buf)
+                let _value_committedUtf16Len = try decodeU32(from: &buf)
+                let _value_alignments = try decodeVec(from: &buf, decoder: { buf in
+                    let _word = try ({ buf in try decodeString(from: &buf) })(&buf)
+                    let _start = try ({ buf in try decodeF64(from: &buf) })(&buf)
+                    let _end = try ({ buf in try decodeF64(from: &buf) })(&buf)
+                    let _meanLogprob = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
+                    let _minLogprob = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
+                    let _meanMargin = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
+                    let _minMargin = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
+                    return AlignedWord(word: _word, start: _start, end: _end, meanLogprob: _meanLogprob, minLogprob: _minLogprob, meanMargin: _meanMargin, minMargin: _minMargin)
+                })
+                let _value_isFinal = try decodeBool(from: &buf)
+                let _value_detectedLanguage = try decodeString(from: &buf)
+                let value = FeedResult(text: _value_text, committedUtf16Len: _value_committedUtf16Len, alignments: _value_alignments, isFinal: _value_isFinal, detectedLanguage: _value_detectedLanguage)
                 return value
             },
             decodeErr: { buf in
@@ -616,10 +630,11 @@ public final class BeeClient: BeeCaller, Sendable {
             })
     }
 
-    public func correctProcess(text: String, appId: String) async throws -> CorrectionOutput {
+    public func correctProcess(text: String, appId: String, words: [AlignedWord]) async throws -> CorrectionOutput {
         var buffer = ByteBufferAllocator().buffer(capacity: 64)
         encodeString(text, into: &buffer)
         encodeString(appId, into: &buffer)
+        encodeVec(words, into: &buffer, encoder: { val, buf in encodeAlignedWord(val, into: &buf) })
         let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
         let schemaInfo = ClientSchemaInfo(methodInfo: bee_method_schemas[0xd383d61a2c875e84]!, schemaRegistry: bee_schema_registry)
         let response = try await connection.call(methodId: 0xd383d61a2c875e84, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
@@ -732,8 +747,8 @@ public protocol BeeHandler: Sendable {
     func createSession(opts: SessionConfig) async throws -> Result<String, BeeError>
     ///  Feed audio samples to a session.
     func feed(sessionId: String, samples: [Float]) async throws -> Result<FeedResult?, BeeError>
-    ///  Finalize a session, returns final transcription.
-    func finishSession(sessionId: String) async throws -> Result<String, BeeError>
+    ///  Finalize a session, returns final transcription with alignments.
+    func finishSession(sessionId: String) async throws -> Result<FeedResult, BeeError>
     ///  Set the language for a session.
     func setLanguage(sessionId: String, language: String) async throws -> Result<Bool, BeeError>
     ///  Single-shot transcription of raw 16kHz f32 samples.
@@ -742,8 +757,8 @@ public protocol BeeHandler: Sendable {
     func getStats() async throws -> EngineStats
     ///  Load the correction engine.
     func correctLoad(datasetDir: String, eventsPath: String, gateThreshold: Float, rankerThreshold: Float) async throws -> Result<Bool, BeeError>
-    ///  Run correction on text.
-    func correctProcess(text: String, appId: String) async throws -> CorrectionOutput
+    ///  Run correction on text with per-word ASR confidence data.
+    func correctProcess(text: String, appId: String, words: [AlignedWord]) async throws -> CorrectionOutput
     ///  Teach the correction engine from user resolutions.
     func correctTeach(sessionId: String, resolutions: [EditResolution]) async throws -> Result<Bool, BeeError>
     ///  Save correction engine state to disk.
@@ -974,7 +989,7 @@ public final class BeeDispatcher: ServiceDispatcher {
                     switch result {
                     case .success(let v):
                         encodeVarint(UInt64(0), into: &buffer)
-                        encodeString(v, into: &buffer)
+                        encodeFeedResult(v, into: &buffer)
                     case .failure(let e):
                         encodeVarint(UInt64(1), into: &buffer)
                         encodeU8(0, into: &buffer)
@@ -1119,8 +1134,18 @@ public final class BeeDispatcher: ServiceDispatcher {
         do {
             let text = try decodeString(from: &buffer)
             let appId = try decodeString(from: &buffer)
+            let words = try decodeVec(from: &buffer, decoder: { buf in
+                let _word = try ({ buf in try decodeString(from: &buf) })(&buf)
+                let _start = try ({ buf in try decodeF64(from: &buf) })(&buf)
+                let _end = try ({ buf in try decodeF64(from: &buf) })(&buf)
+                let _meanLogprob = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
+                let _minLogprob = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
+                let _meanMargin = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
+                let _minMargin = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
+                return AlignedWord(word: _word, start: _start, end: _end, meanLogprob: _meanLogprob, minLogprob: _minLogprob, meanMargin: _meanMargin, minMargin: _minMargin)
+            })
             do {
-                let result = try await handler.correctProcess(text: text, appId: appId)
+                let result = try await handler.correctProcess(text: text, appId: appId, words: words)
                 let _encoded = encodeResultOk(result, encoder: { val, buf in encodeCorrectionOutput(val, into: &buf) })
                 taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
@@ -1213,7 +1238,7 @@ public let bee_schemas: [String: MethodBindingSchema] = [
     "transcribeSamples": MethodBindingSchema(args: [.vec(element: .f32)]),
     "getStats": MethodBindingSchema(args: []),
     "correctLoad": MethodBindingSchema(args: [.string, .string, .f32, .f32]),
-    "correctProcess": MethodBindingSchema(args: [.string, .string]),
+    "correctProcess": MethodBindingSchema(args: [.string, .string, .vec(element: .struct(fields: [("word", .string), ("start", .f64), ("end", .f64), ("mean_logprob", .option(inner: .f32)), ("min_logprob", .option(inner: .f32)), ("mean_margin", .option(inner: .f32)), ("min_margin", .option(inner: .f32))]))]),
     "correctTeach": MethodBindingSchema(args: [.string, .vec(element: .struct(fields: [("edit_id", .string), ("accepted", .bool)]))]),
     "correctSave": MethodBindingSchema(args: []),
 ]
@@ -1240,6 +1265,7 @@ nonisolated(unsafe) public let bee_schema_registry: [UInt64: Schema] = [
     0x8e02f623d1b2310c: Schema(id: 0x8e02f623d1b2310c, typeParams: [], kind: .primitive(.f32)),
     0x915c6fb5b64f270b: Schema(id: 0x915c6fb5b64f270b, typeParams: ["T0", "T1", "T2", "T3"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2"), .var(name: "T3")])),
     0x9d430384fa68b98c: Schema(id: 0x9d430384fa68b98c, typeParams: [], kind: .struct(name: "FeedResult", fields: [FieldSchema(name: "text", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "committed_utf16_len", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "alignments", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0xf0d30c1c928667ef)]), required: true), FieldSchema(name: "is_final", typeRef: .concrete(0x178367a87f66fb46), required: true), FieldSchema(name: "detected_language", typeRef: .concrete(0x6d7dce914ee150e8), required: true)])),
+    0xaa510ab07d34f141: Schema(id: 0xaa510ab07d34f141, typeParams: ["T0", "T1", "T2"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2")])),
     0xba0496aa8cee7a4c: Schema(id: 0xba0496aa8cee7a4c, typeParams: ["T0", "T1"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1")])),
     0xbc5c33249a2dc720: Schema(id: 0xbc5c33249a2dc720, typeParams: [], kind: .primitive(.unit)),
     0xdcafd4de6b7969bb: Schema(id: 0xdcafd4de6b7969bb, typeParams: ["T"], kind: .option(element: .var(name: "T"))),
@@ -1276,8 +1302,8 @@ nonisolated(unsafe) public let bee_method_schemas: [UInt64: MethodSchemaInfo] = 
     0x416a48f228b25310: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0x6847ab90feda71c1],
         argsRoot: .generic(0x6847ab90feda71c1, args: [.concrete(0x6d7dce914ee150e8)]),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x285872d3b3eded20],
-        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6d7dce914ee150e8), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xdcafd4de6b7969bb, 0xf0d30c1c928667ef, 0x0a96b404b4d79d67, 0x9d430384fa68b98c, 0x285872d3b3eded20],
+        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x9d430384fa68b98c), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
     ),
     0xefb09d27037e41ed: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0xba0496aa8cee7a4c],
@@ -1304,8 +1330,8 @@ nonisolated(unsafe) public let bee_method_schemas: [UInt64: MethodSchemaInfo] = 
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
     ),
     0xd383d61a2c875e84: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0xba0496aa8cee7a4c],
-        argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8)]),
+        argsSchemaIds: [0x6d7dce914ee150e8, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xdcafd4de6b7969bb, 0xf0d30c1c928667ef, 0x0a96b404b4d79d67, 0xaa510ab07d34f141],
+        argsRoot: .generic(0xaa510ab07d34f141, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8), .generic(0x0a96b404b4d79d67, args: [.concrete(0xf0d30c1c928667ef)])]),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x361f4536eee9f991, 0x3f2e589db81e95bf, 0x5c000f00fa144db4, 0x0a96b404b4d79d67, 0x6a31d1dd6bec4d20],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6a31d1dd6bec4d20), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),

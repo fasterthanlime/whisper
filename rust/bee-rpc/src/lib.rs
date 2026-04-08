@@ -71,8 +71,8 @@ pub trait Bee {
     /// Feed audio samples to a session.
     async fn feed(&self, session_id: String, samples: Vec<f32>) -> Result<Option<FeedResult>, BeeError>;
 
-    /// Finalize a session, returns final transcription.
-    async fn finish_session(&self, session_id: String) -> Result<String, BeeError>;
+    /// Finalize a session, returns final transcription with alignments.
+    async fn finish_session(&self, session_id: String) -> Result<FeedResult, BeeError>;
 
     /// Set the language for a session.
     async fn set_language(
@@ -98,8 +98,8 @@ pub trait Bee {
         ranker_threshold: f32,
     ) -> Result<bool, BeeError>;
 
-    /// Run correction on text.
-    async fn correct_process(&self, text: String, app_id: String) -> CorrectionOutput;
+    /// Run correction on text with per-word ASR confidence data.
+    async fn correct_process(&self, text: String, app_id: String, words: Vec<AlignedWord>) -> CorrectionOutput;
 
     /// Teach the correction engine from user resolutions.
     async fn correct_teach(

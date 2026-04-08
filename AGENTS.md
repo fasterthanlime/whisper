@@ -61,7 +61,9 @@ direnv allow  # or: eval "$(direnv export bash)"
 # Build Rust FFI library
 cargo build --release -p bee-ffi
 
-# Regenerate IPC Swift code (after changing bee-rpc service definitions)
+# Regenerate IPC Swift code (MANDATORY after ANY change to rust/bee-rpc/src/lib.rs)
+# This generates swift/vox-shared/{AppIPC,ImeIPC,BeeIPC}.swift from the Rust service traits.
+# You MUST run both commands — the codegen writes to rust/bee-rpc/generated/, then you copy.
 cargo run -p bee-rpc
 cp rust/bee-rpc/generated/*.swift swift/vox-shared/
 

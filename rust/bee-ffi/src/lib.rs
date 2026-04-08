@@ -250,7 +250,7 @@ impl bee_rpc::Bee for BeeService {
         }))
     }
 
-    async fn finish_session(&self, session_id: String) -> Result<String, BeeError> {
+    async fn finish_session(&self, session_id: String) -> Result<FeedResult, BeeError> {
         info!("finish_session: {session_id}");
 
         let (_, session_arc) =
@@ -279,7 +279,14 @@ impl bee_rpc::Bee for BeeService {
 
         let text_preview: String = update.text.chars().take(80).collect();
         info!("finish_session: {session_id} {elapsed:.1?} → {text_preview:?}");
-        Ok(update.text)
+        let committed_utf16_len = update.text.encode_utf16().count() as u32;
+        Ok(FeedResult {
+            text: update.text,
+            committed_utf16_len,
+            alignments: update.alignments,
+            is_final: true,
+            detected_language: update.detected_language,
+        })
     }
 
     async fn set_language(
@@ -376,7 +383,7 @@ impl bee_rpc::Bee for BeeService {
         Ok(true)
     }
 
-    async fn correct_process(&self, text: String, app_id: String) -> CorrectionOutput {
+    async fn correct_process(&self, text: String, app_id: String, words: Vec<bee_types::AlignedWord>) -> CorrectionOutput {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
             let mut guard = inner.correction.blocking_lock();
@@ -398,7 +405,7 @@ impl bee_rpc::Bee for BeeService {
             let spans = enumerate_transcript_spans_with(
                 &text,
                 3,
-                None::<&[bee_types::TranscriptAlignmentToken]>,
+                Some(words.as_slice()),
                 |span_text| engine.g2p.ipa_tokens(span_text).ok().flatten(),
             );
 

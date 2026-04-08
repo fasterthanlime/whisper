@@ -39,6 +39,32 @@ impl TranscriptAlignmentTiming for TranscriptAlignmentToken {
     }
 }
 
+impl TranscriptAlignmentTiming for bee_types::AlignedWord {
+    fn start_time(&self) -> f64 {
+        self.start
+    }
+
+    fn end_time(&self) -> f64 {
+        self.end
+    }
+
+    fn mean_logprob(&self) -> Option<f32> {
+        self.mean_logprob
+    }
+
+    fn min_logprob(&self) -> Option<f32> {
+        self.min_logprob
+    }
+
+    fn mean_margin(&self) -> Option<f32> {
+        self.mean_margin
+    }
+
+    fn min_margin(&self) -> Option<f32> {
+        self.min_margin
+    }
+}
+
 pub use bee_types::TranscriptSpan;
 
 pub fn enumerate_transcript_spans_with<F, A>(
