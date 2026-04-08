@@ -36,6 +36,15 @@ STAGE1_LAYER0_OUTPUT = "/encoder/1/encoder/0/bypass/Add_output_0"
 STAGE1_LAYER1_ATTN_WEIGHTS = "/encoder/1/encoder/1/self_attn_weights/Softmax_output_0"
 STAGE1_LAYER1_OUTPUT = "/encoder/1/encoder/1/bypass/Add_output_0"
 STAGE1_OUT = "/encoder/1/out_combiner/Add_output_0"
+STAGE2_DOWNSAMPLE_OUT = "/encoder/2/downsample/ReduceSum_output_0"
+STAGE2_POS_EMB = "/encoder/2/encoder/encoder_pos/Unsqueeze_35_output_0"
+STAGE2_LAYER0_ATTN_WEIGHTS = "/encoder/2/encoder/0/self_attn_weights/Softmax_output_0"
+STAGE2_LAYER0_OUTPUT = "/encoder/2/encoder/0/bypass/Add_output_0"
+STAGE2_LAYER1_ATTN_WEIGHTS = "/encoder/2/encoder/1/self_attn_weights/Softmax_output_0"
+STAGE2_LAYER1_OUTPUT = "/encoder/2/encoder/1/bypass/Add_output_0"
+STAGE2_LAYER2_ATTN_WEIGHTS = "/encoder/2/encoder/2/self_attn_weights/Softmax_output_0"
+STAGE2_LAYER2_OUTPUT = "/encoder/2/encoder/2/bypass/Add_output_0"
+STAGE2_OUT = "/encoder/2/out_combiner/Add_output_0"
 
 
 def ensure_outputs(model_path: Path, output_path: Path) -> Path:
@@ -66,6 +75,15 @@ def ensure_outputs(model_path: Path, output_path: Path) -> Path:
         STAGE1_LAYER1_ATTN_WEIGHTS,
         STAGE1_LAYER1_OUTPUT,
         STAGE1_OUT,
+        STAGE2_DOWNSAMPLE_OUT,
+        STAGE2_POS_EMB,
+        STAGE2_LAYER0_ATTN_WEIGHTS,
+        STAGE2_LAYER0_OUTPUT,
+        STAGE2_LAYER1_ATTN_WEIGHTS,
+        STAGE2_LAYER1_OUTPUT,
+        STAGE2_LAYER2_ATTN_WEIGHTS,
+        STAGE2_LAYER2_OUTPUT,
+        STAGE2_OUT,
     ]:
         if name not in existing:
             model.graph.output.append(
@@ -126,6 +144,15 @@ def main() -> None:
             STAGE1_LAYER1_ATTN_WEIGHTS,
             STAGE1_LAYER1_OUTPUT,
             STAGE1_OUT,
+            STAGE2_DOWNSAMPLE_OUT,
+            STAGE2_POS_EMB,
+            STAGE2_LAYER0_ATTN_WEIGHTS,
+            STAGE2_LAYER0_OUTPUT,
+            STAGE2_LAYER1_ATTN_WEIGHTS,
+            STAGE2_LAYER1_OUTPUT,
+            STAGE2_LAYER2_ATTN_WEIGHTS,
+            STAGE2_LAYER2_OUTPUT,
+            STAGE2_OUT,
         ],
         {"x": features, "x_lens": feat_lens},
     )
@@ -153,6 +180,15 @@ def main() -> None:
         stage1_layer1_attn_weights,
         stage1_layer1_out,
         stage1_out,
+        stage2_downsample_out,
+        stage2_pos_emb,
+        stage2_layer0_attn_weights,
+        stage2_layer0_out,
+        stage2_layer1_attn_weights,
+        stage2_layer1_out,
+        stage2_layer2_attn_weights,
+        stage2_layer2_out,
+        stage2_out,
     ) = outputs
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -182,6 +218,15 @@ def main() -> None:
             "stage1_layer1_attn_weights": stage1_layer1_attn_weights.astype(np.float32),
             "stage1_layer1_out": stage1_layer1_out.astype(np.float32),
             "stage1_out": stage1_out.astype(np.float32),
+            "stage2_downsample_out": stage2_downsample_out.astype(np.float32),
+            "stage2_pos_emb": stage2_pos_emb.astype(np.float32),
+            "stage2_layer0_attn_weights": stage2_layer0_attn_weights.astype(np.float32),
+            "stage2_layer0_out": stage2_layer0_out.astype(np.float32),
+            "stage2_layer1_attn_weights": stage2_layer1_attn_weights.astype(np.float32),
+            "stage2_layer1_out": stage2_layer1_out.astype(np.float32),
+            "stage2_layer2_attn_weights": stage2_layer2_attn_weights.astype(np.float32),
+            "stage2_layer2_out": stage2_layer2_out.astype(np.float32),
+            "stage2_out": stage2_out.astype(np.float32),
         },
         str(args.output),
     )

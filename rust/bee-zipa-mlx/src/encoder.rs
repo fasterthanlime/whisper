@@ -112,6 +112,7 @@ impl Downsample2 {
         let seq_len = shape[0];
         let batch = shape[1];
         let channels = shape[2];
+        let factor = self.weights.shape()[0];
 
         let x = if channels == self.output_dim {
             x.clone()
@@ -124,14 +125,15 @@ impl Downsample2 {
         let batch = x.shape()[1];
         let channels = x.shape()[2];
 
-        let x = if padded_seq_len % 2 == 0 {
+        let remainder = padded_seq_len % factor;
+        let x = if remainder == 0 {
             x
         } else {
-            let pad = zeros::<f32>(&[1, batch, channels])?;
+            let pad = zeros::<f32>(&[factor - remainder, batch, channels])?;
             mlx_rs::ops::concatenate_axis(&[x, pad], 0)?
         };
-        let half_len = x.shape()[0] / 2;
-        let x = x.reshape(&[half_len, 2, batch, channels])?;
+        let downsampled_len = x.shape()[0] / factor;
+        let x = x.reshape(&[downsampled_len, factor, batch, channels])?;
         let weighted = x.multiply(self.weights.as_ref())?;
         sum_axes(&weighted, &[1], false)
     }
@@ -385,6 +387,15 @@ pub struct Stage1EncoderPrefix {
     pub out_combiner: BypassModule,
 }
 
+#[derive(Debug, Clone)]
+pub struct StageEncoder {
+    pub stage: usize,
+    pub downsample: Downsample2,
+    pub encoder_pos: CompactRelPositionalEncoding,
+    pub layers: Vec<ZipformerEncoderLayer>,
+    pub out_combiner: BypassModule,
+}
+
 impl Stage0Encoder {
     pub fn new(config: &ZipaModelConfig) -> Result<Self, Exception> {
         Ok(Self {
@@ -420,6 +431,38 @@ impl Stage1EncoderPrefix {
         let pos_emb = self.encoder_pos.forward(seq_len, 0)?;
         let src = self.layer0.forward(&src, &pos_emb)?;
         let src = self.layer1.forward(&src, &pos_emb)?;
+        let src = upsample_by_repeat(&src, src_padded.shape()[0])?;
+        self.out_combiner.forward(&src_padded, &src)
+    }
+}
+
+impl StageEncoder {
+    pub fn new(config: &ZipaModelConfig, stage: usize) -> Result<Self, Exception> {
+        assert!(
+            stage > 0,
+            "StageEncoder is only for stages with downsample/out_combiner"
+        );
+        let mut layers = Vec::with_capacity(config.num_encoder_layers[stage]);
+        for _ in 0..config.num_encoder_layers[stage] {
+            layers.push(ZipformerEncoderLayer::new_for_stage(config, stage)?);
+        }
+        Ok(Self {
+            stage,
+            downsample: Downsample2::new(config.encoder_dim[stage] as i32)?,
+            encoder_pos: CompactRelPositionalEncoding::new(config.pos_dim as i32, 1.0),
+            layers,
+            out_combiner: BypassModule::new(config.encoder_dim[stage] as i32)?,
+        })
+    }
+
+    pub fn forward(&self, src: &Array) -> Result<Array, Exception> {
+        let src_padded = pad_channels(src, self.out_combiner.bypass_scale.shape()[0])?;
+        let mut src = self.downsample.forward(src)?;
+        let seq_len = src.shape()[0];
+        let pos_emb = self.encoder_pos.forward(seq_len, 0)?;
+        for layer in &self.layers {
+            src = layer.forward(&src, &pos_emb)?;
+        }
         let src = upsample_by_repeat(&src, src_padded.shape()[0])?;
         self.out_combiner.forward(&src_padded, &src)
     }
@@ -520,9 +563,11 @@ fn upsample_by_repeat(x: &Array, target_seq_len: i32) -> Result<Array, Exception
     let seq_len = shape[0];
     let batch = shape[1];
     let channels = shape[2];
+    let repeat_factor = (target_seq_len + seq_len - 1) / seq_len;
     let expanded = x.expand_dims_axes(&[1])?;
-    let repeated = mlx_rs::ops::broadcast_to(&expanded, &[seq_len, 2, batch, channels])?;
-    let reshaped = repeated.reshape(&[seq_len * 2, batch, channels])?;
+    let repeated =
+        mlx_rs::ops::broadcast_to(&expanded, &[seq_len, repeat_factor, batch, channels])?;
+    let reshaped = repeated.reshape(&[seq_len * repeat_factor, batch, channels])?;
     Ok(reshaped.index((0..target_seq_len, .., ..)))
 }
 
@@ -536,7 +581,7 @@ mod tests {
 
     use super::{
         CompactRelPositionalEncoding, Downsample2, Stage0Encoder, Stage1EncoderPrefix,
-        ZipformerEncoderLayer,
+        StageEncoder, ZipformerEncoderLayer,
     };
     use mlx_rs::ops::indexing::IndexOp;
     use mlx_rs::Array;
@@ -1014,6 +1059,193 @@ mod tests {
 
         let actual = stage1.forward(stage0_out).unwrap();
         assert_close("stage1_prefix", &actual, expected);
+    }
+
+    #[test]
+    fn stage2_layer_matches_reference_shapes() {
+        let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
+        let layer = ZipformerEncoderLayer::new_for_stage(&config, 2).unwrap();
+
+        assert_eq!(
+            layer.self_attn_weights.in_proj.weight.shape(),
+            vec![272, 384]
+        );
+        assert_eq!(
+            layer.self_attn_weights.linear_pos.weight.shape(),
+            vec![16, 48]
+        );
+        assert_eq!(layer.self_attn1.in_proj.weight.shape(), vec![48, 384]);
+        assert_eq!(layer.self_attn1.out_proj.weight.shape(), vec![384, 48]);
+        assert_eq!(layer.feed_forward1.in_proj.weight.shape(), vec![768, 384]);
+        assert_eq!(layer.feed_forward1.out_proj.weight.shape(), vec![384, 768]);
+        assert_eq!(
+            layer.nonlin_attention.in_proj.weight.shape(),
+            vec![864, 384]
+        );
+        assert_eq!(
+            layer.nonlin_attention.out_proj.weight.shape(),
+            vec![384, 288]
+        );
+        assert_eq!(layer.conv_module1.in_proj.weight.shape(), vec![768, 384]);
+        assert_eq!(
+            layer.conv_module1.depthwise_conv.weight.shape(),
+            vec![384, 15, 1]
+        );
+        assert_eq!(layer.conv_module1.out_proj.weight.shape(), vec![384, 384]);
+        assert_eq!(layer.feed_forward2.in_proj.weight.shape(), vec![1024, 384]);
+        assert_eq!(layer.feed_forward2.out_proj.weight.shape(), vec![384, 1024]);
+        assert_eq!(layer.self_attn2.in_proj.weight.shape(), vec![48, 384]);
+        assert_eq!(layer.self_attn2.out_proj.weight.shape(), vec![384, 48]);
+        assert_eq!(layer.conv_module2.in_proj.weight.shape(), vec![768, 384]);
+        assert_eq!(
+            layer.conv_module2.depthwise_conv.weight.shape(),
+            vec![384, 15, 1]
+        );
+        assert_eq!(layer.conv_module2.out_proj.weight.shape(), vec![384, 384]);
+        assert_eq!(layer.feed_forward3.in_proj.weight.shape(), vec![1280, 384]);
+        assert_eq!(layer.feed_forward3.out_proj.weight.shape(), vec![384, 1280]);
+        assert_eq!(layer.bypass_mid.bypass_scale.shape(), vec![384]);
+        assert_eq!(layer.norm.bias.shape(), vec![384]);
+        assert_eq!(layer.bypass.bypass_scale.shape(), vec![384]);
+    }
+
+    #[test]
+    fn stage2_layer0_matches_onnx_reference_when_local_artifacts_exist() {
+        assert_stage_layer_matches_reference(
+            "encoder.stage2.layer0",
+            2,
+            "stage2_downsample_out",
+            "stage2_pos_emb",
+            "stage2_layer0_attn_weights",
+            "stage2_layer0_out",
+        );
+    }
+
+    #[test]
+    fn stage2_layer1_matches_onnx_reference_when_local_artifacts_exist() {
+        assert_stage_layer_matches_reference(
+            "encoder.stage2.layer1",
+            2,
+            "stage2_layer0_out",
+            "stage2_pos_emb",
+            "stage2_layer1_attn_weights",
+            "stage2_layer1_out",
+        );
+    }
+
+    #[test]
+    fn stage2_layer2_matches_onnx_reference_when_local_artifacts_exist() {
+        assert_stage_layer_matches_reference(
+            "encoder.stage2.layer2",
+            2,
+            "stage2_layer1_out",
+            "stage2_pos_emb",
+            "stage2_layer2_attn_weights",
+            "stage2_layer2_out",
+        );
+    }
+
+    #[test]
+    fn stage2_wrapper_matches_onnx_reference_when_local_artifacts_exist() {
+        let home = match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home),
+            None => return,
+        };
+        let weights = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/frontend_ctc.safetensors",
+        );
+        let reference = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/authored_282_take_1_layer0_ref.safetensors",
+        );
+        if !(weights.exists() && reference.exists()) {
+            return;
+        }
+
+        let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
+        let mut stage2 = StageEncoder::new(&config, 2).unwrap();
+        let params = Array::load_safetensors(&weights).unwrap();
+        let downsample_stats = load_downsample_weights_from_map(
+            &mut stage2.downsample,
+            "encoder.stage2.downsample.weights",
+            &params,
+        )
+        .unwrap();
+        assert!(
+            downsample_stats.missing.is_empty(),
+            "missing: {:?}",
+            downsample_stats.missing
+        );
+        for (layer_index, layer) in stage2.layers.iter_mut().enumerate() {
+            let prefix = format!("encoder.stage2.layer{layer_index}");
+            let layer_stats = load_stage_layer_weights_from_map(layer, &prefix, &params).unwrap();
+            assert!(
+                layer_stats.missing.is_empty(),
+                "missing: {:?}",
+                layer_stats.missing
+            );
+        }
+        let out_combiner_stats = load_bypass_scale_from_map(
+            &mut stage2.out_combiner,
+            "encoder.stage2.out_combiner.bypass_scale",
+            &params,
+        )
+        .unwrap();
+        assert!(
+            out_combiner_stats.missing.is_empty(),
+            "missing: {:?}",
+            out_combiner_stats.missing
+        );
+
+        let tensors = Array::load_safetensors(&reference).unwrap();
+        let stage1_out = tensors.get("stage1_out").unwrap();
+        let expected = tensors.get("stage2_out").unwrap();
+
+        let actual = stage2.forward(stage1_out).unwrap();
+        assert_close("stage2_wrapper", &actual, expected);
+    }
+
+    fn assert_stage_layer_matches_reference(
+        prefix: &str,
+        stage_index: usize,
+        input_key: &str,
+        pos_key: &str,
+        attn_key: &str,
+        output_key: &str,
+    ) {
+        let home = match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home),
+            None => return,
+        };
+        let weights = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/frontend_ctc.safetensors",
+        );
+        let reference = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/authored_282_take_1_layer0_ref.safetensors",
+        );
+        if !(weights.exists() && reference.exists()) {
+            return;
+        }
+
+        let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
+        let mut layer = ZipformerEncoderLayer::new_for_stage(&config, stage_index).unwrap();
+        let params = Array::load_safetensors(&weights).unwrap();
+        let stats = load_stage_layer_weights_from_map(&mut layer, prefix, &params).unwrap();
+        assert!(stats.missing.is_empty(), "missing: {:?}", stats.missing);
+
+        let tensors = Array::load_safetensors(&reference).unwrap();
+        let layer_input = tensors.get(input_key).unwrap();
+        let pos_emb = tensors.get(pos_key).unwrap();
+        let expected_attn = tensors.get(attn_key).unwrap();
+        let expected = tensors.get(output_key).unwrap();
+
+        let actual_attn = layer
+            .self_attn_weights
+            .forward_with_position(layer_input, pos_emb)
+            .unwrap();
+        assert_close(attn_key, &actual_attn, expected_attn);
+
+        let actual = layer.forward(layer_input, pos_emb).unwrap();
+        assert_close(output_key, &actual, expected);
     }
 
     fn assert_close(name: &str, actual: &Array, expected: &Array) {
