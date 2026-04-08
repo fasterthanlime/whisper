@@ -14,18 +14,13 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 mlx-rs.workspace = true
 tokenizers.workspace = true
 bee-phonetic = { path = "../bee-phonetic" }
-bee-vad = { path = "../bee-vad" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hound = "3"
 rubato = "0.15"
 rustfft = "6"
-safetensors = "0.6"
 anyhow = "1"
 log = "0.4"
 tracing = "0.1"
-env_logger = "0.11"
 thiserror = "2"
-half = "2"
-dirs = "6"
 facet = "0.44.3"
