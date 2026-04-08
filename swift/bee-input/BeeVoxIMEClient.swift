@@ -75,7 +75,7 @@ final class BeeVoxIMEClient: Sendable {
         let dispatcher = ImeDispatcher(handler: ImeImpl())
         do {
             let session = try await VoxRuntime.Session.initiator(
-                connector, dispatcher: dispatcher, resumable: false)
+                connector, dispatcher: dispatcher, resumable: true)
             Task { try await session.run() }
             let client = AppClient(connection: session.connection)
             lock.withLock { state.appClient = client }
