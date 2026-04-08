@@ -1226,6 +1226,105 @@ impl BeeMl for BeeMlService {
             }
         }
 
+        // ── Three scoreboards (006) ─────────────────────────────────────
+        println!("\n╔══════════════════════════════════════════════════════════════╗");
+        println!("║                    THREE SCOREBOARDS                        ║");
+        println!("╚══════════════════════════════════════════════════════════════╝");
+        {
+            // Scoreboard 1: End-to-end (denominator = ALL cases)
+            let mut e2e_can_correct = 0u32;
+            let mut e2e_can_total = 0u32;
+            let mut e2e_cx_abstained = 0u32;
+            let mut e2e_cx_total = 0u32;
+            let mut e2e_cx_false_pos = 0u32;
+            for (i, pc) in probed_cases.iter().enumerate() {
+                let sc = &two_stage_scored[i];
+                if pc.case.should_abstain {
+                    e2e_cx_total += 1;
+                    let gate_open = sc.gate_prob >= best_gt;
+                    let ranker_fires = sc.ranker_best.map_or(false, |(_, p)| p >= best_rt);
+                    if gate_open && ranker_fires {
+                        e2e_cx_false_pos += 1;
+                    } else {
+                        e2e_cx_abstained += 1;
+                    }
+                } else {
+                    e2e_can_total += 1;
+                    let gate_open = sc.gate_prob >= best_gt;
+                    let ranker_fires = sc.ranker_best.map_or(false, |(_, p)| p >= best_rt);
+                    let ranker_correct_id = sc.ranker_best.map_or(false, |(id, _)| sc.gold_alias_id == Some(id));
+                    if gate_open && ranker_fires && ranker_correct_id {
+                        e2e_can_correct += 1;
+                    }
+                }
+            }
+            let e2e_can_pct = if e2e_can_total > 0 { e2e_can_correct as f64 / e2e_can_total as f64 * 100.0 } else { 0.0 };
+            let e2e_cx_pct = if e2e_cx_total > 0 { e2e_cx_abstained as f64 / e2e_cx_total as f64 * 100.0 } else { 0.0 };
+            let e2e_fp_pct = if e2e_cx_total > 0 { e2e_cx_false_pos as f64 / e2e_cx_total as f64 * 100.0 } else { 0.0 };
+
+            println!("\n┌─ 1. End-to-end (all cases, GT={best_gt:.1} RT={best_rt:.1}) ──────────────");
+            println!("│  Canonical corrected:    {e2e_can_correct:>3}/{e2e_can_total:<3}  ({e2e_can_pct:.1}%)");
+            println!("│  Counterex abstained:    {e2e_cx_abstained:>3}/{e2e_cx_total:<3}  ({e2e_cx_pct:.1}%)");
+            println!("│  False positive rate:    {e2e_cx_false_pos:>3}/{e2e_cx_total:<3}  ({e2e_fp_pct:.1}%)");
+            println!("└──────────────────────────────────────────────────");
+
+            // Scoreboard 2: Judge-stage (reachable only)
+            // Gate accuracy at best_gt (reachable cases)
+            let mut gate_pos_correct = 0u32;
+            let mut gate_pos_total = 0u32;
+            let mut gate_neg_correct = 0u32;
+            let mut gate_neg_total = 0u32;
+            for sc in &two_stage_scored {
+                if !sc.reachable { continue; }
+                let gate_open = sc.gate_prob >= best_gt;
+                if sc.should_abstain {
+                    gate_neg_total += 1;
+                    if !gate_open { gate_neg_correct += 1; }
+                } else {
+                    gate_pos_total += 1;
+                    if gate_open { gate_pos_correct += 1; }
+                }
+            }
+            let gate_pos_pct = if gate_pos_total > 0 { gate_pos_correct as f64 / gate_pos_total as f64 * 100.0 } else { 0.0 };
+            let gate_neg_pct = if gate_neg_total > 0 { gate_neg_correct as f64 / gate_neg_total as f64 * 100.0 } else { 0.0 };
+            let gate_bal = (gate_pos_pct + gate_neg_pct) / 2.0;
+
+            // Ranker top-1 (reachable canonical)
+            let mut rank_correct = 0u32;
+            let mut rank_total = 0u32;
+            for sc in &two_stage_scored {
+                if sc.should_abstain || !sc.reachable { continue; }
+                rank_total += 1;
+                if let Some((id, _)) = sc.ranker_best {
+                    if sc.gold_alias_id == Some(id) { rank_correct += 1; }
+                }
+            }
+            let rank_pct = if rank_total > 0 { rank_correct as f64 / rank_total as f64 * 100.0 } else { 0.0 };
+
+            // Composed balanced (reachable)
+            let judge_m = eval_twostage_at_thresholds(&two_stage_scored, best_gt, best_rt);
+            let judge_bal = judge_m.balanced_pct();
+
+            println!("\n┌─ 2. Judge-stage (reachable only) ─────────────────────────");
+            println!("│  Gate balanced accuracy: {gate_bal:.1}%  (open {gate_pos_correct}/{gate_pos_total} {gate_pos_pct:.1}%, close {gate_neg_correct}/{gate_neg_total} {gate_neg_pct:.1}%)");
+            println!("│  Ranker top-1 accuracy:  {rank_correct}/{rank_total}  ({rank_pct:.1}%)");
+            println!("│  Composed balanced:      {judge_bal:.1}%  (can {}/{}  cx {}/{})",
+                judge_m.canonical_correct, judge_m.canonical_total,
+                judge_m.cx_correct, judge_m.cx_total);
+            println!("└──────────────────────────────────────────────────");
+
+            // Scoreboard 3: Upstream opportunity set
+            let retrieved_pct = if canonical_count > 0 { canonical_with_gold as f64 / canonical_count as f64 * 100.0 } else { 0.0 };
+            let verified_pct = if canonical_count > 0 { canonical_gold_verified as f64 / canonical_count as f64 * 100.0 } else { 0.0 };
+            let lost_retrieval = canonical_count - canonical_with_gold;
+            let lost_verification = canonical_with_gold - canonical_gold_verified;
+
+            println!("\n┌─ 3. Upstream opportunity set ──────────────────────────────");
+            println!("│  Gold retrieved:         {canonical_with_gold:>3}/{canonical_count:<3}  ({retrieved_pct:.1}%)  — {lost_retrieval} lost at retrieval");
+            println!("│  Gold verified:          {canonical_gold_verified:>3}/{canonical_count:<3}  ({verified_pct:.1}%)  — {lost_verification} lost at verification");
+            println!("└──────────────────────────────────────────────────");
+        }
+
         // ── Per-case failure report (005) ────────────────────────────────
         println!("\n=== Per-case failure report (at GT={best_gt:.1} RT={best_rt:.1}) ===");
         {
