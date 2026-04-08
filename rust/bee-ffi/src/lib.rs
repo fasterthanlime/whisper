@@ -35,24 +35,61 @@ declare_link_endpoint!(pub mod bee_ffi_endpoint { export = bee_ffi_v1_vtable; })
 
 #[ctor::ctor]
 fn on_load() {
-    // Set up tracing subscriber writing to the log file specified by Swift
-    if let Ok(path) = std::env::var("BEE_FFI_LOG_PATH") {
-        if let Ok(file) = std::fs::OpenOptions::new()
+    struct BeeLogWriter {
+        file: Option<std::sync::Mutex<std::fs::File>>,
+    }
+
+    impl std::io::Write for BeeLogWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            use std::io::Write as _;
+
+            let mut stderr = std::io::stderr().lock();
+            stderr.write_all(buf)?;
+
+            if let Some(file) = &self.file {
+                let mut file = file.lock().unwrap();
+                file.write_all(buf)?;
+            }
+
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            use std::io::Write as _;
+
+            std::io::stderr().lock().flush()?;
+
+            if let Some(file) = &self.file {
+                let mut file = file.lock().unwrap();
+                file.flush()?;
+            }
+
+            Ok(())
+        }
+    }
+
+    let file = std::env::var("BEE_FFI_LOG_PATH").ok().and_then(|path| {
+        std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
-        {
-            let subscriber = tracing_subscriber::fmt()
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-                )
-                .with_writer(file)
-                .with_ansi(false)
-                .finish();
-            let _ = tracing::subscriber::set_global_default(subscriber);
-        }
-    }
+            .ok()
+            .map(std::sync::Mutex::new)
+    });
+
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_writer(move || BeeLogWriter {
+            file: file
+                .as_ref()
+                .map(|f| std::sync::Mutex::new(f.lock().unwrap().try_clone().unwrap())),
+        })
+        .with_ansi(false)
+        .finish();
+    let _ = tracing::subscriber::set_global_default(subscriber);
     info!("bee-ffi: dylib loaded, spawning runtime thread");
     std::thread::spawn(|| {
         info!("bee-ffi: runtime thread started");
@@ -139,16 +176,21 @@ impl BeeService {
         &self,
         session_id: &str,
     ) -> Result<Arc<tokio::sync::Mutex<SessionInner>>, BeeError> {
-        let entry = self.inner.sessions.get(session_id).ok_or_else(|| {
-            BeeError::SessionNotFound {
-                session_id: session_id.to_owned(),
-            }
-        })?;
+        let entry =
+            self.inner
+                .sessions
+                .get(session_id)
+                .ok_or_else(|| BeeError::SessionNotFound {
+                    session_id: session_id.to_owned(),
+                })?;
         Ok(entry.value().clone())
     }
 
     /// Create a new ASR session with VAD, returning the raw Session.
-    fn make_session(engine: &AsrEngine, config: &bee_rpc::SessionConfig) -> bee_transcribe::Session<'static> {
+    fn make_session(
+        engine: &AsrEngine,
+        config: &bee_rpc::SessionConfig,
+    ) -> bee_transcribe::Session<'static> {
         let defaults = SessionOptions::default();
         let lang = if config.language.is_empty() {
             Language::default()
@@ -157,10 +199,26 @@ impl BeeService {
         };
         let opts = SessionOptions {
             language: lang,
-            chunk_duration: if config.chunk_duration > 0.0 { config.chunk_duration } else { defaults.chunk_duration },
-            vad_threshold: if config.vad_threshold > 0.0 { config.vad_threshold } else { defaults.vad_threshold },
-            rollback_tokens: if config.rollback_tokens > 0 { config.rollback_tokens as usize } else { defaults.rollback_tokens },
-            commit_token_count: if config.commit_token_count > 0 { config.commit_token_count as usize } else { defaults.commit_token_count },
+            chunk_duration: if config.chunk_duration > 0.0 {
+                config.chunk_duration
+            } else {
+                defaults.chunk_duration
+            },
+            vad_threshold: if config.vad_threshold > 0.0 {
+                config.vad_threshold
+            } else {
+                defaults.vad_threshold
+            },
+            rollback_tokens: if config.rollback_tokens > 0 {
+                config.rollback_tokens as usize
+            } else {
+                defaults.rollback_tokens
+            },
+            commit_token_count: if config.commit_token_count > 0 {
+                config.commit_token_count as usize
+            } else {
+                defaults.commit_token_count
+            },
             ..defaults
         };
         info!(
@@ -206,19 +264,30 @@ impl bee_rpc::Bee for BeeService {
         let session = Self::make_session(engine, &config);
         self.inner.sessions.insert(
             id.clone(),
-            Arc::new(tokio::sync::Mutex::new(SessionInner { session: Some(session), config })),
+            Arc::new(tokio::sync::Mutex::new(SessionInner {
+                session: Some(session),
+                config,
+            })),
         );
 
         Ok(id)
     }
 
-    async fn feed(&self, session_id: String, samples: Vec<f32>) -> Result<Option<FeedResult>, BeeError> {
+    async fn feed(
+        &self,
+        session_id: String,
+        samples: Vec<f32>,
+    ) -> Result<Option<FeedResult>, BeeError> {
         let session = self.get_session(&session_id)?;
 
         let t0 = std::time::Instant::now();
         let result = tokio::task::spawn_blocking(move || {
             let mut guard = session.blocking_lock();
-            guard.session.as_mut().expect("BUG: feed on finished session").feed(&samples)
+            guard
+                .session
+                .as_mut()
+                .expect("BUG: feed on finished session")
+                .feed(&samples)
         })
         .await
         .expect("spawn_blocking panicked");
@@ -232,12 +301,11 @@ impl bee_rpc::Bee for BeeService {
         })?;
 
         let Some(update) = update else {
-            tracing::debug!("feed: {session_id} no update ({elapsed:.1?})");
+            tracing::trace!("feed: {session_id} no update ({elapsed:.1?})");
             return Ok(None);
         };
 
-        let committed_utf16_len =
-            update.text[..update.committed_len].encode_utf16().count() as u32;
+        let committed_utf16_len = update.text[..update.committed_len].encode_utf16().count() as u32;
         let text_preview: String = update.text.chars().take(80).collect();
         info!("feed: {session_id} {elapsed:.1?} committed_utf16={committed_utf16_len} text={text_preview:?}");
 
@@ -254,16 +322,20 @@ impl bee_rpc::Bee for BeeService {
         info!("finish_session: {session_id}");
 
         let (_, session_arc) =
-            self.inner.sessions.remove(&session_id).ok_or_else(|| {
-                BeeError::SessionNotFound {
+            self.inner
+                .sessions
+                .remove(&session_id)
+                .ok_or_else(|| BeeError::SessionNotFound {
                     session_id: session_id.clone(),
-                }
-            })?;
+                })?;
 
         let t0 = std::time::Instant::now();
         let result = tokio::task::spawn_blocking(move || {
             let mut guard = session_arc.blocking_lock();
-            let session = guard.session.take().expect("BUG: finish on already-finished session");
+            let session = guard
+                .session
+                .take()
+                .expect("BUG: finish on already-finished session");
             session.finish()
         })
         .await
@@ -289,11 +361,7 @@ impl bee_rpc::Bee for BeeService {
         })
     }
 
-    async fn set_language(
-        &self,
-        session_id: String,
-        language: String,
-    ) -> Result<bool, BeeError> {
+    async fn set_language(&self, session_id: String, language: String) -> Result<bool, BeeError> {
         if language.is_empty() {
             return Err(BeeError::TranscriptionError {
                 message: "empty language".into(),
@@ -323,15 +391,13 @@ impl bee_rpc::Bee for BeeService {
 
         // feed + finish are CPU/GPU intensive
         let result = tokio::task::spawn_blocking(move || {
-            session.feed(&samples).map_err(|e| {
-                BeeError::TranscriptionError {
+            session
+                .feed(&samples)
+                .map_err(|e| BeeError::TranscriptionError {
                     message: format!("feed: {e}"),
-                }
-            })?;
-            session.finish().map_err(|e| {
-                BeeError::TranscriptionError {
-                    message: format!("finish: {e}"),
-                }
+                })?;
+            session.finish().map_err(|e| BeeError::TranscriptionError {
+                message: format!("finish: {e}"),
             })
         })
         .await
@@ -372,18 +438,27 @@ impl bee_rpc::Bee for BeeService {
         } else {
             Some(PathBuf::from(events_path))
         };
-        let engine =
-            load_correction_engine(Path::new(&dataset_dir), events, gate_threshold, ranker_threshold)
-                .map_err(|e| {
-                    tracing::error!("correct_load: {e}");
-                    BeeError::CorrectionError { message: e }
-                })?;
+        let engine = load_correction_engine(
+            Path::new(&dataset_dir),
+            events,
+            gate_threshold,
+            ranker_threshold,
+        )
+        .map_err(|e| {
+            tracing::error!("correct_load: {e}");
+            BeeError::CorrectionError { message: e }
+        })?;
         info!("correct_load: success");
         *self.inner.correction.lock().await = Some(engine);
         Ok(true)
     }
 
-    async fn correct_process(&self, text: String, app_id: String, words: Vec<bee_types::AlignedWord>) -> CorrectionOutput {
+    async fn correct_process(
+        &self,
+        text: String,
+        app_id: String,
+        words: Vec<bee_types::AlignedWord>,
+    ) -> CorrectionOutput {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
             let mut guard = inner.correction.blocking_lock();
@@ -402,14 +477,26 @@ impl bee_rpc::Bee for BeeService {
                 Some(app_id)
             };
 
-            let spans = enumerate_transcript_spans_with(
-                &text,
-                3,
-                Some(words.as_slice()),
-                |span_text| engine.g2p.ipa_tokens(span_text).ok().flatten(),
-            );
+            // Log alignment data being fed in
+            for (i, w) in words.iter().enumerate() {
+                tracing::debug!(
+                    "correct_process: word[{i}]={:?} logprob={:?} margin={:?}",
+                    w.word,
+                    (w.mean_logprob, w.min_logprob),
+                    (w.mean_margin, w.min_margin),
+                );
+            }
 
-            tracing::info!("correct_process: text={:?} spans={}", text.chars().take(60).collect::<String>(), spans.len());
+            let spans =
+                enumerate_transcript_spans_with(&text, 3, Some(words.as_slice()), |span_text| {
+                    engine.g2p.ipa_tokens(span_text).ok().flatten()
+                });
+
+            tracing::info!(
+                "correct_process: text={:?} spans={}",
+                text.chars().take(60).collect::<String>(),
+                spans.len()
+            );
 
             let session_id = format!(
                 "{:x}",
@@ -422,7 +509,10 @@ impl bee_rpc::Bee for BeeService {
             // Phase 1: score all spans, collect candidates
             struct ScoredEdit {
                 span: bee_types::TranscriptSpan,
-                candidates: Vec<(bee_phonetic::phonetic_verify::CandidateFeatureRow, bee_types::IdentifierFlags)>,
+                candidates: Vec<(
+                    bee_phonetic::phonetic_verify::CandidateFeatureRow,
+                    bee_types::IdentifierFlags,
+                )>,
                 ctx: SpanContext,
                 edit: CorrectionEdit,
                 score: f64,
@@ -431,6 +521,14 @@ impl bee_rpc::Bee for BeeService {
             let mut candidates: Vec<ScoredEdit> = Vec::new();
 
             for span in &spans {
+                tracing::debug!(
+                    "correct_process: span={:?} mean_logprob={:?} min_logprob={:?} mean_margin={:?} min_margin={:?}",
+                    span.text,
+                    span.mean_logprob,
+                    span.min_logprob,
+                    span.mean_margin,
+                    span.min_margin,
+                );
                 let query = RetrievalQuery {
                     text: span.text.clone(),
                     ipa_tokens: span.ipa_tokens.clone(),
@@ -546,9 +644,7 @@ impl bee_rpc::Bee for BeeService {
             }
 
             if !session_pending.is_empty() {
-                engine
-                    .pending
-                    .insert(session_id.clone(), session_pending);
+                engine.pending.insert(session_id.clone(), session_pending);
             }
 
             CorrectionOutput {
@@ -575,11 +671,13 @@ impl bee_rpc::Bee for BeeService {
                 });
             };
 
-            let session_edits = engine.pending.remove(&session_id).ok_or_else(|| {
-                BeeError::CorrectionError {
-                    message: format!("no pending edits for session {session_id}"),
-                }
-            })?;
+            let session_edits =
+                engine
+                    .pending
+                    .remove(&session_id)
+                    .ok_or_else(|| BeeError::CorrectionError {
+                        message: format!("no pending edits for session {session_id}"),
+                    })?;
 
             for res in &resolutions {
                 let Some(pending) = session_edits.get(&res.edit_id) else {
@@ -646,11 +744,10 @@ impl bee_rpc::Bee for BeeService {
                 })?;
             let mut writer = std::io::BufWriter::new(file);
             for event in engine.event_log.drain(..) {
-                let json = facet_json::to_string(&event).map_err(|e| {
-                    BeeError::CorrectionError {
+                let json =
+                    facet_json::to_string(&event).map_err(|e| BeeError::CorrectionError {
                         message: format!("serialize event: {e}"),
-                    }
-                })?;
+                    })?;
                 writeln!(writer, "{json}").map_err(|e| BeeError::CorrectionError {
                     message: format!("write event: {e}"),
                 })?;

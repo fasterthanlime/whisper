@@ -1240,6 +1240,24 @@ pub fn build_gate_features(
     let any_acceptance_floor = candidates.iter().any(|(c, _)| c.acceptance_floor_passed) as u8 as f64;
     let candidate_count = candidates.len() as f64;
 
+    tracing::debug!(
+        "gate_features: span={:?} tokens={:.2} phones={:.2} low_content={} mean_lp={:.3} min_lp={:.3} mean_m={:.3} min_m={:.3} correct_count={} max_accept={:.3} max_phonetic={:.3} verified={} accept_floor={} candidates={}",
+        span.text,
+        span_token_count / 4.0,
+        span_phone_count / 12.0,
+        span_low_content,
+        mean_lp,
+        min_lp,
+        mean_m,
+        min_m,
+        span_correct_count,
+        max_acceptance,
+        max_phonetic,
+        any_verified,
+        any_acceptance_floor,
+        candidate_count,
+    );
+
     let mut features = vec![
         Feature { index: 0, value: 1.0 },                                        // bias
         Feature { index: 1, value: span_token_count / 4.0 },                     // span_token_count

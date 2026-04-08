@@ -65,6 +65,17 @@ run_step() {
 }
 
 run_step "Building MLX Rust FFI (release)" "cd \"$PROJECT_ROOT/rust\" && cargo build --release -p bee-ffi"
+
+# Sync phonetic-seed dataset early (weights may have changed since last install)
+GROUP_CONTAINER="$HOME/Library/Group Containers/B2N6FSRTPV.group.fasterthanlime.bee"
+DATASET_SRC="$PROJECT_ROOT/data/phonetic-seed"
+DATASET_DST="$GROUP_CONTAINER/phonetic-seed"
+
+if [ -d "$DATASET_SRC" ]; then
+  run_step "Syncing phonetic-seed dataset to Group Container" \
+    "mkdir -p \"$DATASET_DST\" && rsync -a --delete \"$DATASET_SRC/\" \"$DATASET_DST/\""
+fi
+
 if [[ "${BEE_REGEN:-}" == "1" ]]; then
   run_step "Generating Xcode project" "cd \"$SWIFT_DIR\" && xcodegen generate --spec \"$XCODE_SPEC\""
 fi
@@ -101,17 +112,6 @@ run_step "Installing bee to /Applications/bee.app" "rsync -a --delete \"$BUILD_D
 run_step "Copying mlx.metallib into app bundle" "cp \"$MLX_SYS_PREFIX/lib/mlx.metallib\" /Applications/bee.app/Contents/Frameworks/mlx.metallib"
 run_step "Installing beeInput to ~/Library/Input Methods" \
   "rm -rf \"$INPUT_METHOD_DIR/beeInput.app\" && cp -r \"$BUILD_DIR/beeInput.app\" \"$INPUT_METHOD_DIR/\""
-
-GROUP_CONTAINER="$HOME/Library/Group Containers/B2N6FSRTPV.group.fasterthanlime.bee"
-DATASET_SRC="$PROJECT_ROOT/data/phonetic-seed"
-DATASET_DST="$GROUP_CONTAINER/phonetic-seed"
-
-if [ -d "$DATASET_SRC" ]; then
-  run_step "Copying phonetic-seed dataset to Group Container" \
-    "mkdir -p \"$DATASET_DST\" && rsync -a --delete \"$DATASET_SRC/\" \"$DATASET_DST/\""
-else
-  printf '%s\n' "${YELLOW}Skipping phonetic-seed copy (not found at $DATASET_SRC)${RESET}"
-fi
 
 run_step "Restarting beeInput" "pkill beeInput || true"
 run_step "Killing running bee" "pkill bee || true"
