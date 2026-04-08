@@ -11,16 +11,18 @@ use mlx_rs::error::Exception;
 use mlx_rs::Array;
 use tokenizers::Tokenizer;
 
+use bee_qwen3_asr::forced_aligner::ForcedAligner;
+
 use crate::audio_buffer::{AudioBuffer, Seconds};
 use crate::mlx_stuff::clear_mlx_cache;
-use crate::text_buffer::{AsrToken, TokenCount, TokenEntry, TokenId, WordStart};
+use crate::text_buffer::{self, AlignmentItem, AsrToken, TextBuffer, TokenCount, TokenEntry, TokenId, WordStart};
 
 /// A decode sub-session. Replaced wholesale on rotation.
 pub struct DecodeSession {
     /// Audio buffer for this sub-session.
-    pub audio: AudioBuffer,
+    audio: AudioBuffer,
     /// When this sub-session starts in the session timeline.
-    pub start_time: Seconds,
+    start_time: Seconds,
     /// Encoder cache for incremental encoding.
     encoder_cache: EncoderCache,
     /// Mel spectrogram extractor.
@@ -49,6 +51,21 @@ impl DecodeSession {
             rollback_tokens,
             chunk_count: 0,
         }
+    }
+
+    /// Append audio samples to this sub-session.
+    pub fn append_audio(&mut self, chunk: &AudioBuffer) {
+        self.audio.append(chunk);
+    }
+
+    /// Whether this sub-session has any audio.
+    pub fn has_audio(&self) -> bool {
+        !self.audio.is_empty()
+    }
+
+    /// When this sub-session starts in the absolute timeline.
+    pub fn start_time(&self) -> Seconds {
+        self.start_time
     }
 
     /// The text tokens (after `<asr_text>`).
@@ -207,21 +224,95 @@ impl DecodeSession {
         entries
     }
 
-    /// Clear all tokens (used after finish_commit when everything is committed).
+    /// Commit up to `n` text tokens. Snaps back to a word boundary, runs
+    /// forced alignment, and splits self: returns an aligned TextBuffer and
+    /// becomes the remainder (leftover audio, fresh cache).
+    ///
+    /// Returns `None` if nothing can be committed (no complete words, empty
+    /// text, alignment failure, etc.).
+    pub fn commit(
+        &mut self,
+        n: TokenCount,
+        forced_aligner: &ForcedAligner,
+        tokenizer: &Tokenizer,
+    ) -> Result<Option<TextBuffer>, Exception> {
+        // Build entries from text tokens, snap to word boundary
+        let mut entries = TextBuffer::from_entries(self.pending_entries(tokenizer));
+        let safe_n = entries.snap_to_word_boundary(n);
+        if safe_n.0 == 0 {
+            return Ok(None);
+        }
+
+        let to_commit = entries.split_off_front(safe_n);
+        let commit_ids = to_commit.token_ids();
+        let commit_text = tokenizer.decode(&commit_ids, true).unwrap_or_default();
+        if commit_text.trim().is_empty() {
+            return Ok(None);
+        }
+
+        // Run forced alignment against our audio
+        let items = forced_aligner
+            .align(self.audio.samples(), &commit_text)
+            .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
+        if items.is_empty() {
+            return Ok(None);
+        }
+
+        // Build AlignmentItems and align the buffer (pure function)
+        let alignment_items: Vec<AlignmentItem> = items
+            .iter()
+            .map(|item| AlignmentItem {
+                word: item.word.clone(),
+                start: Seconds(item.start_time as f64),
+                end: Seconds(item.end_time as f64),
+            })
+            .collect();
+        let aligned = text_buffer::align(to_commit, &alignment_items, &self.audio, self.start_time);
+
+        // Split ourselves: trim audio, reset for next decode cycle
+        let last_end = Seconds(items.last().unwrap().end_time as f64);
+        let new_start = self.start_time + last_end;
+        let (_, remaining) = self.audio.split_at(last_end);
+        self.audio = remaining;
+        self.start_time = new_start;
+        self.tokens.clear();
+        self.metadata_end = 0;
+        self.encoder_cache = EncoderCache::new();
+        self.mel_extractor = MelExtractor::new(400, 160, 128, 16000);
+        self.chunk_count = 0;
+
+        Ok(Some(aligned))
+    }
+
+    /// Commit all text tokens. Same as `commit` but without a token limit.
+    pub fn commit_all(
+        &mut self,
+        forced_aligner: &ForcedAligner,
+        tokenizer: &Tokenizer,
+    ) -> Result<Option<TextBuffer>, Exception> {
+        let n = TokenCount(self.text_tokens().len());
+        self.commit(n, forced_aligner, tokenizer)
+    }
+
+    /// Clear all tokens and reset state.
     pub fn clear(&mut self) {
         self.tokens.clear();
         self.metadata_end = 0;
         self.encoder_cache = EncoderCache::new();
+        self.chunk_count = 0;
     }
 
     // ── Internal ────────────────────────────────────────────────────
 
     /// Compute the fixed prefix for rollback.
+    /// Rollback applies to text tokens only — metadata is always kept.
     fn compute_prefix(&self) -> Option<Vec<AsrToken>> {
         if self.chunk_count < 2 || self.tokens.is_empty() {
             return None;
         }
-        let keep = self.tokens.len().saturating_sub(self.rollback_tokens.0);
+        let text_len = self.tokens.len() - self.metadata_end;
+        let text_keep = text_len.saturating_sub(self.rollback_tokens.0);
+        let keep = self.metadata_end + text_keep;
         if keep == 0 {
             return None;
         }

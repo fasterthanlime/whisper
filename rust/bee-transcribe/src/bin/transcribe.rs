@@ -114,11 +114,7 @@ fn main() -> anyhow::Result<()> {
         "\n--- Final ({finish_ms:.0}ms, total {:.0}ms) ---",
         t_total.elapsed().as_millis()
     );
-    println!(
-        "  committed: {:?}",
-        &final_update.text[..final_update.asr_committed_len]
-    );
-    println!("  full:      {:?}", final_update.text);
+    println!("  text: {:?}", final_update.text);
 
     if !final_update.alignments.is_empty() {
         println!("\nAlignments:");
@@ -131,11 +127,5 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn print_update(chunk: usize, ms: u128, update: &Update) {
-    let committed = &update.text[..update.asr_committed_len];
-    let pending = &update.text[update.asr_committed_len..];
-    if committed.is_empty() {
-        println!("  chunk {chunk}: {ms:.0}ms | {pending}");
-    } else {
-        println!("  chunk {chunk}: {ms:.0}ms | [{committed}] {pending}");
-    }
+    println!("  chunk {chunk}: {ms:.0}ms | {}", update.text);
 }

@@ -228,9 +228,8 @@ impl<'a> Session<'a> {
 
         let update = self.make_update();
         tracing::debug!(
-            "feed: text={:?} asr_committed={}",
+            "feed: text={:?}",
             &update.text[..update.text.len().min(80)],
-            update.asr_committed_len
         );
 
         Ok(Some(update))
@@ -334,13 +333,9 @@ impl<'a> Session<'a> {
         };
 
         let text = format!("{correction_text}{asr_only_text}{pending_text}");
-        let correction_committed_len = correction_text.len();
-        let asr_committed_len = correction_text.len() + asr_only_text.len();
 
         Update {
             text,
-            asr_committed_len,
-            correction_committed_len,
             alignments: self.aligner.committed_alignments().to_vec(),
             detected_language: self.aligner.detected_language().to_string(),
         }

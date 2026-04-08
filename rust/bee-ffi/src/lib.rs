@@ -288,13 +288,12 @@ impl bee_rpc::Bee for BeeService {
             return Ok(None);
         };
 
-        let committed_utf16_len = update.text[..update.asr_committed_len].encode_utf16().count() as u32;
         let text_preview: String = update.text.chars().take(80).collect();
-        info!("feed: {session_id} {elapsed:.1?} committed_utf16={committed_utf16_len} text={text_preview:?}");
+        info!("feed: {session_id} {elapsed:.1?} text={text_preview:?}");
 
         Ok(Some(FeedResult {
             text: update.text,
-            committed_utf16_len,
+            committed_utf16_len: 0,
             alignments: update.alignments,
             is_final: false,
             detected_language: update.detected_language,

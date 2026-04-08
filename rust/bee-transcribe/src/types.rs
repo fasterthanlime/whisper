@@ -82,16 +82,8 @@ impl Default for SessionOptions {
 /// Result of a `feed()` or `finish()` call.
 #[derive(Debug, Clone, Facet)]
 pub struct Update {
-    /// Full transcription so far (corrected where available + ASR for the rest + in-progress tail).
+    /// Full transcription so far (committed + in-progress tail).
     pub text: String,
-
-    /// Byte offset: `text[..asr_committed_len]` is ASR-committed
-    /// (won't change via rollback, but may still be corrected).
-    pub asr_committed_len: usize,
-
-    /// Byte offset: `text[..correction_committed_len]` has been through the
-    /// correction pipeline and is truly final.
-    pub correction_committed_len: usize,
 
     /// Word-level timestamps for committed words.
     pub alignments: Vec<AlignedWord>,
