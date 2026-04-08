@@ -161,43 +161,48 @@ impl<'a> SessionV2<'a> {
                 pending_tokens = self.pending.len().0,
                 "finish: committing remaining pending tokens"
             );
-            debug_assert!(
-                self.decode.has_audio(),
-                "pending text exists without decode audio"
-            );
-            if let Some(aligned) = self
-                .decode
-                .commit_all(self.forced_aligner, self.tokenizer)?
-            {
-                let final_words: Vec<AlignedWord> = aligned
-                    .words()
-                    .filter_map(|entries| Self::word_to_aligned(self.tokenizer, entries))
-                    .collect();
+            if self.decode.has_audio() {
+                if let Some(aligned) = self
+                    .decode
+                    .commit_all(self.forced_aligner, self.tokenizer)?
+                {
+                    let final_words: Vec<AlignedWord> = aligned
+                        .words()
+                        .filter_map(|entries| Self::word_to_aligned(self.tokenizer, entries))
+                        .collect();
 
-                // Flush previous buffered commit with these final words as right context
-                self.flush_buffered_commit(&final_words);
+                    // Flush previous buffered commit with these final words as right context
+                    self.flush_buffered_commit(&final_words);
 
-                // Correct this final chunk too (no right context)
-                let raw_text = final_words
-                    .iter()
-                    .map(|w| w.word.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                if let Some((ref engine_arc, ref mut corrector)) = self.correction {
-                    let mut engine = engine_arc.lock().expect("correction engine lock poisoned");
-                    corrector.process_chunk_with_context(
-                        &mut engine,
-                        &raw_text,
-                        &final_words,
-                        &self.prev_raw_words,
-                        &[],
-                        self.options.app_id.as_deref(),
-                    );
+                    // Correct this final chunk too (no right context)
+                    let raw_text = final_words
+                        .iter()
+                        .map(|w| w.word.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if let Some((ref engine_arc, ref mut corrector)) = self.correction {
+                        let mut engine =
+                            engine_arc.lock().expect("correction engine lock poisoned");
+                        corrector.process_chunk_with_context(
+                            &mut engine,
+                            &raw_text,
+                            &final_words,
+                            &self.prev_raw_words,
+                            &[],
+                            self.options.app_id.as_deref(),
+                        );
+                    }
+
+                    self.committed.append(aligned);
+                    self.pending
+                        .replace(self.decode.pending_entries(self.tokenizer));
                 }
-
-                self.committed.append(aligned);
-                self.pending
-                    .replace(self.decode.pending_entries(self.tokenizer));
+            } else {
+                tracing::warn!(
+                    pending_tokens = self.pending.len().0,
+                    "finish: pending text without decode audio; preserving raw tail"
+                );
+                self.flush_buffered_commit(&[]);
             }
         } else {
             // No pending tokens, but may still have a buffered commit to flush
