@@ -670,6 +670,12 @@ impl<'a> Session<'a> {
 
         tracing::debug!("make_update: raw_text={raw_text:?} token_count={}", all_ids.len());
 
+        // Log individual tokens to diagnose missing <asr_text> tag
+        for (i, &id) in all_ids.iter().enumerate() {
+            let tok_str = self.engine.tokenizer.decode(&[id], false).unwrap_or_default();
+            tracing::info!("  token[{i}]: id={id} → {tok_str:?}");
+        }
+
         // The model may output "language English<asr_text>actual text" — always strip.
         let (lang, text) = parse_language_prefix(&raw_text);
         if !lang.is_empty() {
@@ -706,38 +712,37 @@ const ASR_TEXT_TAG: &str = "<asr_text>";
 
 /// Strip model-inserted language prefix and `<asr_text>` tag.
 ///
-/// The model may output any combination of:
-///   "language English<asr_text>Hello"
-///   "language EnglishHello"        (tag omitted)
-///   "Hello"                        (no prefix at all)
-///   "language None<asr_text>"      (empty audio)
+/// The `<asr_text>` tag is the reliable delimiter between metadata and text.
+/// Without it, we return the raw string as pure text (no stripping).
 fn parse_language_prefix(text: &str) -> (String, String) {
-    // 1. Remove <asr_text> tag if present
-    let s = text.trim().replace(ASR_TEXT_TAG, "");
-    let s = s.trim();
+    let s = text.trim();
     if s.is_empty() {
         return (String::new(), String::new());
     }
 
-    // 2. Strip "language Xyz" prefix if present
-    let Some(rest) = s.strip_prefix("language ") else {
+    // Split on <asr_text> — the only reliable delimiter
+    let Some(split_pos) = s.find(ASR_TEXT_TAG) else {
+        // No tag — return as pure text, don't try to guess where lang ends
         return (String::new(), s.to_string());
     };
-    let lang_end = rest
-        .find(|c: char| !c.is_ascii_alphabetic())
-        .unwrap_or(rest.len());
-    let lang = &rest[..lang_end];
-    let text_part = rest[lang_end..].trim();
 
-    if lang.eq_ignore_ascii_case("none") && text_part.is_empty() {
-        return (String::new(), String::new());
+    let meta = &s[..split_pos];
+    let text_part = &s[split_pos + ASR_TEXT_TAG.len()..];
+
+    // Extract language from metadata
+    let lang = meta
+        .strip_prefix("language ")
+        .map(|l| l.trim())
+        .unwrap_or("");
+
+    if lang.eq_ignore_ascii_case("none") {
+        let t = text_part.trim();
+        if t.is_empty() {
+            return (String::new(), String::new());
+        }
+        return (String::new(), t.to_string());
     }
 
-    let lang = if lang.eq_ignore_ascii_case("none") {
-        ""
-    } else {
-        lang
-    };
     (lang.to_string(), text_part.to_string())
 }
 

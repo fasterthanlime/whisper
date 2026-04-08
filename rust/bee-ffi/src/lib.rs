@@ -402,6 +402,8 @@ impl bee_rpc::Bee for BeeService {
                 |span_text| engine.g2p.ipa_tokens(span_text).ok().flatten(),
             );
 
+            tracing::info!("correct_process: text={:?} spans={}", text.chars().take(60).collect::<String>(), spans.len());
+
             let session_id = format!(
                 "{:x}",
                 std::time::SystemTime::now()
@@ -460,6 +462,14 @@ impl bee_rpc::Bee for BeeService {
                 };
 
                 let decision = engine.judge.score_span(span, &candidates_with_flags, &ctx);
+
+                tracing::debug!(
+                    "correct_process: span={:?} gate={:.3} chosen={} top_candidate={:?}",
+                    span.text,
+                    decision.gate_prob,
+                    decision.chosen.is_some(),
+                    scored.first().map(|c| &c.term),
+                );
 
                 if let Some(ref chosen) = decision.chosen {
                     let score = decision.gate_prob as f64 * chosen.ranker_prob as f64;
