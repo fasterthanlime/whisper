@@ -75,6 +75,16 @@ fn main() -> Result<()> {
             );
             if let Some(span) = worst_span(trace) {
                 println!("worst span: {:?}", span.span_text);
+                println!(
+                    "alignment source={} phones {}->{} proj={} chosen={} second={} gap={}",
+                    span.alignment_source,
+                    span.transcript_phone_count,
+                    span.chosen_zipa_phone_count,
+                    fmt(span.projected_alignment_score),
+                    fmt(span.chosen_alignment_score),
+                    fmt(span.second_best_alignment_score),
+                    fmt(span.alignment_score_gap),
+                );
                 let top_windows = top_right_anchor_windows(
                     &span.transcript_normalized,
                     &trace.utterance_zipa_normalized,

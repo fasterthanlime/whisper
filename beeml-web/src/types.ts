@@ -125,8 +125,15 @@ export type PhoneticRescueSpan = {
   zipaRaw: string[];
   zipaNormalized: string[];
   transcriptNormalized: string[];
+  transcriptPhoneCount: number;
+  chosenZipaPhoneCount: number;
   transcriptSimilarity?: number | null;
   transcriptFeatureSimilarity?: number | null;
+  projectedAlignmentScore?: number | null;
+  chosenAlignmentScore?: number | null;
+  secondBestAlignmentScore?: number | null;
+  alignmentScoreGap?: number | null;
+  alignmentSource: string;
   alignment: PhoneticAlignmentOp[];
   candidates: PhoneticRescueCandidate[];
 };
