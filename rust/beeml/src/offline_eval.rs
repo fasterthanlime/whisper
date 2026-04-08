@@ -748,6 +748,89 @@ pub(crate) fn train_and_score_twostage_kfold(
     scored
 }
 
+/// Train gate + ranker on ALL cases (no holdout) and export weights to disk.
+pub(crate) fn train_and_export_weights(
+    probed_cases: &[ProbedCase],
+    epochs: usize,
+    hard_neg_cap: usize,
+    output_dir: &std::path::Path,
+) -> std::io::Result<()> {
+    use beeml::judge::{
+        build_gate_features, build_ranker_features, seed_gate_model, seed_ranker_model,
+    };
+
+    let mut gate_model = beeml::sparse_ftrl::SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
+    seed_gate_model(&mut gate_model);
+    let mut ranker_model = beeml::sparse_ftrl::SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
+    seed_ranker_model(&mut ranker_model);
+
+    let memory: beeml::judge::TermMemory = Default::default();
+
+    for _epoch in 0..epochs {
+        for pc in probed_cases {
+            // Gate training
+            if pc.case.should_abstain {
+                for ps in &pc.spans {
+                    if ps.candidates.is_empty() {
+                        continue;
+                    }
+                    let feats = build_gate_features(&ps.span, &ps.candidates, &ps.ctx, &memory);
+                    gate_model.update(&feats, false);
+                }
+            } else if let Some(ps) = find_best_gold_span(&pc.spans) {
+                let feats = build_gate_features(&ps.span, &ps.candidates, &ps.ctx, &memory);
+                gate_model.update(&feats, true);
+            }
+
+            // Ranker training
+            if !pc.case.should_abstain {
+                if let Some(ps) = find_best_gold_span(&pc.spans) {
+                    let gold_id = ps.gold_alias_id.unwrap();
+                    let gold_verified = ps
+                        .candidates
+                        .iter()
+                        .any(|(c, _)| c.alias_id == gold_id && c.verified);
+                    if gold_verified {
+                        let examples = build_ranker_features(&ps.span, &ps.candidates, &memory);
+                        if let Some(gold_ex) = examples.iter().find(|e| e.alias_id == gold_id) {
+                            ranker_model.update(&gold_ex.features, true);
+                        }
+                        let mut neg_indices: Vec<usize> = examples
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, e)| e.alias_id != gold_id)
+                            .map(|(j, _)| j)
+                            .collect();
+                        neg_indices.sort_by(|&a, &b| {
+                            let sa = ranker_model.predict(&examples[a].features);
+                            let sb = ranker_model.predict(&examples[b].features);
+                            sb.total_cmp(&sa)
+                        });
+                        for &idx in neg_indices.iter().take(hard_neg_cap) {
+                            ranker_model.update(&examples[idx].features, false);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Save weights
+    let gate_path = output_dir.join("gate_weights.bin");
+    let mut f = std::fs::File::create(&gate_path)?;
+    gate_model.save_weights(&mut f)?;
+    let gate_weights = gate_model.weights();
+    tracing::info!("Exported {} gate weights to {}", gate_weights.len(), gate_path.display());
+
+    let ranker_path = output_dir.join("ranker_weights.bin");
+    let mut f = std::fs::File::create(&ranker_path)?;
+    ranker_model.save_weights(&mut f)?;
+    let ranker_weights = ranker_model.weights();
+    tracing::info!("Exported {} ranker weights to {}", ranker_weights.len(), ranker_path.display());
+
+    Ok(())
+}
+
 /// Evaluate two-stage scored cases at given thresholds.
 pub(crate) fn eval_twostage_at_thresholds(
     scored: &[TwoStageScoredCase],

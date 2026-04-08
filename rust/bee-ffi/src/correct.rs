@@ -54,7 +54,7 @@ pub(crate) fn load_correction_engine(
     } else {
         0.2
     };
-    let mut judge = TwoStageJudge::new(gt, rt);
+    let mut judge = TwoStageJudge::new(gt, rt, Some(dataset_dir));
 
     // Replay persisted events to rebuild TermMemory
     let resolved_path = events_path.clone();

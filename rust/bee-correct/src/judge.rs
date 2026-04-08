@@ -640,11 +640,28 @@ pub struct TwoStageJudge {
 }
 
 impl TwoStageJudge {
-    pub fn new(gate_threshold: f32, ranker_threshold: f32) -> Self {
+    pub fn new(gate_threshold: f32, ranker_threshold: f32, weights_dir: Option<&std::path::Path>) -> Self {
         let mut gate = SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
         seed_gate_model(&mut gate);
         let mut ranker = SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
         seed_ranker_model(&mut ranker);
+
+        // Load trained weights if available (overrides seed weights)
+        if let Some(dir) = weights_dir {
+            let gate_path = dir.join("gate_weights.bin");
+            if let Ok(mut f) = std::fs::File::open(&gate_path) {
+                if let Ok(()) = gate.load_weights(&mut f) {
+                    tracing::info!("Loaded gate weights from {}", gate_path.display());
+                }
+            }
+            let ranker_path = dir.join("ranker_weights.bin");
+            if let Ok(mut f) = std::fs::File::open(&ranker_path) {
+                if let Ok(()) = ranker.load_weights(&mut f) {
+                    tracing::info!("Loaded ranker weights from {}", ranker_path.display());
+                }
+            }
+        }
+
         Self {
             gate,
             ranker,

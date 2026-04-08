@@ -6,6 +6,7 @@
 //! Reference: McMahan et al., "Ad Click Prediction: a View from the Trenches" (2013)
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
 
 /// Per-feature accumulators: (z, n) where z is the lazy weight accumulator
 /// and n is the sum of squared gradients.
@@ -23,6 +24,8 @@ pub struct SparseFtrl {
     pub l2: f64,
     /// Feature indices that are frozen (not updated during training).
     frozen: std::collections::HashSet<u64>,
+    /// Pre-computed frozen weights loaded from file. Checked first in weight_for().
+    loaded_weights: HashMap<u64, f64>,
 }
 
 /// A single active feature: index + value.
@@ -47,6 +50,7 @@ impl SparseFtrl {
             l1,
             l2,
             frozen: std::collections::HashSet::new(),
+            loaded_weights: HashMap::new(),
         }
     }
 
@@ -60,6 +64,9 @@ impl SparseFtrl {
     /// Applies L1 proximal thresholding: if |z| ≤ l1, the weight is zero
     /// (soft-thresholding for sparsity). Otherwise, w = -(z - sign(z)·l1) / (l2 + (β + √n) / α).
     fn weight_for(&self, index: u64) -> f64 {
+        if let Some(&w) = self.loaded_weights.get(&index) {
+            return w;
+        }
         let Some(&(z, n)) = self.accumulators.get(&index) else {
             return 0.0;
         };
@@ -128,6 +135,41 @@ impl SparseFtrl {
     /// Get the weight for a specific dense feature index.
     pub fn weight_at(&self, index: u64) -> f64 {
         self.weight_for(index)
+    }
+
+    /// Save non-zero weights to a binary file.
+    /// Format: u32 LE count, then (u64 LE index, f64 LE weight) pairs.
+    pub fn save_weights(&self, writer: &mut dyn Write) -> std::io::Result<()> {
+        let w = self.weights();
+        writer.write_all(&(w.len() as u32).to_le_bytes())?;
+        for (idx, val) in &w {
+            writer.write_all(&idx.to_le_bytes())?;
+            writer.write_all(&val.to_le_bytes())?;
+        }
+        Ok(())
+    }
+
+    /// Load frozen weights from a binary file, replacing any existing loaded weights.
+    /// The loaded weights take priority over accumulator-derived weights.
+    pub fn load_weights(&mut self, reader: &mut dyn Read) -> std::io::Result<()> {
+        let mut buf4 = [0u8; 4];
+        reader.read_exact(&mut buf4)?;
+        let count = u32::from_le_bytes(buf4) as usize;
+        self.loaded_weights.clear();
+        let mut buf8 = [0u8; 8];
+        for _ in 0..count {
+            reader.read_exact(&mut buf8)?;
+            let idx = u64::from_le_bytes(buf8);
+            reader.read_exact(&mut buf8)?;
+            let val = f64::from_le_bytes(buf8);
+            self.loaded_weights.insert(idx, val);
+        }
+        Ok(())
+    }
+
+    /// Returns true if this model has loaded (frozen) weights.
+    pub fn has_loaded_weights(&self) -> bool {
+        !self.loaded_weights.is_empty()
     }
 
     /// Softmax update: treat candidates as a multi-class problem.

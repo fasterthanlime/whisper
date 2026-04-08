@@ -124,6 +124,44 @@ async fn main() -> Result<()> {
         }),
     };
 
+    // --export-weights: train on all data and export frozen weights
+    if std::env::args().any(|a| a == "--export-weights") {
+        let epochs = std::env::args()
+            .skip_while(|a| a != "--epochs")
+            .nth(1)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4usize);
+
+        let cases = handler.teaching_cases(0, true);
+        info!(cases = cases.len(), epochs, "probing cases for weight export");
+
+        let service = handler.clone();
+        let probed_cases: Vec<offline_eval::ProbedCase> = tokio::task::block_in_place(|| {
+            use rayon::prelude::*;
+            cases
+                .into_par_iter()
+                .filter_map(|case| {
+                    match service.probe_case_spans(&case, 3, 100) {
+                        Ok(pc) => Some(pc),
+                        Err(e) => {
+                            tracing::warn!(case_id = %case.case_id, error = %e, "probe failed");
+                            None
+                        }
+                    }
+                })
+                .collect()
+        });
+
+        info!(probed = probed_cases.len(), "probed all cases, training and exporting");
+
+        let output_dir = SeedDataset::canonical_root();
+        offline_eval::train_and_export_weights(&probed_cases, epochs, 3, &output_dir)
+            .map_err(|e| anyhow::anyhow!("export weights: {e}"))?;
+
+        info!("weights exported to {}", output_dir.display());
+        return Ok(());
+    }
+
     // --offline-eval: run full Phase 4 eval suite and exit
     if std::env::args().any(|a| a == "--offline-eval") {
         let folds = std::env::args()
