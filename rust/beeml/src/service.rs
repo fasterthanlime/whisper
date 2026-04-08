@@ -4,23 +4,24 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bee_phonetic::{
-    align_token_sequences, enumerate_transcript_spans_with, feature_similarity,
-    normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans, phoneme_similarity,
-    query_index, reduce_ipa_tokens, score_shortlist, sentence_word_tokens, PhoneticIndex,
-    RetrievalQuery, SeedDataset, TranscriptAlignmentToken,
+    AlignmentOp, AlignmentOpKind, PhoneticIndex, RetrievalQuery, SeedDataset,
+    TranscriptAlignmentToken, align_token_sequences, enumerate_transcript_spans_with,
+    feature_similarity, normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans,
+    phoneme_similarity, query_index, reduce_ipa_tokens, score_shortlist, sentence_word_tokens,
 };
 use bee_transcribe::{AlignedWord, Engine};
 use bee_zipa_mlx::audio::AudioBuffer;
 use bee_zipa_mlx::infer::ZipaInference;
 use beeml::g2p::CachedEspeakG2p;
-use beeml::judge::{extract_span_context, OnlineJudge};
+use beeml::judge::{OnlineJudge, extract_span_context};
 use beeml::rpc::{
     FilterDecision, JudgeOptionDebug, JudgeStateDebug, PhoneticComparisonRequest,
     PhoneticComparisonResult, PhoneticComparisonRow, PhoneticComparisonSummary, RapidFireChoice,
     RetrievalCandidateDebug, RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest,
     RetrievalPrototypeProbeResult, SpanDebugTrace, SpanDebugView,
-    TeachRetrievalPrototypeJudgeRequest, TimingBreakdown, TranscribePhoneticCandidate,
-    TranscribePhoneticSpan, TranscribePhoneticTrace,
+    TeachRetrievalPrototypeJudgeRequest, TimingBreakdown, TranscribePhoneticAlignmentKind,
+    TranscribePhoneticAlignmentOp, TranscribePhoneticCandidate, TranscribePhoneticSpan,
+    TranscribePhoneticTrace,
 };
 
 use crate::offline_eval::*;
@@ -145,12 +146,13 @@ impl BeeMlService {
             let zipa_raw = raw_slice_for_normalized_range(
                 &utterance_zipa_raw,
                 &utterance_zipa_normalized_with_spans,
-                zipa_norm_range,
+                zipa_norm_range.clone(),
             );
             let transcript_similarity =
                 phoneme_similarity(&zipa_normalized, &transcript_normalized);
             let transcript_feature_similarity =
                 feature_similarity(&zipa_normalized, &transcript_normalized);
+            let span_alignment = align_token_sequences(&transcript_normalized, &zipa_normalized);
 
             let shortlist = query_index(
                 &self.inner.index,
@@ -214,11 +216,14 @@ impl BeeMlService {
                 token_end: span.token_end as u32,
                 start_sec: span.start_sec.unwrap_or(0.0),
                 end_sec: span.end_sec.unwrap_or(0.0),
+                zipa_norm_start: zipa_norm_range.start as u32,
+                zipa_norm_end: zipa_norm_range.end as u32,
                 zipa_raw,
                 zipa_normalized,
                 transcript_normalized,
                 transcript_similarity,
                 transcript_feature_similarity,
+                alignment: map_alignment_ops(&span_alignment.ops),
                 candidates,
             });
         }
@@ -241,6 +246,7 @@ impl BeeMlService {
             utterance_zipa_raw,
             utterance_zipa_normalized,
             utterance_transcript_normalized,
+            utterance_alignment: map_alignment_ops(&utterance_alignment.ops),
             spans: phonetic_spans,
         })
     }
@@ -900,11 +906,7 @@ impl BeeMlService {
                     min_prob = min_prob.min(prob);
                 }
             }
-            if min_prob == f32::MAX {
-                0.0
-            } else {
-                min_prob
-            }
+            if min_prob == f32::MAX { 0.0 } else { min_prob }
         };
 
         // Log judge scores for the first few cases to debug
@@ -1114,4 +1116,22 @@ fn best_delta(candidates: &[TranscribePhoneticCandidate]) -> f32 {
         .iter()
         .filter_map(|candidate| candidate.similarity_delta)
         .fold(f32::NEG_INFINITY, f32::max)
+}
+
+fn map_alignment_ops(ops: &[AlignmentOp]) -> Vec<TranscribePhoneticAlignmentOp> {
+    ops.iter()
+        .map(|op| TranscribePhoneticAlignmentOp {
+            kind: match op.kind {
+                AlignmentOpKind::Match => TranscribePhoneticAlignmentKind::Match,
+                AlignmentOpKind::Substitute => TranscribePhoneticAlignmentKind::Substitute,
+                AlignmentOpKind::Insert => TranscribePhoneticAlignmentKind::Insert,
+                AlignmentOpKind::Delete => TranscribePhoneticAlignmentKind::Delete,
+            },
+            transcript_index: op.left_index,
+            zipa_index: op.right_index,
+            transcript_token: op.left_token.clone(),
+            zipa_token: op.right_token.clone(),
+            cost: op.cost,
+        })
+        .collect()
 }
