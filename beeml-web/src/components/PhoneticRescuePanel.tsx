@@ -146,6 +146,7 @@ function SpanCard({ span }: { span: PhoneticRescueSpan }) {
           ZIPA {span.zipaNormStart}:{span.zipaNormEnd}
         </span>
         <span className="mini-badge">{span.alignmentSource}</span>
+        <span className="mini-badge">{span.anchorConfidence.toLowerCase()}</span>
         <span className="failure-score">
           base {formatMetric(span.transcriptFeatureSimilarity)}
         </span>

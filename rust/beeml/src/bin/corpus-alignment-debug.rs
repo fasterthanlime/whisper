@@ -1,4 +1,6 @@
 use std::env;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -27,11 +29,16 @@ fn main() -> Result<()> {
     let limit = parse_flag_u32("--limit").unwrap_or(20);
     let show = parse_flag_u32("--show").unwrap_or(8);
     let bucket = parse_flag_string("--bucket");
+    let snapshot_out = parse_flag_string("--snapshot-out");
 
     let service = load_service()?;
     let result = service
         .eval_corpus_alignment(limit as usize, bucket.as_deref())
         .map_err(|error| anyhow::anyhow!("running corpus alignment eval: {error}"))?;
+
+    if let Some(path) = snapshot_out.as_deref() {
+        write_snapshot_jsonl(path, &result.rows)?;
+    }
 
     println!("rows: {}", result.rows.len());
     for summary in &result.bucket_summaries {
@@ -76,8 +83,9 @@ fn main() -> Result<()> {
             if let Some(span) = worst_span(trace) {
                 println!("worst span: {:?}", span.span_text);
                 println!(
-                    "alignment source={} phones {}->{} proj={} chosen={} second={} gap={}",
+                    "alignment source={} confidence={} phones {}->{} proj={} chosen={} second={} gap={}",
                     span.alignment_source,
+                    format_confidence(&span.anchor_confidence),
                     span.transcript_phone_count,
                     span.chosen_zipa_phone_count,
                     fmt(span.projected_alignment_score),
@@ -158,6 +166,68 @@ fn fmt(value: Option<f32>) -> String {
     value
         .map(|v| format!("{v:.4}"))
         .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn format_confidence(value: &beeml::rpc::TranscribePhoneticAnchorConfidence) -> &'static str {
+    match value {
+        beeml::rpc::TranscribePhoneticAnchorConfidence::Low => "low",
+        beeml::rpc::TranscribePhoneticAnchorConfidence::Medium => "medium",
+        beeml::rpc::TranscribePhoneticAnchorConfidence::High => "high",
+    }
+}
+
+#[derive(facet::Facet)]
+struct SnapshotRow {
+    ordinal: u32,
+    bucket: String,
+    prompt_id: String,
+    term: String,
+    prompt_text: String,
+    utterance_feature_similarity: Option<f32>,
+    utterance_similarity: Option<f32>,
+    positive_span_count: u32,
+    worst_span_text: Option<String>,
+    alignment_source: Option<String>,
+    anchor_confidence: Option<String>,
+    transcript_phone_count: Option<u32>,
+    chosen_zipa_phone_count: Option<u32>,
+    projected_alignment_score: Option<f32>,
+    chosen_alignment_score: Option<f32>,
+    second_best_alignment_score: Option<f32>,
+    alignment_score_gap: Option<f32>,
+}
+
+fn write_snapshot_jsonl(path: &str, rows: &[beeml::rpc::CorpusAlignmentEvalRow]) -> Result<()> {
+    let file = File::create(path).with_context(|| format!("creating snapshot file {path}"))?;
+    let mut writer = BufWriter::new(file);
+    for row in rows {
+        let worst_span = row.trace.as_ref().and_then(worst_span);
+        let snapshot = SnapshotRow {
+            ordinal: row.ordinal,
+            bucket: row.bucket.clone(),
+            prompt_id: row.prompt_id.clone(),
+            term: row.term.clone(),
+            prompt_text: row.prompt_text.clone(),
+            utterance_feature_similarity: row.utterance_feature_similarity,
+            utterance_similarity: row.utterance_similarity,
+            positive_span_count: row.positive_span_count,
+            worst_span_text: worst_span.map(|span| span.span_text.clone()),
+            alignment_source: worst_span.map(|span| span.alignment_source.clone()),
+            anchor_confidence: worst_span
+                .map(|span| format_confidence(&span.anchor_confidence).to_string()),
+            transcript_phone_count: worst_span.map(|span| span.transcript_phone_count),
+            chosen_zipa_phone_count: worst_span.map(|span| span.chosen_zipa_phone_count),
+            projected_alignment_score: worst_span.and_then(|span| span.projected_alignment_score),
+            chosen_alignment_score: worst_span.and_then(|span| span.chosen_alignment_score),
+            second_best_alignment_score: worst_span
+                .and_then(|span| span.second_best_alignment_score),
+            alignment_score_gap: worst_span.and_then(|span| span.alignment_score_gap),
+        };
+        let json = facet_json::to_string(&snapshot).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        writer.write_all(json.as_bytes())?;
+        writer.write_all(b"\n")?;
+    }
+    Ok(())
 }
 
 fn print_ops(

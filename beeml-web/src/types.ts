@@ -104,6 +104,7 @@ export type PhoneticRescueCandidate = {
 };
 
 export type PhoneticAlignmentKind = "Match" | "Substitute" | "Insert" | "Delete";
+export type PhoneticAnchorConfidence = "Low" | "Medium" | "High";
 
 export type PhoneticAlignmentOp = {
   kind: PhoneticAlignmentKind;
@@ -134,6 +135,7 @@ export type PhoneticRescueSpan = {
   secondBestAlignmentScore?: number | null;
   alignmentScoreGap?: number | null;
   alignmentSource: string;
+  anchorConfidence: PhoneticAnchorConfidence;
   alignment: PhoneticAlignmentOp[];
   candidates: PhoneticRescueCandidate[];
 };

@@ -23,8 +23,9 @@ use beeml::rpc::{
     PhoneticComparisonRow, PhoneticComparisonSummary, RapidFireChoice, RetrievalCandidateDebug,
     RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
     SpanDebugTrace, SpanDebugView, TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
-    TranscribePhoneticAlignmentKind, TranscribePhoneticAlignmentOp, TranscribePhoneticCandidate,
-    TranscribePhoneticSpan, TranscribePhoneticTrace,
+    TranscribePhoneticAlignmentKind, TranscribePhoneticAlignmentOp,
+    TranscribePhoneticAnchorConfidence, TranscribePhoneticCandidate, TranscribePhoneticSpan,
+    TranscribePhoneticTrace,
 };
 
 use crate::offline_eval::*;
@@ -268,6 +269,13 @@ impl BeeMlService {
                 second_best_alignment_score: selection.second_best_alignment_score,
                 alignment_score_gap: selection.alignment_score_gap,
                 alignment_source: selection.alignment_source.to_string(),
+                anchor_confidence: anchor_confidence(
+                    selection.projected_alignment_score,
+                    selection.chosen_alignment_score,
+                    selection.alignment_score_gap,
+                    transcript_token_count,
+                    zipa_token_count,
+                ),
                 alignment: map_alignment_ops(&selection.alignment.ops),
                 candidates,
             });
@@ -1509,6 +1517,32 @@ fn alignment_quality_score(ops: &[AlignmentOp], left_len: usize, right_len: usiz
     let compression_penalty =
         (left_len.saturating_sub(right_len) as f32 / left_len.max(1) as f32).max(0.0) * 0.35;
     (1.0 - (total_cost / denom) - compression_penalty).clamp(0.0, 1.0)
+}
+
+fn anchor_confidence(
+    projected: Option<f32>,
+    chosen: f32,
+    gap: Option<f32>,
+    transcript_phone_count: u32,
+    chosen_zipa_phone_count: u32,
+) -> TranscribePhoneticAnchorConfidence {
+    let projected_delta = projected.map(|score| chosen - score).unwrap_or(0.0);
+    let gap = gap.unwrap_or(0.0);
+    let compression_ratio = if transcript_phone_count == 0 {
+        0.0
+    } else {
+        chosen_zipa_phone_count as f32 / transcript_phone_count as f32
+    };
+    let sane_length = (0.75..=1.35).contains(&compression_ratio);
+    let somewhat_sane_length = (0.5..=1.75).contains(&compression_ratio);
+
+    if projected_delta >= 0.06 && gap >= 0.08 && sane_length {
+        TranscribePhoneticAnchorConfidence::High
+    } else if projected_delta >= 0.02 && gap >= 0.02 && somewhat_sane_length {
+        TranscribePhoneticAnchorConfidence::Medium
+    } else {
+        TranscribePhoneticAnchorConfidence::Low
+    }
 }
 
 fn best_delta(candidates: &[TranscribePhoneticCandidate]) -> f32 {
