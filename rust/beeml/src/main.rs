@@ -111,6 +111,13 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join("bearcove/bee/data/phonetic-seed/audio-wav")
         });
+    let corpus_dir = env::var("BEE_ZIPA_CORPUS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("bearcove/bee/data/zipa-corpus")
+        });
 
     let mut judge = OnlineJudge::default();
     // Replay correction events from previous sessions
@@ -146,6 +153,7 @@ async fn main() -> Result<()> {
             ),
             zipa: Mutex::new(zipa),
             zipa_wav_dir,
+            corpus_dir,
             judge: Mutex::new(judge),
             event_log_path,
         }),

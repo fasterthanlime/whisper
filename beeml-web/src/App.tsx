@@ -7,12 +7,13 @@ import { TranscribeDemoPanel } from "./components/TranscribeDemoPanel";
 import { OfflineJudgeEvalPanel } from "./components/OfflineJudgeEvalPanel";
 import { CorrectionReviewPanel } from "./components/CorrectionReviewPanel";
 import { PhoneticComparisonPanel } from "./components/PhoneticComparisonPanel";
+import { CorpusCapturePanel } from "./components/CorpusCapturePanel";
 
 const WS_URL = "ws://127.0.0.1:9944";
 
 export default function App() {
   const [tab, setTab] = useState<
-    "transcribe" | "retrieval" | "rapid-fire" | "judge-eval" | "offline-eval" | "correction-ui" | "phonetics"
+    "transcribe" | "retrieval" | "rapid-fire" | "judge-eval" | "offline-eval" | "correction-ui" | "phonetics" | "corpus"
   >("correction-ui");
 
   return (
@@ -76,12 +77,22 @@ export default function App() {
           >
             Transcribe
           </button>
+          <button
+            role="tab"
+            aria-selected={tab === "corpus"}
+            className={tab === "corpus" ? "primary" : ""}
+            onClick={() => setTab("corpus")}
+          >
+            Corpus
+          </button>
         </div>
       </header>
       <main className="app-main">
         <div className="app-page">
           {tab === "transcribe" ? (
             <TranscribeDemoPanel wsUrl={WS_URL} />
+          ) : tab === "corpus" ? (
+            <CorpusCapturePanel wsUrl={WS_URL} />
           ) : tab === "correction-ui" ? (
             <CorrectionReviewPanel />
           ) : tab === "rapid-fire" ? (

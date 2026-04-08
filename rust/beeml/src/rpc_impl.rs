@@ -4,16 +4,16 @@ use bee_transcribe::SessionOptions;
 use bee_zipa_mlx::audio::AudioBuffer;
 use beeml::judge::OnlineJudge;
 use beeml::rpc::{
-    AcceptedEdit, BeeMl, CorrectionDebugResult, CorrectionRequest, CorrectionResult,
-    JudgeEvalFailure, ModelSummary, OfflineJudgeEvalRequest, OfflineJudgeEvalResult,
-    PhoneticComparisonRequest, PhoneticComparisonResult, ProbDistribution, RerankerDebugTrace,
-    RetrievalEvalMiss, RetrievalEvalTermSummary, RetrievalPrototypeEvalProgress,
-    RetrievalPrototypeEvalRequest, RetrievalPrototypeEvalResult, RetrievalPrototypeProbeRequest,
-    RetrievalPrototypeProbeResult, RetrievalPrototypeTeachingCase,
+    AcceptedEdit, BeeMl, CorpusCapturePlanResult, CorrectionDebugResult, CorrectionRequest,
+    CorrectionResult, JudgeEvalFailure, ModelSummary, OfflineJudgeEvalRequest,
+    OfflineJudgeEvalResult, PhoneticComparisonRequest, PhoneticComparisonResult, ProbDistribution,
+    RerankerDebugTrace, RetrievalEvalMiss, RetrievalEvalTermSummary,
+    RetrievalPrototypeEvalProgress, RetrievalPrototypeEvalRequest, RetrievalPrototypeEvalResult,
+    RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult, RetrievalPrototypeTeachingCase,
     RetrievalPrototypeTeachingDeckRequest, RetrievalPrototypeTeachingDeckResult,
-    TeachRetrievalPrototypeJudgeRequest, TermAliasView, TermInspectionRequest,
-    TermInspectionResult, ThresholdRow, TimingBreakdown, TranscribeWavResult, TwoStageGridPoint,
-    TwoStageResult,
+    SaveCorpusRecordingRequest, SaveCorpusRecordingResult, TeachRetrievalPrototypeJudgeRequest,
+    TermAliasView, TermInspectionRequest, TermInspectionResult, ThresholdRow, TimingBreakdown,
+    TranscribeWavResult, TwoStageGridPoint, TwoStageResult,
 };
 use tracing::info;
 use vox::{Rx, Tx};
@@ -1621,5 +1621,32 @@ impl BeeMl for BeeMlService {
         request: PhoneticComparisonRequest,
     ) -> Result<PhoneticComparisonResult, String> {
         self.run_phonetic_comparison(request)
+    }
+
+    async fn get_corpus_capture_plan(&self) -> Result<CorpusCapturePlanResult, String> {
+        let prompts = self.corpus_capture_prompts();
+        let recordings =
+            load_corpus_recordings(&self.inner.corpus_dir).map_err(|e| e.to_string())?;
+        Ok(CorpusCapturePlanResult {
+            corpus_dir: self.inner.corpus_dir.display().to_string(),
+            prompts,
+            recordings,
+        })
+    }
+
+    async fn save_corpus_recording(
+        &self,
+        request: SaveCorpusRecordingRequest,
+    ) -> Result<SaveCorpusRecordingResult, String> {
+        let recording =
+            save_corpus_recording(&self.inner.corpus_dir, &request).map_err(|e| e.to_string())?;
+        let total_recordings = load_corpus_recordings(&self.inner.corpus_dir)
+            .map_err(|e| e.to_string())?
+            .len()
+            .min(u32::MAX as usize) as u32;
+        Ok(SaveCorpusRecordingResult {
+            recording,
+            total_recordings,
+        })
     }
 }
