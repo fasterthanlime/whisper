@@ -56,6 +56,17 @@ pub enum TranscribePhoneticSpanUsefulness {
 }
 
 #[derive(Clone, Debug, Facet)]
+#[repr(u8)]
+pub enum TranscribePhoneticSpanClass {
+    Repeat,
+    ShortCodeTerm,
+    VowelHeavy,
+    ProperNoun,
+    FunctionWord,
+    Ordinary,
+}
+
+#[derive(Clone, Debug, Facet)]
 pub struct TranscribePhoneticSpan {
     pub span_text: String,
     pub token_start: u32,
@@ -78,6 +89,7 @@ pub struct TranscribePhoneticSpan {
     pub alignment_source: String,
     pub anchor_confidence: TranscribePhoneticAnchorConfidence,
     pub span_usefulness: TranscribePhoneticSpanUsefulness,
+    pub span_class: TranscribePhoneticSpanClass,
     pub zipa_rescue_eligible: bool,
     pub alignment: Vec<TranscribePhoneticAlignmentOp>,
     pub candidates: Vec<TranscribePhoneticCandidate>,
