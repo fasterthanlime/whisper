@@ -154,6 +154,8 @@ async fn main() -> Result<()> {
             zipa: Mutex::new(zipa),
             zipa_wav_dir,
             corpus_dir,
+            corpus_eval_jobs: Mutex::new(std::collections::HashMap::new()),
+            next_corpus_eval_job_id: std::sync::atomic::AtomicU64::new(1),
             judge: Mutex::new(judge),
             event_log_path,
         }),

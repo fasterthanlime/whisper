@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { connectBeeMl } from "../beeml.generated";
 import type {
+  CorpusAlignmentEvalJob,
   CorpusAlignmentEvalResult,
   CorpusAlignmentEvalRow,
   TranscribePhoneticTrace as RpcTranscribePhoneticTrace,
@@ -108,26 +109,64 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CorpusAlignmentEvalResult | null>(null);
+  const [job, setJob] = useState<CorpusAlignmentEvalJob | null>(null);
   const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
 
   const runEval = useCallback(async () => {
     try {
-      setStatus("Running corpus alignment eval...");
+      setStatus("Starting corpus alignment eval...");
       setError(null);
+      setResult(null);
       const client = await connectBeeMl(wsUrl);
-      const response = await client.runCorpusAlignmentEval({
+      const response = await client.startCorpusAlignmentEvalJob({
         limit,
         bucket: bucket.trim() ? bucket.trim() : null,
       });
       if (!response.ok) throw new Error(response.error);
-      setResult(response.value);
-      setSelectedPromptId(response.value.rows[0]?.prompt_id ?? null);
-      setStatus(null);
+      setJob(response.value);
+      setStatus("Corpus alignment eval running...");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setStatus(null);
     }
   }, [bucket, limit, wsUrl]);
+
+  useEffect(() => {
+    if (!job || job.status.tag !== "Running") return;
+    let cancelled = false;
+    const interval = window.setInterval(() => {
+      void (async () => {
+        try {
+          const client = await connectBeeMl(wsUrl);
+          const response = await client.getCorpusAlignmentEvalJob(job.job_id);
+          if (!response.ok) throw new Error(response.error);
+          if (cancelled) return;
+          setJob(response.value);
+          if (response.value.status.tag === "Completed") {
+            setResult(response.value.result);
+            setSelectedPromptId(response.value.result?.rows[0]?.prompt_id ?? null);
+            setStatus(null);
+          } else if (response.value.status.tag === "Failed") {
+            setError(response.value.error ?? "Corpus eval failed.");
+            setStatus(null);
+          } else {
+            setStatus(
+              `Corpus alignment eval running... ${response.value.completed_rows}/${response.value.total_rows}`,
+            );
+          }
+        } catch (e) {
+          if (!cancelled) {
+            setError(e instanceof Error ? e.message : String(e));
+            setStatus(null);
+          }
+        }
+      })();
+    }, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [job, wsUrl]);
 
   const selectedRow = useMemo(() => {
     if (!result) return null;
@@ -181,7 +220,7 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
           </div>
           <div className="control-actions">
             <button className="primary" onClick={() => void runEval()}>
-              Run Eval
+              {job?.status.tag === "Running" ? "Re-run Eval" : "Start Eval"}
             </button>
           </div>
         </div>
@@ -192,6 +231,15 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
             {error ? <span className="error-pill">{error}</span> : null}
           </div>
         )}
+        {job ? (
+          <div className="prototype-summary">
+            <span>job {job.job_id}</span>
+            <span>status {job.status.tag.toLowerCase()}</span>
+            <span>
+              progress {job.completed_rows}/{job.total_rows}
+            </span>
+          </div>
+        ) : null}
       </section>
 
       {result ? (

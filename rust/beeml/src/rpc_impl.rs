@@ -4,10 +4,10 @@ use bee_transcribe::SessionOptions;
 use bee_zipa_mlx::audio::AudioBuffer;
 use beeml::judge::OnlineJudge;
 use beeml::rpc::{
-    AcceptedEdit, BeeMl, CorpusAlignmentEvalRequest, CorpusAlignmentEvalResult,
-    CorpusCapturePlanResult, CorrectionDebugResult, CorrectionRequest, CorrectionResult,
-    DeleteCorpusRecordingRequest, DeleteCorpusRecordingResult, JudgeEvalFailure, ModelSummary,
-    OfflineJudgeEvalRequest, OfflineJudgeEvalResult, PhoneticComparisonRequest,
+    AcceptedEdit, BeeMl, CorpusAlignmentEvalJob, CorpusAlignmentEvalRequest,
+    CorpusAlignmentEvalResult, CorpusCapturePlanResult, CorrectionDebugResult, CorrectionRequest,
+    CorrectionResult, DeleteCorpusRecordingRequest, DeleteCorpusRecordingResult, JudgeEvalFailure,
+    ModelSummary, OfflineJudgeEvalRequest, OfflineJudgeEvalResult, PhoneticComparisonRequest,
     PhoneticComparisonResult, ProbDistribution, RerankerDebugTrace, RetrievalEvalMiss,
     RetrievalEvalTermSummary, RetrievalPrototypeEvalProgress, RetrievalPrototypeEvalRequest,
     RetrievalPrototypeEvalResult, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
@@ -1686,5 +1686,28 @@ impl BeeMl for BeeMlService {
                 .as_deref()
                 .filter(|bucket| !bucket.is_empty()),
         )
+    }
+
+    async fn start_corpus_alignment_eval_job(
+        &self,
+        request: CorpusAlignmentEvalRequest,
+    ) -> Result<CorpusAlignmentEvalJob, String> {
+        let limit = request.limit.max(1);
+        let bucket = request.bucket.filter(|bucket| !bucket.is_empty());
+        let job = self.create_corpus_eval_job(limit, bucket.clone())?;
+        let service = self.clone();
+        let job_id = job.job_id;
+        tokio::task::spawn_blocking(move || {
+            let result = service.eval_corpus_alignment(limit as usize, bucket.as_deref());
+            let _ = service.finish_corpus_eval_job(job_id, result);
+        });
+        Ok(job)
+    }
+
+    async fn get_corpus_alignment_eval_job(
+        &self,
+        job_id: u64,
+    ) -> Result<CorpusAlignmentEvalJob, String> {
+        self.get_corpus_eval_job(job_id)
     }
 }

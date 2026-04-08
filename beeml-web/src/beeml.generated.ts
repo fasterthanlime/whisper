@@ -694,6 +694,24 @@ export interface CorpusAlignmentEvalResult {
   bucket_summaries: CorpusAlignmentBucketSummary[];
 }
 
+export type CorpusAlignmentEvalJobStatus =
+  | { tag: 'Running' }
+  | { tag: 'Completed' }
+  | { tag: 'Failed' };
+
+export interface CorpusAlignmentEvalJob {
+  job_id: bigint;
+  status: CorpusAlignmentEvalJobStatus;
+  limit: number;
+  bucket: string | null;
+  completed_rows: number;
+  total_rows: number;
+  started_at_unix_ms: bigint;
+  finished_at_unix_ms: bigint | null;
+  result: CorpusAlignmentEvalResult | null;
+  error: string | null;
+}
+
 // Request/Response type aliases
 export type TranscribeWavRequest = [Uint8Array];
 export type TranscribeWavResponse = { ok: true; value: TranscribeWavResult } | { ok: false; error: string };
@@ -743,6 +761,12 @@ export type DeleteCorpusRecordingResponse = { ok: true; value: DeleteCorpusRecor
 export type RunCorpusAlignmentEvalRequest = [CorpusAlignmentEvalRequest];
 export type RunCorpusAlignmentEvalResponse = { ok: true; value: CorpusAlignmentEvalResult } | { ok: false; error: string };
 
+export type StartCorpusAlignmentEvalJobRequest = [CorpusAlignmentEvalRequest];
+export type StartCorpusAlignmentEvalJobResponse = { ok: true; value: CorpusAlignmentEvalJob } | { ok: false; error: string };
+
+export type GetCorpusAlignmentEvalJobRequest = [bigint];
+export type GetCorpusAlignmentEvalJobResponse = { ok: true; value: CorpusAlignmentEvalJob } | { ok: false; error: string };
+
 // Caller interface for BeeMl
 export interface BeeMlCaller {
   transcribeWav(wavBytes: Uint8Array): Promise<{ ok: true; value: TranscribeWavResult } | { ok: false; error: string }>;
@@ -761,6 +785,8 @@ export interface BeeMlCaller {
   saveCorpusRecording(request: SaveCorpusRecordingRequest): Promise<{ ok: true; value: SaveCorpusRecordingResult } | { ok: false; error: string }>;
   deleteCorpusRecording(request: DeleteCorpusRecordingRequest): Promise<{ ok: true; value: DeleteCorpusRecordingResult } | { ok: false; error: string }>;
   runCorpusAlignmentEval(request: CorpusAlignmentEvalRequest): Promise<{ ok: true; value: CorpusAlignmentEvalResult } | { ok: false; error: string }>;
+  startCorpusAlignmentEvalJob(request: CorpusAlignmentEvalRequest): Promise<{ ok: true; value: CorpusAlignmentEvalJob } | { ok: false; error: string }>;
+  getCorpusAlignmentEvalJob(jobId: bigint): Promise<{ ok: true; value: CorpusAlignmentEvalJob } | { ok: false; error: string }>;
 }
 
 // Client implementation for BeeMl
@@ -1089,6 +1115,44 @@ export class BeeMlClient implements BeeMlCaller {
       }
   }
 
+  async startCorpusAlignmentEvalJob(request: CorpusAlignmentEvalRequest): Promise<{ ok: true; value: CorpusAlignmentEvalJob } | { ok: false; error: string }> {
+    const descriptor = beeMl_startCorpusAlignmentEvalJob_method;
+    const sendSchemas = beeMl_descriptor.send_schemas;
+      try {
+        const value = await this.caller.call({
+          method: "BeeMl.startCorpusAlignmentEvalJob",
+          args: { request },
+          descriptor,
+          sendSchemas,
+        });
+        return { ok: true, value } as { ok: true; value: CorpusAlignmentEvalJob } | { ok: false; error: string };
+      } catch (e: any) {
+        if (e instanceof RpcError && e.isUserError()) {
+          return { ok: false, error: e.userError } as { ok: true; value: CorpusAlignmentEvalJob } | { ok: false; error: string };
+        }
+        throw e;
+      }
+  }
+
+  async getCorpusAlignmentEvalJob(jobId: bigint): Promise<{ ok: true; value: CorpusAlignmentEvalJob } | { ok: false; error: string }> {
+    const descriptor = beeMl_getCorpusAlignmentEvalJob_method;
+    const sendSchemas = beeMl_descriptor.send_schemas;
+      try {
+        const value = await this.caller.call({
+          method: "BeeMl.getCorpusAlignmentEvalJob",
+          args: { jobId },
+          descriptor,
+          sendSchemas,
+        });
+        return { ok: true, value } as { ok: true; value: CorpusAlignmentEvalJob } | { ok: false; error: string };
+      } catch (e: any) {
+        if (e instanceof RpcError && e.isUserError()) {
+          return { ok: false, error: e.userError } as { ok: true; value: CorpusAlignmentEvalJob } | { ok: false; error: string };
+        }
+        throw e;
+      }
+  }
+
 }
 
 /**
@@ -1121,6 +1185,8 @@ export interface BeeMlHandler {
   saveCorpusRecording(request: SaveCorpusRecordingRequest): Promise<{ ok: true; value: SaveCorpusRecordingResult } | { ok: false; error: string }> | { ok: true; value: SaveCorpusRecordingResult } | { ok: false; error: string };
   deleteCorpusRecording(request: DeleteCorpusRecordingRequest): Promise<{ ok: true; value: DeleteCorpusRecordingResult } | { ok: false; error: string }> | { ok: true; value: DeleteCorpusRecordingResult } | { ok: false; error: string };
   runCorpusAlignmentEval(request: CorpusAlignmentEvalRequest): Promise<{ ok: true; value: CorpusAlignmentEvalResult } | { ok: false; error: string }> | { ok: true; value: CorpusAlignmentEvalResult } | { ok: false; error: string };
+  startCorpusAlignmentEvalJob(request: CorpusAlignmentEvalRequest): Promise<{ ok: true; value: CorpusAlignmentEvalJob } | { ok: false; error: string }> | { ok: true; value: CorpusAlignmentEvalJob } | { ok: false; error: string };
+  getCorpusAlignmentEvalJob(jobId: bigint): Promise<{ ok: true; value: CorpusAlignmentEvalJob } | { ok: false; error: string }> | { ok: true; value: CorpusAlignmentEvalJob } | { ok: false; error: string };
 }
 
 // Dispatcher for BeeMl
@@ -1243,6 +1309,20 @@ export class BeeMlDispatcher implements Dispatcher {
       } catch (error) {
         call.replyInternalError(error instanceof Error ? error.message : String(error));
       }
+    } else if (method.id === 0x69aed616d9d95e46n) {
+      try {
+        const result = await this.handler.startCorpusAlignmentEvalJob(args[0] as CorpusAlignmentEvalRequest);
+        if (result.ok) call.reply(result.value); else call.replyErr(result.error);
+      } catch (error) {
+        call.replyInternalError(error instanceof Error ? error.message : String(error));
+      }
+    } else if (method.id === 0x3655a698db53a316n) {
+      try {
+        const result = await this.handler.getCorpusAlignmentEvalJob(args[0] as bigint);
+        if (result.ok) call.reply(result.value); else call.replyErr(result.error);
+      } catch (error) {
+        call.replyInternalError(error instanceof Error ? error.message : String(error));
+      }
     }
   }
 }
@@ -1343,6 +1423,8 @@ export const beeMl_send_schemas: import("@bearcove/vox-core").ServiceSendSchemas
     [0x8815971c399298a5n, { id: 0x8815971c399298a5n, type_params: [], kind: { tag: 'struct', name: 'CorpusAlignmentEvalRow', fields: [{ name: 'prompt_id', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'ordinal', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'bucket', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'prompt_text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'prompt_notes', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'take', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'wav_path', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'asr_transcript', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'utterance_similarity', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'utterance_feature_similarity', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'positive_span_count', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'worst_span_feature_similarity', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'best_span_delta', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'trace', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0xfd24248fcbef41e1n, args: [] }] }, required: true }, { name: 'error', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }] } }],
     [0x1d2bf4f34667291fn, { id: 0x1d2bf4f34667291fn, type_params: [], kind: { tag: 'struct', name: 'CorpusAlignmentBucketSummary', fields: [{ name: 'bucket', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'rows', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'utterance_feature_similarity_mean', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'utterance_similarity_mean', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }] } }],
     [0x8b9650763cc655a2n, { id: 0x8b9650763cc655a2n, type_params: [], kind: { tag: 'struct', name: 'CorpusAlignmentEvalResult', fields: [{ name: 'rows', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x8815971c399298a5n, args: [] }] }, required: true }, { name: 'bucket_summaries', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x1d2bf4f34667291fn, args: [] }] }, required: true }] } }],
+    [0xffc78a159481cde0n, { id: 0xffc78a159481cde0n, type_params: [], kind: { tag: 'enum', name: 'CorpusAlignmentEvalJobStatus', variants: [{ name: 'Running', index: 0, payload: { tag: 'unit' } }, { name: 'Completed', index: 1, payload: { tag: 'unit' } }, { name: 'Failed', index: 2, payload: { tag: 'unit' } }] } }],
+    [0x2f94c16a94fa2e27n, { id: 0x2f94c16a94fa2e27n, type_params: [], kind: { tag: 'struct', name: 'CorpusAlignmentEvalJob', fields: [{ name: 'job_id', type_ref: { tag: 'concrete', type_id: 0xd9356298b81639acn, args: [] }, required: true }, { name: 'status', type_ref: { tag: 'concrete', type_id: 0xffc78a159481cde0n, args: [] }, required: true }, { name: 'limit', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'bucket', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'completed_rows', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'total_rows', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'started_at_unix_ms', type_ref: { tag: 'concrete', type_id: 0xd9356298b81639acn, args: [] }, required: true }, { name: 'finished_at_unix_ms', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0xd9356298b81639acn, args: [] }] }, required: true }, { name: 'result', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8b9650763cc655a2n, args: [] }] }, required: true }, { name: 'error', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }] } }],
   ]),
   methods: new Map<bigint, import("@bearcove/vox-core").MethodSendSchemas>([
     [0x5769301e350ea60bn, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xba8125876d6388b4n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x289e96529e9d36d6n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
@@ -1360,6 +1442,8 @@ export const beeMl_send_schemas: import("@bearcove/vox-core").ServiceSendSchemas
     [0x060d562ca924dcaan, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xb0800cfe11c90d85n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xeb692072cf4d1711n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
     [0xfbf5689e5946633fn, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0x71b10668e555a562n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x1555daee5166d540n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
     [0x39dcd2b66d7d1384n, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xd26cf177cf8e74b7n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x8b9650763cc655a2n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
+    [0x69aed616d9d95e46n, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xd26cf177cf8e74b7n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x2f94c16a94fa2e27n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
+    [0x3655a698db53a316n, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xd9356298b81639acn, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x2f94c16a94fa2e27n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
   ]),
 };
 
@@ -1453,6 +1537,18 @@ export const beeMl_runCorpusAlignmentEval_method: MethodDescriptor = {
   retry: { persist: false, idem: false },
 };
 
+export const beeMl_startCorpusAlignmentEvalJob_method: MethodDescriptor = {
+  name: 'startCorpusAlignmentEvalJob',
+  id: 0x69aed616d9d95e46n,
+  retry: { persist: false, idem: false },
+};
+
+export const beeMl_getCorpusAlignmentEvalJob_method: MethodDescriptor = {
+  name: 'getCorpusAlignmentEvalJob',
+  id: 0x3655a698db53a316n,
+  retry: { persist: false, idem: false },
+};
+
 // Service descriptor for runtime dispatch metadata
 export const beeMl_descriptor: ServiceDescriptor = {
   service_name: 'BeeMl',
@@ -1473,6 +1569,8 @@ export const beeMl_descriptor: ServiceDescriptor = {
     [beeMl_saveCorpusRecording_method.id, beeMl_saveCorpusRecording_method],
     [beeMl_deleteCorpusRecording_method.id, beeMl_deleteCorpusRecording_method],
     [beeMl_runCorpusAlignmentEval_method.id, beeMl_runCorpusAlignmentEval_method],
+    [beeMl_startCorpusAlignmentEvalJob_method.id, beeMl_startCorpusAlignmentEvalJob_method],
+    [beeMl_getCorpusAlignmentEvalJob_method.id, beeMl_getCorpusAlignmentEvalJob_method],
   ]),
 };
 
