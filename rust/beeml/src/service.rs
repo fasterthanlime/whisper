@@ -25,7 +25,7 @@ use beeml::rpc::{
     SpanDebugTrace, SpanDebugView, TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
     TranscribePhoneticAlignmentKind, TranscribePhoneticAlignmentOp,
     TranscribePhoneticAnchorConfidence, TranscribePhoneticCandidate, TranscribePhoneticSpan,
-    TranscribePhoneticTrace,
+    TranscribePhoneticSpanUsefulness, TranscribePhoneticTrace,
 };
 
 use crate::offline_eval::*;
@@ -248,6 +248,26 @@ impl BeeMlService {
                     .unwrap_or(f32::NEG_INFINITY)
                     .total_cmp(&a.similarity_delta.unwrap_or(f32::NEG_INFINITY))
             });
+            let span_usefulness = span_usefulness(
+                &span.text,
+                transcript_token_count,
+                &selection.zipa_normalized,
+            );
+            let candidate_plausible = zipa_candidate_plausible(&candidates);
+            let anchor_confidence = anchor_confidence(
+                selection.projected_alignment_score,
+                selection.chosen_alignment_score,
+                selection.alignment_score_gap,
+                transcript_token_count,
+                zipa_token_count,
+            );
+            let zipa_rescue_eligible =
+                matches!(
+                    anchor_confidence,
+                    TranscribePhoneticAnchorConfidence::Medium
+                        | TranscribePhoneticAnchorConfidence::High
+                ) && !matches!(span_usefulness, TranscribePhoneticSpanUsefulness::Low)
+                    && candidate_plausible;
 
             phonetic_spans.push(TranscribePhoneticSpan {
                 span_text: span.text,
@@ -269,13 +289,9 @@ impl BeeMlService {
                 second_best_alignment_score: selection.second_best_alignment_score,
                 alignment_score_gap: selection.alignment_score_gap,
                 alignment_source: selection.alignment_source.to_string(),
-                anchor_confidence: anchor_confidence(
-                    selection.projected_alignment_score,
-                    selection.chosen_alignment_score,
-                    selection.alignment_score_gap,
-                    transcript_token_count,
-                    zipa_token_count,
-                ),
+                anchor_confidence,
+                span_usefulness,
+                zipa_rescue_eligible,
                 alignment: map_alignment_ops(&selection.alignment.ops),
                 candidates,
             });
@@ -1543,6 +1559,68 @@ fn anchor_confidence(
     } else {
         TranscribePhoneticAnchorConfidence::Low
     }
+}
+
+fn span_usefulness(
+    span_text: &str,
+    transcript_phone_count: u32,
+    zipa_normalized: &[String],
+) -> TranscribePhoneticSpanUsefulness {
+    let normalized_text = span_text
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || ch.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let word_count = normalized_text
+        .split_whitespace()
+        .filter(|part| !part.is_empty())
+        .count();
+    let low_content = matches!(
+        normalized_text.trim(),
+        "a" | "an"
+            | "the"
+            | "and"
+            | "or"
+            | "but"
+            | "uh"
+            | "um"
+            | "oh"
+            | "so"
+            | "well"
+            | "actually"
+            | "like"
+            | "not"
+            | "is"
+            | "was"
+            | "were"
+            | "to"
+            | "of"
+            | "in"
+            | "on"
+            | "for"
+            | "it"
+    );
+    let vowel_onlyish = zipa_normalized.iter().all(|token| {
+        matches!(
+            token.as_str(),
+            "a" | "ɑ" | "ɔ" | "ɛ" | "ə" | "ɪ" | "ʊ" | "i" | "u"
+        )
+    });
+
+    if low_content || transcript_phone_count <= 2 || (word_count == 1 && vowel_onlyish) {
+        TranscribePhoneticSpanUsefulness::Low
+    } else if transcript_phone_count >= 5 || word_count >= 2 {
+        TranscribePhoneticSpanUsefulness::High
+    } else {
+        TranscribePhoneticSpanUsefulness::Medium
+    }
+}
+
+fn zipa_candidate_plausible(candidates: &[TranscribePhoneticCandidate]) -> bool {
+    candidates.iter().any(|candidate| {
+        candidate.similarity_delta.unwrap_or(0.0) >= 0.04
+            && candidate.feature_similarity.unwrap_or(0.0) >= 0.5
+    })
 }
 
 fn best_delta(candidates: &[TranscribePhoneticCandidate]) -> f32 {

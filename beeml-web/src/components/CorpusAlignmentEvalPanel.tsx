@@ -54,6 +54,8 @@ function toPhoneticTrace(trace: RpcTranscribePhoneticTrace): PhoneticRescueTrace
       alignmentScoreGap: span.alignment_score_gap,
       alignmentSource: span.alignment_source,
       anchorConfidence: span.anchor_confidence.tag,
+      spanUsefulness: span.span_usefulness.tag,
+      zipaRescueEligible: span.zipa_rescue_eligible,
       alignment: span.alignment.map((op) => ({
         kind: op.kind.tag,
         transcriptIndex: op.transcript_index,
