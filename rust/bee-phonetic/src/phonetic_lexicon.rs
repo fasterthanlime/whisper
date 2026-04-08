@@ -377,21 +377,18 @@ pub fn normalize_ipa_for_comparison(tokens: &[String]) -> Vec<String> {
             }
             "ɪə" => {
                 out.push("ɪ".to_string());
-                out.push("ə".to_string());
             }
             "eə" => {
                 out.push("ɛ".to_string());
-                out.push("ə".to_string());
             }
             "ʊə" => {
                 out.push("ʊ".to_string());
-                out.push("ə".to_string());
             }
             _ => out.push(normalize_vowel_family(token)),
         }
         index += 1;
     }
-    out
+    normalize_vowel_sequences(out)
 }
 
 fn is_vowel_like(token: &str) -> bool {
@@ -432,6 +429,34 @@ fn normalize_vowel_family(token: &str) -> String {
         "u" | "ʊ" | "ɯ" | "ʉ" => "ʊ".to_string(),
         _ => token.to_string(),
     }
+}
+
+fn normalize_vowel_sequences(tokens: Vec<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut index = 0usize;
+    while index < tokens.len() {
+        let token = tokens[index].as_str();
+        let next = tokens.get(index + 1).map(String::as_str);
+        let next_next = tokens.get(index + 2).map(String::as_str);
+        match (token, next) {
+            ("ɛ", Some("ə")) | ("ɪ", Some("ə")) | ("ʊ", Some("ə"))
+                if next_next.is_none_or(|token| !is_vowel_like(token)) =>
+            {
+                out.push(token.to_string());
+                index += 2;
+            }
+            ("ɔ", Some("ʊ")) => {
+                out.push("ə".to_string());
+                out.push("ʊ".to_string());
+                index += 2;
+            }
+            _ => {
+                out.push(tokens[index].clone());
+                index += 1;
+            }
+        }
+    }
+    out
 }
 
 pub fn derive_identifier_flags(text: &str) -> IdentifierFlags {
@@ -699,6 +724,43 @@ mod tests {
         assert_eq!(
             normalize_ipa_for_comparison(&["ɚ".to_string(), "ɑ".to_string()]),
             vec!["ə", "ɑ"]
+        );
+    }
+
+    #[test]
+    fn normalize_ipa_for_comparison_collapses_centering_diphthongs() {
+        assert_eq!(
+            normalize_ipa_for_comparison(&[
+                "eə".to_string(),
+                "ɪə".to_string(),
+                "ʊə".to_string(),
+            ]),
+            vec!["ɛ", "ɪ", "ʊ"]
+        );
+        assert_eq!(
+            normalize_ipa_for_comparison(&[
+                "ɛ".to_string(),
+                "ə".to_string(),
+                "k".to_string(),
+                "ɪ".to_string(),
+                "ə".to_string(),
+                "t".to_string(),
+                "ʊ".to_string(),
+                "ə".to_string(),
+            ]),
+            vec!["ɛ", "k", "ɪ", "t", "ʊ"]
+        );
+    }
+
+    #[test]
+    fn normalize_ipa_for_comparison_canonicalizes_o_u_glide_sequences() {
+        assert_eq!(
+            normalize_ipa_for_comparison(&["o".to_string(), "ʊ".to_string()]),
+            vec!["ə", "ʊ"]
+        );
+        assert_eq!(
+            normalize_ipa_for_comparison(&["ɔ".to_string(), "ʊ".to_string()]),
+            vec!["ə", "ʊ"]
         );
     }
 }
