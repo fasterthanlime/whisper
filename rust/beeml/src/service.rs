@@ -1,44 +1,70 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use bee_phonetic::{
+    enumerate_transcript_spans_with, query_index, score_shortlist, PhoneticIndex, RetrievalQuery,
+    SeedDataset, TranscriptAlignmentToken, TranscriptSpan,
+};
+use bee_transcribe::{AlignedWord, Engine};
+use beeml::g2p::CachedEspeakG2p;
+use beeml::judge::{extract_span_context, OnlineJudge};
+use beeml::rpc::{
+    AliasSource, CandidateFeatureDebug, FilterDecision, IdentifierFlags,
+    JudgeOptionDebug, JudgeStateDebug, RapidFireChoice, RejectedGroupSpan,
+    RetrievalCandidateDebug, RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest,
+    RetrievalPrototypeProbeResult, SpanDebugTrace, SpanDebugView,
+    TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
+};
+use serde::Deserialize;
+use tracing::info;
+
+use crate::offline_eval::*;
+use crate::rapid_fire::build_rapid_fire_decision_set;
+use crate::util::*;
+
 #[derive(Clone)]
-struct BeeMlService {
-    inner: Arc<BeemlServiceInner>,
+pub(crate) struct BeeMlService {
+    pub(crate) inner: Arc<BeemlServiceInner>,
 }
 
-struct BeemlServiceInner {
-    engine: Engine,
-    index: PhoneticIndex,
-    dataset: SeedDataset,
-    counterexamples: Vec<CounterexampleRecordingRow>,
-    g2p: Mutex<CachedEspeakG2p>,
-    judge: Mutex<OnlineJudge>,
-    event_log_path: std::path::PathBuf,
+pub(crate) struct BeemlServiceInner {
+    pub(crate) engine: Engine,
+    pub(crate) index: PhoneticIndex,
+    pub(crate) dataset: SeedDataset,
+    pub(crate) counterexamples: Vec<CounterexampleRecordingRow>,
+    pub(crate) g2p: Mutex<CachedEspeakG2p>,
+    pub(crate) judge: Mutex<OnlineJudge>,
+    pub(crate) event_log_path: PathBuf,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct CounterexampleRecordingRow {
-    term: String,
-    text: String,
-    take: i64,
-    audio_path: String,
-    transcript: String,
-    surface_form: String,
+pub(crate) struct CounterexampleRecordingRow {
+    pub(crate) term: String,
+    pub(crate) text: String,
+    pub(crate) take: i64,
+    pub(crate) audio_path: String,
+    pub(crate) transcript: String,
+    pub(crate) surface_form: String,
 }
 
 #[derive(Clone)]
-struct EvalCase {
-    case_id: String,
-    suite: &'static str,
-    target_term: String,
-    source_text: String,
-    transcript: String,
-    should_abstain: bool,
-    take: Option<i64>,
-    audio_path: Option<String>,
-    surface_form: Option<String>,
-    words: Vec<AlignedWord>,
+pub(crate) struct EvalCase {
+    pub(crate) case_id: String,
+    pub(crate) suite: &'static str,
+    pub(crate) target_term: String,
+    pub(crate) source_text: String,
+    pub(crate) transcript: String,
+    pub(crate) should_abstain: bool,
+    pub(crate) take: Option<i64>,
+    pub(crate) audio_path: Option<String>,
+    pub(crate) surface_form: Option<String>,
+    pub(crate) words: Vec<AlignedWord>,
 }
 
 impl BeeMlService {
-    fn run_probe(
+    pub(crate) fn run_probe(
         &self,
         request: RetrievalPrototypeProbeRequest,
         teach: Option<TeachRetrievalPrototypeJudgeRequest>,
@@ -320,7 +346,7 @@ impl BeeMlService {
         })
     }
 
-    fn teaching_cases(&self, limit: usize, include_counterexamples: bool) -> Vec<EvalCase> {
+    pub(crate) fn teaching_cases(&self, limit: usize, include_counterexamples: bool) -> Vec<EvalCase> {
         let mut cases = self
             .inner
             .dataset
@@ -389,7 +415,7 @@ impl BeeMlService {
 
     /// Extract spans + candidates for a case without involving the judge.
     /// Used by offline eval to separate feature extraction from judge training.
-    fn probe_case_spans(
+    pub(crate) fn probe_case_spans(
         &self,
         case: &EvalCase,
         max_span_words: u8,
@@ -476,7 +502,7 @@ impl BeeMlService {
         })
     }
 
-    fn evaluate_case(
+    pub(crate) fn evaluate_case(
         &self,
         case: &EvalCase,
         request: &RetrievalPrototypeEvalRequest,

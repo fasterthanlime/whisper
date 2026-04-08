@@ -1,4 +1,14 @@
-fn randomish_case_key(case: &EvalCase, seed: u64) -> u64 {
+use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use beeml::rpc::{
+    AliasSource, CandidateFeatureDebug, IdentifierFlags, RetrievalIndexView,
+};
+
+use crate::service::{CounterexampleRecordingRow, EvalCase};
+
+pub(crate) fn randomish_case_key(case: &EvalCase, seed: u64) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     seed.hash(&mut hasher);
     case.case_id.hash(&mut hasher);
@@ -7,7 +17,7 @@ fn randomish_case_key(case: &EvalCase, seed: u64) -> u64 {
     hasher.finish()
 }
 
-fn load_correction_events(
+pub(crate) fn load_correction_events(
     path: &std::path::Path,
 ) -> anyhow::Result<Vec<beeml::judge::CorrectionEvent>> {
     use std::io::BufRead;
@@ -31,7 +41,7 @@ fn load_correction_events(
     Ok(events)
 }
 
-fn save_correction_events(
+pub(crate) fn save_correction_events(
     path: &std::path::Path,
     events: &[beeml::judge::CorrectionEvent],
 ) -> anyhow::Result<()> {
@@ -49,7 +59,7 @@ fn save_correction_events(
     Ok(())
 }
 
-fn map_alias_source(source: bee_phonetic::AliasSource) -> AliasSource {
+pub(crate) fn map_alias_source(source: bee_phonetic::AliasSource) -> AliasSource {
     match source {
         bee_phonetic::AliasSource::Canonical => AliasSource::Canonical,
         bee_phonetic::AliasSource::Spoken => AliasSource::Spoken,
@@ -58,7 +68,7 @@ fn map_alias_source(source: bee_phonetic::AliasSource) -> AliasSource {
     }
 }
 
-fn map_index_view(view: bee_phonetic::IndexView) -> RetrievalIndexView {
+pub(crate) fn map_index_view(view: bee_phonetic::IndexView) -> RetrievalIndexView {
     match view {
         bee_phonetic::IndexView::RawIpa2 => RetrievalIndexView::RawIpa2,
         bee_phonetic::IndexView::RawIpa3 => RetrievalIndexView::RawIpa3,
@@ -70,7 +80,7 @@ fn map_index_view(view: bee_phonetic::IndexView) -> RetrievalIndexView {
     }
 }
 
-fn map_candidate_features(candidate: &bee_phonetic::CandidateFeatureRow) -> CandidateFeatureDebug {
+pub(crate) fn map_candidate_features(candidate: &bee_phonetic::CandidateFeatureRow) -> CandidateFeatureDebug {
     CandidateFeatureDebug {
         matched_view: map_index_view(candidate.matched_view),
         qgram_overlap: candidate.qgram_overlap,
@@ -111,7 +121,7 @@ fn map_candidate_features(candidate: &bee_phonetic::CandidateFeatureRow) -> Cand
     }
 }
 
-fn map_identifier_flags(flags: &bee_phonetic::IdentifierFlags) -> IdentifierFlags {
+pub(crate) fn map_identifier_flags(flags: &bee_phonetic::IdentifierFlags) -> IdentifierFlags {
     IdentifierFlags {
         acronym_like: flags.acronym_like,
         has_digits: flags.has_digits,
@@ -121,7 +131,7 @@ fn map_identifier_flags(flags: &bee_phonetic::IdentifierFlags) -> IdentifierFlag
     }
 }
 
-fn compare_candidate_rows(
+pub(crate) fn compare_candidate_rows(
     a: &bee_phonetic::CandidateFeatureRow,
     b: &bee_phonetic::CandidateFeatureRow,
 ) -> std::cmp::Ordering {
@@ -132,7 +142,7 @@ fn compare_candidate_rows(
         .then_with(|| b.qgram_overlap.cmp(&a.qgram_overlap))
 }
 
-fn load_counterexample_recordings() -> Result<Vec<CounterexampleRecordingRow>> {
+pub(crate) fn load_counterexample_recordings() -> Result<Vec<CounterexampleRecordingRow>> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../data/phonetic-seed/counterexample_recordings.jsonl");
     let text =

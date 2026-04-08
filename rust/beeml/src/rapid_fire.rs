@@ -1,3 +1,11 @@
+use std::collections::HashMap;
+
+use beeml::rpc::{
+    RapidFireChoice, RapidFireComponent, RapidFireComponentChoice, RapidFireDecisionSet,
+    RapidFireEdit, RejectedGroupSpan, RetrievalCandidateDebug, SpanDebugTrace,
+};
+use tracing::{debug, info};
+
 const RAPID_FIRE_COMPONENT_HYPOTHESES: usize = 4;
 const RAPID_FIRE_SENTENCE_CHOICES: usize = 12;
 const RAPID_FIRE_EXACT_THRESHOLD: usize = 64;
@@ -5,27 +13,27 @@ const RAPID_FIRE_BEAM_WIDTH: usize = 16;
 const RAPID_FIRE_MAX_EDITS_PER_SPAN: usize = 4;
 
 #[derive(Clone)]
-struct EditCandidate {
-    span_token_start: u32,
-    span_token_end: u32,
-    span_text: String,
-    alias_id: u32,
-    replacement_text: String,
-    score: f32,
-    probability: f32,
-    acceptance_score: f32,
-    phonetic_score: f32,
-    verified: bool,
+pub(crate) struct EditCandidate {
+    pub(crate) span_token_start: u32,
+    pub(crate) span_token_end: u32,
+    pub(crate) span_text: String,
+    pub(crate) alias_id: u32,
+    pub(crate) replacement_text: String,
+    pub(crate) score: f32,
+    pub(crate) probability: f32,
+    pub(crate) acceptance_score: f32,
+    pub(crate) phonetic_score: f32,
+    pub(crate) verified: bool,
 }
 
 #[derive(Clone)]
-struct ComponentHypothesis {
-    component_id: u32,
-    component_spans: Vec<RejectedGroupSpan>,
-    edits: Vec<EditCandidate>,
-    choose_keep_original: bool,
-    score: f32,
-    probability: f32,
+pub(crate) struct ComponentHypothesis {
+    pub(crate) component_id: u32,
+    pub(crate) component_spans: Vec<RejectedGroupSpan>,
+    pub(crate) edits: Vec<EditCandidate>,
+    pub(crate) choose_keep_original: bool,
+    pub(crate) score: f32,
+    pub(crate) probability: f32,
 }
 
 #[derive(Clone)]
@@ -36,7 +44,7 @@ struct SentenceHypothesis {
     probability: f32,
 }
 
-fn build_rapid_fire_decision_set(
+pub(crate) fn build_rapid_fire_decision_set(
     transcript: &str,
     spans: &[SpanDebugTrace],
     expected_source_text: &str,

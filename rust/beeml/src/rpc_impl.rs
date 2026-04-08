@@ -1,3 +1,31 @@
+use std::collections::HashMap;
+
+use bee_phonetic::{
+    enumerate_transcript_spans_with, query_index, score_shortlist, RetrievalQuery,
+    TranscriptAlignmentToken,
+};
+use bee_transcribe::{AlignedWord, SessionOptions};
+use beeml::judge::{extract_span_context, OnlineJudge};
+use beeml::rpc::{
+    AcceptedEdit, BeeMl, CorrectionDebugResult, CorrectionRequest, CorrectionResult,
+    FilterDecision, JudgeEvalFailure, ModelSummary, OfflineJudgeEvalRequest,
+    OfflineJudgeEvalResult, ProbDistribution, RerankerDebugTrace,
+    RetrievalCandidateDebug, RetrievalEvalMiss, RetrievalEvalTermSummary,
+    RetrievalPrototypeEvalProgress, RetrievalPrototypeEvalRequest, RetrievalPrototypeEvalResult,
+    RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
+    RetrievalPrototypeTeachingCase, RetrievalPrototypeTeachingDeckRequest,
+    RetrievalPrototypeTeachingDeckResult, SpanDebugTrace, SpanDebugView,
+    TeachRetrievalPrototypeJudgeRequest, TermAliasView, TermInspectionRequest,
+    TermInspectionResult, ThresholdRow, TimingBreakdown, TranscribeWavResult,
+    TwoStageGridPoint, TwoStageResult,
+};
+use tracing::info;
+use vox::{Rx, Tx};
+
+use crate::offline_eval::*;
+use crate::service::{BeeMlService, EvalCase};
+use crate::util::*;
+
 impl BeeMl for BeeMlService {
     async fn transcribe_wav(&self, wav_bytes: Vec<u8>) -> Result<TranscribeWavResult, String> {
         let samples = bee_transcribe::decode_wav(&wav_bytes).map_err(|e| e.to_string())?;
@@ -777,9 +805,10 @@ impl BeeMl for BeeMlService {
         // ── Eval 8: Two-stage (span gate + candidate ranker) ──────────
         println!("\n--- Eval 8: Two-stage (span gate + candidate ranker) ---");
         let two_stage_result;
+        let two_stage_scored =
+            train_and_score_twostage_kfold(&probed_cases, &case_folds, folds, train_epochs, 3);
+        let (mut best_gt, mut best_rt);
         {
-            let two_stage_scored =
-                train_and_score_twostage_kfold(&probed_cases, &case_folds, folds, train_epochs, 3);
 
             // Stage A alone: gate accuracy at various thresholds
             println!("\n  Stage A (gate) alone:");
@@ -864,8 +893,8 @@ impl BeeMl for BeeMlService {
             let gate_thresholds: &[f32] = &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
             let ranker_thresholds: &[f32] = &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
             let mut best_bal = 0.0f64;
-            let mut best_gt = 0.0f32;
-            let mut best_rt = 0.0f32;
+            best_gt = 0.0f32;
+            best_rt = 0.0f32;
             let mut best_m = EvalMetrics::default();
             for &gt in gate_thresholds {
                 for &rt in ranker_thresholds {
@@ -1195,6 +1224,105 @@ impl BeeMl for BeeMlService {
                     println!("    Active features: {}", judge.model().num_active());
                 }
             }
+        }
+
+        // ── Per-case failure report (005) ────────────────────────────────
+        println!("\n=== Per-case failure report (at GT={best_gt:.1} RT={best_rt:.1}) ===");
+        {
+            let trunc = |s: &str, n: usize| -> String {
+                if s.len() <= n { s.to_string() } else { format!("{}…", &s[..n]) }
+            };
+
+            // Bucket 1: Not retrieved — canonical cases where gold term not in any span's shortlist
+            let mut not_retrieved = Vec::new();
+            // Bucket 2: Not verified — gold retrieved but no verified candidate
+            let mut not_verified = Vec::new();
+            // Bucket 3: Gate misses — reachable but gate_prob < best_gt
+            let mut gate_misses = Vec::new();
+            // Bucket 4: Ranker misses — gate opens but ranker top-1 is not gold
+            let mut ranker_misses = Vec::new();
+
+            for (i, pc) in probed_cases.iter().enumerate() {
+                if pc.case.should_abstain {
+                    continue; // only canonical cases
+                }
+
+                let sc = &two_stage_scored[i];
+
+                // Check if gold term appears in any span's shortlist
+                let gold_in_shortlist = pc.spans.iter().any(|ps| ps.gold_alias_id.is_some());
+                if !gold_in_shortlist {
+                    not_retrieved.push(format!(
+                        "  [{:>3}] term={:<30} transcript={}",
+                        pc.case.case_id,
+                        pc.case.target_term,
+                        trunc(&pc.case.transcript, 60),
+                    ));
+                    continue;
+                }
+
+                // Gold is in shortlist — check if verified
+                let gold_verified = pc.spans.iter().any(|ps| {
+                    ps.gold_alias_id.map_or(false, |gid| {
+                        ps.candidates.iter().any(|(c, _)| c.alias_id == gid && c.verified)
+                    })
+                });
+                if !gold_verified {
+                    not_verified.push(format!(
+                        "  [{:>3}] term={:<30} transcript={}",
+                        pc.case.case_id,
+                        pc.case.target_term,
+                        trunc(&pc.case.transcript, 60),
+                    ));
+                    continue;
+                }
+
+                // Gold is verified (reachable). Check gate.
+                if sc.gate_prob < best_gt {
+                    gate_misses.push(format!(
+                        "  [{:>3}] term={:<30} gate_prob={:.3}  transcript={}",
+                        pc.case.case_id,
+                        pc.case.target_term,
+                        sc.gate_prob,
+                        trunc(&pc.case.transcript, 50),
+                    ));
+                    continue;
+                }
+
+                // Gate opens. Check ranker.
+                if let Some((alias_id, ranker_prob)) = sc.ranker_best {
+                    if sc.gold_alias_id != Some(alias_id) {
+                        // Find what the ranker picked instead
+                        let picked_name = pc.spans.iter()
+                            .flat_map(|ps| ps.candidates.iter())
+                            .find(|(c, _)| c.alias_id == alias_id)
+                            .map(|(c, _)| c.term.as_str())
+                            .unwrap_or("?");
+                        ranker_misses.push(format!(
+                            "  [{:>3}] term={:<30} ranker_picked={:<30} ranker_prob={:.3}  transcript={}",
+                            pc.case.case_id,
+                            pc.case.target_term,
+                            picked_name,
+                            ranker_prob,
+                            trunc(&pc.case.transcript, 40),
+                        ));
+                    }
+                }
+            }
+
+            println!("\n1. Not retrieved ({} cases):", not_retrieved.len());
+            for line in &not_retrieved { println!("{line}"); }
+
+            println!("\n2. Not verified ({} cases):", not_verified.len());
+            for line in &not_verified { println!("{line}"); }
+
+            println!("\n3. Gate misses ({} cases):", gate_misses.len());
+            for line in &gate_misses { println!("{line}"); }
+
+            println!("\n4. Ranker misses ({} cases):", ranker_misses.len());
+            for line in &ranker_misses { println!("{line}"); }
+
+            println!();
         }
 
         Ok(OfflineJudgeEvalResult {

@@ -1,67 +1,73 @@
+use std::collections::HashMap;
+
+use bee_phonetic::TranscriptSpan;
+use beeml::judge::OnlineJudge;
+
+use crate::service::EvalCase;
+
 /// Per-span data extracted from a probe, ready for judge training/evaluation.
 /// Does not include judge scores — those are computed separately per fold.
-struct ProbedSpan {
-    span: TranscriptSpan,
-    candidates: Vec<(
+pub(crate) struct ProbedSpan {
+    pub(crate) span: TranscriptSpan,
+    pub(crate) candidates: Vec<(
         bee_phonetic::CandidateFeatureRow,
         bee_phonetic::IdentifierFlags,
     )>,
-    ctx: beeml::judge::SpanContext,
-    /// For canonical cases: the alias_id of the target term (if retrieved).
-    gold_alias_id: Option<u32>,
+    pub(crate) ctx: beeml::judge::SpanContext,
+    pub(crate) gold_alias_id: Option<u32>,
 }
 
 /// All probed spans for one eval case, plus metadata for the offline judge eval.
-struct ProbedCase {
-    case: EvalCase,
-    spans: Vec<ProbedSpan>,
+pub(crate) struct ProbedCase {
+    pub(crate) case: EvalCase,
+    pub(crate) spans: Vec<ProbedSpan>,
 }
 
 // ── Offline eval helpers ───────────────────────────────────────────
 
 #[derive(Clone, Debug, Default)]
-struct EvalMetrics {
-    canonical_correct: u32,
-    canonical_total: u32,
-    canonical_replaced: u32,
-    cx_correct: u32,
-    cx_total: u32,
-    cx_replaced: u32,
+pub(crate) struct EvalMetrics {
+    pub(crate) canonical_correct: u32,
+    pub(crate) canonical_total: u32,
+    pub(crate) canonical_replaced: u32,
+    pub(crate) cx_correct: u32,
+    pub(crate) cx_total: u32,
+    pub(crate) cx_replaced: u32,
 }
 
 impl EvalMetrics {
-    fn canonical_pct(&self) -> f64 {
+    pub(crate) fn canonical_pct(&self) -> f64 {
         if self.canonical_total == 0 {
             0.0
         } else {
             self.canonical_correct as f64 / self.canonical_total as f64 * 100.0
         }
     }
-    fn cx_pct(&self) -> f64 {
+    pub(crate) fn cx_pct(&self) -> f64 {
         if self.cx_total == 0 {
             0.0
         } else {
             self.cx_correct as f64 / self.cx_total as f64 * 100.0
         }
     }
-    fn balanced_pct(&self) -> f64 {
+    pub(crate) fn balanced_pct(&self) -> f64 {
         (self.canonical_pct() + self.cx_pct()) / 2.0
     }
-    fn canonical_replace_pct(&self) -> f64 {
+    pub(crate) fn canonical_replace_pct(&self) -> f64 {
         if self.canonical_total == 0 {
             0.0
         } else {
             self.canonical_replaced as f64 / self.canonical_total as f64 * 100.0
         }
     }
-    fn cx_replace_pct(&self) -> f64 {
+    pub(crate) fn cx_replace_pct(&self) -> f64 {
         if self.cx_total == 0 {
             0.0
         } else {
             self.cx_replaced as f64 / self.cx_total as f64 * 100.0
         }
     }
-    fn merge(&mut self, other: &EvalMetrics) {
+    pub(crate) fn merge(&mut self, other: &EvalMetrics) {
         self.canonical_correct += other.canonical_correct;
         self.canonical_total += other.canonical_total;
         self.canonical_replaced += other.canonical_replaced;
@@ -72,7 +78,7 @@ impl EvalMetrics {
 }
 
 #[derive(Clone, Debug)]
-enum TrainMode {
+pub(crate) enum TrainMode {
     /// No training, use seed weights only.
     None,
     /// Current teach_choice replay.
@@ -86,7 +92,7 @@ enum TrainMode {
 }
 
 /// Eval 1a: Deterministic baseline using the same candidate set as the judge.
-fn eval_deterministic_kfold(
+pub(crate) fn eval_deterministic_kfold(
     probed_cases: &[ProbedCase],
     case_folds: &[usize],
     folds: usize,
@@ -146,19 +152,19 @@ fn eval_deterministic_kfold(
 
 /// Pre-scored case: for each test case, store the probabilities so we can
 /// sweep thresholds without re-training.
-struct ScoredCase {
-    should_abstain: bool,
+pub(crate) struct ScoredCase {
+    pub(crate) should_abstain: bool,
     /// For canonical: the alias_id of the gold candidate.
-    gold_alias_id: Option<u32>,
+    pub(crate) gold_alias_id: Option<u32>,
     /// Best candidate (alias_id, probability) from the gold span (canonical) or
     /// highest-prob candidate across all spans (counterexample).
-    best_candidate: Option<(u32, f32)>,
+    pub(crate) best_candidate: Option<(u32, f32)>,
     /// Whether gold was reachable (canonical: gold span exists; cx: any candidates exist).
-    reachable: bool,
+    pub(crate) reachable: bool,
 }
 
 /// Train k-fold, score all test cases, return pre-scored results.
-fn train_and_score_kfold(
+pub(crate) fn train_and_score_kfold(
     probed_cases: &[ProbedCase],
     case_folds: &[usize],
     folds: usize,
@@ -282,7 +288,7 @@ fn train_and_score_kfold(
 }
 
 /// Evaluate pre-scored cases at a given threshold.
-fn eval_at_threshold(scored: &[ScoredCase], threshold: f32, reachable_only: bool) -> EvalMetrics {
+pub(crate) fn eval_at_threshold(scored: &[ScoredCase], threshold: f32, reachable_only: bool) -> EvalMetrics {
     let mut m = EvalMetrics::default();
     for sc in scored {
         if sc.should_abstain {
@@ -321,7 +327,7 @@ fn eval_at_threshold(scored: &[ScoredCase], threshold: f32, reachable_only: bool
 }
 
 /// Train on a single probed case using the given mode (non-ablated).
-fn train_case(judge: &mut OnlineJudge, pc: &ProbedCase, mode: &TrainMode) {
+pub(crate) fn train_case(judge: &mut OnlineJudge, pc: &ProbedCase, mode: &TrainMode) {
     match mode {
         TrainMode::None => {}
         TrainMode::TeachChoice { .. } => {
@@ -496,7 +502,7 @@ fn score_span_ablated(
 }
 
 /// Get the best counterexample span (most candidates = most likely false positive).
-fn best_cx_span(pc: &ProbedCase) -> Option<&ProbedSpan> {
+pub(crate) fn best_cx_span(pc: &ProbedCase) -> Option<&ProbedSpan> {
     pc.spans
         .iter()
         .filter(|ps| !ps.candidates.is_empty())
@@ -504,12 +510,12 @@ fn best_cx_span(pc: &ProbedCase) -> Option<&ProbedSpan> {
 }
 
 /// Get the span containing the gold alias (prefers verified gold).
-fn gold_span(pc: &ProbedCase) -> Option<&ProbedSpan> {
+pub(crate) fn gold_span(pc: &ProbedCase) -> Option<&ProbedSpan> {
     find_best_gold_span(&pc.spans)
 }
 
 /// Find best gold span: prefer verified gold, fall back to any gold.
-fn find_best_gold_span(spans: &[ProbedSpan]) -> Option<&ProbedSpan> {
+pub(crate) fn find_best_gold_span(spans: &[ProbedSpan]) -> Option<&ProbedSpan> {
     spans
         .iter()
         .find(|ps| {
@@ -525,20 +531,20 @@ fn find_best_gold_span(spans: &[ProbedSpan]) -> Option<&ProbedSpan> {
 }
 
 /// Two-stage scored case: gate probability + ranker probability.
-struct TwoStageScoredCase {
-    should_abstain: bool,
-    gold_alias_id: Option<u32>,
+pub(crate) struct TwoStageScoredCase {
+    pub(crate) should_abstain: bool,
+    pub(crate) gold_alias_id: Option<u32>,
     /// Gate probability for the best span (canonical: gold span; cx: best span).
-    gate_prob: f32,
+    pub(crate) gate_prob: f32,
     /// Best candidate (alias_id, ranker_probability) from the ranker.
-    ranker_best: Option<(u32, f32)>,
+    pub(crate) ranker_best: Option<(u32, f32)>,
     /// Whether gold was reachable (retrieved + verified).
-    reachable: bool,
+    pub(crate) reachable: bool,
 }
 
 /// Train two-stage model (gate + ranker) with k-fold CV.
 /// Returns pre-scored results for threshold sweeping.
-fn train_and_score_twostage_kfold(
+pub(crate) fn train_and_score_twostage_kfold(
     probed_cases: &[ProbedCase],
     case_folds: &[usize],
     folds: usize,
@@ -719,7 +725,7 @@ fn train_and_score_twostage_kfold(
 }
 
 /// Evaluate two-stage scored cases at given thresholds.
-fn eval_twostage_at_thresholds(
+pub(crate) fn eval_twostage_at_thresholds(
     scored: &[TwoStageScoredCase],
     gate_threshold: f32,
     ranker_threshold: f32,
@@ -766,14 +772,14 @@ fn eval_twostage_at_thresholds(
 }
 
 #[derive(Clone, Debug)]
-enum EvalFailureStage {
+pub(crate) enum EvalFailureStage {
     RetrievalShortlist,
     Composition,
     Judge,
 }
 
 #[derive(Clone, Debug)]
-enum GoldUnreachableReason {
+pub(crate) enum GoldUnreachableReason {
     /// Target term not in shortlist at all
     TargetNotRetrieved,
     /// Target term found but other required edits are missing from candidates
@@ -785,31 +791,31 @@ enum GoldUnreachableReason {
 }
 
 #[derive(Clone, Debug)]
-enum EvalChoiceKind {
+pub(crate) enum EvalChoiceKind {
     KeepOriginal,
     SentenceCandidate,
 }
 
-struct CaseEvalResult {
+pub(crate) struct CaseEvalResult {
     // Stage 1: Retrieval
-    target_in_shortlist: bool,
-    target_best_rank: Option<usize>,
+    pub(crate) target_in_shortlist: bool,
+    pub(crate) target_best_rank: Option<usize>,
 
     // Stage 2: Composition (judge-visible decision set)
-    gold_reachable: bool,
-    gold_choice_rank: Option<usize>,
-    gold_unreachable_reason: Option<GoldUnreachableReason>,
-    decision_set_size: usize,
-    replacement_choice_count: usize,
+    pub(crate) gold_reachable: bool,
+    pub(crate) gold_choice_rank: Option<usize>,
+    pub(crate) gold_unreachable_reason: Option<GoldUnreachableReason>,
+    pub(crate) decision_set_size: usize,
+    pub(crate) replacement_choice_count: usize,
 
     // Stage 3: Judge
-    chosen_kind: EvalChoiceKind,
-    chosen_choice_id: Option<String>,
-    chosen_sentence: String,
-    chosen_edit_count: usize,
-    chosen_probability: f32,
-    judge_correct: bool,
+    pub(crate) chosen_kind: EvalChoiceKind,
+    pub(crate) chosen_choice_id: Option<String>,
+    pub(crate) chosen_sentence: String,
+    pub(crate) chosen_edit_count: usize,
+    pub(crate) chosen_probability: f32,
+    pub(crate) judge_correct: bool,
 
     // Attribution
-    first_failure: Option<EvalFailureStage>,
+    pub(crate) first_failure: Option<EvalFailureStage>,
 }

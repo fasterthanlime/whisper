@@ -1,40 +1,27 @@
-use std::collections::HashMap;
+mod offline_eval;
+mod rapid_fire;
+mod rpc_impl;
+mod service;
+mod util;
+
 use std::env;
-use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use bee_phonetic::{
-    enumerate_transcript_spans_with, query_index, score_shortlist, PhoneticIndex, RetrievalQuery,
-    SeedDataset, TranscriptAlignmentToken, TranscriptSpan,
-};
-use bee_transcribe::{AlignedWord, Engine, EngineConfig, SessionOptions};
+use bee_phonetic::SeedDataset;
+use bee_transcribe::{Engine, EngineConfig};
 use beeml::g2p::CachedEspeakG2p;
-use beeml::judge::{extract_span_context, OnlineJudge};
-use beeml::rpc::{
-    AcceptedEdit, AliasSource, BeeMl, CandidateFeatureDebug, CorrectionDebugResult,
-    CorrectionRequest, CorrectionResult, FilterDecision, IdentifierFlags, JudgeEvalFailure,
-    JudgeOptionDebug, JudgeStateDebug, ModelSummary, OfflineJudgeEvalRequest,
-    OfflineJudgeEvalResult, OfflineJudgeFoldResult, ProbDistribution, RapidFireChoice,
-    RapidFireComponent, RapidFireComponentChoice, RapidFireDecisionSet, RapidFireEdit,
-    RejectedGroupSpan, RerankerDebugTrace, RetrievalCandidateDebug, RetrievalEvalMiss,
-    RetrievalEvalTermSummary, RetrievalIndexView, RetrievalPrototypeEvalProgress,
-    RetrievalPrototypeEvalRequest, RetrievalPrototypeEvalResult, RetrievalPrototypeProbeRequest,
-    RetrievalPrototypeProbeResult, RetrievalPrototypeTeachingCase,
-    RetrievalPrototypeTeachingDeckRequest, RetrievalPrototypeTeachingDeckResult, SpanDebugTrace,
-    SpanDebugView, TeachRetrievalPrototypeJudgeRequest, TermAliasView, TermInspectionRequest,
-    TermInspectionResult, ThresholdRow, TimingBreakdown, TranscribeWavResult, TwoStageGridPoint,
-    TwoStageResult,
-};
-use serde::Deserialize;
+use beeml::judge::OnlineJudge;
+use beeml::rpc::{BeeMl, OfflineJudgeEvalRequest};
+use service::{BeeMlService, BeemlServiceInner};
 use tokio::net::TcpListener;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use vox::{NoopClient, Rx, Tx};
+use util::{load_correction_events, load_counterexample_recordings};
+use vox::NoopClient;
 
 fn init_tracing() -> Result<WorkerGuard> {
     let log_dir = env::var("BML_LOG_DIR")
