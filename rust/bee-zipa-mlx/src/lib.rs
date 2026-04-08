@@ -3,6 +3,7 @@ pub mod audio;
 pub mod config;
 pub mod error;
 pub mod features;
+pub mod load;
 pub mod model;
 pub mod tokenizer;
 

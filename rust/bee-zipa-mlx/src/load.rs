@@ -1,0 +1,209 @@
+use std::collections::HashMap;
+use std::path::Path;
+
+use mlx_rs::error::Exception;
+use mlx_rs::module::ModuleParameters;
+use mlx_rs::Array;
+
+use crate::model::ZipaModel;
+
+const DIRECT_KEYS: &[(&str, &str)] = &[
+    ("encoder_embed.conv0.bias", "encoder_embed.conv0.bias"),
+    ("encoder_embed.conv1.bias", "encoder_embed.conv1.bias"),
+    ("encoder_embed.conv2.bias", "encoder_embed.conv2.bias"),
+    (
+        "encoder_embed.convnext.depthwise_conv.bias",
+        "encoder_embed.convnext.depthwise_conv.bias",
+    ),
+    (
+        "encoder_embed.convnext.pointwise_conv1.bias",
+        "encoder_embed.convnext.pointwise_conv1.bias",
+    ),
+    (
+        "encoder_embed.convnext.pointwise_conv2.bias",
+        "encoder_embed.convnext.pointwise_conv2.bias",
+    ),
+    ("encoder_embed.out.weight", "encoder_embed.out.weight"),
+    ("encoder_embed.out.bias", "encoder_embed.out.bias"),
+    ("encoder_embed.out_norm.log_scale", "encoder_embed.out_norm.log_scale"),
+    ("encoder_embed.out_norm.bias", "encoder_embed.out_norm.bias"),
+    ("ctc_output.linear.weight", "ctc_head.linear.weight"),
+    ("ctc_output.linear.bias", "ctc_head.linear.bias"),
+];
+
+const CONV2D_KEYS: &[(&str, &str)] = &[
+    ("encoder_embed.conv0.weight", "encoder_embed.conv0.weight"),
+    ("encoder_embed.conv1.weight", "encoder_embed.conv1.weight"),
+    ("encoder_embed.conv2.weight", "encoder_embed.conv2.weight"),
+    (
+        "encoder_embed.convnext.depthwise_conv.weight",
+        "encoder_embed.convnext.depthwise_conv.weight",
+    ),
+    (
+        "encoder_embed.convnext.pointwise_conv1.weight",
+        "encoder_embed.convnext.pointwise_conv1.weight",
+    ),
+    (
+        "encoder_embed.convnext.pointwise_conv2.weight",
+        "encoder_embed.convnext.pointwise_conv2.weight",
+    ),
+];
+
+/// Load the ZIPA frontend + CTC head weights from a safetensors file produced by
+/// `scripts/zipa/export_onnx_initializers.py`.
+pub fn load_frontend_and_ctc_weights(
+    model: &mut ZipaModel,
+    safetensors_path: impl AsRef<Path>,
+) -> Result<LoadStats, Exception> {
+    let loaded = Array::load_safetensors(safetensors_path)
+        .map_err(|e| Exception::custom(format!("load safetensors: {e}")))?;
+    load_frontend_and_ctc_weights_from_map(model, &loaded)
+}
+
+pub fn load_frontend_and_ctc_weights_from_map(
+    model: &mut ZipaModel,
+    tensors: &HashMap<String, Array>,
+) -> Result<LoadStats, Exception> {
+    let mut params = model.parameters_mut().flatten();
+    let mut loaded_count = 0usize;
+    let mut missing = Vec::new();
+
+    for (src, dst) in DIRECT_KEYS {
+        match tensors.get(*src) {
+            Some(value) => {
+                if let Some(param) = params.get_mut(*dst) {
+                    **param = value.clone();
+                    loaded_count += 1;
+                }
+            }
+            None => missing.push((*src).to_owned()),
+        }
+    }
+
+    for (src, dst) in CONV2D_KEYS {
+        match tensors.get(*src) {
+            Some(value) => {
+                let transposed = value.transpose_axes(&[0, 2, 3, 1])?;
+                if let Some(param) = params.get_mut(*dst) {
+                    **param = transposed;
+                    loaded_count += 1;
+                }
+            }
+            None => missing.push((*src).to_owned()),
+        }
+    }
+
+    Ok(LoadStats {
+        loaded: loaded_count,
+        missing,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadStats {
+    pub loaded: usize,
+    pub missing: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use mlx_rs::module::ModuleParameters;
+    use mlx_rs::Array;
+
+    use crate::config::{ZipaModelConfig, ZipaVariant};
+    use crate::load::load_frontend_and_ctc_weights_from_map;
+    use crate::model::ZipaModel;
+
+    #[test]
+    fn loads_frontend_subset_and_transposes_conv_weights() {
+        let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
+        let mut model = ZipaModel::new(&config).unwrap();
+
+        let mut tensors = HashMap::new();
+        tensors.insert(
+            "encoder_embed.conv0.weight".to_string(),
+            Array::zeros::<f32>(&[8, 1, 3, 3]).unwrap(),
+        );
+        tensors.insert(
+            "encoder_embed.conv0.bias".to_string(),
+            Array::zeros::<f32>(&[8]).unwrap(),
+        );
+        tensors.insert(
+            "encoder_embed.conv1.weight".to_string(),
+            Array::zeros::<f32>(&[32, 8, 3, 3]).unwrap(),
+        );
+        tensors.insert(
+            "encoder_embed.conv1.bias".to_string(),
+            Array::zeros::<f32>(&[32]).unwrap(),
+        );
+        tensors.insert(
+            "encoder_embed.conv2.weight".to_string(),
+            Array::zeros::<f32>(&[128, 32, 3, 3]).unwrap(),
+        );
+        tensors.insert(
+            "encoder_embed.conv2.bias".to_string(),
+            Array::zeros::<f32>(&[128]).unwrap(),
+        );
+        tensors.insert(
+            "encoder_embed.convnext.depthwise_conv.weight".to_string(),
+            Array::zeros::<f32>(&[128, 1, 7, 7]).unwrap(),
+        );
+        tensors.insert(
+            "encoder_embed.convnext.depthwise_conv.bias".to_string(),
+            Array::zeros::<f32>(&[128]).unwrap(),
+        );
+        tensors.insert(
+            "encoder_embed.convnext.pointwise_conv1.weight".to_string(),
+            Array::zeros::<f32>(&[384, 128, 1, 1]).unwrap(),
+        );
+        tensors.insert(
+            "encoder_embed.convnext.pointwise_conv1.bias".to_string(),
+            Array::zeros::<f32>(&[384]).unwrap(),
+        );
+        tensors.insert(
+            "encoder_embed.convnext.pointwise_conv2.weight".to_string(),
+            Array::zeros::<f32>(&[128, 384, 1, 1]).unwrap(),
+        );
+        tensors.insert(
+            "encoder_embed.convnext.pointwise_conv2.bias".to_string(),
+            Array::zeros::<f32>(&[128]).unwrap(),
+        );
+        tensors.insert(
+            "encoder_embed.out.weight".to_string(),
+            Array::zeros::<f32>(&[192, 2432]).unwrap(),
+        );
+        tensors.insert(
+            "encoder_embed.out.bias".to_string(),
+            Array::zeros::<f32>(&[192]).unwrap(),
+        );
+        tensors.insert(
+            "encoder_embed.out_norm.log_scale".to_string(),
+            Array::zeros::<f32>(&[]).unwrap(),
+        );
+        tensors.insert(
+            "encoder_embed.out_norm.bias".to_string(),
+            Array::zeros::<f32>(&[192]).unwrap(),
+        );
+        tensors.insert(
+            "ctc_output.linear.weight".to_string(),
+            Array::zeros::<f32>(&[127, 256]).unwrap(),
+        );
+        tensors.insert(
+            "ctc_output.linear.bias".to_string(),
+            Array::zeros::<f32>(&[127]).unwrap(),
+        );
+
+        let stats = load_frontend_and_ctc_weights_from_map(&mut model, &tensors).unwrap();
+        assert_eq!(stats.loaded, 18);
+
+        let flat = model.parameters().flatten();
+        assert_eq!(flat["encoder_embed.conv0.weight"].shape(), vec![8, 3, 3, 1]);
+        assert_eq!(
+            flat["encoder_embed.convnext.depthwise_conv.weight"].shape(),
+            vec![128, 7, 7, 1]
+        );
+        assert_eq!(flat["ctc_head.linear.weight"].shape(), vec![127, 256]);
+    }
+}
