@@ -372,7 +372,9 @@ struct CorrectionTestView: View {
         _ = await ts.feed(session: session, samples: samples)
 
         statusText = "finalizing..."
-        let transcript = await ts.finish(session: session) ?? ""
+        let finishResult = await ts.finish(session: session)
+        let transcript = finishResult?.text ?? ""
+        let words = finishResult?.alignments ?? []
         corrTestLogger.info("Transcript for \(session.id): \"\(transcript)\"")
 
         if transcript.isEmpty {
@@ -385,7 +387,7 @@ struct CorrectionTestView: View {
 
         // Run correction
         let cs = appState.correctionService
-        let corrOutput = await cs.process(text: transcript, words: [], appId: "")
+        let corrOutput = await cs.process(text: transcript, words: words, appId: "")
 
         if let corrOutput, !corrOutput.edits.isEmpty {
             statusText = "\(randomFile)\n\"\(transcript.prefix(60))\"\n\(corrOutput.edits.count) correction(s)"
