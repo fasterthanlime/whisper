@@ -8,6 +8,7 @@ use bee_phonetic::{
     SeedDataset, TranscriptAlignmentToken, TranscriptSpan,
 };
 use bee_transcribe::{AlignedWord, Engine};
+use bee_types::Confidence;
 use beeml::g2p::CachedEspeakG2p;
 use beeml::judge::{extract_span_context, OnlineJudge};
 use beeml::rpc::{
@@ -359,10 +360,12 @@ impl BeeMlService {
                         word: w.word.clone(),
                         start: w.start,
                         end: w.end,
-                        mean_logprob: w.mean_logprob,
-                        min_logprob: w.min_logprob,
-                        mean_margin: w.mean_margin,
-                        min_margin: w.min_margin,
+                        confidence: Confidence {
+                            mean_lp: w.mean_logprob.unwrap_or(0.0),
+                            min_lp: w.min_logprob.unwrap_or(0.0),
+                            mean_m: w.mean_margin.unwrap_or(0.0),
+                            min_m: w.min_margin.unwrap_or(0.0),
+                        },
                     })
                     .collect(),
             })
@@ -388,10 +391,12 @@ impl BeeMlService {
                             word: w.word.clone(),
                             start: w.start,
                             end: w.end,
-                            mean_logprob: w.mean_logprob,
-                            min_logprob: w.min_logprob,
-                            mean_margin: w.mean_margin,
-                            min_margin: w.min_margin,
+                            confidence: Confidence {
+                                mean_lp: w.mean_logprob.unwrap_or(0.0),
+                                min_lp: w.min_logprob.unwrap_or(0.0),
+                                mean_m: w.mean_margin.unwrap_or(0.0),
+                                min_m: w.min_margin.unwrap_or(0.0),
+                            },
                         }).collect(),
                     }),
             );

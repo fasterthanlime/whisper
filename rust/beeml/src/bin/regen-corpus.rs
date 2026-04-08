@@ -202,10 +202,10 @@ fn transcribe_file(
             word: w.word.clone(),
             start: w.start,
             end: w.end,
-            mean_logprob: w.mean_logprob,
-            min_logprob: w.min_logprob,
-            mean_margin: w.mean_margin,
-            min_margin: w.min_margin,
+            mean_logprob: Some(w.confidence.mean_lp),
+            min_logprob: Some(w.confidence.min_lp),
+            mean_margin: Some(w.confidence.mean_m),
+            min_margin: Some(w.confidence.min_m),
         })
         .collect();
 
