@@ -872,11 +872,9 @@ impl BeeMl for BeeMlService {
                         continue;
                     }
                     ranker_total += 1;
-                    if let Some((alias_id, _)) = sc.ranker_best {
-                        if sc.gold_alias_id == Some(alias_id) {
-                            ranker_correct += 1;
-                        }
-                    }
+                    let tm = sc.gold_term.as_deref().zip(sc.ranker_best_term.as_deref())
+                        .is_some_and(|(g, r)| g.eq_ignore_ascii_case(r));
+                    if tm { ranker_correct += 1; }
                 }
                 println!(
                     "    Top-1 accuracy: {ranker_correct}/{ranker_total} ({:.1}%)",
@@ -994,8 +992,10 @@ impl BeeMl for BeeMlService {
                 if sc.should_abstain || !sc.reachable {
                     continue;
                 }
-                if let Some((alias_id, prob)) = sc.ranker_best {
-                    if sc.gold_alias_id == Some(alias_id) {
+                if let Some((_alias_id, prob)) = sc.ranker_best {
+                    let tm = sc.gold_term.as_deref().zip(sc.ranker_best_term.as_deref())
+                        .is_some_and(|(g, r)| g.eq_ignore_ascii_case(r));
+                    if tm {
                         ranker_gold_probs.push(prob);
                     } else {
                         ranker_nongold_probs.push(prob);
@@ -1252,7 +1252,8 @@ impl BeeMl for BeeMlService {
                     e2e_can_total += 1;
                     let gate_open = sc.gate_prob >= best_gt;
                     let ranker_fires = sc.ranker_best.map_or(false, |(_, p)| p >= best_rt);
-                    let ranker_correct_id = sc.ranker_best.map_or(false, |(id, _)| sc.gold_alias_id == Some(id));
+                    let ranker_correct_id = sc.gold_term.as_deref().zip(sc.ranker_best_term.as_deref())
+                        .is_some_and(|(g, r)| g.eq_ignore_ascii_case(r));
                     if gate_open && ranker_fires && ranker_correct_id {
                         e2e_can_correct += 1;
                     }
@@ -1295,9 +1296,9 @@ impl BeeMl for BeeMlService {
             for sc in &two_stage_scored {
                 if sc.should_abstain || !sc.reachable { continue; }
                 rank_total += 1;
-                if let Some((id, _)) = sc.ranker_best {
-                    if sc.gold_alias_id == Some(id) { rank_correct += 1; }
-                }
+                let term_match = sc.gold_term.as_deref().zip(sc.ranker_best_term.as_deref())
+                    .is_some_and(|(g, r)| g.eq_ignore_ascii_case(r));
+                if term_match { rank_correct += 1; }
             }
             let rank_pct = if rank_total > 0 { rank_correct as f64 / rank_total as f64 * 100.0 } else { 0.0 };
 
@@ -1420,14 +1421,11 @@ impl BeeMl for BeeMlService {
                 }
 
                 // Gate opens. Check ranker.
-                if let Some((alias_id, ranker_prob)) = sc.ranker_best {
-                    if sc.gold_alias_id != Some(alias_id) {
-                        // Find what the ranker picked instead
-                        let picked_name = pc.spans.iter()
-                            .flat_map(|ps| ps.candidates.iter())
-                            .find(|(c, _)| c.alias_id == alias_id)
-                            .map(|(c, _)| c.term.as_str())
-                            .unwrap_or("?");
+                if let Some((_alias_id, ranker_prob)) = sc.ranker_best {
+                    let term_match = sc.gold_term.as_deref().zip(sc.ranker_best_term.as_deref())
+                        .is_some_and(|(g, r)| g.eq_ignore_ascii_case(r));
+                    if !term_match {
+                        let picked_name = sc.ranker_best_term.as_deref().unwrap_or("?");
                         ranker_misses.push(format!(
                             "  [{:>3}] term={:<30} ranker_picked={:<30} ranker_prob={:.3}  transcript={}",
                             pc.case.case_id,

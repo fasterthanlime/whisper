@@ -534,10 +534,13 @@ pub(crate) fn find_best_gold_span(spans: &[ProbedSpan]) -> Option<&ProbedSpan> {
 pub(crate) struct TwoStageScoredCase {
     pub(crate) should_abstain: bool,
     pub(crate) gold_alias_id: Option<u32>,
+    pub(crate) gold_term: Option<String>,
     /// Gate probability for the best span (canonical: gold span; cx: best span).
     pub(crate) gate_prob: f32,
     /// Best candidate (alias_id, ranker_probability) from the ranker.
     pub(crate) ranker_best: Option<(u32, f32)>,
+    /// Term name of the ranker's best pick.
+    pub(crate) ranker_best_term: Option<String>,
     /// Whether gold was reachable (retrieved + verified).
     pub(crate) reachable: bool,
 }
@@ -559,8 +562,10 @@ pub(crate) fn train_and_score_twostage_kfold(
     scored.resize_with(probed_cases.len(), || TwoStageScoredCase {
         should_abstain: false,
         gold_alias_id: None,
+        gold_term: None,
         gate_prob: 0.0,
         ranker_best: None,
+        ranker_best_term: None,
         reachable: false,
     });
 
@@ -663,11 +668,18 @@ pub(crate) fn train_and_score_twostage_kfold(
                 let (gate_prob, ranker_best) =
                     best_gate.map(|(gp, rb)| (gp, rb)).unwrap_or((0.0, None));
 
+                let ranker_best_term = ranker_best.and_then(|(aid, _)| {
+                    pc.spans.iter().flat_map(|ps| ps.candidates.iter())
+                        .find(|(c, _)| c.alias_id == aid)
+                        .map(|(c, _)| c.term.clone())
+                });
                 scored[i] = TwoStageScoredCase {
                     should_abstain: true,
                     gold_alias_id: None,
+                    gold_term: None,
                     gate_prob,
                     ranker_best,
+                    ranker_best_term,
                     reachable: has_candidates,
                 };
             } else {
@@ -702,19 +714,31 @@ pub(crate) fn train_and_score_twostage_kfold(
                         .map(|e| (e.alias_id, ranker_model.predict_prob(&e.features) as f32))
                         .max_by(|a, b| a.1.total_cmp(&b.1));
 
+                    let gold_term_name = gs.candidates.iter()
+                        .find(|(c, _)| c.alias_id == gold_id)
+                        .map(|(c, _)| c.term.clone());
+                    let ranker_best_term = ranker_best.and_then(|(aid, _)| {
+                        gs.candidates.iter()
+                            .find(|(c, _)| c.alias_id == aid)
+                            .map(|(c, _)| c.term.clone())
+                    });
                     scored[i] = TwoStageScoredCase {
                         should_abstain: false,
                         gold_alias_id: Some(gold_id),
+                        gold_term: gold_term_name,
                         gate_prob,
                         ranker_best,
+                        ranker_best_term,
                         reachable: gold_verified,
                     };
                 } else {
                     scored[i] = TwoStageScoredCase {
                         should_abstain: false,
                         gold_alias_id: None,
+                        gold_term: Some(pc.case.target_term.clone()),
                         gate_prob: 0.0,
                         ranker_best: None,
+                        ranker_best_term: None,
                         reachable: false,
                     };
                 }
@@ -760,10 +784,11 @@ pub(crate) fn eval_twostage_at_thresholds(
             let replaced = gate_open && ranker_accept;
             if replaced {
                 m.canonical_replaced += 1;
-                if let Some((alias_id, _)) = sc.ranker_best {
-                    if sc.gold_alias_id == Some(alias_id) {
-                        m.canonical_correct += 1;
-                    }
+                // Match by term name, not alias_id — multiple aliases for the same term are all correct
+                let term_match = sc.gold_term.as_deref().zip(sc.ranker_best_term.as_deref())
+                    .is_some_and(|(g, r)| g.eq_ignore_ascii_case(r));
+                if term_match {
+                    m.canonical_correct += 1;
                 }
             }
         }

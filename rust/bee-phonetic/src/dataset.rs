@@ -7,7 +7,7 @@ use facet::Facet;
 
 use crate::phonetic_index::{build_index, PhoneticIndex};
 use crate::phonetic_lexicon::{build_phonetic_lexicon, LexiconAlias};
-use crate::types::VocabRow;
+use crate::types::{ReviewedConfusionSurfaceRow, VocabRow};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SeedDataset {
@@ -15,6 +15,7 @@ pub struct SeedDataset {
     pub terms: Vec<SeedTermRow>,
     pub sentence_examples: Vec<SentenceExampleRow>,
     pub recording_examples: Vec<RecordingExampleRow>,
+    pub confusion_forms: Vec<ReviewedConfusionSurfaceRow>,
 }
 
 impl SeedDataset {
@@ -34,6 +35,7 @@ impl SeedDataset {
             terms: load_jsonl(root.join("vocab.jsonl"))?,
             sentence_examples: load_jsonl(root.join("sentence_examples.jsonl"))?,
             recording_examples: load_jsonl(root.join("recording_examples.jsonl"))?,
+            confusion_forms: load_jsonl_optional(root.join("confusion_forms.jsonl")),
             root,
         })
     }
@@ -59,7 +61,15 @@ impl SeedDataset {
     }
 
     pub fn lexicon_aliases(&self) -> Vec<LexiconAlias> {
-        build_phonetic_lexicon(&self.vocab_rows(), &Default::default())
+        let mut confusion_map: std::collections::HashMap<String, Vec<ReviewedConfusionSurfaceRow>> =
+            Default::default();
+        for form in &self.confusion_forms {
+            confusion_map
+                .entry(form.term.clone())
+                .or_default()
+                .push(form.clone());
+        }
+        build_phonetic_lexicon(&self.vocab_rows(), &confusion_map)
     }
 
     pub fn phonetic_index(&self) -> PhoneticIndex {
@@ -255,6 +265,13 @@ impl CleanPath for PathBuf {
         }
         out
     }
+}
+
+fn load_jsonl_optional<T>(path: PathBuf) -> Vec<T>
+where
+    T: Facet<'static>,
+{
+    load_jsonl(path).unwrap_or_default()
 }
 
 fn load_jsonl<T>(path: PathBuf) -> Result<Vec<T>, SeedDatasetError>
