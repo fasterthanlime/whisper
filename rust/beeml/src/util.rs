@@ -7,6 +7,7 @@ use beeml::rpc::{
     AliasSource, CandidateFeatureDebug, CorpusCaptureRecording, DeleteCorpusRecordingRequest,
     IdentifierFlags, RetrievalIndexView, SaveCorpusRecordingRequest,
 };
+use facet::Facet;
 
 use crate::service::{CounterexampleRecordingRow, EvalCase};
 
@@ -164,6 +165,45 @@ pub(crate) fn load_counterexample_recordings() -> Result<Vec<CounterexampleRecor
     Ok(rows)
 }
 
+#[derive(Clone, Debug, Facet)]
+pub(crate) struct CorpusPromptRow {
+    pub(crate) bucket: String,
+    pub(crate) term: String,
+    pub(crate) text: String,
+    pub(crate) prompt_notes: Option<String>,
+}
+
+#[derive(Clone, Debug, Facet)]
+struct LegacyCorpusCaptureRecording {
+    pub prompt_id: String,
+    pub ordinal: u32,
+    pub term: String,
+    pub text: String,
+    pub take: u32,
+    pub wav_path: String,
+    pub created_at_unix_ms: u64,
+    pub num_bytes: u32,
+    pub notes: Option<String>,
+}
+
+pub(crate) fn load_corpus_prompt_rows() -> Result<Vec<CorpusPromptRow>> {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/zipa-corpus/prompts.jsonl");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let mut rows = Vec::new();
+    for (line_idx, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let row = facet_json::from_str::<CorpusPromptRow>(line)
+            .map_err(|e| anyhow::anyhow!("{e:?}"))
+            .with_context(|| format!("parsing {} line {}", path.display(), line_idx + 1))?;
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
 pub(crate) fn load_corpus_recordings(
     corpus_dir: &std::path::Path,
 ) -> Result<Vec<CorpusCaptureRecording>> {
@@ -178,10 +218,27 @@ pub(crate) fn load_corpus_recordings(
         if line.trim().is_empty() {
             continue;
         }
-        let row = facet_json::from_str::<CorpusCaptureRecording>(line)
-            .map_err(|e| anyhow::anyhow!("{e:?}"))
-            .with_context(|| format!("parsing {} line {}", path.display(), line_idx + 1))?;
-        rows.push(row);
+        match facet_json::from_str::<CorpusCaptureRecording>(line) {
+            Ok(row) => rows.push(row),
+            Err(primary_error) => {
+                let legacy = facet_json::from_str::<LegacyCorpusCaptureRecording>(line)
+                    .map_err(|_| anyhow::anyhow!("{primary_error:?}"))
+                    .with_context(|| format!("parsing {} line {}", path.display(), line_idx + 1))?;
+                rows.push(CorpusCaptureRecording {
+                    prompt_id: legacy.prompt_id,
+                    ordinal: legacy.ordinal,
+                    bucket: "legacy".to_string(),
+                    term: legacy.term,
+                    text: legacy.text,
+                    prompt_notes: None,
+                    take: legacy.take,
+                    wav_path: legacy.wav_path,
+                    created_at_unix_ms: legacy.created_at_unix_ms,
+                    num_bytes: legacy.num_bytes,
+                    notes: legacy.notes,
+                });
+            }
+        }
     }
     Ok(rows)
 }
@@ -214,8 +271,10 @@ pub(crate) fn save_corpus_recording(
     let row = CorpusCaptureRecording {
         prompt_id: request.prompt_id.clone(),
         ordinal: request.ordinal,
+        bucket: request.bucket.clone(),
         term: request.term.clone(),
         text: request.text.clone(),
+        prompt_notes: request.prompt_notes.clone(),
         take: next_take,
         wav_path: wav_path.display().to_string(),
         created_at_unix_ms,

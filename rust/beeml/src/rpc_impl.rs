@@ -1626,8 +1626,15 @@ impl BeeMl for BeeMlService {
 
     async fn get_corpus_capture_plan(&self) -> Result<CorpusCapturePlanResult, String> {
         let prompts = self.corpus_capture_prompts();
-        let recordings =
-            load_corpus_recordings(&self.inner.corpus_dir).map_err(|e| e.to_string())?;
+        let prompt_ids = prompts
+            .iter()
+            .map(|prompt| prompt.prompt_id.clone())
+            .collect::<std::collections::HashSet<_>>();
+        let recordings = load_corpus_recordings(&self.inner.corpus_dir)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .filter(|row| prompt_ids.contains(&row.prompt_id))
+            .collect();
         Ok(CorpusCapturePlanResult {
             corpus_dir: self.inner.corpus_dir.display().to_string(),
             prompts,

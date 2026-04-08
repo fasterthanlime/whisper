@@ -64,25 +64,26 @@ pub(crate) struct EvalCase {
 
 impl BeeMlService {
     pub(crate) fn corpus_capture_prompts(&self) -> Vec<beeml::rpc::CorpusCapturePrompt> {
-        let mut seen = std::collections::HashSet::new();
-        let mut prompts = Vec::new();
-        for row in &self.inner.dataset.recording_examples {
-            let normalized = row.text.trim().to_string();
-            if !seen.insert(normalized.clone()) {
-                continue;
-            }
-            let ordinal = prompts.len() as u32 + 1;
-            prompts.push(beeml::rpc::CorpusCapturePrompt {
-                prompt_id: format!("corpus-{ordinal:03}"),
-                ordinal,
-                term: row.term.clone(),
-                text: normalized,
-            });
-            if prompts.len() >= 100 {
-                break;
-            }
-        }
-        prompts
+        const PROMPT_SET_PREFIX: &str = "zipa-targeted-v1";
+        load_corpus_prompt_rows()
+            .unwrap_or_else(|error| {
+                tracing::error!(?error, "failed to load ZIPA corpus prompts");
+                Vec::new()
+            })
+            .into_iter()
+            .enumerate()
+            .map(|(index, row)| {
+                let ordinal = index as u32 + 1;
+                beeml::rpc::CorpusCapturePrompt {
+                    prompt_id: format!("{PROMPT_SET_PREFIX}-{ordinal:03}"),
+                    ordinal,
+                    bucket: row.bucket,
+                    term: row.term,
+                    text: row.text,
+                    prompt_notes: row.prompt_notes,
+                }
+            })
+            .collect()
     }
 
     pub(crate) fn build_transcribe_phonetic_trace(

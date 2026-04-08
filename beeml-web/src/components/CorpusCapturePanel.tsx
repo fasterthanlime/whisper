@@ -111,8 +111,10 @@ export function CorpusCapturePanel({ wsUrl }: { wsUrl: string }) {
         const result = await client.saveCorpusRecording({
           prompt_id: currentPrompt.prompt_id,
           ordinal: currentPrompt.ordinal,
+          bucket: currentPrompt.bucket,
           term: currentPrompt.term,
           text: currentPrompt.text,
+          prompt_notes: currentPrompt.prompt_notes,
           wav_bytes: bytes,
           notes: notes.trim() ? notes.trim() : null,
         });
@@ -209,6 +211,7 @@ export function CorpusCapturePanel({ wsUrl }: { wsUrl: string }) {
         <section className="prototype-card" style={{ gap: "1rem" }}>
           <div className="failure-topline">
             <span className="mini-badge">{currentPrompt.ordinal}</span>
+            <span className="mini-badge">{currentPrompt.bucket}</span>
             <span className="mini-badge">{currentPrompt.term}</span>
             <span className="failure-score">{currentPrompt.prompt_id}</span>
           </div>
@@ -222,6 +225,12 @@ export function CorpusCapturePanel({ wsUrl }: { wsUrl: string }) {
           >
             {currentPrompt.text}
           </div>
+
+          {currentPrompt.prompt_notes ? (
+            <div className="prototype-empty" style={{ textAlign: "left" }}>
+              {currentPrompt.prompt_notes}
+            </div>
+          ) : null}
 
           <div className="control-bar">
             <div className="control-actions">
@@ -336,6 +345,7 @@ export function CorpusCapturePanel({ wsUrl }: { wsUrl: string }) {
                 >
                   <div className="failure-topline">
                     <span className="mini-badge">{prompt.ordinal}</span>
+                    <span className="mini-badge">{prompt.bucket}</span>
                     <span className="mini-badge">{prompt.term}</span>
                     {latest ? (
                       <span className="failure-score">take {latest.take}</span>
