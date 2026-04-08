@@ -16,7 +16,9 @@ use crate::audio_filter::{self, AudioFilterChain};
 use crate::corrector::Corrector;
 use crate::decode_session::DecodeSession;
 use crate::text_buffer::{self, TextBuffer, TokenCount, TokenEntry, TokenId};
-use crate::types::{PendingToken, SessionOptions, SessionSnapshot, TokenAlternative};
+use crate::types::{
+    PendingToken, SessionAmbiguitySummary, SessionOptions, SessionSnapshot, TokenAlternative,
+};
 use crate::{FinishResult, SharedCorrectionEngine};
 
 /// A committed chunk waiting for right-context before correction.
@@ -52,6 +54,7 @@ pub struct Session<'a> {
     options: SessionOptions,
     incoming: Vec<f32>,
     chunk_size_samples: usize,
+    revision: u64,
 }
 
 impl<'a> Session<'a> {
@@ -85,6 +88,7 @@ impl<'a> Session<'a> {
             options,
             incoming: Vec::new(),
             chunk_size_samples,
+            revision: 0,
         }
     }
 
@@ -381,7 +385,12 @@ impl<'a> Session<'a> {
         })
     }
 
-    fn make_snapshot(&self) -> SessionSnapshot {
+    fn make_snapshot(&mut self) -> SessionSnapshot {
+        const LOW_CONCENTRATION: f32 = 3.0;
+        const LOW_MARGIN: f32 = 2.0;
+
+        self.revision += 1;
+
         let mut committed_text = String::new();
         let mut pending_text = String::new();
         let mut committed_words = Vec::new();
@@ -451,7 +460,7 @@ impl<'a> Session<'a> {
         }
 
         let full_text = format!("{committed_text}{pending_text}");
-        let pending_tokens = self
+        let pending_tokens: Vec<_> = self
             .pending_entries()
             .iter()
             .map(|entry| PendingToken {
@@ -476,12 +485,67 @@ impl<'a> Session<'a> {
             })
             .collect();
 
+        let pending_token_count = pending_tokens.len() as u32;
+        let ambiguity = if pending_tokens.is_empty() {
+            SessionAmbiguitySummary {
+                pending_token_count: 0,
+                low_concentration_count: 0,
+                low_margin_count: 0,
+                volatile_token_count: 0,
+                mean_concentration: 0.0,
+                mean_margin: 0.0,
+                min_concentration: 0.0,
+                min_margin: 0.0,
+            }
+        } else {
+            let n = pending_tokens.len() as f32;
+            let low_concentration_count = pending_tokens
+                .iter()
+                .filter(|token| token.concentration < LOW_CONCENTRATION)
+                .count() as u32;
+            let low_margin_count = pending_tokens
+                .iter()
+                .filter(|token| token.margin < LOW_MARGIN)
+                .count() as u32;
+            let volatile_token_count = pending_tokens
+                .iter()
+                .filter(|token| {
+                    token.concentration < LOW_CONCENTRATION || token.margin < LOW_MARGIN
+                })
+                .count() as u32;
+
+            SessionAmbiguitySummary {
+                pending_token_count,
+                low_concentration_count,
+                low_margin_count,
+                volatile_token_count,
+                mean_concentration: pending_tokens
+                    .iter()
+                    .map(|token| token.concentration)
+                    .sum::<f32>()
+                    / n,
+                mean_margin: pending_tokens.iter().map(|token| token.margin).sum::<f32>() / n,
+                min_concentration: pending_tokens
+                    .iter()
+                    .map(|token| token.concentration)
+                    .fold(f32::INFINITY, f32::min),
+                min_margin: pending_tokens
+                    .iter()
+                    .map(|token| token.margin)
+                    .fold(f32::INFINITY, f32::min),
+            }
+        };
+
         SessionSnapshot {
+            revision: self.revision,
             committed_text,
             pending_text,
             full_text,
+            committed_token_count: self.committed.len().0 as u32,
+            pending_token_count,
             committed_words,
             pending_tokens,
+            ambiguity,
             detected_language: self.detected_language.clone(),
         }
     }

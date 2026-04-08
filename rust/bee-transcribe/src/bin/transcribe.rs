@@ -155,7 +155,14 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn print_update(chunk: usize, ms: u128, snapshot: &SessionSnapshot) {
-    println!("  chunk {chunk}: {ms:.0}ms | {}", snapshot.full_text);
+    println!(
+        "  chunk {chunk}: {ms:.0}ms | rev={} committed={} pending={} volatile={} | {}",
+        snapshot.revision,
+        snapshot.committed_token_count,
+        snapshot.pending_token_count,
+        snapshot.ambiguity.volatile_token_count,
+        snapshot.full_text,
+    );
 }
 
 /// Print per-word alternatives with confidence info.
