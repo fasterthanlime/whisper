@@ -109,8 +109,11 @@ impl EncoderEmbed {
                 .build()?,
             convnext: ConvNeXtFrontend::new(Self::LAYER3_CHANNELS)?,
             out: MaybeQuantized::new(
-                nn::LinearBuilder::new(out_width * Self::LAYER3_CHANNELS, config.encoder_dim[0] as i32)
-                    .build()?,
+                nn::LinearBuilder::new(
+                    out_width * Self::LAYER3_CHANNELS,
+                    config.encoder_dim[0] as i32,
+                )
+                .build()?,
             ),
             out_norm: BiasNorm::new(config.encoder_dim[0] as i32)?,
         })
@@ -306,7 +309,10 @@ mod tests {
             model.encoder_embed.convnext.pointwise_conv2.weight.shape(),
             vec![128, 1, 1, 384]
         );
-        assert_eq!(linear_weight_shape(&model.encoder_embed.out), vec![192, 2432]);
+        assert_eq!(
+            linear_weight_shape(&model.encoder_embed.out),
+            vec![192, 2432]
+        );
         assert_eq!(linear_weight_shape(&model.ctc_head.linear), vec![127, 512]);
     }
 

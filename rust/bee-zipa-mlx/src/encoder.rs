@@ -373,9 +373,7 @@ pub struct ConvolutionModule {
 impl ConvolutionModule {
     pub fn new(embed_dim: i32, kernel_size: i32) -> Result<Self, Exception> {
         Ok(Self {
-            in_proj: MaybeQuantized::new(
-                nn::LinearBuilder::new(embed_dim, embed_dim * 2).build()?,
-            ),
+            in_proj: MaybeQuantized::new(nn::LinearBuilder::new(embed_dim, embed_dim * 2).build()?),
             depthwise_conv: nn::Conv1dBuilder::new(1, embed_dim, kernel_size)
                 .groups(embed_dim)
                 .padding(kernel_size / 2)
@@ -647,7 +645,8 @@ impl ZipformerEncoderLayer {
         self.feed_forward1.quantize_linears(max_group_size, bits)?;
         self.feed_forward2.quantize_linears(max_group_size, bits)?;
         self.feed_forward3.quantize_linears(max_group_size, bits)?;
-        self.nonlin_attention.quantize_linears(max_group_size, bits)?;
+        self.nonlin_attention
+            .quantize_linears(max_group_size, bits)?;
         self.conv_module1.quantize_linears(max_group_size, bits)?;
         self.conv_module2.quantize_linears(max_group_size, bits)?;
         Ok(())
@@ -714,35 +713,86 @@ mod tests {
         let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
         let layer = ZipformerEncoderLayer::new_for_stage(&config, 0).unwrap();
 
-        assert_eq!(linear_weight_shape(&layer.self_attn_weights.in_proj), vec![272, 192]);
+        assert_eq!(
+            linear_weight_shape(&layer.self_attn_weights.in_proj),
+            vec![272, 192]
+        );
         assert_eq!(
             linear_weight_shape(&layer.self_attn_weights.linear_pos),
             vec![16, 48]
         );
-        assert_eq!(linear_weight_shape(&layer.self_attn1.in_proj), vec![48, 192]);
-        assert_eq!(linear_weight_shape(&layer.self_attn1.out_proj), vec![192, 48]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward1.in_proj), vec![384, 192]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward1.out_proj), vec![192, 384]);
-        assert_eq!(linear_weight_shape(&layer.nonlin_attention.in_proj), vec![432, 192]);
-        assert_eq!(linear_weight_shape(&layer.nonlin_attention.out_proj), vec![192, 144]);
-        assert_eq!(linear_weight_shape(&layer.conv_module1.in_proj), vec![384, 192]);
+        assert_eq!(
+            linear_weight_shape(&layer.self_attn1.in_proj),
+            vec![48, 192]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.self_attn1.out_proj),
+            vec![192, 48]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward1.in_proj),
+            vec![384, 192]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward1.out_proj),
+            vec![192, 384]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.nonlin_attention.in_proj),
+            vec![432, 192]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.nonlin_attention.out_proj),
+            vec![192, 144]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.conv_module1.in_proj),
+            vec![384, 192]
+        );
         assert_eq!(
             layer.conv_module1.depthwise_conv.weight.shape(),
             vec![192, 31, 1]
         );
-        assert_eq!(linear_weight_shape(&layer.conv_module1.out_proj), vec![192, 192]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward2.in_proj), vec![512, 192]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward2.out_proj), vec![192, 512]);
-        assert_eq!(linear_weight_shape(&layer.self_attn2.in_proj), vec![48, 192]);
-        assert_eq!(linear_weight_shape(&layer.self_attn2.out_proj), vec![192, 48]);
-        assert_eq!(linear_weight_shape(&layer.conv_module2.in_proj), vec![384, 192]);
+        assert_eq!(
+            linear_weight_shape(&layer.conv_module1.out_proj),
+            vec![192, 192]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward2.in_proj),
+            vec![512, 192]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward2.out_proj),
+            vec![192, 512]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.self_attn2.in_proj),
+            vec![48, 192]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.self_attn2.out_proj),
+            vec![192, 48]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.conv_module2.in_proj),
+            vec![384, 192]
+        );
         assert_eq!(
             layer.conv_module2.depthwise_conv.weight.shape(),
             vec![192, 31, 1]
         );
-        assert_eq!(linear_weight_shape(&layer.conv_module2.out_proj), vec![192, 192]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward3.in_proj), vec![640, 192]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward3.out_proj), vec![192, 640]);
+        assert_eq!(
+            linear_weight_shape(&layer.conv_module2.out_proj),
+            vec![192, 192]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward3.in_proj),
+            vec![640, 192]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward3.out_proj),
+            vec![192, 640]
+        );
         assert_eq!(layer.bypass_mid.bypass_scale.shape(), vec![192]);
         assert_eq!(layer.norm.bias.shape(), vec![192]);
         assert_eq!(layer.bypass.bypass_scale.shape(), vec![192]);
@@ -953,35 +1003,86 @@ mod tests {
         let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
         let layer = ZipformerEncoderLayer::new_for_stage(&config, 1).unwrap();
 
-        assert_eq!(linear_weight_shape(&layer.self_attn_weights.in_proj), vec![272, 256]);
+        assert_eq!(
+            linear_weight_shape(&layer.self_attn_weights.in_proj),
+            vec![272, 256]
+        );
         assert_eq!(
             linear_weight_shape(&layer.self_attn_weights.linear_pos),
             vec![16, 48]
         );
-        assert_eq!(linear_weight_shape(&layer.self_attn1.in_proj), vec![48, 256]);
-        assert_eq!(linear_weight_shape(&layer.self_attn1.out_proj), vec![256, 48]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward1.in_proj), vec![576, 256]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward1.out_proj), vec![256, 576]);
-        assert_eq!(linear_weight_shape(&layer.nonlin_attention.in_proj), vec![576, 256]);
-        assert_eq!(linear_weight_shape(&layer.nonlin_attention.out_proj), vec![256, 192]);
-        assert_eq!(linear_weight_shape(&layer.conv_module1.in_proj), vec![512, 256]);
+        assert_eq!(
+            linear_weight_shape(&layer.self_attn1.in_proj),
+            vec![48, 256]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.self_attn1.out_proj),
+            vec![256, 48]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward1.in_proj),
+            vec![576, 256]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward1.out_proj),
+            vec![256, 576]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.nonlin_attention.in_proj),
+            vec![576, 256]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.nonlin_attention.out_proj),
+            vec![256, 192]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.conv_module1.in_proj),
+            vec![512, 256]
+        );
         assert_eq!(
             layer.conv_module1.depthwise_conv.weight.shape(),
             vec![256, 31, 1]
         );
-        assert_eq!(linear_weight_shape(&layer.conv_module1.out_proj), vec![256, 256]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward2.in_proj), vec![768, 256]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward2.out_proj), vec![256, 768]);
-        assert_eq!(linear_weight_shape(&layer.self_attn2.in_proj), vec![48, 256]);
-        assert_eq!(linear_weight_shape(&layer.self_attn2.out_proj), vec![256, 48]);
-        assert_eq!(linear_weight_shape(&layer.conv_module2.in_proj), vec![512, 256]);
+        assert_eq!(
+            linear_weight_shape(&layer.conv_module1.out_proj),
+            vec![256, 256]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward2.in_proj),
+            vec![768, 256]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward2.out_proj),
+            vec![256, 768]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.self_attn2.in_proj),
+            vec![48, 256]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.self_attn2.out_proj),
+            vec![256, 48]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.conv_module2.in_proj),
+            vec![512, 256]
+        );
         assert_eq!(
             layer.conv_module2.depthwise_conv.weight.shape(),
             vec![256, 31, 1]
         );
-        assert_eq!(linear_weight_shape(&layer.conv_module2.out_proj), vec![256, 256]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward3.in_proj), vec![960, 256]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward3.out_proj), vec![256, 960]);
+        assert_eq!(
+            linear_weight_shape(&layer.conv_module2.out_proj),
+            vec![256, 256]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward3.in_proj),
+            vec![960, 256]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward3.out_proj),
+            vec![256, 960]
+        );
         assert_eq!(layer.bypass_mid.bypass_scale.shape(), vec![256]);
         assert_eq!(layer.norm.bias.shape(), vec![256]);
         assert_eq!(layer.bypass.bypass_scale.shape(), vec![256]);
@@ -1170,35 +1271,86 @@ mod tests {
         let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
         let layer = ZipformerEncoderLayer::new_for_stage(&config, 2).unwrap();
 
-        assert_eq!(linear_weight_shape(&layer.self_attn_weights.in_proj), vec![272, 384]);
+        assert_eq!(
+            linear_weight_shape(&layer.self_attn_weights.in_proj),
+            vec![272, 384]
+        );
         assert_eq!(
             linear_weight_shape(&layer.self_attn_weights.linear_pos),
             vec![16, 48]
         );
-        assert_eq!(linear_weight_shape(&layer.self_attn1.in_proj), vec![48, 384]);
-        assert_eq!(linear_weight_shape(&layer.self_attn1.out_proj), vec![384, 48]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward1.in_proj), vec![768, 384]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward1.out_proj), vec![384, 768]);
-        assert_eq!(linear_weight_shape(&layer.nonlin_attention.in_proj), vec![864, 384]);
-        assert_eq!(linear_weight_shape(&layer.nonlin_attention.out_proj), vec![384, 288]);
-        assert_eq!(linear_weight_shape(&layer.conv_module1.in_proj), vec![768, 384]);
+        assert_eq!(
+            linear_weight_shape(&layer.self_attn1.in_proj),
+            vec![48, 384]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.self_attn1.out_proj),
+            vec![384, 48]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward1.in_proj),
+            vec![768, 384]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward1.out_proj),
+            vec![384, 768]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.nonlin_attention.in_proj),
+            vec![864, 384]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.nonlin_attention.out_proj),
+            vec![384, 288]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.conv_module1.in_proj),
+            vec![768, 384]
+        );
         assert_eq!(
             layer.conv_module1.depthwise_conv.weight.shape(),
             vec![384, 15, 1]
         );
-        assert_eq!(linear_weight_shape(&layer.conv_module1.out_proj), vec![384, 384]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward2.in_proj), vec![1024, 384]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward2.out_proj), vec![384, 1024]);
-        assert_eq!(linear_weight_shape(&layer.self_attn2.in_proj), vec![48, 384]);
-        assert_eq!(linear_weight_shape(&layer.self_attn2.out_proj), vec![384, 48]);
-        assert_eq!(linear_weight_shape(&layer.conv_module2.in_proj), vec![768, 384]);
+        assert_eq!(
+            linear_weight_shape(&layer.conv_module1.out_proj),
+            vec![384, 384]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward2.in_proj),
+            vec![1024, 384]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward2.out_proj),
+            vec![384, 1024]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.self_attn2.in_proj),
+            vec![48, 384]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.self_attn2.out_proj),
+            vec![384, 48]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.conv_module2.in_proj),
+            vec![768, 384]
+        );
         assert_eq!(
             layer.conv_module2.depthwise_conv.weight.shape(),
             vec![384, 15, 1]
         );
-        assert_eq!(linear_weight_shape(&layer.conv_module2.out_proj), vec![384, 384]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward3.in_proj), vec![1280, 384]);
-        assert_eq!(linear_weight_shape(&layer.feed_forward3.out_proj), vec![384, 1280]);
+        assert_eq!(
+            linear_weight_shape(&layer.conv_module2.out_proj),
+            vec![384, 384]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward3.in_proj),
+            vec![1280, 384]
+        );
+        assert_eq!(
+            linear_weight_shape(&layer.feed_forward3.out_proj),
+            vec![384, 1280]
+        );
         assert_eq!(layer.bypass_mid.bypass_scale.shape(), vec![384]);
         assert_eq!(layer.norm.bias.shape(), vec![384]);
         assert_eq!(layer.bypass.bypass_scale.shape(), vec![384]);

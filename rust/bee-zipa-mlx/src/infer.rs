@@ -50,9 +50,9 @@ impl ZipaInference {
     pub fn load_quantized_safetensors(path: impl AsRef<Path>) -> Result<Self> {
         let (tensors, metadata) = Array::load_safetensors_with_metadata(path)
             .map_err(|e| mlx_rs::error::Exception::custom(format!("load safetensors: {e}")))?;
-        let format = metadata
-            .get("format")
-            .ok_or_else(|| ZipaError::Other(anyhow::anyhow!("missing quantized checkpoint format")))?;
+        let format = metadata.get("format").ok_or_else(|| {
+            ZipaError::Other(anyhow::anyhow!("missing quantized checkpoint format"))
+        })?;
         if format != QUANTIZED_CHECKPOINT_FORMAT {
             return Err(ZipaError::Other(anyhow::anyhow!(
                 "unsupported quantized checkpoint format: {format}"
@@ -66,9 +66,7 @@ impl ZipaInference {
         let group_size = metadata
             .get("group_size")
             .ok_or_else(|| {
-                ZipaError::Other(anyhow::anyhow!(
-                    "missing quantized checkpoint group_size"
-                ))
+                ZipaError::Other(anyhow::anyhow!("missing quantized checkpoint group_size"))
             })?
             .parse::<i32>()
             .map_err(|e| ZipaError::Other(anyhow::Error::new(e)))?;
@@ -100,6 +98,18 @@ impl ZipaInference {
         inference.quantize_linears(group_size, bits)?;
         inference.load_flattened_quantized_tensors(&tensors)?;
         Ok(inference)
+    }
+
+    pub fn load_quantized_bundle_dir(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let checkpoint = path.join("model.safetensors");
+        if !checkpoint.is_file() {
+            return Err(ZipaError::Other(anyhow::anyhow!(
+                "quantized bundle dir is missing model.safetensors: {}",
+                checkpoint.display()
+            )));
+        }
+        Self::load_quantized_safetensors(checkpoint)
     }
 
     pub fn load_from_reference_dir(
@@ -216,7 +226,10 @@ impl ZipaInference {
 
         let mut metadata = HashMap::new();
         metadata.insert("format".to_owned(), QUANTIZED_CHECKPOINT_FORMAT.to_owned());
-        metadata.insert("variant".to_owned(), "small-crctc-ns-no-diacritics-700k".to_owned());
+        metadata.insert(
+            "variant".to_owned(),
+            "small-crctc-ns-no-diacritics-700k".to_owned(),
+        );
         metadata.insert("group_size".to_owned(), group_size.to_string());
         metadata.insert("bits".to_owned(), bits.to_string());
 
@@ -254,9 +267,9 @@ fn load_prefixed_parameters<M: ModuleParameters>(
     let mut params = module.parameters_mut().flatten();
     for (name, param) in &mut params {
         let key = format!("{prefix}.{name}");
-        let value = tensors.get(&key).ok_or_else(|| {
-            ZipaError::Other(anyhow::anyhow!("missing quantized tensor: {key}"))
-        })?;
+        let value = tensors
+            .get(&key)
+            .ok_or_else(|| ZipaError::Other(anyhow::anyhow!("missing quantized tensor: {key}")))?;
         **param = value.clone();
     }
     Ok(())

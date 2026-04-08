@@ -22,7 +22,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ if output.is_none() => output = Some(PathBuf::from(arg)),
             _ => {
-                eprintln!("usage: zipa-export-quantized [--bits N] [--group-size N] <output.safetensors>");
+                eprintln!(
+                    "usage: zipa-export-quantized [--bits N] [--group-size N] <output.safetensors>"
+                );
                 std::process::exit(2);
             }
         }
@@ -31,7 +33,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = match output {
         Some(path) => path,
         None => {
-            eprintln!("usage: zipa-export-quantized [--bits N] [--group-size N] <output.safetensors>");
+            eprintln!(
+                "usage: zipa-export-quantized [--bits N] [--group-size N] <output.safetensors>"
+            );
             std::process::exit(2);
         }
     };

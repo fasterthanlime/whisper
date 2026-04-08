@@ -74,6 +74,7 @@ This is a Bee model bundle. It is not currently intended as a standalone general
 - Small incompatible projections remain dense inside the checkpoint
 - Norms, bypass scales, convolution weights, and downsample weights remain dense
 - Group size: `64`
+- Full-model Q4 was evaluated during development and produced unacceptable end-to-end degradation on longer inputs, so this bundle standardizes on Q8 and does not currently pursue Q4.
 
 ## Usage From Bee
 
@@ -81,9 +82,11 @@ Example from a Bee checkout:
 
 ```bash
 cargo run -q -p bee-zipa-mlx --bin zipa-infer -- \\
-  --quantized-checkpoint /path/to/model.safetensors \\
+  --bundle-dir /path/to/zipa-mlx-hf \\
   /path/to/audio.wav
 ```
+
+The CLI also accepts `--quantized-checkpoint /path/to/model.safetensors`, but `--bundle-dir` is the intended entry point for the published bundle layout.
 
 ## Notes
 
@@ -151,6 +154,11 @@ def main() -> None:
         "group_size": args.group_size,
         "checkpoint": "model.safetensors",
     }
+    config["quantization"]["q4_status"] = "evaluated_and_rejected"
+    config["quantization"]["q4_note"] = (
+        "Full-model Q4 produced unacceptable end-to-end degradation on longer inputs; "
+        "Q8 is the supported published format."
+    )
     config["source_model_id"] = "anyspeech/zipa-small-crctc-ns-no-diacritics-700k"
     config["target_hf_repo"] = "bearcove/zipa-small-crctc-ns-no-diacritics-700k-mlx-q8"
     config["consumer_repo"] = "fasterthanlime/bee"

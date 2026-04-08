@@ -10,6 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut bits = None;
     let mut group_size = None;
     let mut quantized_checkpoint = None;
+    let mut bundle_dir = None;
     let mut wav = None;
 
     while let Some(arg) = args.next() {
@@ -23,13 +24,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 group_size = Some(value.to_string_lossy().parse::<i32>()?);
             }
             "--quantized-checkpoint" => {
-                let value = args.next().ok_or("--quantized-checkpoint requires a value")?;
+                let value = args
+                    .next()
+                    .ok_or("--quantized-checkpoint requires a value")?;
                 quantized_checkpoint = Some(PathBuf::from(value));
+            }
+            "--bundle-dir" => {
+                let value = args.next().ok_or("--bundle-dir requires a value")?;
+                bundle_dir = Some(PathBuf::from(value));
             }
             _ if wav.is_none() => wav = Some(PathBuf::from(arg)),
             _ => {
                 eprintln!(
-                    "usage: zipa-infer [--bits N] [--group-size N] [--quantized-checkpoint PATH] <wav-path>"
+                    "usage: zipa-infer [--bits N] [--group-size N] [--quantized-checkpoint PATH | --bundle-dir DIR] <wav-path>"
                 );
                 std::process::exit(2);
             }
@@ -40,25 +47,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(path) => path,
         None => {
             eprintln!(
-                "usage: zipa-infer [--bits N] [--group-size N] [--quantized-checkpoint PATH] <wav-path>"
+                "usage: zipa-infer [--bits N] [--group-size N] [--quantized-checkpoint PATH | --bundle-dir DIR] <wav-path>"
             );
             std::process::exit(2);
         }
     };
 
+    if quantized_checkpoint.is_some() && bundle_dir.is_some() {
+        eprintln!("--quantized-checkpoint and --bundle-dir cannot be used together");
+        std::process::exit(2);
+    }
+
     let load_start = Instant::now();
-    let mut inference = match &quantized_checkpoint {
-        Some(path) => ZipaInference::load_quantized_safetensors(path)?,
-        None => ZipaInference::load_reference_small_no_diacritics()?,
+    let mut inference = match (&quantized_checkpoint, &bundle_dir) {
+        (Some(path), None) => ZipaInference::load_quantized_safetensors(path)?,
+        (None, Some(path)) => ZipaInference::load_quantized_bundle_dir(path)?,
+        (None, None) => ZipaInference::load_reference_small_no_diacritics()?,
+        (Some(_), Some(_)) => unreachable!(),
     };
     let load_elapsed = load_start.elapsed();
 
-    if quantized_checkpoint.is_none() {
+    if quantized_checkpoint.is_none() && bundle_dir.is_none() {
         if let Some(bits) = bits {
             inference.quantize_linears(group_size.unwrap_or(64), bits)?;
         }
     } else if bits.is_some() || group_size.is_some() {
-        eprintln!("--bits/--group-size cannot be used with --quantized-checkpoint");
+        eprintln!("--bits/--group-size cannot be used with --quantized-checkpoint or --bundle-dir");
         std::process::exit(2);
     }
 
@@ -69,6 +83,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("wav: {}", wav.display());
     if let Some(path) = quantized_checkpoint {
         println!("quantized_checkpoint: {}", path.display());
+    }
+    if let Some(path) = bundle_dir {
+        println!("bundle_dir: {}", path.display());
     }
     println!("load_ms: {:.3}", load_elapsed.as_secs_f64() * 1_000.0);
     if let Some(bits) = bits {
