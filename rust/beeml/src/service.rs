@@ -17,7 +17,7 @@ use beeml::rpc::{
     RetrievalPrototypeProbeResult, SpanDebugTrace, SpanDebugView,
     TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
 };
-use serde::Deserialize;
+use bee_phonetic::dataset::RecordingWordAlignment;
 use tracing::info;
 
 use crate::offline_eval::*;
@@ -39,15 +39,7 @@ pub(crate) struct BeemlServiceInner {
     pub(crate) event_log_path: PathBuf,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub(crate) struct CounterexampleRecordingRow {
-    pub(crate) term: String,
-    pub(crate) text: String,
-    pub(crate) take: i64,
-    pub(crate) audio_path: String,
-    pub(crate) transcript: String,
-    pub(crate) surface_form: String,
-}
+pub(crate) use bee_phonetic::CounterexampleRecordingRow;
 
 #[derive(Clone)]
 pub(crate) struct EvalCase {
@@ -395,7 +387,15 @@ impl BeeMlService {
                         take: Some(row.take),
                         audio_path: Some(row.audio_path.clone()),
                         surface_form: Some(row.surface_form.clone()),
-                        words: Vec::new(),
+                        words: row.words.iter().map(|w| AlignedWord {
+                            word: w.word.clone(),
+                            start: w.start,
+                            end: w.end,
+                            mean_logprob: w.mean_logprob,
+                            min_logprob: w.min_logprob,
+                            mean_margin: w.mean_margin,
+                            min_margin: w.min_margin,
+                        }).collect(),
                     }),
             );
         }

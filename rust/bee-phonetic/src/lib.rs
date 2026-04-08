@@ -9,8 +9,8 @@ pub mod types;
 pub mod word_split;
 
 pub use dataset::{
-    RecordingExampleRow, SeedDataset, SeedDatasetError, SeedDatasetValidationError, SeedTermRow,
-    SentenceExampleRow,
+    CounterexampleRecordingRow, RecordingExampleRow, SeedDataset, SeedDatasetError,
+    SeedDatasetValidationError, SeedTermRow, SentenceExampleRow,
 };
 pub use feature_view::{
     feature_similarity, feature_similarity_from_vectors, feature_tokens_for_ipa,

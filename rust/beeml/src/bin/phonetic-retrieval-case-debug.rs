@@ -6,8 +6,8 @@ use bee_phonetic::{
     CandidateFeatureRow, LexiconAlias, RetrievalQuery, SeedDataset, TranscriptAlignmentToken,
     TranscriptSpan,
 };
+use bee_phonetic::CounterexampleRecordingRow;
 use beeml::g2p::CachedEspeakG2p;
-use serde::Deserialize;
 
 #[derive(Debug, Clone)]
 struct Config {
@@ -30,16 +30,6 @@ impl Default for Config {
             counterexamples: false,
         }
     }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct CounterexampleRecordingRow {
-    term: String,
-    text: String,
-    take: i64,
-    audio_path: String,
-    transcript: String,
-    surface_form: String,
 }
 
 #[derive(Debug, Clone)]
@@ -431,8 +421,8 @@ fn load_counterexample_recordings(
         if line.trim().is_empty() {
             continue;
         }
-        let row = serde_json::from_str::<CounterexampleRecordingRow>(line)
-            .map_err(|error| format!("{}:{}: {error}", path.display(), line_idx + 1))?;
+        let row = facet_json::from_str::<CounterexampleRecordingRow>(line)
+            .map_err(|error| format!("{}:{}: {error:?}", path.display(), line_idx + 1))?;
         out.push(row);
     }
     Ok(out)

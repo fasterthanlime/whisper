@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use bee_phonetic::{
-    enumerate_transcript_spans_with, query_index, score_shortlist, RetrievalQuery, SeedDataset,
-    TranscriptAlignmentToken, TranscriptSpan, VerifiedCandidate,
+    enumerate_transcript_spans_with, query_index, score_shortlist, CounterexampleRecordingRow,
+    RetrievalQuery, SeedDataset, TranscriptAlignmentToken, TranscriptSpan, VerifiedCandidate,
 };
 use beeml::g2p::CachedEspeakG2p;
 use rayon::prelude::*;
@@ -57,16 +57,6 @@ struct PreparedRecording {
 enum EvalSuite {
     Canonical,
     Counterexample,
-}
-
-#[derive(Debug, Clone, Facet)]
-struct CounterexampleRecordingRow {
-    term: String,
-    text: String,
-    take: i64,
-    audio_path: String,
-    transcript: String,
-    surface_form: String,
 }
 
 #[derive(Debug, Default)]

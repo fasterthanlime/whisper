@@ -32,8 +32,6 @@ dirs = "5"
 facet = "0.44.3"
 facet-json = "0.44"
 rayon = "1.10.0"
-serde = { workspace = true }
-serde_json = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"], optional = true }
 tracing = "0.1.41"
 tracing-appender = "0.2.3"

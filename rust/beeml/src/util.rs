@@ -152,7 +152,8 @@ pub(crate) fn load_counterexample_recordings() -> Result<Vec<CounterexampleRecor
         if line.trim().is_empty() {
             continue;
         }
-        let row = serde_json::from_str::<CounterexampleRecordingRow>(line)
+        let row = facet_json::from_str::<CounterexampleRecordingRow>(line)
+            .map_err(|e| anyhow::anyhow!("{e:?}"))
             .with_context(|| format!("parsing {} line {}", path.display(), line_idx + 1))?;
         rows.push(row);
     }

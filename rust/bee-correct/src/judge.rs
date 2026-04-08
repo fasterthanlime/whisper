@@ -1052,8 +1052,17 @@ pub fn extract_span_context(
         .collect();
 
     // Code-like: check ±10 chars for code markers
-    let window_start = char_start.saturating_sub(10);
-    let window_end = (char_end + 10).min(transcript.len());
+    let window_start = transcript[..char_start]
+        .char_indices()
+        .rev()
+        .nth(10)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let window_end = transcript[char_end..]
+        .char_indices()
+        .nth(10)
+        .map(|(i, _)| char_end + i)
+        .unwrap_or(transcript.len());
     let window = &transcript[window_start..window_end];
     let code_markers = ["()", "{}", "::", ".", "_", "->", "=>", "fn ", "let "];
     let code_like = code_markers.iter().any(|m| window.contains(m));

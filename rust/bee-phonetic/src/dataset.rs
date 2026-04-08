@@ -148,6 +148,18 @@ pub struct RecordingExampleRow {
     pub words: Vec<RecordingWordAlignment>,
 }
 
+#[derive(Debug, Clone, Facet, PartialEq)]
+pub struct CounterexampleRecordingRow {
+    pub term: String,
+    pub text: String,
+    pub take: i64,
+    pub audio_path: String,
+    pub transcript: String,
+    pub surface_form: String,
+    #[facet(default)]
+    pub words: Vec<RecordingWordAlignment>,
+}
+
 /// Per-word alignment data from ASR, stored alongside recording examples.
 #[derive(Debug, Clone, PartialEq, Facet)]
 pub struct RecordingWordAlignment {
