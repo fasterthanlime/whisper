@@ -145,11 +145,27 @@ function SpanCard({ span }: { span: PhoneticRescueSpan }) {
         <span className="mini-badge">
           ZIPA {span.zipaNormStart}:{span.zipaNormEnd}
         </span>
+        <span className="mini-badge">{span.alignmentSource}</span>
         <span className="failure-score">
           base {formatMetric(span.transcriptFeatureSimilarity)}
         </span>
       </div>
       <div className="failure-transcript">{span.spanText}</div>
+      <div className="failure-pills">
+        <span className="failure-pill">
+          phones {span.transcriptPhoneCount}{"->"}
+          {span.chosenZipaPhoneCount}
+        </span>
+        <span className="failure-pill">
+          proj {formatMetric(span.projectedAlignmentScore)}
+        </span>
+        <span className="failure-pill">
+          chosen {formatMetric(span.chosenAlignmentScore)}
+        </span>
+        <span className="failure-pill">
+          gap {formatMetric(span.alignmentScoreGap)}
+        </span>
+      </div>
       <AlignmentView ops={span.alignment} transcriptLabel="Transcript" zipaLabel="ZIPA" />
       <div className="accepted-edits" style={{ marginTop: "0.25rem" }}>
         {span.candidates

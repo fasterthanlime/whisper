@@ -31,6 +31,17 @@ use crate::offline_eval::*;
 use crate::rapid_fire::build_rapid_fire_decision_set;
 use crate::util::*;
 
+struct SpanAlignmentSelection {
+    range: std::ops::Range<usize>,
+    alignment: bee_phonetic::TokenAlignment,
+    zipa_normalized: Vec<String>,
+    projected_alignment_score: Option<f32>,
+    chosen_alignment_score: f32,
+    second_best_alignment_score: Option<f32>,
+    alignment_score_gap: Option<f32>,
+    alignment_source: &'static str,
+}
+
 #[derive(Clone)]
 pub(crate) struct BeeMlService {
     pub(crate) inner: Arc<BeemlServiceInner>,
@@ -156,29 +167,30 @@ impl BeeMlService {
             if transcript_normalized.is_empty() {
                 continue;
             }
+            let transcript_token_count = transcript_normalized.len().min(u32::MAX as usize) as u32;
             let transcript_norm_range = transcript_token_range_for_span(
                 &transcript_word_normalized_ranges,
                 span.token_start,
                 span.token_end,
             );
-            let Some((zipa_norm_range, span_alignment, zipa_normalized)) =
-                select_span_alignment_range(
-                    &transcript_normalized,
-                    &utterance_zipa_normalized,
-                    utterance_alignment.project_left_range(transcript_norm_range),
-                )
-            else {
+            let Some(selection) = select_span_alignment_range(
+                &transcript_normalized,
+                &utterance_zipa_normalized,
+                utterance_alignment.project_left_range(transcript_norm_range),
+            ) else {
                 continue;
             };
+            let zipa_norm_range = selection.range.clone();
             let zipa_raw = raw_slice_for_normalized_range(
                 &utterance_zipa_raw,
                 &utterance_zipa_normalized_with_spans,
                 zipa_norm_range.clone(),
             );
+            let zipa_token_count = selection.zipa_normalized.len().min(u32::MAX as usize) as u32;
             let transcript_similarity =
-                phoneme_similarity(&zipa_normalized, &transcript_normalized);
+                phoneme_similarity(&selection.zipa_normalized, &transcript_normalized);
             let transcript_feature_similarity =
-                feature_similarity(&zipa_normalized, &transcript_normalized);
+                feature_similarity(&selection.zipa_normalized, &transcript_normalized);
 
             let shortlist = query_index(
                 &self.inner.index,
@@ -213,7 +225,7 @@ impl BeeMlService {
                     })?;
                 let candidate_normalized = normalize_ipa_for_comparison(&candidate_raw);
                 let feature_similarity =
-                    feature_similarity(&zipa_normalized, &candidate_normalized);
+                    feature_similarity(&selection.zipa_normalized, &candidate_normalized);
                 let similarity_delta = match (feature_similarity, transcript_feature_similarity) {
                     (Some(candidate), Some(transcript)) => Some(candidate - transcript),
                     _ => None,
@@ -245,11 +257,18 @@ impl BeeMlService {
                 zipa_norm_start: zipa_norm_range.start as u32,
                 zipa_norm_end: zipa_norm_range.end as u32,
                 zipa_raw,
-                zipa_normalized,
+                zipa_normalized: selection.zipa_normalized,
                 transcript_normalized,
+                transcript_phone_count: transcript_token_count,
+                chosen_zipa_phone_count: zipa_token_count,
                 transcript_similarity,
                 transcript_feature_similarity,
-                alignment: map_alignment_ops(&span_alignment.ops),
+                projected_alignment_score: selection.projected_alignment_score,
+                chosen_alignment_score: Some(selection.chosen_alignment_score),
+                second_best_alignment_score: selection.second_best_alignment_score,
+                alignment_score_gap: selection.alignment_score_gap,
+                alignment_source: selection.alignment_source.to_string(),
+                alignment: map_alignment_ops(&selection.alignment.ops),
                 candidates,
             });
         }
@@ -1416,14 +1435,10 @@ fn select_span_alignment_range(
     transcript_normalized: &[String],
     utterance_zipa_normalized: &[String],
     projected_range: Option<std::ops::Range<usize>>,
-) -> Option<(
-    std::ops::Range<usize>,
-    bee_phonetic::TokenAlignment,
-    Vec<String>,
-)> {
+) -> Option<SpanAlignmentSelection> {
     let mut candidate_ranges = Vec::<std::ops::Range<usize>>::new();
-    if let Some(range) = projected_range {
-        candidate_ranges.push(range);
+    if let Some(range) = &projected_range {
+        candidate_ranges.push(range.clone());
     }
     candidate_ranges.extend(
         top_right_anchor_windows(transcript_normalized, utterance_zipa_normalized, 3)
@@ -1432,8 +1447,8 @@ fn select_span_alignment_range(
     );
     normalize_candidate_ranges(&mut candidate_ranges, utterance_zipa_normalized.len());
 
-    let mut best = None;
-    for range in candidate_ranges {
+    let mut scored = Vec::new();
+    for (candidate_index, range) in candidate_ranges.into_iter().enumerate() {
         let zipa_normalized = utterance_zipa_normalized
             .get(range.clone())
             .unwrap_or(&[])
@@ -1447,16 +1462,35 @@ fn select_span_alignment_range(
             transcript_normalized.len(),
             zipa_normalized.len(),
         );
-        let replace = match &best {
-            Some((_, best_score, _, _)) => score > *best_score,
-            None => true,
-        };
-        if replace {
-            best = Some((range, score, alignment, zipa_normalized));
-        }
+        scored.push((candidate_index, range, score, alignment, zipa_normalized));
     }
 
-    best.map(|(range, _score, alignment, zipa_normalized)| (range, alignment, zipa_normalized))
+    scored.sort_by(|a, b| b.2.total_cmp(&a.2));
+    let projected_alignment_score = scored
+        .iter()
+        .find(|(candidate_index, _, _, _, _)| projected_range.is_some() && *candidate_index == 0)
+        .map(|(_, _, score, _, _)| *score);
+    let second_best_alignment_score = scored.get(1).map(|(_, _, score, _, _)| *score);
+    let (candidate_index, range, chosen_alignment_score, alignment, zipa_normalized) =
+        scored.into_iter().next()?;
+    let alignment_score_gap =
+        second_best_alignment_score.map(|score| chosen_alignment_score - score);
+    let alignment_source = if projected_range.is_some() && candidate_index == 0 {
+        "projected"
+    } else {
+        "anchored"
+    };
+
+    Some(SpanAlignmentSelection {
+        range,
+        alignment,
+        zipa_normalized,
+        projected_alignment_score,
+        chosen_alignment_score,
+        second_best_alignment_score,
+        alignment_score_gap,
+        alignment_source,
+    })
 }
 
 fn normalize_candidate_ranges(ranges: &mut Vec<std::ops::Range<usize>>, utterance_len: usize) {

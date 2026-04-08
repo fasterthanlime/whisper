@@ -239,21 +239,13 @@ pub fn top_right_anchor_windows(
                 continue;
             }
 
-            let mut similarity_sum = 0.0f32;
-            let mut exact_matches = 0usize;
-            for index in 0..overlap {
-                let similarity = token_similarity(&left[index], &window[index]);
-                if similarity >= 0.999 {
-                    exact_matches += 1;
-                }
-                similarity_sum += similarity;
-            }
-
-            let mean_similarity = similarity_sum / overlap as f32;
-            let coverage = overlap as f32 / left.len() as f32;
             let length_delta = window_len as i32 - left.len() as i32;
-            let score = mean_similarity * coverage + (exact_matches as f32 / overlap as f32) * 0.15
-                - (length_delta.abs() as f32) * 0.05;
+            let (score, mean_similarity) = if left.len() < 5 {
+                short_window_alignment_score(left, window)
+            } else {
+                diagonal_window_score(left, window)
+            };
+            let score = score - (length_delta.abs() as f32) * 0.05;
 
             candidates.push(AlignmentWindowCandidate {
                 right_start: start as u32,
@@ -303,6 +295,126 @@ fn substitution_cost(left: &str, right: &str) -> f32 {
 
 fn token_similarity(left: &str, right: &str) -> f32 {
     1.0 - substitution_cost(left, right)
+}
+
+fn diagonal_window_score(left: &[String], window: &[String]) -> (f32, f32) {
+    let overlap = left.len().min(window.len());
+    let mut similarity_sum = 0.0f32;
+    let mut exact_matches = 0usize;
+    let mut weighted_sum = 0.0f32;
+    let mut total_weight = 0.0f32;
+    for index in 0..overlap {
+        let similarity = token_similarity(&left[index], &window[index]);
+        let weight = token_anchor_weight(&left[index], &window[index]);
+        if similarity >= 0.999 {
+            exact_matches += 1;
+        }
+        similarity_sum += similarity;
+        weighted_sum += similarity * weight;
+        total_weight += weight;
+    }
+
+    let mean_similarity = similarity_sum / overlap as f32;
+    let coverage = overlap as f32 / left.len() as f32;
+    let weighted_mean = if total_weight > 0.0 {
+        weighted_sum / total_weight
+    } else {
+        mean_similarity
+    };
+    let score = weighted_mean * coverage + (exact_matches as f32 / overlap as f32) * 0.15;
+    (score, mean_similarity)
+}
+
+fn short_window_alignment_score(left: &[String], window: &[String]) -> (f32, f32) {
+    let rows = left.len();
+    let cols = window.len();
+    if rows == 0 || cols == 0 {
+        return (0.0, 0.0);
+    }
+
+    let mut dp = vec![vec![f32::NEG_INFINITY; cols + 1]; rows + 1];
+    dp[0].fill(0.0);
+
+    for i in 1..=rows {
+        dp[i][0] = dp[i - 1][0] - deletion_penalty(&left[i - 1]);
+    }
+
+    for i in 1..=rows {
+        for j in 1..=cols {
+            let match_score = dp[i - 1][j - 1] + pair_match_score(&left[i - 1], &window[j - 1]);
+            let delete_score = dp[i - 1][j] - deletion_penalty(&left[i - 1]);
+            let insert_score = dp[i][j - 1] - insertion_penalty(&window[j - 1]);
+            dp[i][j] = match_score.max(delete_score).max(insert_score);
+        }
+    }
+
+    let best = dp[rows].iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let normalized = (best / rows.max(cols) as f32).clamp(-1.0, 1.0);
+    let score = ((normalized + 1.0) / 2.0).clamp(0.0, 1.0);
+
+    let mut similarity_sum = 0.0f32;
+    let mut overlap = 0usize;
+    for index in 0..rows.min(cols) {
+        similarity_sum += token_similarity(&left[index], &window[index]);
+        overlap += 1;
+    }
+    let mean_similarity = if overlap > 0 {
+        similarity_sum / overlap as f32
+    } else {
+        0.0
+    };
+    (score, mean_similarity)
+}
+
+fn pair_match_score(left: &str, right: &str) -> f32 {
+    let similarity = token_similarity(left, right);
+    let weight = token_anchor_weight(left, right);
+    similarity * weight - (1.0 - similarity) * 0.65
+}
+
+fn deletion_penalty(token: &str) -> f32 {
+    if is_weak_vowel(token) {
+        0.45
+    } else if is_vowel(token) {
+        0.75
+    } else {
+        1.1
+    }
+}
+
+fn insertion_penalty(token: &str) -> f32 {
+    if is_weak_vowel(token) {
+        0.4
+    } else if is_vowel(token) {
+        0.7
+    } else {
+        1.0
+    }
+}
+
+fn token_anchor_weight(left: &str, right: &str) -> f32 {
+    token_kind_weight(left).max(token_kind_weight(right))
+}
+
+fn token_kind_weight(token: &str) -> f32 {
+    if is_weak_vowel(token) {
+        0.45
+    } else if is_vowel(token) {
+        0.75
+    } else {
+        1.15
+    }
+}
+
+fn is_weak_vowel(token: &str) -> bool {
+    matches!(token, "ə" | "ɪ" | "ʊ")
+}
+
+fn is_vowel(token: &str) -> bool {
+    matches!(
+        token,
+        "a" | "æ" | "ɑ" | "ɔ" | "ɛ" | "ə" | "ɪ" | "ʊ" | "i" | "u"
+    )
 }
 
 fn ranges_overlap(left: Range<usize>, right: Range<usize>) -> bool {
