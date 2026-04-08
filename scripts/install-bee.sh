@@ -74,6 +74,8 @@ DATASET_DST="$GROUP_CONTAINER/phonetic-seed"
 if [ -d "$DATASET_SRC" ]; then
   run_step "Syncing phonetic-seed dataset to Group Container" \
     "mkdir -p \"$DATASET_DST\" && rsync -a --delete \"$DATASET_SRC/\" \"$DATASET_DST/\""
+  run_step "Migrating phonetic-seed confidence fields" \
+    "python3 \"$SCRIPT_DIR/migrate-phonetic-seed.py\" \"$DATASET_DST\""
 fi
 
 if [[ "${BEE_REGEN:-}" == "1" ]]; then

@@ -1,10 +1,13 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use bee_transcribe::{EngineConfig, SessionOptions, Update};
+use tracing_subscriber::EnvFilter;
 
 fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
 
     let args: Vec<String> = std::env::args().collect();
     let use_v2 = args.iter().any(|a| a == "--v2");
@@ -24,6 +27,20 @@ fn main() -> anyhow::Result<()> {
     let vad_dir =
         std::env::var("BEE_VAD_DIR").map_err(|_| anyhow::anyhow!("BEE_VAD_DIR not set"))?;
 
+    // Correction engine: look in group container (same as install-bee.sh)
+    let group_container: PathBuf = dirs::home_dir()
+        .unwrap()
+        .join("Library/Group Containers/B2N6FSRTPV.group.fasterthanlime.bee");
+    let correction_dir_path = group_container.join("phonetic-seed");
+    let correction_dir: Option<&Path> = if correction_dir_path.exists() {
+        println!("Correction dataset: {}", correction_dir_path.display());
+        Some(&correction_dir_path)
+    } else {
+        println!("Correction dataset not found at {}", correction_dir_path.display());
+        None
+    };
+    let correction_events_path = correction_dir.map(|d| d.join("events.jsonl"));
+
     // Load engine
     let t0 = Instant::now();
     let engine = bee_transcribe::Engine::load(&EngineConfig {
@@ -31,8 +48,8 @@ fn main() -> anyhow::Result<()> {
         tokenizer_dir: Path::new(&tokenizer_dir),
         aligner_dir: Path::new(&aligner_dir),
         silero_dir: Path::new(&vad_dir),
-        correction_dir: None,
-        correction_events_path: None,
+        correction_dir,
+        correction_events_path,
     })?;
     println!("Engine loaded in {:.0}ms", t0.elapsed().as_millis());
 

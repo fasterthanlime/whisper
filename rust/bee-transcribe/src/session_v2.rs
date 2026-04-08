@@ -64,6 +64,11 @@ impl<'a> SessionV2<'a> {
 
     pub fn feed(&mut self, samples: &[f32]) -> Result<Option<Update>, Exception> {
         self.incoming.extend_from_slice(samples);
+        tracing::trace!(
+            incoming_len = self.incoming.len(),
+            chunk_size = self.chunk_size_samples,
+            "feed: buffering audio"
+        );
 
         let mut did_decode = false;
         while self.incoming.len() >= self.chunk_size_samples {
@@ -72,9 +77,15 @@ impl<'a> SessionV2<'a> {
             let chunk = AudioBuffer::new(chunk_samples, SampleRate::HZ_16000);
 
             if let Some(chunk) = self.filters.process(chunk) {
+                tracing::debug!(
+                    audio_samples = chunk.len(),
+                    "feed: speech chunk passed filters"
+                );
                 self.decode.append_audio(&chunk);
                 self.decode_and_maybe_commit(self.options.max_tokens_streaming)?;
                 did_decode = true;
+            } else {
+                tracing::trace!("feed: chunk filtered out (silence/VAD)");
             }
         }
 
@@ -86,6 +97,13 @@ impl<'a> SessionV2<'a> {
     }
 
     pub fn finish(&mut self) -> Result<Update, Exception> {
+        tracing::info!(
+            incoming = self.incoming.len(),
+            committed_tokens = self.committed.len().0,
+            pending_tokens = self.pending.len().0,
+            "finish: finalizing session"
+        );
+
         if !self.incoming.is_empty() {
             let remaining = std::mem::take(&mut self.incoming);
             let chunk = AudioBuffer::new(remaining, SampleRate::HZ_16000);
@@ -95,11 +113,16 @@ impl<'a> SessionV2<'a> {
         }
 
         if self.decode.has_audio() {
+            tracing::debug!(max_tokens = self.options.max_tokens_final, "finish: final decode");
             self.decode_and_maybe_commit(self.options.max_tokens_final)?;
         }
 
         // Commit everything remaining
         if !self.pending.is_empty() {
+            tracing::debug!(
+                pending_tokens = self.pending.len().0,
+                "finish: committing remaining pending tokens"
+            );
             debug_assert!(
                 self.decode.has_audio(),
                 "pending text exists without decode audio"
@@ -113,7 +136,14 @@ impl<'a> SessionV2<'a> {
             }
         }
 
-        Ok(self.make_update())
+        let update = self.make_update();
+        tracing::info!(
+            committed_tokens = self.committed.len().0,
+            text_len = update.text.len(),
+            alignments = update.alignments.len(),
+            "finish: done"
+        );
+        Ok(update)
     }
 
     // ── Internal ────────────────────────────────────────────────────
@@ -127,6 +157,7 @@ impl<'a> SessionV2<'a> {
         )?;
 
         if let Some(lang) = self.decode.detected_language(self.tokenizer) {
+            tracing::debug!(language = %lang, "detected language");
             self.detected_language = lang;
         }
 
@@ -137,12 +168,35 @@ impl<'a> SessionV2<'a> {
         // Check if enough fixed tokens to try committing
         let text_count = self.decode.text_tokens().len();
         let fixed = text_count.saturating_sub(self.options.rollback_tokens);
+        tracing::debug!(
+            text_tokens = text_count,
+            fixed,
+            rollback = self.options.rollback_tokens,
+            commit_threshold = self.options.commit_token_count * 2,
+            "decode_and_maybe_commit: token counts"
+        );
+
         if fixed >= self.options.commit_token_count * 2 {
+            tracing::info!(
+                commit_n = self.options.commit_token_count,
+                text_tokens = text_count,
+                "rotating: committing tokens and starting fresh decode"
+            );
             if let Some(aligned) = self.decode.commit(
                 TokenCount(self.options.commit_token_count),
                 self.forced_aligner,
                 self.tokenizer,
             )? {
+                let committed_words: Vec<_> = aligned.words()
+                    .filter_map(|entries| Self::word_to_aligned(self.tokenizer, entries))
+                    .map(|w| w.word.clone())
+                    .collect();
+                tracing::info!(
+                    words = ?committed_words,
+                    remaining_text_tokens = self.decode.text_tokens().len(),
+                    remaining_audio_samples = self.decode.audio_len(),
+                    "rotation complete: committed words"
+                );
                 self.committed.append(aligned);
                 // Refresh pending after rotation
                 self.pending

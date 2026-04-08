@@ -63,6 +63,11 @@ impl DecodeSession {
         !self.audio.is_empty()
     }
 
+    /// Number of audio samples in this sub-session.
+    pub fn audio_len(&self) -> usize {
+        self.audio.len()
+    }
+
     /// When this sub-session starts in the absolute timeline.
     pub fn start_time(&self) -> Seconds {
         self.start_time
@@ -233,7 +238,14 @@ impl DecodeSession {
         // Build entries from text tokens, snap to word boundary
         let mut entries = TextBuffer::from_entries(self.pending_entries(tokenizer));
         let safe_n = entries.snap_to_word_boundary(n);
+        tracing::debug!(
+            requested = n.0,
+            snapped = safe_n.0,
+            total_text_tokens = self.text_tokens().len(),
+            "commit: snap to word boundary"
+        );
         if safe_n.0 == 0 {
+            tracing::debug!("commit: nothing to commit (no complete words)");
             return Ok(None);
         }
 
@@ -241,14 +253,22 @@ impl DecodeSession {
         let commit_ids = to_commit.token_ids();
         let commit_text = tokenizer.decode(&commit_ids, true).unwrap_or_default();
         if commit_text.trim().is_empty() {
+            tracing::debug!("commit: empty text after decode, skipping");
             return Ok(None);
         }
+
+        tracing::debug!(
+            tokens = safe_n.0,
+            text = %commit_text.trim(),
+            "commit: aligning text"
+        );
 
         // Run forced alignment against our audio
         let items = forced_aligner
             .align(self.audio.samples(), &commit_text)
             .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
         if items.is_empty() {
+            tracing::warn!("commit: forced aligner returned no items");
             return Ok(None);
         }
 
@@ -269,6 +289,19 @@ impl DecodeSession {
         let last_end = Seconds(items.last().unwrap().end_time as f64);
         let new_start = self.start_time + last_end;
         let (_, remaining) = self.audio.split_at(last_end);
+
+        let remaining_text_tokens = self.text_tokens().len() - safe_n.0;
+        tracing::info!(
+            committed_tokens = safe_n.0,
+            remaining_text_tokens,
+            old_start = %format!("{:.3}s", self.start_time.0),
+            new_start = %format!("{:.3}s", new_start.0),
+            audio_before = self.audio.len(),
+            audio_after = remaining.len(),
+            aligned_words = items.len(),
+            "commit: rotation"
+        );
+
         self.audio = remaining;
         self.start_time = new_start;
 
