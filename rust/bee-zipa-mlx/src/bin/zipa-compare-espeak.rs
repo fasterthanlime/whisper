@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use bee_correct::g2p::CachedEspeakG2p;
-use bee_phonetic::{feature_similarity, phoneme_similarity, reduce_ipa_tokens};
+use bee_phonetic::{
+    feature_similarity, normalize_ipa_for_comparison, phoneme_similarity, reduce_ipa_tokens,
+};
 use bee_zipa_mlx::infer::ZipaInference;
 use serde_json::Value;
 
@@ -26,10 +28,15 @@ struct ComparisonRow {
     zipa_reduced: Vec<String>,
     espeak_raw: Vec<String>,
     espeak_reduced: Vec<String>,
+    zipa_normalized: Vec<String>,
+    espeak_normalized: Vec<String>,
     raw_similarity: Option<f32>,
     reduced_similarity: Option<f32>,
+    normalized_similarity: Option<f32>,
+    normalized_feature_similarity: Option<f32>,
     feature_similarity: Option<f32>,
     reduced_exact: bool,
+    normalized_exact: bool,
 }
 
 struct RecordingExample {
@@ -81,6 +88,8 @@ fn main() -> Result<()> {
             .ipa_tokens(&text)?
             .ok_or_else(|| anyhow!("espeak produced no tokens for '{}'", text))?;
         let espeak_reduced = reduce_ipa_tokens(&espeak_raw);
+        let zipa_normalized = normalize_ipa_for_comparison(&zipa_raw);
+        let espeak_normalized = normalize_ipa_for_comparison(&espeak_raw);
 
         rows.push(ComparisonRow {
             wav,
@@ -88,12 +97,17 @@ fn main() -> Result<()> {
             text,
             raw_similarity: phoneme_similarity(&zipa_raw, &espeak_raw),
             reduced_similarity: phoneme_similarity(&zipa_reduced, &espeak_reduced),
+            normalized_similarity: phoneme_similarity(&zipa_normalized, &espeak_normalized),
+            normalized_feature_similarity: feature_similarity(&zipa_normalized, &espeak_normalized),
             feature_similarity: feature_similarity(&zipa_raw, &espeak_raw),
             reduced_exact: zipa_reduced == espeak_reduced,
+            normalized_exact: zipa_normalized == espeak_normalized,
             zipa_raw,
             zipa_reduced,
+            zipa_normalized,
             espeak_raw,
             espeak_reduced,
+            espeak_normalized,
         });
     }
 
@@ -105,9 +119,14 @@ fn main() -> Result<()> {
     let mut raw_count = 0usize;
     let mut reduced_total = 0.0f32;
     let mut reduced_count = 0usize;
+    let mut normalized_total = 0.0f32;
+    let mut normalized_count = 0usize;
     let mut feature_total = 0.0f32;
     let mut feature_count = 0usize;
+    let mut normalized_feature_total = 0.0f32;
+    let mut normalized_feature_count = 0usize;
     let mut exact_count = 0usize;
+    let mut normalized_exact_count = 0usize;
 
     for row in &rows {
         if let Some(value) = row.raw_similarity {
@@ -122,8 +141,19 @@ fn main() -> Result<()> {
             feature_total += value;
             feature_count += 1;
         }
+        if let Some(value) = row.normalized_similarity {
+            normalized_total += value;
+            normalized_count += 1;
+        }
+        if let Some(value) = row.normalized_feature_similarity {
+            normalized_feature_total += value;
+            normalized_feature_count += 1;
+        }
         if row.reduced_exact {
             exact_count += 1;
+        }
+        if row.normalized_exact {
+            normalized_exact_count += 1;
         }
 
         println!("wav: {}", row.wav.display());
@@ -133,21 +163,37 @@ fn main() -> Result<()> {
         println!("espeak_raw: {}", row.espeak_raw.join(" "));
         println!("zipa_reduced: {}", row.zipa_reduced.join(" "));
         println!("espeak_reduced: {}", row.espeak_reduced.join(" "));
+        println!("zipa_normalized: {}", row.zipa_normalized.join(" "));
+        println!("espeak_normalized: {}", row.espeak_normalized.join(" "));
         println!("raw_similarity: {}", format_optional(row.raw_similarity));
         println!(
             "reduced_similarity: {}",
             format_optional(row.reduced_similarity)
         );
         println!(
+            "normalized_similarity: {}",
+            format_optional(row.normalized_similarity)
+        );
+        println!(
             "feature_similarity: {}",
             format_optional(row.feature_similarity)
         );
+        println!(
+            "normalized_feature_similarity: {}",
+            format_optional(row.normalized_feature_similarity)
+        );
         println!("reduced_exact: {}", row.reduced_exact);
+        println!("normalized_exact: {}", row.normalized_exact);
         println!();
     }
 
     println!("summary.rows: {}", rows.len());
     println!("summary.reduced_exact: {}/{}", exact_count, rows.len());
+    println!(
+        "summary.normalized_exact: {}/{}",
+        normalized_exact_count,
+        rows.len()
+    );
     println!(
         "summary.raw_similarity_mean: {}",
         format_mean(raw_total, raw_count)
@@ -157,8 +203,16 @@ fn main() -> Result<()> {
         format_mean(reduced_total, reduced_count)
     );
     println!(
+        "summary.normalized_similarity_mean: {}",
+        format_mean(normalized_total, normalized_count)
+    );
+    println!(
         "summary.feature_similarity_mean: {}",
         format_mean(feature_total, feature_count)
+    );
+    println!(
+        "summary.normalized_feature_similarity_mean: {}",
+        format_mean(normalized_feature_total, normalized_feature_count)
     );
 
     Ok(())

@@ -333,6 +333,56 @@ pub fn reduce_ipa_tokens(tokens: &[String]) -> Vec<String> {
     tokens.iter().map(|token| reduce_ipa_token(token)).collect()
 }
 
+pub fn normalize_ipa_for_comparison(tokens: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for token in reduce_ipa_tokens(tokens) {
+        match token.as_str() {
+            "t͡ʃ" | "tʃ" => {
+                out.push("t".to_string());
+                out.push("ʃ".to_string());
+            }
+            "d͡ʒ" | "dʒ" => {
+                out.push("d".to_string());
+                out.push("ʒ".to_string());
+            }
+            "eɪ" => {
+                out.push("e".to_string());
+                out.push("ɪ".to_string());
+            }
+            "aɪ" => {
+                out.push("a".to_string());
+                out.push("ɪ".to_string());
+            }
+            "ɔɪ" => {
+                out.push("ɔ".to_string());
+                out.push("ɪ".to_string());
+            }
+            "aʊ" => {
+                out.push("a".to_string());
+                out.push("ʊ".to_string());
+            }
+            "oʊ" | "əʊ" => {
+                out.push("ə".to_string());
+                out.push("ʊ".to_string());
+            }
+            "ɪə" => {
+                out.push("ɪ".to_string());
+                out.push("ə".to_string());
+            }
+            "eə" => {
+                out.push("e".to_string());
+                out.push("ə".to_string());
+            }
+            "ʊə" => {
+                out.push("ʊ".to_string());
+                out.push("ə".to_string());
+            }
+            _ => out.push(token),
+        }
+    }
+    out
+}
+
 pub fn derive_identifier_flags(text: &str) -> IdentifierFlags {
     let mut acronym_like = false;
     let mut has_digits = false;
@@ -524,5 +574,47 @@ mod tests {
         assert!(!looks_like_name("qwen"));
         assert!(!looks_like_name("MachO"));
         assert!(!looks_like_name("third day"));
+    }
+
+    #[test]
+    fn reduce_ipa_tokens_strips_prosody_and_normalizes_rhotic_vowels() {
+        assert_eq!(
+            reduce_ipa_tokens(&[
+                "ɚ".to_string(),
+                "ɝ".to_string(),
+                "oʊ".to_string(),
+                "iː".to_string()
+            ]),
+            vec!["ə", "ə", "əʊ", "i"]
+        );
+    }
+
+    #[test]
+    fn normalize_ipa_for_comparison_splits_affricates_and_diphthongs() {
+        assert_eq!(
+            normalize_ipa_for_comparison(&[
+                "tʃ".to_string(),
+                "d͡ʒ".to_string(),
+                "aɪ".to_string(),
+                "eɪ".to_string(),
+                "oʊ".to_string(),
+                "əʊ".to_string(),
+            ]),
+            vec!["t", "ʃ", "d", "ʒ", "a", "ɪ", "e", "ɪ", "ə", "ʊ", "ə", "ʊ"]
+        );
+    }
+
+    #[test]
+    fn normalize_ipa_for_comparison_matches_split_spellings() {
+        assert_eq!(
+            normalize_ipa_for_comparison(&["aɪ".to_string(), "tʃ".to_string(), "ɚ".to_string()]),
+            normalize_ipa_for_comparison(&[
+                "a".to_string(),
+                "ɪ".to_string(),
+                "t".to_string(),
+                "ʃ".to_string(),
+                "ə".to_string(),
+            ])
+        );
     }
 }

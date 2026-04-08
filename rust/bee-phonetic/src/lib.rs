@@ -21,8 +21,8 @@ pub use phonetic_index::{
     build_index, query_index, IndexView, PhoneticIndex, RetrievalCandidate, RetrievalQuery,
 };
 pub use phonetic_lexicon::{
-    build_phonetic_lexicon, derive_identifier_flags, reduce_ipa_tokens, AliasSource,
-    IdentifierFlags, LexiconAlias,
+    build_phonetic_lexicon, derive_identifier_flags, normalize_ipa_for_comparison,
+    reduce_ipa_tokens, AliasSource, IdentifierFlags, LexiconAlias,
 };
 pub use phonetic_verify::{
     score_shortlist, verify_shortlist, CandidateFeatureRow, VerifiedCandidate,
