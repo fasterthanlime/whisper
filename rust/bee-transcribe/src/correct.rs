@@ -46,8 +46,7 @@ pub fn load_correction_engine(config: &CorrectionConfig<'_>) -> Result<Correctio
         SeedDataset::load(config.dataset_dir).map_err(|e| format!("load dataset: {e}"))?;
     let index = dataset.phonetic_index();
 
-    let g2p =
-        CachedEspeakG2p::english(config.dataset_dir).map_err(|e| format!("init g2p: {e}"))?;
+    let g2p = CachedEspeakG2p::english(config.dataset_dir).map_err(|e| format!("init g2p: {e}"))?;
 
     let gt = if config.gate_threshold > 0.0 {
         config.gate_threshold

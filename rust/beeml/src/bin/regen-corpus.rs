@@ -29,8 +29,7 @@ fn main() -> anyhow::Result<()> {
 
     let model_dir = std::env::var("BEE_ASR_MODEL_DIR")
         .map_err(|_| anyhow::anyhow!("BEE_ASR_MODEL_DIR not set"))?;
-    let tokenizer_dir =
-        std::env::var("BEE_TOKENIZER_DIR").unwrap_or_else(|_| model_dir.clone());
+    let tokenizer_dir = std::env::var("BEE_TOKENIZER_DIR").unwrap_or_else(|_| model_dir.clone());
     let aligner_dir =
         std::env::var("BEE_ALIGNER_DIR").map_err(|_| anyhow::anyhow!("BEE_ALIGNER_DIR not set"))?;
     let silero_dir =
@@ -195,7 +194,9 @@ fn transcribe_file(
         offset = end;
     }
 
-    let result = session.finish().map_err(|e| anyhow::anyhow!("transcription: {e}"))?;
+    let result = session
+        .finish()
+        .map_err(|e| anyhow::anyhow!("transcription: {e}"))?;
     let update = result.update;
 
     let words = update

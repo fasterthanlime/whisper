@@ -5,17 +5,15 @@ use bee_zipa_mlx::audio::AudioBuffer;
 use beeml::judge::OnlineJudge;
 use beeml::rpc::{
     AcceptedEdit, BeeMl, CorrectionDebugResult, CorrectionRequest, CorrectionResult,
-    JudgeEvalFailure, ModelSummary, OfflineJudgeEvalRequest,
-    OfflineJudgeEvalResult, ProbDistribution, RerankerDebugTrace,
-    PhoneticComparisonRequest, PhoneticComparisonResult,
-    RetrievalEvalMiss, RetrievalEvalTermSummary,
-    RetrievalPrototypeEvalProgress, RetrievalPrototypeEvalRequest, RetrievalPrototypeEvalResult,
-    RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
-    RetrievalPrototypeTeachingCase, RetrievalPrototypeTeachingDeckRequest,
-    RetrievalPrototypeTeachingDeckResult,
+    JudgeEvalFailure, ModelSummary, OfflineJudgeEvalRequest, OfflineJudgeEvalResult,
+    PhoneticComparisonRequest, PhoneticComparisonResult, ProbDistribution, RerankerDebugTrace,
+    RetrievalEvalMiss, RetrievalEvalTermSummary, RetrievalPrototypeEvalProgress,
+    RetrievalPrototypeEvalRequest, RetrievalPrototypeEvalResult, RetrievalPrototypeProbeRequest,
+    RetrievalPrototypeProbeResult, RetrievalPrototypeTeachingCase,
+    RetrievalPrototypeTeachingDeckRequest, RetrievalPrototypeTeachingDeckResult,
     TeachRetrievalPrototypeJudgeRequest, TermAliasView, TermInspectionRequest,
-    TermInspectionResult, ThresholdRow, TimingBreakdown, TranscribeWavResult,
-    TwoStageGridPoint, TwoStageResult,
+    TermInspectionResult, ThresholdRow, TimingBreakdown, TranscribeWavResult, TwoStageGridPoint,
+    TwoStageResult,
 };
 use tracing::info;
 use vox::{Rx, Tx};
@@ -32,7 +30,11 @@ impl BeeMl for BeeMlService {
             sample_rate_hz: 16_000,
         };
 
-        let mut session = self.inner.engine.session(SessionOptions::default()).map_err(|e| e.to_string())?;
+        let mut session = self
+            .inner
+            .engine
+            .session(SessionOptions::default())
+            .map_err(|e| e.to_string())?;
 
         session.feed(&samples).map_err(|e| e.to_string())?;
         let result = session.finish().map_err(|e| e.to_string())?;
@@ -491,11 +493,13 @@ impl BeeMl for BeeMlService {
             .filter(|pc| pc.case.should_abstain)
             .filter(|pc| pc.spans.iter().any(|ps| !ps.candidates.is_empty()))
             .count();
-        println!("\n  Dataset: {canonical_count} canonical ({canonical_with_gold} gold retrieved, {canonical_gold_verified} gold verified), {cx_count} counterexamples ({cx_with_candidates} with candidates)");
+        println!(
+            "\n  Dataset: {canonical_count} canonical ({canonical_with_gold} gold retrieved, {canonical_gold_verified} gold verified), {cx_count} counterexamples ({cx_with_candidates} with candidates)"
+        );
 
         // ── Feature activation diagnostics ──────────────────────────────
         {
-            use beeml::judge::{build_examples, NUM_DENSE};
+            use beeml::judge::{NUM_DENSE, build_examples};
             println!("\n--- Feature activation diagnostics ---");
 
             let mut total_examples = 0u64;
@@ -646,10 +650,15 @@ impl BeeMl for BeeMlService {
                 let m = eval_at_threshold(scored, t, reachable_only);
                 println!(
                     "    T={t:.1}  can {}/{} ({:.1}%)  cx {}/{} ({:.1}%)  bal {:.1}%  repl: can {:.1}% cx {:.1}%",
-                    m.canonical_correct, m.canonical_total, m.canonical_pct(),
-                    m.cx_correct, m.cx_total, m.cx_pct(),
+                    m.canonical_correct,
+                    m.canonical_total,
+                    m.canonical_pct(),
+                    m.cx_correct,
+                    m.cx_total,
+                    m.cx_pct(),
                     m.balanced_pct(),
-                    m.canonical_replace_pct(), m.cx_replace_pct(),
+                    m.canonical_replace_pct(),
+                    m.cx_replace_pct(),
                 );
             }
         }
@@ -816,7 +825,6 @@ impl BeeMl for BeeMlService {
             train_and_score_twostage_kfold(&probed_cases, &case_folds, folds, train_epochs, 3);
         let (mut best_gt, mut best_rt);
         {
-
             // Stage A alone: gate accuracy at various thresholds
             println!("\n  Stage A (gate) alone:");
             let mut gate_sweep = Vec::new();
@@ -856,7 +864,9 @@ impl BeeMl for BeeMlService {
                     0.0
                 };
                 let bal = (pos_pct + neg_pct) / 2.0;
-                println!("    GT={gt:.1}  open_correct {gate_pos_correct}/{gate_pos_total} ({pos_pct:.1}%)  closed_correct {gate_neg_correct}/{gate_neg_total} ({neg_pct:.1}%)  bal {bal:.1}%");
+                println!(
+                    "    GT={gt:.1}  open_correct {gate_pos_correct}/{gate_pos_total} ({pos_pct:.1}%)  closed_correct {gate_neg_correct}/{gate_neg_total} ({neg_pct:.1}%)  bal {bal:.1}%"
+                );
                 gate_sweep.push(ThresholdRow {
                     threshold: gt,
                     canonical_correct: gate_pos_correct,
@@ -879,9 +889,14 @@ impl BeeMl for BeeMlService {
                         continue;
                     }
                     ranker_total += 1;
-                    let tm = sc.gold_term.as_deref().zip(sc.ranker_best_term.as_deref())
+                    let tm = sc
+                        .gold_term
+                        .as_deref()
+                        .zip(sc.ranker_best_term.as_deref())
                         .is_some_and(|(g, r)| g.eq_ignore_ascii_case(r));
-                    if tm { ranker_correct += 1; }
+                    if tm {
+                        ranker_correct += 1;
+                    }
                 }
                 println!(
                     "    Top-1 accuracy: {ranker_correct}/{ranker_total} ({:.1}%)",
@@ -916,11 +931,17 @@ impl BeeMl for BeeMlService {
                     }
                 }
             }
-            println!("    Best: GT={best_gt:.1} RT={best_rt:.1}  can {}/{} ({:.1}%)  cx {}/{} ({:.1}%)  bal {:.1}%  repl: can {:.1}% cx {:.1}%",
-                best_m.canonical_correct, best_m.canonical_total, best_m.canonical_pct(),
-                best_m.cx_correct, best_m.cx_total, best_m.cx_pct(),
+            println!(
+                "    Best: GT={best_gt:.1} RT={best_rt:.1}  can {}/{} ({:.1}%)  cx {}/{} ({:.1}%)  bal {:.1}%  repl: can {:.1}% cx {:.1}%",
+                best_m.canonical_correct,
+                best_m.canonical_total,
+                best_m.canonical_pct(),
+                best_m.cx_correct,
+                best_m.cx_total,
+                best_m.cx_pct(),
                 best_m.balanced_pct(),
-                best_m.canonical_replace_pct(), best_m.cx_replace_pct(),
+                best_m.canonical_replace_pct(),
+                best_m.cx_replace_pct(),
             );
 
             fn metrics_to_grid(gt: f32, rt: f32, m: &EvalMetrics) -> TwoStageGridPoint {
@@ -945,11 +966,17 @@ impl BeeMl for BeeMlService {
             for &gt in &[0.2, 0.3, 0.4, 0.5] {
                 for &rt in &[0.2, 0.3, 0.4, 0.5] {
                     let m = eval_twostage_at_thresholds(&two_stage_scored, gt, rt);
-                    println!("      GT={gt:.1} RT={rt:.1}  can {}/{} ({:.1}%)  cx {}/{} ({:.1}%)  bal {:.1}%  repl: can {:.1}% cx {:.1}%",
-                        m.canonical_correct, m.canonical_total, m.canonical_pct(),
-                        m.cx_correct, m.cx_total, m.cx_pct(),
+                    println!(
+                        "      GT={gt:.1} RT={rt:.1}  can {}/{} ({:.1}%)  cx {}/{} ({:.1}%)  bal {:.1}%  repl: can {:.1}% cx {:.1}%",
+                        m.canonical_correct,
+                        m.canonical_total,
+                        m.canonical_pct(),
+                        m.cx_correct,
+                        m.cx_total,
+                        m.cx_pct(),
                         m.balanced_pct(),
-                        m.canonical_replace_pct(), m.cx_replace_pct(),
+                        m.canonical_replace_pct(),
+                        m.cx_replace_pct(),
                     );
                     grid_points.push(metrics_to_grid(gt, rt, &m));
                 }
@@ -1000,7 +1027,10 @@ impl BeeMl for BeeMlService {
                     continue;
                 }
                 if let Some((_alias_id, prob)) = sc.ranker_best {
-                    let tm = sc.gold_term.as_deref().zip(sc.ranker_best_term.as_deref())
+                    let tm = sc
+                        .gold_term
+                        .as_deref()
+                        .zip(sc.ranker_best_term.as_deref())
                         .is_some_and(|(g, r)| g.eq_ignore_ascii_case(r));
                     if tm {
                         ranker_gold_probs.push(prob);
@@ -1163,7 +1193,10 @@ impl BeeMl for BeeMlService {
                         .unwrap_or(0.0);
 
                     println!("    Before training:");
-                    println!("      canonical gold prob={gold_pre:.4}, best prob={best_pre:.4} (term={})", can_case.case.target_term);
+                    println!(
+                        "      canonical gold prob={gold_pre:.4}, best prob={best_pre:.4} (term={})",
+                        can_case.case.target_term
+                    );
                     println!(
                         "      counterex best prob={cx_best_pre:.4} (term={})",
                         cx_case.case.target_term
@@ -1216,8 +1249,14 @@ impl BeeMl for BeeMlService {
                         .unwrap_or(0.0);
 
                     println!("    After training on 1 counterexample:");
-                    println!("      canonical gold prob={gold_post2:.4} (delta={:+.4} from canonical-only)", gold_post2 - gold_post1);
-                    println!("      counterex best prob={cx_best_post2:.4} (delta={:+.4} from canonical-only)", cx_best_post2 - cx_best_post1);
+                    println!(
+                        "      canonical gold prob={gold_post2:.4} (delta={:+.4} from canonical-only)",
+                        gold_post2 - gold_post1
+                    );
+                    println!(
+                        "      counterex best prob={cx_best_post2:.4} (delta={:+.4} from canonical-only)",
+                        cx_best_post2 - cx_best_post1
+                    );
 
                     // Weight norm
                     let weights = judge.weights();
@@ -1258,21 +1297,44 @@ impl BeeMl for BeeMlService {
                     e2e_can_total += 1;
                     let gate_open = sc.gate_prob >= best_gt;
                     let ranker_fires = sc.ranker_best.map_or(false, |(_, p)| p >= best_rt);
-                    let ranker_correct_id = sc.gold_term.as_deref().zip(sc.ranker_best_term.as_deref())
+                    let ranker_correct_id = sc
+                        .gold_term
+                        .as_deref()
+                        .zip(sc.ranker_best_term.as_deref())
                         .is_some_and(|(g, r)| g.eq_ignore_ascii_case(r));
                     if gate_open && ranker_fires && ranker_correct_id {
                         e2e_can_correct += 1;
                     }
                 }
             }
-            let e2e_can_pct = if e2e_can_total > 0 { e2e_can_correct as f64 / e2e_can_total as f64 * 100.0 } else { 0.0 };
-            let e2e_cx_pct = if e2e_cx_total > 0 { e2e_cx_abstained as f64 / e2e_cx_total as f64 * 100.0 } else { 0.0 };
-            let e2e_fp_pct = if e2e_cx_total > 0 { e2e_cx_false_pos as f64 / e2e_cx_total as f64 * 100.0 } else { 0.0 };
+            let e2e_can_pct = if e2e_can_total > 0 {
+                e2e_can_correct as f64 / e2e_can_total as f64 * 100.0
+            } else {
+                0.0
+            };
+            let e2e_cx_pct = if e2e_cx_total > 0 {
+                e2e_cx_abstained as f64 / e2e_cx_total as f64 * 100.0
+            } else {
+                0.0
+            };
+            let e2e_fp_pct = if e2e_cx_total > 0 {
+                e2e_cx_false_pos as f64 / e2e_cx_total as f64 * 100.0
+            } else {
+                0.0
+            };
 
-            println!("\n┌─ 1. End-to-end (all cases, GT={best_gt:.1} RT={best_rt:.1}) ──────────────");
-            println!("│  Canonical corrected:    {e2e_can_correct:>3}/{e2e_can_total:<3}  ({e2e_can_pct:.1}%)");
-            println!("│  Counterex abstained:    {e2e_cx_abstained:>3}/{e2e_cx_total:<3}  ({e2e_cx_pct:.1}%)");
-            println!("│  False positive rate:    {e2e_cx_false_pos:>3}/{e2e_cx_total:<3}  ({e2e_fp_pct:.1}%)");
+            println!(
+                "\n┌─ 1. End-to-end (all cases, GT={best_gt:.1} RT={best_rt:.1}) ──────────────"
+            );
+            println!(
+                "│  Canonical corrected:    {e2e_can_correct:>3}/{e2e_can_total:<3}  ({e2e_can_pct:.1}%)"
+            );
+            println!(
+                "│  Counterex abstained:    {e2e_cx_abstained:>3}/{e2e_cx_total:<3}  ({e2e_cx_pct:.1}%)"
+            );
+            println!(
+                "│  False positive rate:    {e2e_cx_false_pos:>3}/{e2e_cx_total:<3}  ({e2e_fp_pct:.1}%)"
+            );
             println!("└──────────────────────────────────────────────────");
 
             // Scoreboard 2: Judge-stage (reachable only)
@@ -1282,53 +1344,96 @@ impl BeeMl for BeeMlService {
             let mut gate_neg_correct = 0u32;
             let mut gate_neg_total = 0u32;
             for sc in &two_stage_scored {
-                if !sc.reachable { continue; }
+                if !sc.reachable {
+                    continue;
+                }
                 let gate_open = sc.gate_prob >= best_gt;
                 if sc.should_abstain {
                     gate_neg_total += 1;
-                    if !gate_open { gate_neg_correct += 1; }
+                    if !gate_open {
+                        gate_neg_correct += 1;
+                    }
                 } else {
                     gate_pos_total += 1;
-                    if gate_open { gate_pos_correct += 1; }
+                    if gate_open {
+                        gate_pos_correct += 1;
+                    }
                 }
             }
-            let gate_pos_pct = if gate_pos_total > 0 { gate_pos_correct as f64 / gate_pos_total as f64 * 100.0 } else { 0.0 };
-            let gate_neg_pct = if gate_neg_total > 0 { gate_neg_correct as f64 / gate_neg_total as f64 * 100.0 } else { 0.0 };
+            let gate_pos_pct = if gate_pos_total > 0 {
+                gate_pos_correct as f64 / gate_pos_total as f64 * 100.0
+            } else {
+                0.0
+            };
+            let gate_neg_pct = if gate_neg_total > 0 {
+                gate_neg_correct as f64 / gate_neg_total as f64 * 100.0
+            } else {
+                0.0
+            };
             let gate_bal = (gate_pos_pct + gate_neg_pct) / 2.0;
 
             // Ranker top-1 (reachable canonical)
             let mut rank_correct = 0u32;
             let mut rank_total = 0u32;
             for sc in &two_stage_scored {
-                if sc.should_abstain || !sc.reachable { continue; }
+                if sc.should_abstain || !sc.reachable {
+                    continue;
+                }
                 rank_total += 1;
-                let term_match = sc.gold_term.as_deref().zip(sc.ranker_best_term.as_deref())
+                let term_match = sc
+                    .gold_term
+                    .as_deref()
+                    .zip(sc.ranker_best_term.as_deref())
                     .is_some_and(|(g, r)| g.eq_ignore_ascii_case(r));
-                if term_match { rank_correct += 1; }
+                if term_match {
+                    rank_correct += 1;
+                }
             }
-            let rank_pct = if rank_total > 0 { rank_correct as f64 / rank_total as f64 * 100.0 } else { 0.0 };
+            let rank_pct = if rank_total > 0 {
+                rank_correct as f64 / rank_total as f64 * 100.0
+            } else {
+                0.0
+            };
 
             // Composed balanced (reachable)
             let judge_m = eval_twostage_at_thresholds(&two_stage_scored, best_gt, best_rt);
             let judge_bal = judge_m.balanced_pct();
 
             println!("\n┌─ 2. Judge-stage (reachable only) ─────────────────────────");
-            println!("│  Gate balanced accuracy: {gate_bal:.1}%  (open {gate_pos_correct}/{gate_pos_total} {gate_pos_pct:.1}%, close {gate_neg_correct}/{gate_neg_total} {gate_neg_pct:.1}%)");
+            println!(
+                "│  Gate balanced accuracy: {gate_bal:.1}%  (open {gate_pos_correct}/{gate_pos_total} {gate_pos_pct:.1}%, close {gate_neg_correct}/{gate_neg_total} {gate_neg_pct:.1}%)"
+            );
             println!("│  Ranker top-1 accuracy:  {rank_correct}/{rank_total}  ({rank_pct:.1}%)");
-            println!("│  Composed balanced:      {judge_bal:.1}%  (can {}/{}  cx {}/{})",
-                judge_m.canonical_correct, judge_m.canonical_total,
-                judge_m.cx_correct, judge_m.cx_total);
+            println!(
+                "│  Composed balanced:      {judge_bal:.1}%  (can {}/{}  cx {}/{})",
+                judge_m.canonical_correct,
+                judge_m.canonical_total,
+                judge_m.cx_correct,
+                judge_m.cx_total
+            );
             println!("└──────────────────────────────────────────────────");
 
             // Scoreboard 3: Upstream opportunity set
-            let retrieved_pct = if canonical_count > 0 { canonical_with_gold as f64 / canonical_count as f64 * 100.0 } else { 0.0 };
-            let verified_pct = if canonical_count > 0 { canonical_gold_verified as f64 / canonical_count as f64 * 100.0 } else { 0.0 };
+            let retrieved_pct = if canonical_count > 0 {
+                canonical_with_gold as f64 / canonical_count as f64 * 100.0
+            } else {
+                0.0
+            };
+            let verified_pct = if canonical_count > 0 {
+                canonical_gold_verified as f64 / canonical_count as f64 * 100.0
+            } else {
+                0.0
+            };
             let lost_retrieval = canonical_count - canonical_with_gold;
             let lost_verification = canonical_with_gold - canonical_gold_verified;
 
             println!("\n┌─ 3. Upstream opportunity set ──────────────────────────────");
-            println!("│  Gold retrieved:         {canonical_with_gold:>3}/{canonical_count:<3}  ({retrieved_pct:.1}%)  — {lost_retrieval} lost at retrieval");
-            println!("│  Gold verified:          {canonical_gold_verified:>3}/{canonical_count:<3}  ({verified_pct:.1}%)  — {lost_verification} lost at verification");
+            println!(
+                "│  Gold retrieved:         {canonical_with_gold:>3}/{canonical_count:<3}  ({retrieved_pct:.1}%)  — {lost_retrieval} lost at retrieval"
+            );
+            println!(
+                "│  Gold verified:          {canonical_gold_verified:>3}/{canonical_count:<3}  ({verified_pct:.1}%)  — {lost_verification} lost at verification"
+            );
             println!("└──────────────────────────────────────────────────");
         }
 
@@ -1336,7 +1441,11 @@ impl BeeMl for BeeMlService {
         println!("\n=== Per-case failure report (at GT={best_gt:.1} RT={best_rt:.1}) ===");
         {
             let trunc = |s: &str, n: usize| -> String {
-                if s.len() <= n { s.to_string() } else { format!("{}…", &s[..n]) }
+                if s.len() <= n {
+                    s.to_string()
+                } else {
+                    format!("{}…", &s[..n])
+                }
             };
 
             // Bucket 1: Not retrieved — canonical cases where gold term not in any span's shortlist
@@ -1370,34 +1479,50 @@ impl BeeMl for BeeMlService {
                 // Gold is in shortlist — check if verified
                 let gold_verified = pc.spans.iter().any(|ps| {
                     ps.gold_alias_id.map_or(false, |gid| {
-                        ps.candidates.iter().any(|(c, _)| c.alias_id == gid && c.verified)
+                        ps.candidates
+                            .iter()
+                            .any(|(c, _)| c.alias_id == gid && c.verified)
                     })
                 });
                 if !gold_verified {
                     // Find the gold candidate to show WHY it failed verification
-                    let gold_c = pc.spans.iter()
+                    let gold_c = pc
+                        .spans
+                        .iter()
                         .filter_map(|ps| {
                             ps.gold_alias_id.and_then(|gid| {
-                                ps.candidates.iter().find(|(c, _)| c.alias_id == gid).map(|(c, _)| c)
+                                ps.candidates
+                                    .iter()
+                                    .find(|(c, _)| c.alias_id == gid)
+                                    .map(|(c, _)| c)
                             })
                         })
                         .next();
                     let diag = if let Some(c) = gold_c {
                         let mut reasons = Vec::new();
                         if c.short_guard_applied && !c.short_guard_passed {
-                            reasons.push(format!("SHORT_GUARD(onset={}, feat={:.2}, tok={:.2})",
-                                c.short_guard_onset_match, c.feature_score, c.token_score));
+                            reasons.push(format!(
+                                "SHORT_GUARD(onset={}, feat={:.2}, tok={:.2})",
+                                c.short_guard_onset_match, c.feature_score, c.token_score
+                            ));
                         }
                         if c.low_content_guard_applied && !c.low_content_guard_passed {
-                            reasons.push(format!("LOW_CONTENT(tok={:.2}, feat={:.2})",
-                                c.token_score, c.feature_score));
+                            reasons.push(format!(
+                                "LOW_CONTENT(tok={:.2}, feat={:.2})",
+                                c.token_score, c.feature_score
+                            ));
                         }
                         if !c.acceptance_floor_passed {
-                            reasons.push(format!("ACCEPT_FLOOR(phon={:.2}, accept={:.2}, coarse={:.2})",
-                                c.phonetic_score, c.acceptance_score, c.coarse_score));
+                            reasons.push(format!(
+                                "ACCEPT_FLOOR(phon={:.2}, accept={:.2}, coarse={:.2})",
+                                c.phonetic_score, c.acceptance_score, c.coarse_score
+                            ));
                         }
                         if reasons.is_empty() {
-                            format!("alias={:<20} phon={:.2} accept={:.2} (unknown reason)", c.alias_text, c.phonetic_score, c.acceptance_score)
+                            format!(
+                                "alias={:<20} phon={:.2} accept={:.2} (unknown reason)",
+                                c.alias_text, c.phonetic_score, c.acceptance_score
+                            )
                         } else {
                             format!("alias={:<20} {}", c.alias_text, reasons.join(" + "))
                         }
@@ -1428,7 +1553,10 @@ impl BeeMl for BeeMlService {
 
                 // Gate opens. Check ranker.
                 if let Some((_alias_id, ranker_prob)) = sc.ranker_best {
-                    let term_match = sc.gold_term.as_deref().zip(sc.ranker_best_term.as_deref())
+                    let term_match = sc
+                        .gold_term
+                        .as_deref()
+                        .zip(sc.ranker_best_term.as_deref())
                         .is_some_and(|(g, r)| g.eq_ignore_ascii_case(r));
                     if !term_match {
                         let picked_name = sc.ranker_best_term.as_deref().unwrap_or("?");
@@ -1445,16 +1573,24 @@ impl BeeMl for BeeMlService {
             }
 
             println!("\n1. Not retrieved ({} cases):", not_retrieved.len());
-            for line in &not_retrieved { println!("{line}"); }
+            for line in &not_retrieved {
+                println!("{line}");
+            }
 
             println!("\n2. Not verified ({} cases):", not_verified.len());
-            for line in &not_verified { println!("{line}"); }
+            for line in &not_verified {
+                println!("{line}");
+            }
 
             println!("\n3. Gate misses ({} cases):", gate_misses.len());
-            for line in &gate_misses { println!("{line}"); }
+            for line in &gate_misses {
+                println!("{line}");
+            }
 
             println!("\n4. Ranker misses ({} cases):", ranker_misses.len());
-            for line in &ranker_misses { println!("{line}"); }
+            for line in &ranker_misses {
+                println!("{line}");
+            }
 
             println!();
         }

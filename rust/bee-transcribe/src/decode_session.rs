@@ -7,15 +7,17 @@ use bee_qwen3_asr::encoder::EncoderCache;
 use bee_qwen3_asr::generate::{self, TokenLogprob};
 use bee_qwen3_asr::mel::MelExtractor;
 use bee_qwen3_asr::model::Qwen3ASRModel;
-use mlx_rs::error::Exception;
 use mlx_rs::Array;
+use mlx_rs::error::Exception;
 use tokenizers::Tokenizer;
 
 use bee_qwen3_asr::forced_aligner::ForcedAligner;
 
 use crate::audio_buffer::{AudioBuffer, Seconds};
 use crate::mlx_stuff::clear_mlx_cache;
-use crate::text_buffer::{self, AlignmentItem, AsrToken, TextBuffer, TokenCount, TokenEntry, TokenId, WordStart};
+use crate::text_buffer::{
+    self, AlignmentItem, AsrToken, TextBuffer, TokenCount, TokenEntry, TokenId, WordStart,
+};
 
 /// A decode sub-session. Replaced wholesale on rotation.
 pub struct DecodeSession {

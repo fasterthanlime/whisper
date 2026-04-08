@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 
 fn main() {
-    let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../swift/vox-shared");
+    let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../swift/vox-shared");
     std::fs::create_dir_all(&out_dir).unwrap();
 
     let services = [

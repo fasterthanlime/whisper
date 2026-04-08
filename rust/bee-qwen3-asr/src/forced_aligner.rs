@@ -10,11 +10,11 @@ use std::path::Path;
 
 use bee_phonetic::split_sentence_words;
 use facet::Facet;
+use mlx_rs::Array;
 use mlx_rs::error::Exception;
 use mlx_rs::module::{Module, ModuleParametersExt};
 use mlx_rs::ops;
 use mlx_rs::ops::indexing::IndexOp;
-use mlx_rs::Array;
 
 use crate::config::{AsrConfig, ThinkerConfig};
 use crate::load;
@@ -42,8 +42,9 @@ impl ForcedAligner {
     /// Load a forced aligner from a model directory.
     pub fn load(model_dir: &Path, tokenizer: tokenizers::Tokenizer) -> Result<Self, Exception> {
         let config_path = model_dir.join("config.json");
-        let config_str = std::fs::read_to_string(&config_path)
-            .map_err(|e| Exception::custom(format!("read config: {e} at {}", config_path.display())))?;
+        let config_str = std::fs::read_to_string(&config_path).map_err(|e| {
+            Exception::custom(format!("read config: {e} at {}", config_path.display()))
+        })?;
         let config: AsrConfig = serde_json::from_str(&config_str)
             .map_err(|e| Exception::custom(format!("parse config: {e}")))?;
 

@@ -264,8 +264,8 @@ fn feature_boundary_penalty(
 // Order matches ipa_all.csv columns: syl, son, cons, cont, delrel, lat, nas,
 // strid, voi, sg, cg, ant, cor, distr, lab, hi, lo, back, round, velaric, tense, long, hitone, hireg
 const FEATURE_WEIGHTS: &[f32] = &[
-    1.0, 1.0, 1.0, 0.5, 0.25, 0.25, 0.25, 0.125, 0.125, 0.125, 0.125, 0.25,
-    0.25, 0.125, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.125, 0.0, 0.0,
+    1.0, 1.0, 1.0, 0.5, 0.25, 0.25, 0.25, 0.125, 0.125, 0.125, 0.125, 0.25, 0.25, 0.125, 0.25,
+    0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.125, 0.0, 0.0,
 ];
 const FEATURE_WEIGHT_SUM: f32 = 7.25; // sum of weights (hitone/hireg are 0.0)
 

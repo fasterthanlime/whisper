@@ -5,12 +5,13 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use bee_phonetic::{
-    enumerate_transcript_spans_with, query_index, score_shortlist, CounterexampleRecordingRow,
-    RetrievalQuery, SeedDataset, TranscriptAlignmentToken, TranscriptSpan, VerifiedCandidate,
+    CounterexampleRecordingRow, RetrievalQuery, SeedDataset, TranscriptAlignmentToken,
+    TranscriptSpan, VerifiedCandidate, enumerate_transcript_spans_with, query_index,
+    score_shortlist,
 };
 use beeml::g2p::CachedEspeakG2p;
-use rayon::prelude::*;
 use facet::Facet;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 struct EvalConfig {
@@ -142,7 +143,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let index = dataset.phonetic_index();
     let target_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target");
-    let mut g2p = CachedEspeakG2p::english_with_persist_path(&target_dir, Some(eval_g2p_cache_path()))?;
+    let mut g2p =
+        CachedEspeakG2p::english_with_persist_path(&target_dir, Some(eval_g2p_cache_path()))?;
     let mut summary = EvalSummary::default();
     let mut counter_summary = CounterexampleSummary::default();
     let mut timings = EvalTimings::default();
@@ -643,8 +645,8 @@ fn eval_g2p_cache_path() -> std::path::PathBuf {
         .join("../../target/phonetic-retrieval-eval-g2p-cache.tsv")
 }
 
-fn load_counterexample_recordings(
-) -> Result<Vec<CounterexampleRecordingRow>, Box<dyn std::error::Error>> {
+fn load_counterexample_recordings()
+-> Result<Vec<CounterexampleRecordingRow>, Box<dyn std::error::Error>> {
     let path = counterexample_recordings_path();
     let text = std::fs::read_to_string(&path)?;
     let mut out = Vec::new();

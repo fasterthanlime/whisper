@@ -69,17 +69,17 @@ pub trait Bee {
     async fn create_session(&self, opts: SessionConfig) -> Result<String, BeeError>;
 
     /// Feed audio samples to a session.
-    async fn feed(&self, session_id: String, samples: Vec<f32>) -> Result<Option<FeedResult>, BeeError>;
+    async fn feed(
+        &self,
+        session_id: String,
+        samples: Vec<f32>,
+    ) -> Result<Option<FeedResult>, BeeError>;
 
     /// Finalize a session, returns final transcription with alignments.
     async fn finish_session(&self, session_id: String) -> Result<FeedResult, BeeError>;
 
     /// Set the language for a session.
-    async fn set_language(
-        &self,
-        session_id: String,
-        language: String,
-    ) -> Result<bool, BeeError>;
+    async fn set_language(&self, session_id: String, language: String) -> Result<bool, BeeError>;
 
     /// Single-shot transcription of raw 16kHz f32 samples.
     async fn transcribe_samples(&self, samples: Vec<f32>) -> Result<String, BeeError>;

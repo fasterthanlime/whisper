@@ -91,8 +91,7 @@ impl<'a> SessionV2<'a> {
 
         let mut did_decode = false;
         while self.incoming.len() >= self.chunk_size_samples {
-            let chunk_samples: Vec<f32> =
-                self.incoming.drain(..self.chunk_size_samples).collect();
+            let chunk_samples: Vec<f32> = self.incoming.drain(..self.chunk_size_samples).collect();
             let chunk = AudioBuffer::new(chunk_samples, SampleRate::HZ_16000);
 
             if let Some(chunk) = self.filters.process(chunk) {
@@ -132,7 +131,10 @@ impl<'a> SessionV2<'a> {
         }
 
         if self.decode.has_audio() {
-            tracing::debug!(max_tokens = self.options.max_tokens_final, "finish: final decode");
+            tracing::debug!(
+                max_tokens = self.options.max_tokens_final,
+                "finish: final decode"
+            );
             self.decode_and_maybe_commit(self.options.max_tokens_final)?;
         }
 
@@ -146,11 +148,12 @@ impl<'a> SessionV2<'a> {
                 self.decode.has_audio(),
                 "pending text exists without decode audio"
             );
-            if let Some(aligned) = self.decode.commit_all(
-                self.forced_aligner,
-                self.tokenizer,
-            )? {
-                let final_words: Vec<AlignedWord> = aligned.words()
+            if let Some(aligned) = self
+                .decode
+                .commit_all(self.forced_aligner, self.tokenizer)?
+            {
+                let final_words: Vec<AlignedWord> = aligned
+                    .words()
                     .filter_map(|entries| Self::word_to_aligned(self.tokenizer, entries))
                     .collect();
 
@@ -158,7 +161,11 @@ impl<'a> SessionV2<'a> {
                 self.flush_buffered_commit(&final_words);
 
                 // Correct this final chunk too (no right context)
-                let raw_text = final_words.iter().map(|w| w.word.as_str()).collect::<Vec<_>>().join(" ");
+                let raw_text = final_words
+                    .iter()
+                    .map(|w| w.word.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 if let Some((ref engine_arc, ref mut corrector)) = self.correction {
                     let mut engine = engine_arc.lock().expect("correction engine lock poisoned");
                     corrector.process_chunk_with_context(
@@ -172,7 +179,8 @@ impl<'a> SessionV2<'a> {
                 }
 
                 self.committed.append(aligned);
-                self.pending.replace(self.decode.pending_entries(self.tokenizer));
+                self.pending
+                    .replace(self.decode.pending_entries(self.tokenizer));
             }
         } else {
             // No pending tokens, but may still have a buffered commit to flush
@@ -231,10 +239,12 @@ impl<'a> SessionV2<'a> {
                 self.forced_aligner,
                 self.tokenizer,
             )? {
-                let new_words: Vec<AlignedWord> = aligned.words()
+                let new_words: Vec<AlignedWord> = aligned
+                    .words()
                     .filter_map(|entries| Self::word_to_aligned(self.tokenizer, entries))
                     .collect();
-                let committed_word_texts: Vec<_> = new_words.iter().map(|w| w.word.clone()).collect();
+                let committed_word_texts: Vec<_> =
+                    new_words.iter().map(|w| w.word.clone()).collect();
                 tracing::info!(
                     words = ?committed_word_texts,
                     remaining_text_tokens = self.decode.text_tokens().len(),
@@ -247,7 +257,11 @@ impl<'a> SessionV2<'a> {
                 self.flush_buffered_commit(&new_words);
 
                 // Buffer this chunk for correction when the next commit arrives.
-                let raw_text = new_words.iter().map(|w| w.word.as_str()).collect::<Vec<_>>().join(" ");
+                let raw_text = new_words
+                    .iter()
+                    .map(|w| w.word.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 self.buffered_commit = Some(BufferedCommit {
                     raw_text,
                     words: new_words,
@@ -342,7 +356,10 @@ impl<'a> SessionV2<'a> {
         // Decode pending tokens as one block
         let pending_ids = self.pending.token_ids();
         if !pending_ids.is_empty() {
-            let pending_text = self.tokenizer.decode(&pending_ids, true).unwrap_or_default();
+            let pending_text = self
+                .tokenizer
+                .decode(&pending_ids, true)
+                .unwrap_or_default();
             if !text.is_empty() && !pending_text.starts_with(' ') {
                 text.push(' ');
             }

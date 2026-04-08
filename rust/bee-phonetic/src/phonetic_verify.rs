@@ -217,7 +217,7 @@ fn is_low_content_span(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::phonetic_index::{build_index, query_index, RetrievalQuery};
+    use crate::phonetic_index::{RetrievalQuery, build_index, query_index};
     use crate::phonetic_lexicon::LexiconAlias;
     use crate::word_split::count_sentence_words;
 
@@ -347,9 +347,7 @@ mod tests {
         // phonetic similarity ~0.28 is garbage. The candidate should not be
         // verified even if structure_bonus inflates acceptance_score above the floor.
         // We bypass index query and feed the candidate directly to score_shortlist.
-        let index = build_index(vec![
-            alias(0, "SQLite", "SQLite", "s i k w l aɪ t"),
-        ]);
+        let index = build_index(vec![alias(0, "SQLite", "SQLite", "s i k w l aɪ t")]);
         let span = TranscriptSpan {
             token_start: 0,
             token_end: 2,

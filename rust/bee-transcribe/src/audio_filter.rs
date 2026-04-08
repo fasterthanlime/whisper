@@ -83,7 +83,8 @@ impl AudioFilter for DcOffsetFilter {
         let rate = chunk.sample_rate();
         let mut samples: Vec<f32> = chunk.samples().to_vec();
         for sample in &mut samples {
-            self.running_mean = self.running_mean * (1.0 - self.alpha) + *sample as f64 * self.alpha;
+            self.running_mean =
+                self.running_mean * (1.0 - self.alpha) + *sample as f64 * self.alpha;
             *sample -= self.running_mean as f32;
         }
         Some(AudioBuffer::new(samples, rate))
@@ -113,7 +114,11 @@ impl ClippingGuard {
 impl AudioFilter for ClippingGuard {
     fn process(&mut self, chunk: AudioBuffer) -> Option<AudioBuffer> {
         let rate = chunk.sample_rate();
-        let samples: Vec<f32> = chunk.samples().iter().map(|&s| s.clamp(-1.0, 1.0)).collect();
+        let samples: Vec<f32> = chunk
+            .samples()
+            .iter()
+            .map(|&s| s.clamp(-1.0, 1.0))
+            .collect();
         Some(AudioBuffer::new(samples, rate))
     }
 }
@@ -194,7 +199,10 @@ impl AudioFilter for RmsNormalizer {
         // Cap gain to avoid blowing up quiet chunks
         let gain = gain.min(10.0);
         let rate = chunk.sample_rate();
-        let normalized: Vec<f32> = samples.iter().map(|&s| (s * gain).clamp(-1.0, 1.0)).collect();
+        let normalized: Vec<f32> = samples
+            .iter()
+            .map(|&s| (s * gain).clamp(-1.0, 1.0))
+            .collect();
         tracing::trace!(rms, gain, target = self.target_rms, "rms_normalizer");
         Some(AudioBuffer::new(normalized, rate))
     }

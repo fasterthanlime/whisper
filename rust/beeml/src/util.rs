@@ -2,9 +2,7 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use beeml::rpc::{
-    AliasSource, CandidateFeatureDebug, IdentifierFlags, RetrievalIndexView,
-};
+use beeml::rpc::{AliasSource, CandidateFeatureDebug, IdentifierFlags, RetrievalIndexView};
 
 use crate::service::{CounterexampleRecordingRow, EvalCase};
 
@@ -80,7 +78,9 @@ pub(crate) fn map_index_view(view: bee_phonetic::IndexView) -> RetrievalIndexVie
     }
 }
 
-pub(crate) fn map_candidate_features(candidate: &bee_phonetic::CandidateFeatureRow) -> CandidateFeatureDebug {
+pub(crate) fn map_candidate_features(
+    candidate: &bee_phonetic::CandidateFeatureRow,
+) -> CandidateFeatureDebug {
     CandidateFeatureDebug {
         matched_view: map_index_view(candidate.matched_view),
         qgram_overlap: candidate.qgram_overlap,

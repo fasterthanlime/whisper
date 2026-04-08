@@ -286,7 +286,11 @@ pub(crate) fn train_and_score_kfold(
 }
 
 /// Evaluate pre-scored cases at a given threshold.
-pub(crate) fn eval_at_threshold(scored: &[ScoredCase], threshold: f32, reachable_only: bool) -> EvalMetrics {
+pub(crate) fn eval_at_threshold(
+    scored: &[ScoredCase],
+    threshold: f32,
+    reachable_only: bool,
+) -> EvalMetrics {
     let mut m = EvalMetrics::default();
     for sc in scored {
         if sc.should_abstain {
@@ -667,7 +671,9 @@ pub(crate) fn train_and_score_twostage_kfold(
                     best_gate.map(|(gp, rb)| (gp, rb)).unwrap_or((0.0, None));
 
                 let ranker_best_term = ranker_best.and_then(|(aid, _)| {
-                    pc.spans.iter().flat_map(|ps| ps.candidates.iter())
+                    pc.spans
+                        .iter()
+                        .flat_map(|ps| ps.candidates.iter())
                         .find(|(c, _)| c.alias_id == aid)
                         .map(|(c, _)| c.term.clone())
                 });
@@ -712,11 +718,14 @@ pub(crate) fn train_and_score_twostage_kfold(
                         .map(|e| (e.alias_id, ranker_model.predict_prob(&e.features) as f32))
                         .max_by(|a, b| a.1.total_cmp(&b.1));
 
-                    let gold_term_name = gs.candidates.iter()
+                    let gold_term_name = gs
+                        .candidates
+                        .iter()
                         .find(|(c, _)| c.alias_id == gold_id)
                         .map(|(c, _)| c.term.clone());
                     let ranker_best_term = ranker_best.and_then(|(aid, _)| {
-                        gs.candidates.iter()
+                        gs.candidates
+                            .iter()
                             .find(|(c, _)| c.alias_id == aid)
                             .map(|(c, _)| c.term.clone())
                     });
@@ -818,13 +827,21 @@ pub(crate) fn train_and_export_weights(
     let mut f = std::fs::File::create(&gate_path)?;
     gate_model.save_weights(&mut f)?;
     let gate_weights = gate_model.weights();
-    tracing::info!("Exported {} gate weights to {}", gate_weights.len(), gate_path.display());
+    tracing::info!(
+        "Exported {} gate weights to {}",
+        gate_weights.len(),
+        gate_path.display()
+    );
 
     let ranker_path = output_dir.join("ranker_weights.bin");
     let mut f = std::fs::File::create(&ranker_path)?;
     ranker_model.save_weights(&mut f)?;
     let ranker_weights = ranker_model.weights();
-    tracing::info!("Exported {} ranker weights to {}", ranker_weights.len(), ranker_path.display());
+    tracing::info!(
+        "Exported {} ranker weights to {}",
+        ranker_weights.len(),
+        ranker_path.display()
+    );
 
     Ok(())
 }
@@ -866,7 +883,10 @@ pub(crate) fn eval_twostage_at_thresholds(
             if replaced {
                 m.canonical_replaced += 1;
                 // Match by term name, not alias_id — multiple aliases for the same term are all correct
-                let term_match = sc.gold_term.as_deref().zip(sc.ranker_best_term.as_deref())
+                let term_match = sc
+                    .gold_term
+                    .as_deref()
+                    .zip(sc.ranker_best_term.as_deref())
                     .is_some_and(|(g, r)| g.eq_ignore_ascii_case(r));
                 if term_match {
                     m.canonical_correct += 1;

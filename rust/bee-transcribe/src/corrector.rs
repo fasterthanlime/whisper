@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use bee_phonetic::phonetic_verify::CandidateFeatureRow;
 use bee_phonetic::{
-    enumerate_transcript_spans_with, feature_tokens_for_ipa, query_index, score_shortlist,
-    RetrievalQuery,
+    RetrievalQuery, enumerate_transcript_spans_with, feature_tokens_for_ipa, query_index,
+    score_shortlist,
 };
 use bee_rpc::CorrectionEdit;
 use bee_types::{IdentifierFlags, SpanContext};
@@ -91,10 +91,9 @@ impl Corrector {
             );
         }
 
-        let spans =
-            enumerate_transcript_spans_with(text, 3, Some(words), |span_text| {
-                engine.g2p.ipa_tokens(span_text).ok().flatten()
-            });
+        let spans = enumerate_transcript_spans_with(text, 3, Some(words), |span_text| {
+            engine.g2p.ipa_tokens(span_text).ok().flatten()
+        });
 
         tracing::info!(
             "corrector: text={:?} spans={} left_ctx={} right_ctx={}",
@@ -314,7 +313,7 @@ fn extract_span_context_from_words(
     SpanContext {
         left_tokens,
         right_tokens,
-        code_like: false,   // ASR speech is not code
+        code_like: false, // ASR speech is not code
         prose_like: true,
         list_like: false,
         sentence_start,

@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use bee_phonetic::{
-    enumerate_transcript_spans_with, feature_tokens_for_ipa, query_index, score_shortlist,
-    CandidateFeatureRow, LexiconAlias, RetrievalQuery, SeedDataset, TranscriptAlignmentToken,
-    TranscriptSpan,
-};
 use bee_phonetic::CounterexampleRecordingRow;
+use bee_phonetic::{
+    CandidateFeatureRow, LexiconAlias, RetrievalQuery, SeedDataset, TranscriptAlignmentToken,
+    TranscriptSpan, enumerate_transcript_spans_with, feature_tokens_for_ipa, query_index,
+    score_shortlist,
+};
 use beeml::g2p::CachedEspeakG2p;
 
 #[derive(Debug, Clone)]
@@ -412,8 +412,8 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
     Ok(config)
 }
 
-fn load_counterexample_recordings(
-) -> Result<Vec<CounterexampleRecordingRow>, Box<dyn std::error::Error>> {
+fn load_counterexample_recordings()
+-> Result<Vec<CounterexampleRecordingRow>, Box<dyn std::error::Error>> {
     let path = counterexample_recordings_path();
     let text = std::fs::read_to_string(&path)?;
     let mut out = Vec::new();

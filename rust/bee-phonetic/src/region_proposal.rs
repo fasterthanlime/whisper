@@ -1,6 +1,6 @@
 use crate::phonetic_lexicon::reduce_ipa_tokens;
-use crate::word_split::sentence_word_tokens;
 use crate::word_split::SentenceWordToken;
+use crate::word_split::sentence_word_tokens;
 
 pub use bee_types::{Confidence, TranscriptAlignmentToken};
 
@@ -107,10 +107,24 @@ where
                 let span_alignments = &alignments[token_start..token_end];
                 let n = span_alignments.len() as f32;
 
-                let mean_lp = span_alignments.iter().map(|a| a.confidence().mean_lp).sum::<f32>() / n;
-                let min_lp = span_alignments.iter().map(|a| a.confidence().min_lp).fold(f32::INFINITY, f32::min);
-                let mean_m = span_alignments.iter().map(|a| a.confidence().mean_m).sum::<f32>() / n;
-                let min_m = span_alignments.iter().map(|a| a.confidence().min_m).fold(f32::INFINITY, f32::min);
+                let mean_lp = span_alignments
+                    .iter()
+                    .map(|a| a.confidence().mean_lp)
+                    .sum::<f32>()
+                    / n;
+                let min_lp = span_alignments
+                    .iter()
+                    .map(|a| a.confidence().min_lp)
+                    .fold(f32::INFINITY, f32::min);
+                let mean_m = span_alignments
+                    .iter()
+                    .map(|a| a.confidence().mean_m)
+                    .sum::<f32>()
+                    / n;
+                let min_m = span_alignments
+                    .iter()
+                    .map(|a| a.confidence().min_m)
+                    .fold(f32::INFINITY, f32::min);
 
                 (
                     Some(span_alignments[0].start_time()),

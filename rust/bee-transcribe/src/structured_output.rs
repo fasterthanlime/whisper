@@ -24,10 +24,7 @@ impl<'a> StructuredAsrOutput<'a> {
     ///
     /// If no `<asr_text>` token is found, all tokens are treated as text
     /// (metadata is empty).
-    pub fn from_raw(
-        raw_ids: &'a [TokenId],
-        raw_logprobs: &'a [TokenLogprob],
-    ) -> Self {
+    pub fn from_raw(raw_ids: &'a [TokenId], raw_logprobs: &'a [TokenLogprob]) -> Self {
         let asr_text_id = generate::TOK_ASR_TEXT as TokenId;
 
         if let Some(tag_pos) = raw_ids.iter().position(|&id| id == asr_text_id) {

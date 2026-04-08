@@ -11,7 +11,11 @@ fn main() -> anyhow::Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     let use_v2 = args.iter().any(|a| a == "--v2");
-    let positional: Vec<&str> = args[1..].iter().filter(|a| !a.starts_with("--")).map(|s| s.as_str()).collect();
+    let positional: Vec<&str> = args[1..]
+        .iter()
+        .filter(|a| !a.starts_with("--"))
+        .map(|s| s.as_str())
+        .collect();
     if positional.is_empty() {
         eprintln!("Usage: transcribe [--v2] <audio.wav>");
         std::process::exit(1);
@@ -20,8 +24,7 @@ fn main() -> anyhow::Result<()> {
 
     let model_dir = std::env::var("BEE_ASR_MODEL_DIR")
         .map_err(|_| anyhow::anyhow!("BEE_ASR_MODEL_DIR not set"))?;
-    let tokenizer_dir = std::env::var("BEE_TOKENIZER_DIR")
-        .unwrap_or_else(|_| model_dir.clone());
+    let tokenizer_dir = std::env::var("BEE_TOKENIZER_DIR").unwrap_or_else(|_| model_dir.clone());
     let aligner_dir =
         std::env::var("BEE_ALIGNER_DIR").map_err(|_| anyhow::anyhow!("BEE_ALIGNER_DIR not set"))?;
     let vad_dir =
@@ -36,7 +39,10 @@ fn main() -> anyhow::Result<()> {
         println!("Correction dataset: {}", correction_dir_path.display());
         Some(&correction_dir_path)
     } else {
-        println!("Correction dataset not found at {}", correction_dir_path.display());
+        println!(
+            "Correction dataset not found at {}",
+            correction_dir_path.display()
+        );
         None
     };
     let correction_events_path = correction_dir.map(|d| d.join("events.jsonl"));

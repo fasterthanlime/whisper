@@ -24,7 +24,6 @@ pub(crate) struct AsrEngine {
     pub(crate) stats: StatsSampler,
 }
 
-
 // SAFETY: Engine is immutable after construction. MLX arrays are heap-allocated
 // Metal buffers; concurrent read access is safe.
 unsafe impl Send for AsrEngine {}
@@ -36,11 +35,7 @@ unsafe impl Sync for AsrEngine {}
 /// just no silence detection).
 pub(crate) fn find_vad_dir(cache_base: &Path) -> Option<PathBuf> {
     let dir = cache_base.join("aitytech--Silero-VAD-v5-MLX");
-    if dir.exists() {
-        Some(dir)
-    } else {
-        None
-    }
+    if dir.exists() { Some(dir) } else { None }
 }
 
 /// Resolve paths for the ASR engine from the sandbox cache directory.

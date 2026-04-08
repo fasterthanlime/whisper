@@ -1,18 +1,18 @@
 //! High-level streaming transcription built on `bee-qwen3-asr`.
 
 mod aligner;
+mod asr;
 pub mod audio_buffer;
 pub mod audio_filter;
-mod asr;
-pub mod decode_session;
-pub mod session_v2;
-pub mod text_buffer;
 pub mod correct;
 pub mod corrector;
+pub mod decode_session;
 mod generator;
 mod mlx_stuff;
+pub mod session_v2;
 mod speech_gate;
 mod structured_output;
+pub mod text_buffer;
 mod types;
 mod wav_util;
 
@@ -28,8 +28,8 @@ pub use wav_util::decode_wav;
 use bee_qwen3_asr::config::AsrConfig;
 use bee_qwen3_asr::forced_aligner::ForcedAligner;
 use bee_qwen3_asr::generate::TokenLogprob;
-use bee_qwen3_asr::model::Qwen3ASRModel;
 use bee_qwen3_asr::load;
+use bee_qwen3_asr::model::Qwen3ASRModel;
 use mlx_rs::error::Exception;
 use mlx_rs::module::ModuleParametersExt;
 use tokenizers::Tokenizer;
@@ -115,7 +115,7 @@ impl Engine {
             let cc = crate::correct::CorrectionConfig {
                 dataset_dir,
                 events_path: config.correction_events_path.clone(),
-                gate_threshold: 0.0, // uses default
+                gate_threshold: 0.0,   // uses default
                 ranker_threshold: 0.0, // uses default
             };
             let ce = crate::correct::load_correction_engine(&cc)
@@ -142,7 +142,10 @@ impl Engine {
     ) -> Result<session_v2::SessionV2<'_>, Exception> {
         let vad = SileroVad::from_tensors(&self.vad_tensors)
             .map_err(|e| Exception::custom(format!("vad creation failed: {e}")))?;
-        let correction = self.correction.as_ref().map(|ce| (ce.clone(), Corrector::new()));
+        let correction = self
+            .correction
+            .as_ref()
+            .map(|ce| (ce.clone(), Corrector::new()));
         Ok(session_v2::SessionV2::new(
             &self.model,
             &self.tokenizer,
@@ -160,7 +163,10 @@ impl Engine {
         let vad = SileroVad::from_tensors(&self.vad_tensors)
             .map_err(|e| Exception::custom(format!("vad creation failed: {e}")))?;
 
-        let correction = self.correction.as_ref().map(|ce| (ce.clone(), Corrector::new()));
+        let correction = self
+            .correction
+            .as_ref()
+            .map(|ce| (ce.clone(), Corrector::new()));
 
         Ok(Session {
             engine: self,
@@ -243,10 +249,7 @@ impl<'a> Session<'a> {
         }
 
         let update = self.make_update();
-        tracing::debug!(
-            "feed: text={:?}",
-            &update.text[..update.text.len().min(80)],
-        );
+        tracing::debug!("feed: text={:?}", &update.text[..update.text.len().min(80)],);
 
         Ok(Some(update))
     }
@@ -373,19 +376,9 @@ fn word_logprob_stats(
 
     let mut per_token_texts: Vec<String> = Vec::with_capacity(token_ids.len());
     for (i, _) in token_ids.iter().enumerate() {
-        let with = tokenizer
-            .decode(
-                &token_ids[..=i],
-                true,
-            )
-            .unwrap_or_default();
+        let with = tokenizer.decode(&token_ids[..=i], true).unwrap_or_default();
         let without = if i > 0 {
-            tokenizer
-                .decode(
-                    &token_ids[..i],
-                    true,
-                )
-                .unwrap_or_default()
+            tokenizer.decode(&token_ids[..i], true).unwrap_or_default()
         } else {
             String::new()
         };

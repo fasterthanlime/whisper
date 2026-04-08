@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rustfft::{num_complex::Complex, FftPlanner};
+use rustfft::{FftPlanner, num_complex::Complex};
 
 /// Compute Hann window coefficients.
 fn hann_window(n: usize) -> Vec<f32> {
@@ -308,12 +308,18 @@ fn load_audio_ffmpeg(path: &str, target_sr: u32) -> anyhow::Result<Vec<f32>> {
 
     let output = Command::new("ffmpeg")
         .args([
-            "-i", path,
-            "-f", "f32le",
-            "-acodec", "pcm_f32le",
-            "-ac", "1",
-            "-ar", &target_sr.to_string(),
-            "-v", "error",
+            "-i",
+            path,
+            "-f",
+            "f32le",
+            "-acodec",
+            "pcm_f32le",
+            "-ac",
+            "1",
+            "-ar",
+            &target_sr.to_string(),
+            "-v",
+            "error",
             "pipe:1",
         ])
         .output()?;

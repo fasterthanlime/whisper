@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use bee_phonetic::parse_reviewed_ipa;
-use espeak_ng::{install_bundled_language, EspeakNg};
+use espeak_ng::{EspeakNg, install_bundled_language};
 
 pub struct CachedEspeakG2p {
     engine: EspeakNg,
@@ -19,7 +19,10 @@ impl CachedEspeakG2p {
         Self::english_with_persist_path(base_dir, None)
     }
 
-    pub fn english_with_persist_path(base_dir: &Path, persist_path: Option<PathBuf>) -> Result<Self> {
+    pub fn english_with_persist_path(
+        base_dir: &Path,
+        persist_path: Option<PathBuf>,
+    ) -> Result<Self> {
         let data_dir = bundled_espeak_data_dir(base_dir, "en")?;
         let cache = match persist_path.as_deref() {
             Some(path) => load_cache_file(path)?,

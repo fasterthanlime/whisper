@@ -5,8 +5,8 @@ use bee_qwen3_asr::encoder::EncoderCache;
 use bee_qwen3_asr::generate::TokenLogprob;
 use bee_qwen3_asr::mel::MelExtractor;
 use bee_qwen3_asr::{generate, model::Qwen3ASRModel};
-use mlx_rs::error::Exception;
 use mlx_rs::Array;
+use mlx_rs::error::Exception;
 use tokenizers::Tokenizer;
 
 use crate::mlx_stuff::clear_mlx_cache;
@@ -140,7 +140,10 @@ impl Generator {
         if chunk_count <= 2 || self.raw_token_ids.is_empty() {
             return None;
         }
-        let keep = self.raw_token_ids.len().saturating_sub(self.rollback_tokens);
+        let keep = self
+            .raw_token_ids
+            .len()
+            .saturating_sub(self.rollback_tokens);
         if keep == 0 {
             return None;
         }
@@ -150,7 +153,9 @@ impl Generator {
     /// Number of fixed (non-rollback) tokens.
     #[allow(dead_code)]
     pub fn fixed_token_count(&self) -> usize {
-        self.raw_token_ids.len().saturating_sub(self.rollback_tokens)
+        self.raw_token_ids
+            .len()
+            .saturating_sub(self.rollback_tokens)
     }
 
     /// Drop the first `n` raw tokens and reset encoder cache (after commit).

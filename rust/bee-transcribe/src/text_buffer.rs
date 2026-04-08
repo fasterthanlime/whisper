@@ -177,10 +177,7 @@ pub fn align(
     for entry in &mut buf.entries {
         if entry.word.is_some() && word_idx < items.len() {
             let item = &items[word_idx];
-            let time = TimeRange::new(
-                item.start + audio_offset,
-                item.end + audio_offset,
-            );
+            let time = TimeRange::new(item.start + audio_offset, item.end + audio_offset);
             let word_audio = audio.slice(TimeRange::new(item.start, item.end));
             entry.word = Some(WordStart {
                 alignment: Some(WordAlignment {
@@ -201,9 +198,15 @@ pub fn confidence(entries: &[TokenEntry]) -> bee_types::Confidence {
     let n = entries.len() as f32;
     bee_types::Confidence {
         mean_lp: entries.iter().map(|e| e.token.logprob).sum::<f32>() / n,
-        min_lp: entries.iter().map(|e| e.token.logprob).fold(f32::INFINITY, f32::min),
+        min_lp: entries
+            .iter()
+            .map(|e| e.token.logprob)
+            .fold(f32::INFINITY, f32::min),
         mean_m: entries.iter().map(|e| e.token.margin).sum::<f32>() / n,
-        min_m: entries.iter().map(|e| e.token.margin).fold(f32::INFINITY, f32::min),
+        min_m: entries
+            .iter()
+            .map(|e| e.token.margin)
+            .fold(f32::INFINITY, f32::min),
     }
 }
 
@@ -297,10 +300,10 @@ mod tests {
     #[test]
     fn word_iteration() {
         let buf = TextBuffer::from_entries(vec![
-            tok(1, true),   // word 1
+            tok(1, true), // word 1
             tok(2, false),
-            tok(3, true),   // word 2
-            tok(4, true),   // word 3
+            tok(3, true), // word 2
+            tok(4, true), // word 3
             tok(5, false),
             tok(6, false),
         ]);
@@ -314,9 +317,9 @@ mod tests {
     #[test]
     fn align_fills_word_starts() {
         let buf = TextBuffer::from_entries(vec![
-            tok(1, true),   // word 0
+            tok(1, true), // word 0
             tok(2, false),
-            tok(3, true),   // word 1
+            tok(3, true), // word 1
         ]);
         let audio = AudioBuffer::new(vec![0.0; 16000], SampleRate::HZ_16000);
         let items = vec![
@@ -338,12 +341,24 @@ mod tests {
         assert_eq!(words.len(), 2);
 
         // Word 0 aligned with absolute offset
-        let w0 = words[0][0].word.as_ref().unwrap().alignment.as_ref().unwrap();
+        let w0 = words[0][0]
+            .word
+            .as_ref()
+            .unwrap()
+            .alignment
+            .as_ref()
+            .unwrap();
         assert_eq!(w0.time.start, Seconds(5.0));
         assert_eq!(w0.time.end, Seconds(5.3));
 
         // Word 1
-        let w1 = words[1][0].word.as_ref().unwrap().alignment.as_ref().unwrap();
+        let w1 = words[1][0]
+            .word
+            .as_ref()
+            .unwrap()
+            .alignment
+            .as_ref()
+            .unwrap();
         assert_eq!(w1.time.start, Seconds(5.3));
         assert_eq!(w1.time.end, Seconds(5.6));
     }

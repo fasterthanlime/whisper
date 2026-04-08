@@ -147,8 +147,14 @@ impl AudioBuffer {
     /// Slice a time range, returning a new buffer.
     /// Clamps to buffer bounds.
     pub fn slice(&self, range: TimeRange) -> AudioBuffer {
-        let start = range.start.to_samples(self.sample_rate).min(self.samples.len());
-        let end = range.end.to_samples(self.sample_rate).min(self.samples.len());
+        let start = range
+            .start
+            .to_samples(self.sample_rate)
+            .min(self.samples.len());
+        let end = range
+            .end
+            .to_samples(self.sample_rate)
+            .min(self.samples.len());
         AudioBuffer {
             samples: self.samples[start..end].to_vec(),
             sample_rate: self.sample_rate,

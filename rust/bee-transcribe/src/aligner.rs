@@ -57,12 +57,7 @@ impl Aligner {
         if metadata_ids.is_empty() {
             return;
         }
-        let meta = tokenizer
-            .decode(
-                metadata_ids,
-                true,
-            )
-            .unwrap_or_default();
+        let meta = tokenizer.decode(metadata_ids, true).unwrap_or_default();
         let lang = meta
             .trim()
             .strip_prefix("language ")
@@ -122,7 +117,15 @@ impl Aligner {
             return Ok(None);
         }
         // No rotation needed at finish — commit everything, no metadata offset
-        self.do_commit(forced_aligner, tokenizer, audio, text_ids, text_logprobs, 0, text_ids.len())
+        self.do_commit(
+            forced_aligner,
+            tokenizer,
+            audio,
+            text_ids,
+            text_logprobs,
+            0,
+            text_ids.len(),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -136,12 +139,7 @@ impl Aligner {
         metadata_token_count: usize,
         commit_count: usize,
     ) -> Result<Option<AlignedChunk>, Exception> {
-        let commit_text = tokenizer
-            .decode(
-                commit_text_ids,
-                true,
-            )
-            .unwrap_or_default();
+        let commit_text = tokenizer.decode(commit_text_ids, true).unwrap_or_default();
 
         if commit_text.trim().is_empty() {
             return Ok(None);
@@ -176,8 +174,7 @@ impl Aligner {
 
         self.committed_text_tokens
             .extend_from_slice(commit_text_ids);
-        self.committed_logprobs
-            .extend_from_slice(commit_logprobs);
+        self.committed_logprobs.extend_from_slice(commit_logprobs);
 
         let cut = audio_cut_samples.min(audio.len());
         self.committed_audio_offset += cut as f64 / 16000.0;

@@ -4,10 +4,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use bee_rpc::{
-    BeeDispatcher, BeeError, EditResolution, EngineStats,
-    FeedResult, RepoDownload,
-};
+use bee_rpc::{BeeDispatcher, BeeError, EditResolution, EngineStats, FeedResult, RepoDownload};
 use bee_transcribe::corrector::Corrector;
 use bee_transcribe::{Language, SessionOptions};
 
@@ -19,7 +16,7 @@ use vox_ffi::declare_link_endpoint;
 mod engine;
 mod session;
 mod stats;
-use engine::{load_engine, AsrEngine};
+use engine::{AsrEngine, load_engine};
 use session::SessionInner;
 
 // ── Vox-FFI endpoint ───────────────────────────────────────────────────
@@ -214,9 +211,12 @@ impl BeeService {
             "make_session: chunk={:.2}s vad_thresh={:.2} rollback={} commit={}",
             opts.chunk_duration, opts.vad_threshold, opts.rollback_tokens, opts.commit_token_count,
         );
-        let session = engine.inner.session(opts).map_err(|e| BeeError::TranscriptionError {
-            message: format!("{e}"),
-        })?;
+        let session = engine
+            .inner
+            .session(opts)
+            .map_err(|e| BeeError::TranscriptionError {
+                message: format!("{e}"),
+            })?;
         Ok(session)
     }
 }
@@ -452,11 +452,14 @@ impl bee_rpc::Bee for BeeService {
         resolutions: Vec<EditResolution>,
     ) -> Result<bool, BeeError> {
         let engine_asr = self.engine()?;
-        let correction_arc = engine_asr.inner.correction().cloned().ok_or_else(|| {
-            BeeError::CorrectionError {
-                message: "correction engine not loaded".into(),
-            }
-        })?;
+        let correction_arc =
+            engine_asr
+                .inner
+                .correction()
+                .cloned()
+                .ok_or_else(|| BeeError::CorrectionError {
+                    message: "correction engine not loaded".into(),
+                })?;
 
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
@@ -467,15 +470,14 @@ impl bee_rpc::Bee for BeeService {
                 });
             };
 
-            let mut engine = correction_arc.lock().expect("correction engine lock poisoned");
+            let mut engine = correction_arc
+                .lock()
+                .expect("correction engine lock poisoned");
             let pending_edits = corrector.take_pending();
 
             for res in &resolutions {
                 let Some(pending) = pending_edits.get(&res.edit_id) else {
-                    tracing::warn!(
-                        "correct_teach: unknown edit_id {}",
-                        res.edit_id,
-                    );
+                    tracing::warn!("correct_teach: unknown edit_id {}", res.edit_id,);
                     continue;
                 };
 
@@ -494,10 +496,7 @@ impl bee_rpc::Bee for BeeService {
                 engine.event_log.push(event);
             }
 
-            tracing::info!(
-                resolutions = resolutions.len(),
-                "correct_teach: applied"
-            );
+            tracing::info!(resolutions = resolutions.len(), "correct_teach: applied");
             Ok(true)
         })
         .await
@@ -506,14 +505,19 @@ impl bee_rpc::Bee for BeeService {
 
     async fn correct_save(&self) -> Result<bool, BeeError> {
         let engine_asr = self.engine()?;
-        let correction_arc = engine_asr.inner.correction().cloned().ok_or_else(|| {
-            BeeError::CorrectionError {
-                message: "correction engine not loaded".into(),
-            }
-        })?;
+        let correction_arc =
+            engine_asr
+                .inner
+                .correction()
+                .cloned()
+                .ok_or_else(|| BeeError::CorrectionError {
+                    message: "correction engine not loaded".into(),
+                })?;
 
         tokio::task::spawn_blocking(move || {
-            let mut engine = correction_arc.lock().expect("correction engine lock poisoned");
+            let mut engine = correction_arc
+                .lock()
+                .expect("correction engine lock poisoned");
 
             let Some(ref path) = engine.events_path else {
                 tracing::warn!("correct_save: no events_path configured, skipping");

@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use facet::Facet;
 use serde_json::Value;
 
-use crate::phonetic_index::{build_index, PhoneticIndex};
-use crate::phonetic_lexicon::{build_phonetic_lexicon, LexiconAlias};
+use crate::phonetic_index::{PhoneticIndex, build_index};
+use crate::phonetic_lexicon::{LexiconAlias, build_phonetic_lexicon};
 use crate::types::{ReviewedConfusionSurfaceRow, VocabRow};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,7 +35,9 @@ impl SeedDataset {
         Ok(Self {
             terms: load_jsonl(root.join("vocab.jsonl"))?,
             sentence_examples: load_jsonl(root.join("sentence_examples.jsonl"))?,
-            recording_examples: load_recording_examples_jsonl(root.join("recording_examples.jsonl"))?,
+            recording_examples: load_recording_examples_jsonl(
+                root.join("recording_examples.jsonl"),
+            )?,
             confusion_forms: load_jsonl_optional(root.join("confusion_forms.jsonl")),
             root,
         })
@@ -318,7 +320,9 @@ where
     Ok(rows)
 }
 
-fn load_recording_examples_jsonl(path: PathBuf) -> Result<Vec<RecordingExampleRow>, SeedDatasetError> {
+fn load_recording_examples_jsonl(
+    path: PathBuf,
+) -> Result<Vec<RecordingExampleRow>, SeedDatasetError> {
     let file = File::open(&path).map_err(|source| SeedDatasetError::Io {
         path: path.clone(),
         source,
@@ -373,8 +377,7 @@ fn parse_recording_example_row(
             .map_err(|message| json_error(path, line_no, message))?,
         text: required_string(&value, "text")
             .map_err(|message| json_error(path, line_no, message))?,
-        take: required_i64(&value, "take")
-            .map_err(|message| json_error(path, line_no, message))?,
+        take: required_i64(&value, "take").map_err(|message| json_error(path, line_no, message))?,
         audio_path: required_string(&value, "audio_path")
             .map_err(|message| json_error(path, line_no, message))?,
         transcript: required_string(&value, "transcript")
@@ -431,7 +434,10 @@ fn required_f64(value: &Value, key: &str) -> Result<f64, String> {
 }
 
 fn optional_f32(value: &Value, key: &str) -> Option<f32> {
-    value.get(key).and_then(Value::as_f64).map(|value| value as f32)
+    value
+        .get(key)
+        .and_then(Value::as_f64)
+        .map(|value| value as f32)
 }
 
 fn json_error(path: &Path, line_no: usize, message: String) -> SeedDatasetError {
@@ -545,14 +551,18 @@ mod tests {
         assert_eq!(dataset.terms.len(), 26);
         assert_eq!(dataset.sentence_examples.len(), 140);
         assert_eq!(dataset.recording_examples.len(), 106);
-        assert!(!dataset
-            .sentence_examples
-            .iter()
-            .any(|row| row.term.eq_ignore_ascii_case("clap")));
-        assert!(!dataset
-            .recording_examples
-            .iter()
-            .any(|row| row.term.eq_ignore_ascii_case("clap")));
+        assert!(
+            !dataset
+                .sentence_examples
+                .iter()
+                .any(|row| row.term.eq_ignore_ascii_case("clap"))
+        );
+        assert!(
+            !dataset
+                .recording_examples
+                .iter()
+                .any(|row| row.term.eq_ignore_ascii_case("clap"))
+        );
         assert!(aliases.len() >= dataset.terms.len() * 2);
         assert_eq!(index.aliases.len(), aliases.len());
         assert!(!index.postings.is_empty());
