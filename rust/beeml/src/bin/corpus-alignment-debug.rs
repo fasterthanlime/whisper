@@ -71,6 +71,20 @@ fn main() -> Result<()> {
             println!("notes: {}", notes);
         }
         if let Some(trace) = &row.trace {
+            println!("snapshot revision: {}", trace.snapshot_revision);
+            println!("aligned transcript: {}", trace.aligned_transcript);
+            if !trace.pending_text.is_empty() {
+                println!("pending tail: {}", trace.pending_text);
+            }
+            println!(
+                "tail ambiguity: pending={} volatile={} low_conc={} low_margin={} mean_conc={:.2} mean_margin={:.2}",
+                trace.tail_ambiguity.pending_token_count,
+                trace.tail_ambiguity.volatile_token_count,
+                trace.tail_ambiguity.low_concentration_count,
+                trace.tail_ambiguity.low_margin_count,
+                trace.tail_ambiguity.mean_concentration,
+                trace.tail_ambiguity.mean_margin,
+            );
             println!(
                 "utterance transcript norm: {}",
                 trace.utterance_transcript_normalized.join(" ")

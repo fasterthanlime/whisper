@@ -33,9 +33,7 @@ impl BeeMl for BeeMlService {
 
         let result = self.transcribe_samples_chunked(&samples)?;
         let snapshot = result.snapshot;
-        let phonetic_trace = self
-            .build_transcribe_phonetic_trace(&audio, &snapshot.full_text, &snapshot.committed_words)
-            .ok();
+        let phonetic_trace = self.build_transcribe_phonetic_trace(&audio, &snapshot).ok();
 
         Ok(TranscribeWavResult {
             transcript: snapshot.full_text,
