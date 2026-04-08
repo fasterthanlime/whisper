@@ -1,7 +1,7 @@
 use facet::Facet;
 use vox::{Rx, Tx};
 
-use bee_transcribe::{AlignedWord, Update};
+use bee_transcribe::{AlignedWord, SessionSnapshot};
 
 #[derive(Clone, Debug, Facet)]
 pub struct TranscribeWavResult {
@@ -842,7 +842,7 @@ pub trait BeeMl {
     async fn stream_transcribe(
         &self,
         audio_in: Rx<Vec<f32>>,
-        updates_out: Tx<Update>,
+        updates_out: Tx<SessionSnapshot>,
     ) -> Result<(), String>;
 
     async fn correct_transcript(

@@ -415,9 +415,13 @@ impl BeeMlService {
             };
 
             let result = self.transcribe_samples_chunked(&samples)?;
-            let update = result.update;
+            let snapshot = result.snapshot;
 
-            match self.build_transcribe_phonetic_trace(&audio, &update.text, &update.alignments) {
+            match self.build_transcribe_phonetic_trace(
+                &audio,
+                &snapshot.full_text,
+                &snapshot.committed_words,
+            ) {
                 Ok(trace) => {
                     let positive_span_count = trace
                         .spans
@@ -453,7 +457,7 @@ impl BeeMlService {
                         prompt_notes: prompt.prompt_notes,
                         take: recording.take,
                         wav_path: recording.wav_path,
-                        asr_transcript: update.text,
+                        asr_transcript: snapshot.full_text.clone(),
                         utterance_similarity: trace.utterance_similarity,
                         utterance_feature_similarity: trace.utterance_feature_similarity,
                         positive_span_count,
@@ -472,7 +476,7 @@ impl BeeMlService {
                     prompt_notes: prompt.prompt_notes,
                     take: recording.take,
                     wav_path: recording.wav_path,
-                    asr_transcript: update.text,
+                    asr_transcript: snapshot.full_text,
                     utterance_similarity: None,
                     utterance_feature_similarity: None,
                     positive_span_count: 0,

@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use bee_qwen3_asr::generate::TOP_K;
 use bee_transcribe::text_buffer::TokenEntry;
-use bee_transcribe::{EngineConfig, SessionOptions, Update};
+use bee_transcribe::{EngineConfig, SessionOptions, SessionSnapshot};
 use tokenizers::Tokenizer;
 use tracing_subscriber::EnvFilter;
 
@@ -118,10 +118,10 @@ fn main() -> anyhow::Result<()> {
         let ms = t0.elapsed().as_millis();
 
         match result {
-            Some(update) => {
-                if update.text != last_text {
-                    print_update(chunk_idx, ms, &update);
-                    last_text = update.text.clone();
+            Some(snapshot) => {
+                if snapshot.full_text != last_text {
+                    print_update(chunk_idx, ms, &snapshot);
+                    last_text = snapshot.full_text.clone();
                 } else {
                     println!("  chunk {chunk_idx}: {ms:.0}ms (unchanged)");
                 }
@@ -142,11 +142,11 @@ fn main() -> anyhow::Result<()> {
         "\n--- Final ({finish_ms:.0}ms, total {:.0}ms) ---",
         t_total.elapsed().as_millis()
     );
-    println!("  text: {:?}", result.update.text);
+    println!("  text: {:?}", result.snapshot.full_text);
 
-    if !result.update.alignments.is_empty() {
+    if !result.snapshot.committed_words.is_empty() {
         println!("\nAlignments:");
-        for w in &result.update.alignments {
+        for w in &result.snapshot.committed_words {
             println!("  [{:.3}s - {:.3}s] {}", w.start, w.end, w.word);
         }
     }
@@ -154,8 +154,8 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_update(chunk: usize, ms: u128, update: &Update) {
-    println!("  chunk {chunk}: {ms:.0}ms | {}", update.text);
+fn print_update(chunk: usize, ms: u128, snapshot: &SessionSnapshot) {
+    println!("  chunk {chunk}: {ms:.0}ms | {}", snapshot.full_text);
 }
 
 /// Print per-word alternatives with confidence info.
