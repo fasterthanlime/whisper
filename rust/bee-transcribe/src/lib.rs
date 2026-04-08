@@ -7,7 +7,7 @@ pub mod correct;
 pub mod corrector;
 pub mod decode_session;
 mod mlx_stuff;
-pub mod session_v2;
+pub mod session;
 pub mod text_buffer;
 mod types;
 mod wav_util;
@@ -34,7 +34,7 @@ pub use bee_types::AlignedWord;
 /// can reference the same engine (locked during use).
 pub type SharedCorrectionEngine = Arc<Mutex<CorrectionEngine>>;
 
-/// Result of `SessionV2::finish()`. Contains the final update and optionally
+/// Result of `Session::finish()`. Contains the final update and optionally
 /// the corrector state (for teach/save).
 pub struct FinishResult {
     pub update: Update,
@@ -126,14 +126,14 @@ impl Engine {
     }
 
     /// Create a new transcription session.
-    pub fn session(&self, options: SessionOptions) -> Result<session_v2::SessionV2<'_>, Exception> {
+    pub fn session(&self, options: SessionOptions) -> Result<session::Session<'_>, Exception> {
         let vad = SileroVad::from_tensors(&self.vad_tensors)
             .map_err(|e| Exception::custom(format!("vad creation failed: {e}")))?;
         let correction = self
             .correction
             .as_ref()
             .map(|ce| (ce.clone(), Corrector::new()));
-        Ok(session_v2::SessionV2::new(
+        Ok(session::Session::new(
             &self.model,
             &self.tokenizer,
             &self.aligner,
