@@ -506,7 +506,7 @@ fn evaluate_prepared_recording(
         );
         timings.query_total += query_start.elapsed();
         let verify_start = Instant::now();
-        let scored = score_shortlist(&span, &shortlist, index);
+        let scored = score_shortlist(span, &shortlist, index);
         timings.verify_total += verify_start.elapsed();
 
         for (candidate_rank_in_span, candidate) in

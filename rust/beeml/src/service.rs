@@ -3,21 +3,19 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use bee_phonetic::dataset::RecordingWordAlignment;
 use bee_phonetic::{
-    enumerate_transcript_spans_with, query_index, score_shortlist, PhoneticIndex, RetrievalQuery,
-    SeedDataset, TranscriptAlignmentToken, TranscriptSpan,
+    PhoneticIndex,
+    SeedDataset, TranscriptAlignmentToken,
 };
 use bee_transcribe::{AlignedWord, Engine};
 use beeml::g2p::CachedEspeakG2p;
-use beeml::judge::{extract_span_context, OnlineJudge};
+use beeml::judge::OnlineJudge;
 use beeml::rpc::{
-    AliasSource, CandidateFeatureDebug, FilterDecision, IdentifierFlags, JudgeOptionDebug,
-    JudgeStateDebug, RapidFireChoice, RejectedGroupSpan, RetrievalCandidateDebug,
+    JudgeOptionDebug,
+    JudgeStateDebug, RapidFireChoice,
     RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
-    SpanDebugTrace, SpanDebugView, TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
+    TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
 };
-use tracing::info;
 
 use crate::offline_eval::*;
 use crate::rapid_fire::build_rapid_fire_decision_set;

@@ -1,20 +1,16 @@
 use std::collections::HashMap;
 
-use bee_phonetic::{
-    enumerate_transcript_spans_with, query_index, score_shortlist, RetrievalQuery,
-    TranscriptAlignmentToken,
-};
-use bee_transcribe::{AlignedWord, SessionOptions};
-use beeml::judge::{extract_span_context, OnlineJudge};
+use bee_transcribe::SessionOptions;
+use beeml::judge::OnlineJudge;
 use beeml::rpc::{
     AcceptedEdit, BeeMl, CorrectionDebugResult, CorrectionRequest, CorrectionResult,
-    FilterDecision, JudgeEvalFailure, ModelSummary, OfflineJudgeEvalRequest,
+    JudgeEvalFailure, ModelSummary, OfflineJudgeEvalRequest,
     OfflineJudgeEvalResult, ProbDistribution, RerankerDebugTrace,
-    RetrievalCandidateDebug, RetrievalEvalMiss, RetrievalEvalTermSummary,
+    RetrievalEvalMiss, RetrievalEvalTermSummary,
     RetrievalPrototypeEvalProgress, RetrievalPrototypeEvalRequest, RetrievalPrototypeEvalResult,
     RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
     RetrievalPrototypeTeachingCase, RetrievalPrototypeTeachingDeckRequest,
-    RetrievalPrototypeTeachingDeckResult, SpanDebugTrace, SpanDebugView,
+    RetrievalPrototypeTeachingDeckResult,
     TeachRetrievalPrototypeJudgeRequest, TermAliasView, TermInspectionRequest,
     TermInspectionResult, ThresholdRow, TimingBreakdown, TranscribeWavResult,
     TwoStageGridPoint, TwoStageResult,
@@ -488,7 +484,7 @@ impl BeeMl for BeeMlService {
 
         // ── Feature activation diagnostics ──────────────────────────────
         {
-            use beeml::judge::{build_examples, FeatureSlice, NUM_DENSE, SPARSE_OFFSET};
+            use beeml::judge::{build_examples, NUM_DENSE};
             println!("\n--- Feature activation diagnostics ---");
 
             let mut total_examples = 0u64;
@@ -1078,7 +1074,6 @@ impl BeeMl for BeeMlService {
             );
 
             // Also show where gold candidate is NOT the best
-            let mut gold_not_best_probs: Vec<f32> = Vec::new();
             let mut gold_not_best_best: Vec<f32> = Vec::new();
             for sc in &scored_balanced {
                 if !sc.should_abstain && sc.reachable {
