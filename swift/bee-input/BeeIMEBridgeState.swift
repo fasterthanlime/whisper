@@ -141,6 +141,9 @@ final class BeeIMEBridgeState: NSObject {
 
     private(set) var state: State = .idle
 
+    /// Retained after deactivation so post-session replaceText can still reach the client.
+    private var lastSession: BeeIMESession?
+
     // MARK: - Queries
 
     var isDictating: Bool {
@@ -176,6 +179,7 @@ final class BeeIMEBridgeState: NSObject {
             state = .serving(session, sessionID: sessionID, pendingText: pending)
             return
         }
+        lastSession = nil
         let session = BeeIMESession(controller: controller, pid: pid, clientID: clientID)
         state = .activated(session)
         beeInputLog("state → activated pid=\(pid.map(String.init) ?? "nil")")
@@ -184,6 +188,7 @@ final class BeeIMEBridgeState: NSObject {
 
     func deactivate(_ controller: BeeInputController) {
         guard activeController === controller else { return }
+        lastSession = currentSession
         state = .idle
         beeInputLog("state → idle")
     }
@@ -292,9 +297,9 @@ final class BeeIMEBridgeState: NSObject {
     }
 
     func replaceText(oldText: String, newText: String, sessionID: UUID) {
-        // Find the session — can be in activated or serving state
-        guard let session = currentSession else {
-            beeInputLog("replaceText: no session, dropping")
+        // Try current session first, fall back to lastSession for post-dictation corrections
+        guard let session = currentSession ?? lastSession else {
+            beeInputLog("replaceText: no session (current or last), dropping")
             return
         }
         session.handleReplaceText(oldText: oldText, newText: newText)
