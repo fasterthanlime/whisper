@@ -337,12 +337,53 @@ impl BeeMlService {
                 .then_with(|| a.token_start.cmp(&b.token_start))
         });
 
+        let worst_raw_span_index = phonetic_spans
+            .iter()
+            .enumerate()
+            .filter_map(|(index, span)| {
+                span.transcript_feature_similarity
+                    .map(|score| (index.min(u32::MAX as usize) as u32, score))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(index, _)| index);
+
+        let worst_contentful_span_index = phonetic_spans
+            .iter()
+            .enumerate()
+            .filter(|(_, span)| {
+                !matches!(span.span_usefulness, TranscribePhoneticSpanUsefulness::Low)
+            })
+            .filter_map(|(index, span)| {
+                span.transcript_feature_similarity
+                    .map(|score| (index.min(u32::MAX as usize) as u32, score))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(index, _)| index);
+
+        let best_rescue_span_index = phonetic_spans
+            .iter()
+            .enumerate()
+            .filter(|(_, span)| span.zipa_rescue_eligible)
+            .filter_map(|(index, span)| {
+                let best_delta = span
+                    .candidates
+                    .iter()
+                    .filter_map(|candidate| candidate.similarity_delta)
+                    .max_by(|a, b| a.total_cmp(b))?;
+                Some((index.min(u32::MAX as usize) as u32, best_delta))
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(index, _)| index);
+
         Ok(TranscribePhoneticTrace {
             snapshot_revision: snapshot.revision,
             aligned_transcript: snapshot.committed_text.clone(),
             pending_text: snapshot.pending_text.clone(),
             full_transcript: snapshot.full_text.clone(),
             tail_ambiguity: snapshot.ambiguity.clone(),
+            worst_raw_span_index,
+            worst_contentful_span_index,
+            best_rescue_span_index,
             utterance_similarity: phoneme_similarity(
                 &utterance_zipa_raw,
                 &utterance_transcript_raw,

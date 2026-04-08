@@ -152,6 +152,23 @@ export type PhoneticRescueSpan = {
 };
 
 export type PhoneticRescueTrace = {
+  snapshotRevision: bigint;
+  alignedTranscript: string;
+  pendingText: string;
+  fullTranscript: string;
+  tailAmbiguity: {
+    pendingTokenCount: number;
+    lowConcentrationCount: number;
+    lowMarginCount: number;
+    volatileTokenCount: number;
+    meanConcentration: number;
+    meanMargin: number;
+    minConcentration: number;
+    minMargin: number;
+  };
+  worstRawSpanIndex?: number | null;
+  worstContentfulSpanIndex?: number | null;
+  bestRescueSpanIndex?: number | null;
   utteranceZipaRaw: string[];
   utteranceZipaNormalized: string[];
   utteranceTranscriptNormalized: string[];

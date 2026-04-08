@@ -94,7 +94,7 @@ fn main() -> Result<()> {
                 "utterance ZIPA norm: {}",
                 trace.utterance_zipa_normalized.join(" ")
             );
-            if let Some(span) = worst_span(trace) {
+            if let Some(span) = selected_span(trace) {
                 println!("worst span: {:?}", span.span_text);
                 println!(
                     "alignment source={} confidence={} class={} usefulness={} eligible={} phones {}->{} proj={} chosen={} second={} gap={}",
@@ -240,7 +240,7 @@ fn write_snapshot_jsonl(path: &str, rows: &[beeml::rpc::CorpusAlignmentEvalRow])
     let file = File::create(path).with_context(|| format!("creating snapshot file {path}"))?;
     let mut writer = BufWriter::new(file);
     for row in rows {
-        let worst_span = row.trace.as_ref().and_then(worst_span);
+        let worst_span = row.trace.as_ref().and_then(selected_span);
         let snapshot = SnapshotRow {
             ordinal: row.ordinal,
             bucket: row.bucket.clone(),
@@ -327,14 +327,14 @@ fn crop_utterance_ops(
     }
 }
 
-fn worst_span(
+fn selected_span(
     trace: &beeml::rpc::TranscribePhoneticTrace,
 ) -> Option<&beeml::rpc::TranscribePhoneticSpan> {
-    trace.spans.iter().min_by(|a, b| {
-        a.transcript_feature_similarity
-            .unwrap_or(f32::INFINITY)
-            .total_cmp(&b.transcript_feature_similarity.unwrap_or(f32::INFINITY))
-    })
+    trace
+        .best_rescue_span_index
+        .or(trace.worst_contentful_span_index)
+        .or(trace.worst_raw_span_index)
+        .and_then(|index| trace.spans.get(index as usize))
 }
 
 fn load_service() -> Result<BeeMlService> {
