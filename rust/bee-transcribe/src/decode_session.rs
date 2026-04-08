@@ -166,7 +166,7 @@ impl DecodeSession {
 
         // Merge prefix + generated into a single Vec<AsrToken>
         let prefix_len = prefix.as_ref().map_or(0, |p| p.len());
-        let merged = self.merge_tokens(prefix, &generated, &logprobs);
+        let merged = Self::merge_tokens(prefix, &generated, &logprobs);
 
         tracing::debug!(
             "decode_session: chunk={} generated={} prefix={prefix_len} total={}",
@@ -346,77 +346,42 @@ impl DecodeSession {
 
     // ── Internal ────────────────────────────────────────────────────
 
-    /// Compute the fixed prefix for rollback.
-    /// Rollback applies to text tokens only — metadata is always kept.
+    /// Compute the fixed prefix for rollback — text tokens only.
+    ///
+    /// Metadata is never included here: `build_initial_prompt` re-emits the
+    /// language header on every step, so including metadata in the prefix
+    /// would duplicate it in the model's context.
     fn compute_prefix(&self) -> Option<Vec<AsrToken>> {
         if self.chunk_count < 2 || self.tokens.is_empty() {
             return None;
         }
-        let text_len = self.tokens.len() - self.metadata_end;
-        let text_keep = text_len.saturating_sub(self.rollback_tokens.0);
-        let keep = self.metadata_end + text_keep;
-        if keep == 0 {
+        let text_tokens = self.text_tokens();
+        let text_keep = text_tokens.len().saturating_sub(self.rollback_tokens.0);
+        if text_keep == 0 {
             return None;
         }
-        Some(self.tokens[..keep].to_vec())
+        Some(text_tokens[..text_keep].to_vec())
     }
 
     /// Merge prefix tokens + newly generated tokens into a single Vec<AsrToken>.
+    ///
+    /// The prefix already carries correct logprobs from the previous step.
+    /// Generated tokens get fresh logprobs from this step.
     fn merge_tokens(
-        &self,
         prefix: Option<Vec<AsrToken>>,
         generated: &[i32],
         logprobs: &[TokenLogprob],
     ) -> Vec<AsrToken> {
-        if let Some(prefix) = prefix {
-            let prefix_len = prefix.len();
-            // Reuse logprobs from previous run for prefix tokens
-            let prefix_logprobs: Vec<AsrToken> = if self.tokens.len() >= prefix_len {
-                self.tokens[..prefix_len].to_vec()
-            } else {
-                let mut p = self.tokens.clone();
-                p.resize(
-                    prefix_len,
-                    AsrToken {
-                        id: 0,
-                        logprob: 0.0,
-                        margin: 0.0,
-                    },
-                );
-                p
-            };
-
-            let mut merged = prefix_logprobs;
-            for (i, &token_id) in generated.iter().enumerate() {
-                let lp = logprobs.get(i).map_or(
-                    AsrToken {
-                        id: token_id as TokenId,
-                        logprob: 0.0,
-                        margin: 0.0,
-                    },
-                    |lp| AsrToken {
-                        id: token_id as TokenId,
-                        logprob: lp.logprob,
-                        margin: lp.margin,
-                    },
-                );
-                merged.push(lp);
-            }
-            merged
-        } else {
-            generated
-                .iter()
-                .enumerate()
-                .map(|(i, &token_id)| {
-                    let lp = logprobs.get(i);
-                    AsrToken {
-                        id: token_id as TokenId,
-                        logprob: lp.map_or(0.0, |l| l.logprob),
-                        margin: lp.map_or(0.0, |l| l.margin),
-                    }
-                })
-                .collect()
+        let mut merged: Vec<AsrToken> = prefix.unwrap_or_default();
+        for (i, &token_id) in generated.iter().enumerate() {
+            let lp = logprobs.get(i);
+            merged.push(AsrToken {
+                id: token_id as TokenId,
+                logprob: lp.map_or(0.0, |l| l.logprob),
+                margin: lp.map_or(0.0, |l| l.margin),
+            });
         }
+        merged
     }
 
     /// Find the <asr_text> boundary in tokens.

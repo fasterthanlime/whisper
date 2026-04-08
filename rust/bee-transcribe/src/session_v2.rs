@@ -35,6 +35,10 @@ pub struct SessionV2<'a> {
     committed: TextBuffer,
     pending: TextBuffer,
     detected_language: String,
+    /// Language locked after the first commit (rotation). In auto-detect mode,
+    /// we wait until we have a full committed segment before trusting the
+    /// detection — then freeze it so subsequent sub-sessions don't drift.
+    locked_language: String,
 
     /// Correction state: shared engine + per-session corrector.
     correction: Option<(SharedCorrectionEngine, Corrector)>,
@@ -72,6 +76,7 @@ impl<'a> SessionV2<'a> {
             committed: TextBuffer::new(),
             pending: TextBuffer::new(),
             detected_language: String::new(),
+            locked_language: String::new(),
             correction,
             buffered_commit: None,
             prev_raw_words: Vec::new(),
@@ -200,13 +205,19 @@ impl<'a> SessionV2<'a> {
 
     // ── Internal ────────────────────────────────────────────────────
 
+    /// Language to pass to the model: explicit > locked > auto.
+    fn effective_language(&self) -> &str {
+        if !self.options.language.as_str().is_empty() {
+            self.options.language.as_str()
+        } else {
+            &self.locked_language
+        }
+    }
+
     fn decode_and_maybe_commit(&mut self, max_tokens: usize) -> Result<(), Exception> {
-        self.decode.decode_step(
-            self.model,
-            self.tokenizer,
-            self.options.language.as_str(),
-            max_tokens,
-        )?;
+        let language = self.effective_language().to_owned();
+        self.decode
+            .decode_step(self.model, self.tokenizer, &language, max_tokens)?;
 
         if let Some(lang) = self.decode.detected_language(self.tokenizer) {
             tracing::debug!(language = %lang, "detected language");
@@ -251,6 +262,17 @@ impl<'a> SessionV2<'a> {
                     remaining_audio_samples = self.decode.audio_len(),
                     "rotation complete: committed words"
                 );
+
+                // Lock language on first rotation (auto-detect mode only).
+                // We wait for a full committed segment before trusting the
+                // detected language, so subsequent sub-sessions don't drift.
+                if self.locked_language.is_empty()
+                    && !self.detected_language.is_empty()
+                    && self.options.language.as_str().is_empty()
+                {
+                    tracing::info!(language = %self.detected_language, "locking detected language after first rotation");
+                    self.locked_language = self.detected_language.clone();
+                }
 
                 // One-commit-late correction: correct the *previous* buffered
                 // chunk using the new chunk's words as right context.
