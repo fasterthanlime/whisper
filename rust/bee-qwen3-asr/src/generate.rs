@@ -30,6 +30,7 @@ pub const TOK_SYSTEM: i32 = 8948;
 pub const TOK_USER: i32 = 872;
 pub const TOK_ASSISTANT: i32 = 77091;
 pub const TOK_NEWLINE: i32 = 198;
+pub const TOK_ASR_TEXT: i32 = 151704;
 
 /// Greedy autoregressive generation (batch mode, fresh cache).
 pub fn generate(
@@ -77,26 +78,32 @@ pub fn generate(
 /// Build the initial prompt tokens for the first streaming chunk.
 ///
 /// Template:
-///   <|im_start|>system\n<|im_end|>\n<|im_start|>user\n
+///   <|im_start|>system\n{context}<|im_end|>\n<|im_start|>user\n
 ///   <|audio_start|><|audio_pad|>*N<|audio_end|><|im_end|>\n
 ///   <|im_start|>assistant\n
-///   language {lang}<asr_text>
+///   [language {lang}<asr_text>]   ← only when language is non-empty
 pub fn build_initial_prompt(
     n_audio_tokens: usize,
-    language_tokens: &[i32],
-    asr_text_tokens: &[i32],
+    language: &str,
+    context: &str,
+    tokenizer: &tokenizers::Tokenizer,
 ) -> Vec<i32> {
     let mut prompt: Vec<i32> = vec![
         TOK_IM_START,
         TOK_SYSTEM,
         TOK_NEWLINE,
+    ];
+    if !context.is_empty() {
+        prompt.extend(tokenize(tokenizer, context));
+    }
+    prompt.extend_from_slice(&[
         TOK_IM_END,
         TOK_NEWLINE,
         TOK_IM_START,
         TOK_USER,
         TOK_NEWLINE,
         AUDIO_START_TOKEN_ID,
-    ];
+    ]);
     prompt.extend(std::iter::repeat_n(AUDIO_PAD_TOKEN_ID, n_audio_tokens));
     prompt.extend_from_slice(&[
         AUDIO_END_TOKEN_ID,
@@ -106,8 +113,11 @@ pub fn build_initial_prompt(
         TOK_ASSISTANT,
         TOK_NEWLINE,
     ]);
-    prompt.extend_from_slice(language_tokens);
-    prompt.extend_from_slice(asr_text_tokens);
+    if !language.is_empty() {
+        let lang_header = format!("language {language}");
+        prompt.extend(tokenize(tokenizer, &lang_header));
+        prompt.push(TOK_ASR_TEXT);
+    }
     prompt
 }
 
@@ -117,11 +127,11 @@ pub fn build_initial_prompt(
 ///   <|im_end|>\n<|im_start|>user\n
 ///   <|audio_start|><|audio_pad|>*N<|audio_end|><|im_end|>\n
 ///   <|im_start|>assistant\n
-///   language {lang}<asr_text>
+///   [language {lang}<asr_text>]   ← only when language is non-empty
 pub fn build_followup_prompt(
     n_audio_tokens: usize,
-    language_tokens: &[i32],
-    asr_text_tokens: &[i32],
+    language: &str,
+    tokenizer: &tokenizers::Tokenizer,
 ) -> Vec<i32> {
     let mut prompt: Vec<i32> = vec![
         TOK_IM_END,
@@ -140,8 +150,11 @@ pub fn build_followup_prompt(
         TOK_ASSISTANT,
         TOK_NEWLINE,
     ]);
-    prompt.extend_from_slice(language_tokens);
-    prompt.extend_from_slice(asr_text_tokens);
+    if !language.is_empty() {
+        let lang_header = format!("language {language}");
+        prompt.extend(tokenize(tokenizer, &lang_header));
+        prompt.push(TOK_ASR_TEXT);
+    }
     prompt
 }
 
@@ -281,6 +294,13 @@ fn strip_eos(mut tokens: Vec<i32>) -> Vec<i32> {
         }
     }
     tokens
+}
+
+fn tokenize(tokenizer: &tokenizers::Tokenizer, text: &str) -> Vec<i32> {
+    tokenizer
+        .encode(text, false)
+        .map(|enc| enc.get_ids().iter().map(|&id| id as i32).collect())
+        .unwrap_or_default()
 }
 
 fn detect_repetition(tokens: &[i32]) -> bool {

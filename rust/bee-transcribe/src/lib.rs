@@ -49,9 +49,9 @@ pub fn set_mlx_cache_limit(limit: usize) -> Result<usize, String> {
 use bee_qwen3_asr::config::AsrConfig;
 use bee_qwen3_asr::encoder::EncoderCache;
 use bee_qwen3_asr::forced_aligner::ForcedAligner;
+use bee_qwen3_asr::generate::TokenLogprob;
 use bee_qwen3_asr::mel::MelExtractor;
 use bee_qwen3_asr::model::Qwen3ASRModel;
-use bee_qwen3_asr::generate::TokenLogprob;
 use bee_qwen3_asr::{generate, load};
 use facet::Facet;
 use mlx_rs::error::Exception;
@@ -172,9 +172,7 @@ fn load_tokenizer(dir: &Path) -> Result<tokenizers::Tokenizer, mlx_rs::error::Ex
         tokenizer.with_pre_tokenizer(Some(
             tokenizers::pre_tokenizers::byte_level::ByteLevel::new(false, true, false),
         ));
-        tokenizer.with_decoder(Some(
-            tokenizers::decoders::byte_level::ByteLevel::default(),
-        ));
+        tokenizer.with_decoder(Some(tokenizers::decoders::byte_level::ByteLevel::default()));
         return Ok(tokenizer);
     }
 
@@ -217,8 +215,9 @@ impl Engine {
     /// Load an engine from explicit paths.
     pub fn load(config: &EngineConfig<'_>) -> Result<Self, Exception> {
         let config_path = config.model_dir.join("config.json");
-        let config_str = std::fs::read_to_string(&config_path)
-            .map_err(|e| Exception::custom(format!("read config: {e} at {}", config_path.display())))?;
+        let config_str = std::fs::read_to_string(&config_path).map_err(|e| {
+            Exception::custom(format!("read config: {e} at {}", config_path.display()))
+        })?;
         let asr_config: AsrConfig = serde_json::from_str(&config_str)
             .map_err(|e| Exception::custom(format!("parse config: {e}")))?;
 
@@ -249,19 +248,6 @@ impl Engine {
     pub fn session(&self, options: SessionOptions) -> Session<'_> {
         let chunk_size_samples = (options.chunk_duration * 16000.0) as usize;
 
-        // Always resolve <asr_text> token ID for splitting output.
-        let asr_text_tokens = tokenize_to_i32(&self.tokenizer, "<asr_text>");
-
-        // When language is empty, omit the language prefix entirely and let the
-        // model detect the language (matching the reference Python implementation).
-        // When a specific language is set, force it with "language {name}<asr_text>".
-        let language_tokens = if options.language.as_str().is_empty() {
-            Vec::new()
-        } else {
-            let lang_header = format!("language {}", options.language.as_str());
-            tokenize_to_i32(&self.tokenizer, &lang_header)
-        };
-
         Session {
             engine: self,
             vad: None, // caller sets this via set_vad()
@@ -277,8 +263,6 @@ impl Engine {
             committed_logprobs: Vec::new(),
             committed_alignments: Vec::new(),
             committed_audio_offset: 0.0,
-            language_tokens,
-            asr_text_tokens,
             options,
             speech_detected: false,
             detected_language: String::new(),
@@ -313,10 +297,6 @@ pub struct Session<'a> {
     committed_alignments: Vec<AlignedWord>,
     committed_audio_offset: f64,
 
-    // Precomputed prompt tokens
-    language_tokens: Vec<i32>,
-    asr_text_tokens: Vec<i32>,
-
     options: SessionOptions,
     speech_detected: bool,
     /// Language detected by the model in auto-detect mode.
@@ -337,7 +317,11 @@ impl<'a> Session<'a> {
         self.buffer.extend_from_slice(samples);
 
         if self.buffer.len() < self.chunk_size_samples {
-            tracing::trace!("feed: buffering {}/{}", self.buffer.len(), self.chunk_size_samples);
+            tracing::trace!(
+                "feed: buffering {}/{}",
+                self.buffer.len(),
+                self.chunk_size_samples
+            );
             return Ok(None);
         }
 
@@ -383,14 +367,22 @@ impl<'a> Session<'a> {
         }
 
         // Decode
-        tracing::debug!("feed: decoding chunk {} ({} audio samples total)", self.chunk_count, self.audio.len());
+        tracing::debug!(
+            "feed: decoding chunk {} ({} audio samples total)",
+            self.chunk_count,
+            self.audio.len()
+        );
         self.decode_step(self.options.max_tokens_streaming)?;
 
         // Check for commit
         self.maybe_commit()?;
 
         let update = self.make_update();
-        tracing::debug!("feed: text={:?} committed_len={}", &update.text[..update.text.len().min(80)], update.committed_len);
+        tracing::debug!(
+            "feed: text={:?} committed_len={}",
+            &update.text[..update.text.len().min(80)],
+            update.committed_len
+        );
 
         Ok(Some(update))
     }
@@ -464,8 +456,9 @@ impl<'a> Session<'a> {
         let prefix_ids = self.compute_prefix();
         let mut prompt = generate::build_initial_prompt(
             audio_features.shape()[1] as usize,
-            &self.language_tokens,
-            &self.asr_text_tokens,
+            self.options.language.as_str(),
+            "", // TODO: context support
+            &self.engine.tokenizer,
         );
         if let Some(prefix) = &prefix_ids {
             prompt.extend(prefix.iter().map(|&t| t as i32));
@@ -490,28 +483,33 @@ impl<'a> Session<'a> {
             prompt.len(),
         );
 
-        let (all_ids, all_logprobs): (Vec<u32>, Vec<TokenLogprob>) = if let Some(prefix) = prefix_ids {
-            // Prefix tokens reuse their previous logprobs; generated tokens get fresh ones.
-            let prefix_len = prefix.len();
-            let prefix_logprobs = if self.token_logprobs.len() >= prefix_len {
-                self.token_logprobs[..prefix_len].to_vec()
+        let (all_ids, all_logprobs): (Vec<u32>, Vec<TokenLogprob>) =
+            if let Some(prefix) = prefix_ids {
+                // Prefix tokens reuse their previous logprobs; generated tokens get fresh ones.
+                let prefix_len = prefix.len();
+                let prefix_logprobs = if self.token_logprobs.len() >= prefix_len {
+                    self.token_logprobs[..prefix_len].to_vec()
+                } else {
+                    // Fallback: pad with zeros (shouldn't happen in practice)
+                    let mut lps = self.token_logprobs.clone();
+                    lps.resize(
+                        prefix_len,
+                        TokenLogprob {
+                            token_id: 0,
+                            logprob: 0.0,
+                            margin: 0.0,
+                        },
+                    );
+                    lps
+                };
+                let mut ids = prefix;
+                ids.extend(generated.iter().map(|&t| t as u32));
+                let mut lps = prefix_logprobs;
+                lps.extend_from_slice(&logprobs);
+                (ids, lps)
             } else {
-                // Fallback: pad with zeros (shouldn't happen in practice)
-                let mut lps = self.token_logprobs.clone();
-                lps.resize(prefix_len, TokenLogprob { token_id: 0, logprob: 0.0, margin: 0.0 });
-                lps
+                (generated.iter().map(|&t| t as u32).collect(), logprobs)
             };
-            let mut ids = prefix;
-            ids.extend(generated.iter().map(|&t| t as u32));
-            let mut lps = prefix_logprobs;
-            lps.extend_from_slice(&logprobs);
-            (ids, lps)
-        } else {
-            (
-                generated.iter().map(|&t| t as u32).collect(),
-                logprobs,
-            )
-        };
 
         tracing::debug!(
             "decode_step: total_ids={} (prefix={prefix_len} + generated={})",
@@ -522,7 +520,10 @@ impl<'a> Session<'a> {
         // If the model returned EOS immediately (no generated tokens and no prefix),
         // preserve the existing transcription rather than wiping it.
         if all_ids.is_empty() && !self.token_ids.is_empty() {
-            tracing::debug!("decode_step: EOS with no output, preserving {} existing tokens", self.token_ids.len());
+            tracing::debug!(
+                "decode_step: EOS with no output, preserving {} existing tokens",
+                self.token_ids.len()
+            );
         } else {
             self.token_ids = all_ids;
             self.token_logprobs = all_logprobs;
@@ -619,8 +620,7 @@ impl<'a> Session<'a> {
         // Update committed tokens and logprobs
         self.committed_tokens
             .extend_from_slice(&self.token_ids[..commit_count]);
-        self.committed_logprobs
-            .extend_from_slice(commit_logprobs);
+        self.committed_logprobs.extend_from_slice(commit_logprobs);
 
         // Rotate session
         let cut = audio_cut_samples.min(self.audio.len());
@@ -664,26 +664,45 @@ impl<'a> Session<'a> {
         let all_ids = self.full_token_ids();
 
         // Split at the <asr_text> token — metadata before, text after.
-        let asr_text_id = self.asr_text_tokens.first().map(|&id| id as u32);
-        let (text, detected_lang) = if let Some(tag_pos) = asr_text_id.and_then(|tid| all_ids.iter().position(|&id| id == tid)) {
+        let asr_text_id = generate::TOK_ASR_TEXT as u32;
+        let (text, detected_lang) = if let Some(tag_pos) =
+            all_ids.iter().position(|&id| id == asr_text_id)
+        {
             let meta_ids = &all_ids[..tag_pos];
             let text_ids = &all_ids[tag_pos + 1..];
-            let meta = self.engine.tokenizer.decode(meta_ids, true).unwrap_or_default();
-            let text = self.engine.tokenizer.decode(text_ids, true).unwrap_or_default();
+            let meta = self
+                .engine
+                .tokenizer
+                .decode(meta_ids, true)
+                .unwrap_or_default();
+            let text = self
+                .engine
+                .tokenizer
+                .decode(text_ids, true)
+                .unwrap_or_default();
 
             // Extract language from metadata (e.g. "language English")
-            let lang = meta.trim()
+            let lang = meta
+                .trim()
                 .strip_prefix("language ")
                 .map(|l| l.trim().to_string())
                 .filter(|l| !l.eq_ignore_ascii_case("none"))
                 .unwrap_or_default();
 
-            tracing::debug!("make_update: lang={lang:?} text={text:?} (split at token {tag_pos})");
+            tracing::info!("make_update: lang={lang:?} text={text:?} (split at token {tag_pos}, {meta_ids_len} meta + {text_ids_len} text tokens)",
+                meta_ids_len = meta_ids.len(), text_ids_len = text_ids.len());
             (text, lang)
         } else {
             // No <asr_text> token — decode everything as text
-            let text = self.engine.tokenizer.decode(&all_ids, true).unwrap_or_default();
-            tracing::debug!("make_update: no <asr_text> token, raw_text={text:?}");
+            let text = self
+                .engine
+                .tokenizer
+                .decode(&all_ids, true)
+                .unwrap_or_default();
+            tracing::info!(
+                "make_update: no <asr_text> token, {n} tokens, raw_text={text:?}",
+                n = all_ids.len()
+            );
             (text, String::new())
         };
 
@@ -716,7 +735,6 @@ impl<'a> Session<'a> {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
-
 
 /// Compute per-word logprob statistics by mapping decoder tokens to aligner words.
 ///
@@ -788,19 +806,15 @@ fn word_logprob_stats(
             }
             let n = lps.len() as f32;
             let mean_lp = lps.iter().map(|lp| lp.logprob).sum::<f32>() / n;
-            let min_lp = lps.iter().map(|lp| lp.logprob).fold(f32::INFINITY, f32::min);
+            let min_lp = lps
+                .iter()
+                .map(|lp| lp.logprob)
+                .fold(f32::INFINITY, f32::min);
             let mean_m = lps.iter().map(|lp| lp.margin).sum::<f32>() / n;
             let min_m = lps.iter().map(|lp| lp.margin).fold(f32::INFINITY, f32::min);
             (Some(mean_lp), Some(min_lp), Some(mean_m), Some(min_m))
         })
         .collect()
-}
-
-fn tokenize_to_i32(tokenizer: &tokenizers::Tokenizer, text: &str) -> Vec<i32> {
-    tokenizer
-        .encode(text, false)
-        .map(|enc| enc.get_ids().iter().map(|&id| id as i32).collect())
-        .unwrap_or_default()
 }
 
 fn compute_rms(samples: &[f32]) -> f32 {
