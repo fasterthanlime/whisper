@@ -36,7 +36,7 @@ declare_link_endpoint!(pub mod bee_ffi_endpoint { export = bee_ffi_v1_vtable; })
 #[ctor::ctor]
 fn on_load() {
     struct BeeLogWriter {
-        file: Option<std::sync::Mutex<strip_ansi_escapes::Writer<std::fs::File>>>,
+        file: Option<strip_ansi_escapes::Writer<std::fs::File>>,
     }
 
     impl std::io::Write for BeeLogWriter {
@@ -44,11 +44,9 @@ fn on_load() {
             use std::io::Write as _;
 
             let mut stderr = std::io::stderr().lock();
-
             stderr.write_all(buf)?;
 
-            if let Some(file) = &self.file {
-                let mut file = file.lock().unwrap();
+            if let Some(file) = &mut self.file {
                 file.write_all(buf)?;
             }
 
@@ -60,8 +58,7 @@ fn on_load() {
 
             std::io::stderr().lock().flush()?;
 
-            if let Some(file) = &self.file {
-                let mut file = file.lock().unwrap();
+            if let Some(file) = &mut self.file {
                 file.flush()?;
             }
 
@@ -69,26 +66,21 @@ fn on_load() {
         }
     }
 
-    let file = std::env::var("BEE_FFI_LOG_PATH").ok().and_then(|path| {
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .ok()
-            .map(std::sync::Mutex::new)
-    });
-
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
-        .with_writer(move || BeeLogWriter {
-            file: file.as_ref().map(|f| {
-                std::sync::Mutex::new(strip_ansi_escapes::Writer::new(
-                    f.lock().unwrap().try_clone().unwrap(),
-                ))
-            }),
+        .with_writer(move || {
+            let file = std::env::var("BEE_FFI_LOG_PATH").ok().and_then(|path| {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .ok()
+                    .map(strip_ansi_escapes::Writer::new)
+            });
+            BeeLogWriter { file }
         })
         .with_ansi(true)
         .finish();
