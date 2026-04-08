@@ -4,6 +4,7 @@ pub mod config;
 pub mod encoder;
 pub mod error;
 pub mod features;
+pub mod infer;
 pub mod load;
 pub mod model;
 pub mod tokenizer;

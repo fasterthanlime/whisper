@@ -105,8 +105,11 @@ impl EncoderEmbed {
                 .stride((1, 2))
                 .build()?,
             convnext: ConvNeXtFrontend::new(Self::LAYER3_CHANNELS)?,
-            out: nn::LinearBuilder::new(out_width * Self::LAYER3_CHANNELS, config.encoder_dim[0] as i32)
-                .build()?,
+            out: nn::LinearBuilder::new(
+                out_width * Self::LAYER3_CHANNELS,
+                config.encoder_dim[0] as i32,
+            )
+            .build()?,
             out_norm: BiasNorm::new(config.encoder_dim[0] as i32)?,
         })
     }
@@ -218,7 +221,10 @@ mod tests {
 
         assert_eq!(model.encoder_embed.conv0.weight.shape(), vec![8, 3, 3, 1]);
         assert_eq!(model.encoder_embed.conv1.weight.shape(), vec![32, 3, 3, 8]);
-        assert_eq!(model.encoder_embed.conv2.weight.shape(), vec![128, 3, 3, 32]);
+        assert_eq!(
+            model.encoder_embed.conv2.weight.shape(),
+            vec![128, 3, 3, 32]
+        );
         assert_eq!(
             model.encoder_embed.convnext.depthwise_conv.weight.shape(),
             vec![128, 7, 7, 1]

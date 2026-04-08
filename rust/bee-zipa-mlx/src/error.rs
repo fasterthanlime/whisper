@@ -9,6 +9,10 @@ pub enum ZipaError {
     #[error("invalid tokens.txt line: {0}")]
     InvalidTokenLine(String),
     #[error(transparent)]
+    Mlx(#[from] mlx_rs::error::Exception),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+    #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Wav(#[from] hound::Error),

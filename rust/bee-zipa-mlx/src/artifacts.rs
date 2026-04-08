@@ -35,8 +35,9 @@ impl ReferenceArtifacts {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("~"));
         match variant {
-            ZipaVariant::SmallCrCtcNsNoDiacritics700k => home
-                .join("bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp"),
+            ZipaVariant::SmallCrCtcNsNoDiacritics700k => {
+                home.join("bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp")
+            }
         }
     }
 }

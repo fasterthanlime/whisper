@@ -166,7 +166,8 @@ impl FbankExtractor {
                     } else {
                         c.re * c.re + c.im * c.im
                     };
-                    energy += spec * self.mel_filters[bin_idx * self.params.num_filters + filter_idx];
+                    energy +=
+                        spec * self.mel_filters[bin_idx * self.params.num_filters + filter_idx];
                 }
                 data[frame_idx * self.params.num_filters + filter_idx] =
                     energy.max(f32::EPSILON).ln();
@@ -193,7 +194,12 @@ fn get_strided_frames(samples: &[f32], window_length: usize, window_shift: usize
     padded.extend(samples[..npad_left.min(num_samples)].iter().rev().copied());
     padded.extend_from_slice(samples);
     if npad_right > 0 {
-        padded.extend(samples[num_samples - npad_right as usize..].iter().rev().copied());
+        padded.extend(
+            samples[num_samples - npad_right as usize..]
+                .iter()
+                .rev()
+                .copied(),
+        );
     }
 
     (0..num_frames)
@@ -281,12 +287,10 @@ mod tests {
         let last = &feats.data[(feats.num_frames - 1) * 80..feats.num_frames * 80];
 
         let expected_first = [
-            -7.26802, -6.653513, -7.136528, -7.233698, -7.209892, -7.214974, -7.196978,
-            -7.560191,
+            -7.26802, -6.653513, -7.136528, -7.233698, -7.209892, -7.214974, -7.196978, -7.560191,
         ];
         let expected_last = [
-            -6.151392, -6.141901, -7.884505, -8.159524, -7.953354, -7.431382, -6.63212,
-            -5.984893,
+            -6.151392, -6.141901, -7.884505, -8.159524, -7.953354, -7.431382, -6.63212, -5.984893,
         ];
 
         for (actual, expected) in row0.iter().take(8).zip(expected_first) {
