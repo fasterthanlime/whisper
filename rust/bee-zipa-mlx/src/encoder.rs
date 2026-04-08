@@ -320,6 +320,15 @@ impl ZipformerEncoderLayer {
         let src = self.norm.forward(&src)?;
         self.bypass.forward(&src_orig, &src)
     }
+
+    pub fn forward(
+        &self,
+        src: &Array,
+        pos_emb: &Array,
+    ) -> Result<Array, Exception> {
+        let attn_weights = self.self_attn_weights.forward_with_position(src, pos_emb)?;
+        self.forward_with_attn_weights(src, &attn_weights)
+    }
 }
 
 fn relative_to_absolute(pos_scores: &Array, seq_len: i32) -> Result<Array, Exception> {
@@ -396,8 +405,15 @@ mod tests {
 
         let tensors = Array::load_safetensors(&reference).unwrap();
         let layer0_in = tensors.get("layer0_in").unwrap();
+        let pos_emb = tensors.get("pos_emb").unwrap();
         let attn_weights = tensors.get("attn_weights").unwrap();
         let src_orig = layer0_in.clone();
+
+        let actual_attn = layer
+            .self_attn_weights
+            .forward_with_position(layer0_in, pos_emb)
+            .unwrap();
+        assert_close("attn_weights", &actual_attn, attn_weights);
 
         let add0 = layer0_in.add(&layer.feed_forward1.forward(layer0_in).unwrap()).unwrap();
         assert_close("add0", &add0, tensors.get("add0").unwrap());
@@ -443,6 +459,9 @@ mod tests {
 
         let actual = layer.bypass.forward(&src_orig, &norm).unwrap();
         assert_close("layer0_out", &actual, tensors.get("layer0_out").unwrap());
+
+        let full_actual = layer.forward(layer0_in, pos_emb).unwrap();
+        assert_close("layer0_out_full", &full_actual, tensors.get("layer0_out").unwrap());
     }
 
     fn assert_close(name: &str, actual: &Array, expected: &Array) {
