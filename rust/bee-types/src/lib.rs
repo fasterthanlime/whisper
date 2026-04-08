@@ -59,14 +59,11 @@ pub struct TranscriptSpan {
 }
 
 /// ASR alignment token with timing and uncertainty.
-#[derive(Debug, Clone, Default, Facet)]
+#[derive(Debug, Clone, Facet)]
 pub struct TranscriptAlignmentToken {
     pub start_time: f64,
     pub end_time: f64,
-    pub mean_logprob: Option<f32>,
-    pub min_logprob: Option<f32>,
-    pub mean_margin: Option<f32>,
-    pub min_margin: Option<f32>,
+    pub confidence: Confidence,
 }
 
 /// A word token with character offsets in the transcript.

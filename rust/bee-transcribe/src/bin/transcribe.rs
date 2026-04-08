@@ -19,7 +19,8 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| model_dir.clone());
     let aligner_dir =
         std::env::var("BEE_ALIGNER_DIR").map_err(|_| anyhow::anyhow!("BEE_ALIGNER_DIR not set"))?;
-    let vad_dir = std::env::var("BEE_VAD_DIR").ok();
+    let vad_dir =
+        std::env::var("BEE_VAD_DIR").map_err(|_| anyhow::anyhow!("BEE_VAD_DIR not set"))?;
 
     // Load engine
     let t0 = Instant::now();
@@ -27,6 +28,7 @@ fn main() -> anyhow::Result<()> {
         model_dir: Path::new(&model_dir),
         tokenizer_dir: Path::new(&tokenizer_dir),
         aligner_dir: Path::new(&aligner_dir),
+        silero_dir: Path::new(&vad_dir),
     })?;
     println!("Engine loaded in {:.0}ms", t0.elapsed().as_millis());
 
@@ -62,18 +64,7 @@ fn main() -> anyhow::Result<()> {
         options.max_tokens_final = v.parse().unwrap();
     }
     let chunk_samples = (options.chunk_duration * 16000.0) as usize;
-    let mut session = engine.session(options);
-
-    // Optionally load VAD
-    if let Some(ref vad_dir) = vad_dir {
-        match bee_vad::SileroVad::load(Path::new(vad_dir)) {
-            Ok(vad) => {
-                session.set_vad(vad);
-                println!("VAD loaded");
-            }
-            Err(e) => println!("VAD not loaded: {e}"),
-        }
-    }
+    let mut session = engine.session(options)?;
 
     println!(
         "\n--- Streaming (chunk={:.0}ms) ---\n",

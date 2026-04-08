@@ -24,6 +24,7 @@ pub(crate) struct AsrEngine {
     pub(crate) stats: StatsSampler,
 }
 
+
 // SAFETY: Engine is immutable after construction. MLX arrays are heap-allocated
 // Metal buffers; concurrent read access is safe.
 unsafe impl Send for AsrEngine {}
@@ -66,15 +67,19 @@ fn resolve_engine_config(
             .ok_or("forced aligner not found")?
     };
 
+    let silero_dir: PathBuf = find_vad_dir(cache_base).ok_or("Silero VAD not found")?;
+
     // Leak the PathBufs to get 'static references (engine lives for process lifetime)
     let model_dir: &'static Path = Box::leak(model_dir.to_path_buf().into_boxed_path());
     let tokenizer_dir: &'static Path = Box::leak(tokenizer_dir.into_boxed_path());
     let aligner_dir: &'static Path = Box::leak(aligner_dir.into_boxed_path());
+    let silero_dir: &'static Path = Box::leak(silero_dir.into_boxed_path());
 
     Ok(EngineConfig {
         model_dir,
         tokenizer_dir,
         aligner_dir,
+        silero_dir,
     })
 }
 
@@ -92,23 +97,8 @@ pub(crate) fn load_engine(model_dir: &Path, cache_base: &Path) -> Result<AsrEngi
     );
     let engine = Engine::load(&config).map_err(|e| format!("load engine: {e}"))?;
 
-    let vad_tensors = find_vad_dir(cache_base).and_then(|d| {
-        let st_path = d.join("model.safetensors");
-        match mlx_rs::Array::load_safetensors(&st_path) {
-            Ok(tensors) => {
-                tracing::info!("Silero VAD loaded ({} tensors)", tensors.len());
-                Some(tensors)
-            }
-            Err(e) => {
-                tracing::warn!("Failed to load VAD: {e}");
-                None
-            }
-        }
-    });
-
     Ok(AsrEngine {
         inner: Box::leak(Box::new(engine)),
-        vad_tensors,
         stats: StatsSampler::new(),
     })
 }

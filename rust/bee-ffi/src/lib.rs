@@ -185,7 +185,7 @@ impl BeeService {
     fn make_session(
         engine: &AsrEngine,
         config: &bee_rpc::SessionConfig,
-    ) -> bee_transcribe::Session<'static> {
+    ) -> Result<bee_transcribe::Session<'static>, BeeError> {
         let defaults = SessionOptions::default();
         let lang = if config.language.is_empty() {
             Language::default()
@@ -220,14 +220,10 @@ impl BeeService {
             "make_session: chunk={:.2}s vad_thresh={:.2} rollback={} commit={}",
             opts.chunk_duration, opts.vad_threshold, opts.rollback_tokens, opts.commit_token_count,
         );
-        let mut session = engine.inner.session(opts);
-        if let Some(ref tensors) = engine.vad_tensors {
-            match bee_vad::SileroVad::from_tensors(tensors) {
-                Ok(vad) => session.set_vad(vad),
-                Err(e) => tracing::error!("VAD creation failed: {e}"),
-            }
-        }
-        session
+        let session = engine.inner.session(opts).map_err(|e| BeeError::TranscriptionError {
+            message: format!("{e}"),
+        })?;
+        Ok(session)
     }
 }
 
@@ -256,7 +252,7 @@ impl bee_rpc::Bee for BeeService {
         let id = format!("session-{id_num}");
         info!("create_session: {id} language={}", config.language);
 
-        let session = Self::make_session(engine, &config);
+        let session = Self::make_session(engine, &config)?;
         self.inner.sessions.insert(
             id.clone(),
             Arc::new(tokio::sync::Mutex::new(SessionInner {
@@ -369,7 +365,7 @@ impl bee_rpc::Bee for BeeService {
 
         info!("set_language: {session_id} → {language}");
         guard.config.language = language;
-        guard.session = Some(Self::make_session(engine, &guard.config));
+        guard.session = Some(Self::make_session(engine, &guard.config)?);
         Ok(true)
     }
 
@@ -382,7 +378,7 @@ impl bee_rpc::Bee for BeeService {
             rollback_tokens: 0,
             commit_token_count: 0,
         };
-        let mut session = Self::make_session(engine, &default_config);
+        let mut session = Self::make_session(engine, &default_config)?;
 
         // feed + finish are CPU/GPU intensive
         let result = tokio::task::spawn_blocking(move || {
@@ -475,10 +471,10 @@ impl bee_rpc::Bee for BeeService {
             // Log alignment data being fed in
             for (i, w) in words.iter().enumerate() {
                 tracing::debug!(
-                    "correct_process: word[{i}]={:?} logprob={:?} margin={:?}",
+                    "correct_process: word[{i}]={:?} logprob=({:.3},{:.3}) margin=({:.3},{:.3})",
                     w.word,
-                    (w.mean_logprob, w.min_logprob),
-                    (w.mean_margin, w.min_margin),
+                    w.confidence.mean_lp, w.confidence.min_lp,
+                    w.confidence.mean_m, w.confidence.min_m,
                 );
             }
 

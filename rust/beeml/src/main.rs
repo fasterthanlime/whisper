@@ -68,12 +68,16 @@ async fn main() -> Result<()> {
     let aligner_dir = env::var("BEE_ALIGNER_DIR")
         .map(PathBuf::from)
         .context("BEE_ALIGNER_DIR must be set")?;
+    let silero_dir = env::var("BEE_VAD_DIR")
+        .map(PathBuf::from)
+        .context("BEE_VAD_DIR must be set")?;
 
     info!(model_dir = %model_dir.display(), "loading ASR engine");
     let engine = Engine::load(&EngineConfig {
         model_dir: &model_dir,
         tokenizer_dir: &tokenizer_dir,
         aligner_dir: &aligner_dir,
+        silero_dir: &silero_dir,
     })
     .context("loading engine")?;
 

@@ -33,6 +33,8 @@ fn main() -> anyhow::Result<()> {
         std::env::var("BEE_TOKENIZER_DIR").unwrap_or_else(|_| model_dir.clone());
     let aligner_dir =
         std::env::var("BEE_ALIGNER_DIR").map_err(|_| anyhow::anyhow!("BEE_ALIGNER_DIR not set"))?;
+    let silero_dir =
+        std::env::var("BEE_VAD_DIR").map_err(|_| anyhow::anyhow!("BEE_VAD_DIR not set"))?;
 
     let corpus_root = SeedDataset::canonical_root();
 
@@ -43,6 +45,7 @@ fn main() -> anyhow::Result<()> {
         model_dir: Path::new(&model_dir),
         tokenizer_dir: Path::new(&tokenizer_dir),
         aligner_dir: Path::new(&aligner_dir),
+        silero_dir: Path::new(&silero_dir),
     })?;
     println!("done ({:.0}ms)", t0.elapsed().as_millis());
 
@@ -181,7 +184,7 @@ fn transcribe_file(
 
     let options = SessionOptions::default();
     let chunk_samples = (options.chunk_duration * 16000.0) as usize;
-    let mut session = engine.session(options);
+    let mut session = engine.session(options)?;
 
     let mut offset = 0;
     while offset < samples.len() {

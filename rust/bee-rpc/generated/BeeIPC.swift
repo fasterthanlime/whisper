@@ -71,23 +71,31 @@ public struct SessionConfig: Codable, Sendable {
     }
 }
 
+public struct Confidence: Codable, Sendable {
+    public var meanLp: Float
+    public var minLp: Float
+    public var meanM: Float
+    public var minM: Float
+
+    nonisolated public init(meanLp: Float, minLp: Float, meanM: Float, minM: Float) {
+        self.meanLp = meanLp
+        self.minLp = minLp
+        self.meanM = meanM
+        self.minM = minM
+    }
+}
+
 public struct AlignedWord: Codable, Sendable {
     public var word: String
     public var start: Double
     public var end: Double
-    public var meanLogprob: Float?
-    public var minLogprob: Float?
-    public var meanMargin: Float?
-    public var minMargin: Float?
+    public var confidence: Confidence
 
-    nonisolated public init(word: String, start: Double, end: Double, meanLogprob: Float?, minLogprob: Float?, meanMargin: Float?, minMargin: Float?) {
+    nonisolated public init(word: String, start: Double, end: Double, confidence: Confidence) {
         self.word = word
         self.start = start
         self.end = end
-        self.meanLogprob = meanLogprob
-        self.minLogprob = minLogprob
-        self.meanMargin = meanMargin
-        self.minMargin = minMargin
+        self.confidence = confidence
     }
 }
 
@@ -209,14 +217,18 @@ nonisolated internal func encodeSessionConfig(_ value: SessionConfig, into buffe
     encodeU32(value.commitTokenCount, into: &buffer)
 }
 
+nonisolated internal func encodeConfidence(_ value: Confidence, into buffer: inout ByteBuffer) {
+    encodeF32(value.meanLp, into: &buffer)
+    encodeF32(value.minLp, into: &buffer)
+    encodeF32(value.meanM, into: &buffer)
+    encodeF32(value.minM, into: &buffer)
+}
+
 nonisolated internal func encodeAlignedWord(_ value: AlignedWord, into buffer: inout ByteBuffer) {
     encodeString(value.word, into: &buffer)
     encodeF64(value.start, into: &buffer)
     encodeF64(value.end, into: &buffer)
-    encodeOption(value.meanLogprob, into: &buffer, encoder: { val, buf in encodeF32(val, into: &buf) })
-    encodeOption(value.minLogprob, into: &buffer, encoder: { val, buf in encodeF32(val, into: &buf) })
-    encodeOption(value.meanMargin, into: &buffer, encoder: { val, buf in encodeF32(val, into: &buf) })
-    encodeOption(value.minMargin, into: &buffer, encoder: { val, buf in encodeF32(val, into: &buf) })
+    encodeConfidence(value.confidence, into: &buffer)
 }
 
 nonisolated internal func encodeFeedResult(_ value: FeedResult, into buffer: inout ByteBuffer) {
@@ -407,11 +419,14 @@ public final class BeeClient: BeeCaller, Sendable {
                     let _word = try ({ buf in try decodeString(from: &buf) })(&buf)
                     let _start = try ({ buf in try decodeF64(from: &buf) })(&buf)
                     let _end = try ({ buf in try decodeF64(from: &buf) })(&buf)
-                    let _meanLogprob = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
-                    let _minLogprob = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
-                    let _meanMargin = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
-                    let _minMargin = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
-                    return AlignedWord(word: _word, start: _start, end: _end, meanLogprob: _meanLogprob, minLogprob: _minLogprob, meanMargin: _meanMargin, minMargin: _minMargin)
+                    let _confidence = try ({ buf in
+                    let _meanLp = try ({ buf in try decodeF32(from: &buf) })(&buf)
+                    let _minLp = try ({ buf in try decodeF32(from: &buf) })(&buf)
+                    let _meanM = try ({ buf in try decodeF32(from: &buf) })(&buf)
+                    let _minM = try ({ buf in try decodeF32(from: &buf) })(&buf)
+                    return Confidence(meanLp: _meanLp, minLp: _minLp, meanM: _meanM, minM: _minM)
+                })(&buf)
+                    return AlignedWord(word: _word, start: _start, end: _end, confidence: _confidence)
                 }) })(&buf)
                     let _isFinal = try ({ buf in try decodeBool(from: &buf) })(&buf)
                     let _detectedLanguage = try ({ buf in try decodeString(from: &buf) })(&buf)
@@ -460,11 +475,14 @@ public final class BeeClient: BeeCaller, Sendable {
                     let _word = try ({ buf in try decodeString(from: &buf) })(&buf)
                     let _start = try ({ buf in try decodeF64(from: &buf) })(&buf)
                     let _end = try ({ buf in try decodeF64(from: &buf) })(&buf)
-                    let _meanLogprob = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
-                    let _minLogprob = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
-                    let _meanMargin = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
-                    let _minMargin = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
-                    return AlignedWord(word: _word, start: _start, end: _end, meanLogprob: _meanLogprob, minLogprob: _minLogprob, meanMargin: _meanMargin, minMargin: _minMargin)
+                    let _confidence = try ({ buf in
+                    let _meanLp = try ({ buf in try decodeF32(from: &buf) })(&buf)
+                    let _minLp = try ({ buf in try decodeF32(from: &buf) })(&buf)
+                    let _meanM = try ({ buf in try decodeF32(from: &buf) })(&buf)
+                    let _minM = try ({ buf in try decodeF32(from: &buf) })(&buf)
+                    return Confidence(meanLp: _meanLp, minLp: _minLp, meanM: _meanM, minM: _minM)
+                })(&buf)
+                    return AlignedWord(word: _word, start: _start, end: _end, confidence: _confidence)
                 })
                 let _value_isFinal = try decodeBool(from: &buf)
                 let _value_detectedLanguage = try decodeString(from: &buf)
@@ -1138,11 +1156,14 @@ public final class BeeDispatcher: ServiceDispatcher {
                 let _word = try ({ buf in try decodeString(from: &buf) })(&buf)
                 let _start = try ({ buf in try decodeF64(from: &buf) })(&buf)
                 let _end = try ({ buf in try decodeF64(from: &buf) })(&buf)
-                let _meanLogprob = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
-                let _minLogprob = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
-                let _meanMargin = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
-                let _minMargin = try ({ buf in try decodeOption(from: &buf, decoder: { buf in try decodeF32(from: &buf) }) })(&buf)
-                return AlignedWord(word: _word, start: _start, end: _end, meanLogprob: _meanLogprob, minLogprob: _minLogprob, meanMargin: _meanMargin, minMargin: _minMargin)
+                let _confidence = try ({ buf in
+                let _meanLp = try ({ buf in try decodeF32(from: &buf) })(&buf)
+                let _minLp = try ({ buf in try decodeF32(from: &buf) })(&buf)
+                let _meanM = try ({ buf in try decodeF32(from: &buf) })(&buf)
+                let _minM = try ({ buf in try decodeF32(from: &buf) })(&buf)
+                return Confidence(meanLp: _meanLp, minLp: _minLp, meanM: _meanM, minM: _minM)
+            })(&buf)
+                return AlignedWord(word: _word, start: _start, end: _end, confidence: _confidence)
             })
             do {
                 let result = try await handler.correctProcess(text: text, appId: appId, words: words)
@@ -1238,7 +1259,7 @@ public let bee_schemas: [String: MethodBindingSchema] = [
     "transcribeSamples": MethodBindingSchema(args: [.vec(element: .f32)]),
     "getStats": MethodBindingSchema(args: []),
     "correctLoad": MethodBindingSchema(args: [.string, .string, .f32, .f32]),
-    "correctProcess": MethodBindingSchema(args: [.string, .string, .vec(element: .struct(fields: [("word", .string), ("start", .f64), ("end", .f64), ("mean_logprob", .option(inner: .f32)), ("min_logprob", .option(inner: .f32)), ("mean_margin", .option(inner: .f32)), ("min_margin", .option(inner: .f32))]))]),
+    "correctProcess": MethodBindingSchema(args: [.string, .string, .vec(element: .struct(fields: [("word", .string), ("start", .f64), ("end", .f64), ("confidence", .struct(fields: [("mean_lp", .f32), ("min_lp", .f32), ("mean_m", .f32), ("min_m", .f32)]))]))]),
     "correctTeach": MethodBindingSchema(args: [.string, .vec(element: .struct(fields: [("edit_id", .string), ("accepted", .bool)]))]),
     "correctSave": MethodBindingSchema(args: []),
 ]
@@ -1264,12 +1285,13 @@ nonisolated(unsafe) public let bee_schema_registry: [UInt64: Schema] = [
     0x715e96e611ad7d16: Schema(id: 0x715e96e611ad7d16, typeParams: [], kind: .struct(name: "SessionConfig", fields: [FieldSchema(name: "language", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "chunk_duration", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "vad_threshold", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "rollback_tokens", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "commit_token_count", typeRef: .concrete(0x281c5be4f2ee63b4), required: true)])),
     0x8e02f623d1b2310c: Schema(id: 0x8e02f623d1b2310c, typeParams: [], kind: .primitive(.f32)),
     0x915c6fb5b64f270b: Schema(id: 0x915c6fb5b64f270b, typeParams: ["T0", "T1", "T2", "T3"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2"), .var(name: "T3")])),
-    0x9d430384fa68b98c: Schema(id: 0x9d430384fa68b98c, typeParams: [], kind: .struct(name: "FeedResult", fields: [FieldSchema(name: "text", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "committed_utf16_len", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "alignments", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0xf0d30c1c928667ef)]), required: true), FieldSchema(name: "is_final", typeRef: .concrete(0x178367a87f66fb46), required: true), FieldSchema(name: "detected_language", typeRef: .concrete(0x6d7dce914ee150e8), required: true)])),
+    0x95b1914ad6380338: Schema(id: 0x95b1914ad6380338, typeParams: [], kind: .struct(name: "FeedResult", fields: [FieldSchema(name: "text", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "committed_utf16_len", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "alignments", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0xb3b757451de582d3)]), required: true), FieldSchema(name: "is_final", typeRef: .concrete(0x178367a87f66fb46), required: true), FieldSchema(name: "detected_language", typeRef: .concrete(0x6d7dce914ee150e8), required: true)])),
     0xaa510ab07d34f141: Schema(id: 0xaa510ab07d34f141, typeParams: ["T0", "T1", "T2"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2")])),
+    0xb3b757451de582d3: Schema(id: 0xb3b757451de582d3, typeParams: [], kind: .struct(name: "AlignedWord", fields: [FieldSchema(name: "word", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "start", typeRef: .concrete(0x3f2e589db81e95bf), required: true), FieldSchema(name: "end", typeRef: .concrete(0x3f2e589db81e95bf), required: true), FieldSchema(name: "confidence", typeRef: .concrete(0xcd77762ab5898969), required: true)])),
     0xba0496aa8cee7a4c: Schema(id: 0xba0496aa8cee7a4c, typeParams: ["T0", "T1"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1")])),
     0xbc5c33249a2dc720: Schema(id: 0xbc5c33249a2dc720, typeParams: [], kind: .primitive(.unit)),
+    0xcd77762ab5898969: Schema(id: 0xcd77762ab5898969, typeParams: [], kind: .struct(name: "Confidence", fields: [FieldSchema(name: "mean_lp", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "min_lp", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "mean_m", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "min_m", typeRef: .concrete(0x8e02f623d1b2310c), required: true)])),
     0xdcafd4de6b7969bb: Schema(id: 0xdcafd4de6b7969bb, typeParams: ["T"], kind: .option(element: .var(name: "T"))),
-    0xf0d30c1c928667ef: Schema(id: 0xf0d30c1c928667ef, typeParams: [], kind: .struct(name: "AlignedWord", fields: [FieldSchema(name: "word", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "start", typeRef: .concrete(0x3f2e589db81e95bf), required: true), FieldSchema(name: "end", typeRef: .concrete(0x3f2e589db81e95bf), required: true), FieldSchema(name: "mean_logprob", typeRef: .generic(0xdcafd4de6b7969bb, args: [.concrete(0x8e02f623d1b2310c)]), required: true), FieldSchema(name: "min_logprob", typeRef: .generic(0xdcafd4de6b7969bb, args: [.concrete(0x8e02f623d1b2310c)]), required: true), FieldSchema(name: "mean_margin", typeRef: .generic(0xdcafd4de6b7969bb, args: [.concrete(0x8e02f623d1b2310c)]), required: true), FieldSchema(name: "min_margin", typeRef: .generic(0xdcafd4de6b7969bb, args: [.concrete(0x8e02f623d1b2310c)]), required: true)])),
     0xf92331d26d0aabc4: Schema(id: 0xf92331d26d0aabc4, typeParams: [], kind: .struct(name: "EditResolution", fields: [FieldSchema(name: "edit_id", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "accepted", typeRef: .concrete(0x178367a87f66fb46), required: true)])),
 ]
 
@@ -1296,14 +1318,14 @@ nonisolated(unsafe) public let bee_method_schemas: [UInt64: MethodSchemaInfo] = 
     0xc7e28a8816c1bc83: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0x8e02f623d1b2310c, 0x0a96b404b4d79d67, 0xba0496aa8cee7a4c],
         argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .generic(0x0a96b404b4d79d67, args: [.concrete(0x8e02f623d1b2310c)])]),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xdcafd4de6b7969bb, 0xf0d30c1c928667ef, 0x0a96b404b4d79d67, 0x9d430384fa68b98c, 0x285872d3b3eded20],
-        responseRoot: .generic(0x42046de663beeef0, args: [.generic(0xdcafd4de6b7969bb, args: [.concrete(0x9d430384fa68b98c)]), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xcd77762ab5898969, 0xb3b757451de582d3, 0x0a96b404b4d79d67, 0x95b1914ad6380338, 0xdcafd4de6b7969bb, 0x285872d3b3eded20],
+        responseRoot: .generic(0x42046de663beeef0, args: [.generic(0xdcafd4de6b7969bb, args: [.concrete(0x95b1914ad6380338)]), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
     ),
     0x416a48f228b25310: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0x6847ab90feda71c1],
         argsRoot: .generic(0x6847ab90feda71c1, args: [.concrete(0x6d7dce914ee150e8)]),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xdcafd4de6b7969bb, 0xf0d30c1c928667ef, 0x0a96b404b4d79d67, 0x9d430384fa68b98c, 0x285872d3b3eded20],
-        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x9d430384fa68b98c), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xcd77762ab5898969, 0xb3b757451de582d3, 0x0a96b404b4d79d67, 0x95b1914ad6380338, 0x285872d3b3eded20],
+        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x95b1914ad6380338), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
     ),
     0xefb09d27037e41ed: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0xba0496aa8cee7a4c],
@@ -1330,8 +1352,8 @@ nonisolated(unsafe) public let bee_method_schemas: [UInt64: MethodSchemaInfo] = 
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
     ),
     0xd383d61a2c875e84: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xdcafd4de6b7969bb, 0xf0d30c1c928667ef, 0x0a96b404b4d79d67, 0xaa510ab07d34f141],
-        argsRoot: .generic(0xaa510ab07d34f141, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8), .generic(0x0a96b404b4d79d67, args: [.concrete(0xf0d30c1c928667ef)])]),
+        argsSchemaIds: [0x6d7dce914ee150e8, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xcd77762ab5898969, 0xb3b757451de582d3, 0x0a96b404b4d79d67, 0xaa510ab07d34f141],
+        argsRoot: .generic(0xaa510ab07d34f141, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8), .generic(0x0a96b404b4d79d67, args: [.concrete(0xb3b757451de582d3)])]),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x361f4536eee9f991, 0x3f2e589db81e95bf, 0x5c000f00fa144db4, 0x0a96b404b4d79d67, 0x6a31d1dd6bec4d20],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6a31d1dd6bec4d20), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),

@@ -11,6 +11,7 @@ mod types;
 use tokenizers::Tokenizer;
 pub use types::*;
 mod wav_util;
+pub use wav_util::decode_wav;
 
 use bee_qwen3_asr::config::AsrConfig;
 use bee_qwen3_asr::encoder::EncoderCache;
@@ -96,7 +97,7 @@ impl Engine {
     pub fn session(&self, options: SessionOptions) -> Result<Session<'_>, Exception> {
         let chunk_size_samples = (options.chunk_duration * 16000.0) as usize;
 
-        let vad = SileroVad::from_tensors(tensors)
+        let vad = SileroVad::from_tensors(&self.vad_tensors)
             .map_err(|e| Exception::custom(format!("vad creation failed: {e}")))?;
 
         let session = Session {
@@ -177,7 +178,7 @@ impl<'a> Session<'a> {
 
         // VAD gate: run on full chunks for reliable detection
         if !self.speech_detected {
-            let prob = vad.process_audio(&chunk).unwrap_or(0.0);
+            let prob = self.vad.process_audio(&chunk).unwrap_or(0.0);
             if prob < self.options.vad_threshold {
                 tracing::debug!("feed: pre-speech silence (vad={prob:.3})");
                 return Ok(None);
@@ -191,7 +192,7 @@ impl<'a> Session<'a> {
 
         // Skip decode if this chunk is silence (but keep the audio)
         if self.chunk_count > 1 {
-            let prob = vad.process_audio(&chunk).unwrap_or(0.0);
+            let prob = self.vad.process_audio(&chunk).unwrap_or(0.0);
             let silent = prob < self.options.vad_threshold;
             if silent {
                 tracing::debug!("feed: mid-speech silence (vad={prob:.3}), skipping decode");
@@ -246,14 +247,15 @@ impl<'a> Session<'a> {
                     &self.token_ids,
                     &self.token_logprobs,
                     items.len(),
-                );
+                )
+                .map_err(|e| Exception::custom(format!("{e}")))?;
                 let offset = self.committed_audio_offset;
                 for (i, item) in items.iter().enumerate() {
                     self.committed_alignments.push(AlignedWord {
                         word: item.word.clone(),
                         start: item.start_time + offset,
                         end: item.end_time + offset,
-                        confidence: wstats[i],
+                        confidence: wstats[i].clone(),
                     });
                 }
             }
@@ -429,20 +431,17 @@ impl<'a> Session<'a> {
             &self.token_ids[..commit_count],
             commit_logprobs,
             items.len(),
-        );
+        )
+        .map_err(|e| Exception::custom(format!("{e}")))?;
 
         // Store alignments with absolute timestamps and logprob stats
         let offset = self.committed_audio_offset;
         for (i, item) in items.iter().enumerate() {
-            let (mean_logprob, min_logprob, mean_margin, min_margin) = wstats[i];
             self.committed_alignments.push(AlignedWord {
                 word: item.word.clone(),
                 start: item.start_time + offset,
                 end: item.end_time + offset,
-                mean_logprob,
-                min_logprob,
-                mean_margin,
-                min_margin,
+                confidence: wstats[i].clone(),
             });
         }
 
@@ -495,7 +494,7 @@ impl<'a> Session<'a> {
         // Split at the <asr_text> token — metadata before, text after.
         let asr_text_id = generate::TOK_ASR_TEXT;
         let (text, detected_lang) = if let Some(tag_pos) =
-            all_ids.iter().position(|&id| id == asr_text_id)
+            all_ids.iter().position(|&id| id == asr_text_id as TokenId)
         {
             let meta_ids = &all_ids[..tag_pos];
             let text_ids = &all_ids[tag_pos + 1..];
@@ -656,12 +655,4 @@ fn word_logprob_stats(
         })
         .collect();
     Ok(word_confidences)
-}
-
-fn compute_rms(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    let sum_sq: f32 = samples.iter().map(|&s| s * s).sum();
-    (sum_sq / samples.len() as f32).sqrt()
 }
