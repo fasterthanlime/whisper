@@ -256,11 +256,11 @@ impl<'a> SessionV2<'a> {
             text_tokens = text_count,
             fixed,
             rollback,
-            commit_threshold = self.options.commit_token_count * 2,
+            commit_threshold = self.options.commit_token_count,
             "decode_and_maybe_commit: token counts"
         );
 
-        if fixed >= self.options.commit_token_count * 2 {
+        if fixed >= self.options.commit_token_count {
             tracing::info!(
                 commit_n = self.options.commit_token_count,
                 text_tokens = text_count,
@@ -300,11 +300,16 @@ impl<'a> SessionV2<'a> {
                 self.flush_buffered_commit(&new_words);
 
                 // Buffer this chunk for correction when the next commit arrives.
-                let raw_text = new_words
-                    .iter()
-                    .map(|w| w.word.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                let raw_text = {
+                    let mut s = String::new();
+                    for w in &new_words {
+                        if !s.is_empty() && !w.word.starts_with(' ') {
+                            s.push(' ');
+                        }
+                        s.push_str(&w.word);
+                    }
+                    s
+                };
                 self.buffered_commit = Some(BufferedCommit {
                     raw_text,
                     words: new_words,
