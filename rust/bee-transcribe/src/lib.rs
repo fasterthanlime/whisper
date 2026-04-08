@@ -2,6 +2,7 @@
 
 mod aligner;
 pub mod audio_buffer;
+pub mod audio_filter;
 mod asr;
 pub mod text_buffer;
 pub mod correct;
