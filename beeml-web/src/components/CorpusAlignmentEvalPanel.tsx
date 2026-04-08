@@ -6,8 +6,9 @@ import type {
   CorpusAlignmentEvalRow,
   TranscribePhoneticTrace as RpcTranscribePhoneticTrace,
 } from "../beeml.generated";
-import { PhoneticRescuePanel } from "./PhoneticRescuePanel";
+import { AlignmentView, PhoneticRescuePanel } from "./PhoneticRescuePanel";
 import type { PhoneticRescueTrace } from "../types";
+import type { PhoneticAlignmentOp, PhoneticRescueSpan } from "../types";
 
 function formatMetric(value: number | null | undefined) {
   return value == null ? "n/a" : value.toFixed(4);
@@ -70,15 +71,27 @@ function RowCard({
   selected: boolean;
   onSelect: () => void;
 }) {
+  const trace = row.trace ? toPhoneticTrace(row.trace) : null;
+  const previewOps = lanePreviewOps(trace);
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
       className="failure-card"
       style={{
         gap: "0.55rem",
         textAlign: "left",
         border: selected ? "1px solid var(--accent)" : "1px solid var(--border)",
         background: selected ? "var(--bg-subtle)" : "var(--bg-elevated)",
+        cursor: "pointer",
+        userSelect: "text",
       }}
     >
       <div className="failure-topline">
@@ -98,9 +111,39 @@ function RowCard({
         <span className="failure-pill">best Δ {formatMetric(row.best_span_delta)}</span>
       </div>
       <div className="token-row muted">ASR: {row.asr_transcript}</div>
+      {previewOps.length > 0 ? (
+        <div style={{ marginTop: "0.15rem" }}>
+          <AlignmentView ops={previewOps} transcriptLabel="Transcript" zipaLabel="ZIPA" />
+        </div>
+      ) : null}
       {row.error ? <div className="error-pill">{row.error}</div> : null}
-    </button>
+    </div>
   );
+}
+
+function lanePreviewOps(trace: PhoneticRescueTrace | null): PhoneticAlignmentOp[] {
+  if (!trace) return [];
+  const worstSpan = trace.spans.reduce<PhoneticRescueSpan | null>((worst, span) => {
+    if (!worst) return span;
+    const left = span.transcriptFeatureSimilarity ?? Infinity;
+    const right = worst.transcriptFeatureSimilarity ?? Infinity;
+    return left < right ? span : worst;
+  }, null);
+  if (worstSpan && worstSpan.alignment.length > 0) {
+    return cropOps(worstSpan.alignment, 18);
+  }
+  return cropOps(trace.utteranceAlignment, 18);
+}
+
+function cropOps(ops: PhoneticAlignmentOp[], targetWidth: number): PhoneticAlignmentOp[] {
+  if (ops.length <= targetWidth) return ops;
+  const mismatchIndex = ops.findIndex((op) => op.kind !== "Match");
+  if (mismatchIndex < 0) {
+    return ops.slice(0, targetWidth);
+  }
+  const left = Math.max(0, mismatchIndex - Math.floor(targetWidth / 2));
+  const right = Math.min(ops.length, left + targetWidth);
+  return ops.slice(Math.max(0, right - targetWidth), right);
 }
 
 export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
