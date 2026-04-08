@@ -103,17 +103,31 @@ export type PhoneticRescueCandidate = {
   similarityDelta?: number | null;
 };
 
+export type PhoneticAlignmentKind = "Match" | "Substitute" | "Insert" | "Delete";
+
+export type PhoneticAlignmentOp = {
+  kind: PhoneticAlignmentKind;
+  transcriptIndex?: number | null;
+  zipaIndex?: number | null;
+  transcriptToken?: string | null;
+  zipaToken?: string | null;
+  cost: number;
+};
+
 export type PhoneticRescueSpan = {
   spanText: string;
   tokenStart: number;
   tokenEnd: number;
   startSec: number;
   endSec: number;
+  zipaNormStart: number;
+  zipaNormEnd: number;
   zipaRaw: string[];
   zipaNormalized: string[];
   transcriptNormalized: string[];
   transcriptSimilarity?: number | null;
   transcriptFeatureSimilarity?: number | null;
+  alignment: PhoneticAlignmentOp[];
   candidates: PhoneticRescueCandidate[];
 };
 
@@ -123,6 +137,7 @@ export type PhoneticRescueTrace = {
   utteranceTranscriptNormalized: string[];
   utteranceSimilarity?: number | null;
   utteranceFeatureSimilarity?: number | null;
+  utteranceAlignment: PhoneticAlignmentOp[];
   spans: PhoneticRescueSpan[];
 };
 

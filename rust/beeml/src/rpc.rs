@@ -21,17 +21,39 @@ pub struct TranscribePhoneticCandidate {
 }
 
 #[derive(Clone, Debug, Facet)]
+#[repr(u8)]
+pub enum TranscribePhoneticAlignmentKind {
+    Match,
+    Substitute,
+    Insert,
+    Delete,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct TranscribePhoneticAlignmentOp {
+    pub kind: TranscribePhoneticAlignmentKind,
+    pub transcript_index: Option<u32>,
+    pub zipa_index: Option<u32>,
+    pub transcript_token: Option<String>,
+    pub zipa_token: Option<String>,
+    pub cost: f32,
+}
+
+#[derive(Clone, Debug, Facet)]
 pub struct TranscribePhoneticSpan {
     pub span_text: String,
     pub token_start: u32,
     pub token_end: u32,
     pub start_sec: f64,
     pub end_sec: f64,
+    pub zipa_norm_start: u32,
+    pub zipa_norm_end: u32,
     pub zipa_raw: Vec<String>,
     pub zipa_normalized: Vec<String>,
     pub transcript_normalized: Vec<String>,
     pub transcript_similarity: Option<f32>,
     pub transcript_feature_similarity: Option<f32>,
+    pub alignment: Vec<TranscribePhoneticAlignmentOp>,
     pub candidates: Vec<TranscribePhoneticCandidate>,
 }
 
@@ -42,6 +64,7 @@ pub struct TranscribePhoneticTrace {
     pub utterance_transcript_normalized: Vec<String>,
     pub utterance_similarity: Option<f32>,
     pub utterance_feature_similarity: Option<f32>,
+    pub utterance_alignment: Vec<TranscribePhoneticAlignmentOp>,
     pub spans: Vec<TranscribePhoneticSpan>,
 }
 
