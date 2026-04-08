@@ -42,21 +42,6 @@ impl TokenAlignment {
         }
 
         let mut matched = Vec::new();
-        for op in &self.ops {
-            let (Some(left), Some(right)) = (op.left_index, op.right_index) else {
-                continue;
-            };
-            let left = left as usize;
-            if left_range.start <= left && left < left_range.end {
-                matched.push(right as usize);
-            }
-        }
-        if !matched.is_empty() {
-            let start = *matched.iter().min().expect("non-empty matches");
-            let end = matched.iter().max().expect("non-empty matches") + 1;
-            return Some(start..end);
-        }
-
         let mut right_cursor = 0usize;
         let mut right_before = None;
         let mut right_after = None;
@@ -65,22 +50,39 @@ impl TokenAlignment {
             let left_idx = op.left_index.map(|idx| idx as usize);
             let right_idx = op.right_index.map(|idx| idx as usize);
 
+            let (Some(left), Some(right)) = (op.left_index, op.right_index) else {
+                if right_idx.is_some() {
+                    right_cursor += 1;
+                }
+                continue;
+            };
+            let left = left as usize;
+            let right = right as usize;
+            if left_range.start <= left && left < left_range.end {
+                matched.push(right);
+            }
+
             if let Some(left_idx) = left_idx {
                 if left_idx < left_range.start {
-                    if let Some(right_idx) = right_idx {
-                        right_before = Some(right_idx + 1);
-                    } else {
-                        right_before = Some(right_cursor);
-                    }
-                } else if left_idx >= left_range.end {
+                    right_before = Some(right_idx.map_or(right_cursor, |idx| idx + 1));
+                } else if left_idx >= left_range.end && right_after.is_none() {
                     right_after = Some(right_idx.unwrap_or(right_cursor));
-                    break;
                 }
             }
 
             if right_idx.is_some() {
                 right_cursor += 1;
             }
+        }
+        if !matched.is_empty() {
+            let start = *matched.iter().min().expect("non-empty matches");
+            let end = matched.iter().max().expect("non-empty matches") + 1;
+            let expanded_start = right_before.map_or(start, |anchor| anchor.min(start));
+            let expanded_end = right_after.map_or(end, |anchor| anchor.max(end));
+            if expanded_start <= expanded_end {
+                return Some(expanded_start..expanded_end);
+            }
+            return Some(start..end);
         }
 
         match (right_before, right_after) {
@@ -218,7 +220,9 @@ fn substitution_cost(left: &str, right: &str) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{align_token_sequences, ComparisonToken};
+    use super::{
+        AlignmentOp, AlignmentOpKind, ComparisonToken, TokenAlignment, align_token_sequences,
+    };
 
     #[test]
     fn projects_direct_matches() {
@@ -258,5 +262,87 @@ mod tests {
         };
         assert_eq!(token.source_start, 3);
         assert_eq!(token.source_end, 5);
+    }
+
+    #[test]
+    fn projects_sparse_match_to_surrounding_anchor_window() {
+        let alignment = TokenAlignment {
+            ops: vec![
+                AlignmentOp {
+                    kind: AlignmentOpKind::Match,
+                    left_index: Some(0),
+                    right_index: Some(0),
+                    left_token: Some("pre".into()),
+                    right_token: Some("pre".into()),
+                    cost: 0.0,
+                },
+                AlignmentOp {
+                    kind: AlignmentOpKind::Insert,
+                    left_index: None,
+                    right_index: Some(1),
+                    left_token: None,
+                    right_token: Some("r1".into()),
+                    cost: 1.0,
+                },
+                AlignmentOp {
+                    kind: AlignmentOpKind::Delete,
+                    left_index: Some(1),
+                    right_index: None,
+                    left_token: Some("l1".into()),
+                    right_token: None,
+                    cost: 1.0,
+                },
+                AlignmentOp {
+                    kind: AlignmentOpKind::Delete,
+                    left_index: Some(2),
+                    right_index: None,
+                    left_token: Some("l2".into()),
+                    right_token: None,
+                    cost: 1.0,
+                },
+                AlignmentOp {
+                    kind: AlignmentOpKind::Match,
+                    left_index: Some(3),
+                    right_index: Some(2),
+                    left_token: Some("mid".into()),
+                    right_token: Some("mid".into()),
+                    cost: 0.0,
+                },
+                AlignmentOp {
+                    kind: AlignmentOpKind::Insert,
+                    left_index: None,
+                    right_index: Some(3),
+                    left_token: None,
+                    right_token: Some("r2".into()),
+                    cost: 1.0,
+                },
+                AlignmentOp {
+                    kind: AlignmentOpKind::Insert,
+                    left_index: None,
+                    right_index: Some(4),
+                    left_token: None,
+                    right_token: Some("r3".into()),
+                    cost: 1.0,
+                },
+                AlignmentOp {
+                    kind: AlignmentOpKind::Delete,
+                    left_index: Some(4),
+                    right_index: None,
+                    left_token: Some("l3".into()),
+                    right_token: None,
+                    cost: 1.0,
+                },
+                AlignmentOp {
+                    kind: AlignmentOpKind::Match,
+                    left_index: Some(5),
+                    right_index: Some(5),
+                    left_token: Some("post".into()),
+                    right_token: Some("post".into()),
+                    cost: 0.0,
+                },
+            ],
+        };
+
+        assert_eq!(alignment.project_left_range(1..5), Some(1..5));
     }
 }
