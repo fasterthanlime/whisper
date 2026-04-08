@@ -76,7 +76,7 @@ fn main() -> anyhow::Result<()> {
                     println!(
                         "{} words, logprobs: {}/{}{}",
                         words.len(),
-                        words.iter().filter(|w| w.mean_logprob.is_some()).count(),
+                        words.len(),
                         words.len(),
                         if changed {
                             format!(" CHANGED: {:?} -> {:?}", row.transcript, transcript)
@@ -137,7 +137,7 @@ fn main() -> anyhow::Result<()> {
                     println!(
                         "{} words, logprobs: {}/{}{}",
                         words.len(),
-                        words.iter().filter(|w| w.mean_logprob.is_some()).count(),
+                        words.len(),
                         words.len(),
                         if changed {
                             format!(" CHANGED: {:?} -> {:?}", row.transcript, transcript)
@@ -202,10 +202,7 @@ fn transcribe_file(
             word: w.word.clone(),
             start: w.start,
             end: w.end,
-            mean_logprob: Some(w.confidence.mean_lp),
-            min_logprob: Some(w.confidence.min_lp),
-            mean_margin: Some(w.confidence.mean_m),
-            min_margin: Some(w.confidence.min_m),
+            confidence: w.confidence.clone(),
         })
         .collect();
 

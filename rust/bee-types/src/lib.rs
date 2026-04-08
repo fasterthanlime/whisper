@@ -25,7 +25,7 @@ pub struct AlignedWord {
 }
 
 /// Statistics for a word.
-#[derive(Debug, Clone, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 pub struct Confidence {
     /// Mean logprob
     pub mean_lp: f32,

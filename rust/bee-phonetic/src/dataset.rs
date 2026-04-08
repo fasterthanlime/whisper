@@ -166,10 +166,7 @@ pub struct RecordingWordAlignment {
     pub word: String,
     pub start: f64,
     pub end: f64,
-    pub mean_logprob: Option<f32>,
-    pub min_logprob: Option<f32>,
-    pub mean_margin: Option<f32>,
-    pub min_margin: Option<f32>,
+    pub confidence: bee_types::Confidence,
 }
 
 #[derive(Debug)]

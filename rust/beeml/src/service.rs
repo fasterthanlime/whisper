@@ -3,22 +3,20 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use bee_phonetic::dataset::RecordingWordAlignment;
 use bee_phonetic::{
     enumerate_transcript_spans_with, query_index, score_shortlist, PhoneticIndex, RetrievalQuery,
     SeedDataset, TranscriptAlignmentToken, TranscriptSpan,
 };
 use bee_transcribe::{AlignedWord, Engine};
-use bee_types::Confidence;
 use beeml::g2p::CachedEspeakG2p;
 use beeml::judge::{extract_span_context, OnlineJudge};
 use beeml::rpc::{
-    AliasSource, CandidateFeatureDebug, FilterDecision, IdentifierFlags,
-    JudgeOptionDebug, JudgeStateDebug, RapidFireChoice, RejectedGroupSpan,
-    RetrievalCandidateDebug, RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest,
-    RetrievalPrototypeProbeResult, SpanDebugTrace, SpanDebugView,
-    TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
+    AliasSource, CandidateFeatureDebug, FilterDecision, IdentifierFlags, JudgeOptionDebug,
+    JudgeStateDebug, RapidFireChoice, RejectedGroupSpan, RetrievalCandidateDebug,
+    RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
+    SpanDebugTrace, SpanDebugView, TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
 };
-use bee_phonetic::dataset::RecordingWordAlignment;
 use tracing::info;
 
 use crate::offline_eval::*;
@@ -336,7 +334,11 @@ impl BeeMlService {
         })
     }
 
-    pub(crate) fn teaching_cases(&self, limit: usize, include_counterexamples: bool) -> Vec<EvalCase> {
+    pub(crate) fn teaching_cases(
+        &self,
+        limit: usize,
+        include_counterexamples: bool,
+    ) -> Vec<EvalCase> {
         let mut cases = self
             .inner
             .dataset
@@ -360,12 +362,7 @@ impl BeeMlService {
                         word: w.word.clone(),
                         start: w.start,
                         end: w.end,
-                        confidence: Confidence {
-                            mean_lp: w.mean_logprob.unwrap_or(0.0),
-                            min_lp: w.min_logprob.unwrap_or(0.0),
-                            mean_m: w.mean_margin.unwrap_or(0.0),
-                            min_m: w.min_margin.unwrap_or(0.0),
-                        },
+                        confidence: w.confidence.clone(),
                     })
                     .collect(),
             })
@@ -387,17 +384,16 @@ impl BeeMlService {
                         take: Some(row.take),
                         audio_path: Some(row.audio_path.clone()),
                         surface_form: Some(row.surface_form.clone()),
-                        words: row.words.iter().map(|w| AlignedWord {
-                            word: w.word.clone(),
-                            start: w.start,
-                            end: w.end,
-                            confidence: Confidence {
-                                mean_lp: w.mean_logprob.unwrap_or(0.0),
-                                min_lp: w.min_logprob.unwrap_or(0.0),
-                                mean_m: w.mean_margin.unwrap_or(0.0),
-                                min_m: w.min_margin.unwrap_or(0.0),
-                            },
-                        }).collect(),
+                        words: row
+                            .words
+                            .iter()
+                            .map(|w| AlignedWord {
+                                word: w.word.clone(),
+                                start: w.start,
+                                end: w.end,
+                                confidence: w.confidence.clone(),
+                            })
+                            .collect(),
                     }),
             );
         }
