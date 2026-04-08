@@ -198,6 +198,12 @@ export function PhoneticRescuePanel({ trace }: { trace: PhoneticRescueTrace }) {
   const spans = trace.spans.filter((span) =>
     span.candidates.some((candidate) => (candidate.similarityDelta ?? 0) > 0),
   );
+  const worstRawSpan =
+    trace.worstRawSpanIndex != null ? trace.spans[trace.worstRawSpanIndex] : null;
+  const worstContentfulSpan =
+    trace.worstContentfulSpanIndex != null ? trace.spans[trace.worstContentfulSpanIndex] : null;
+  const bestRescueSpan =
+    trace.bestRescueSpanIndex != null ? trace.spans[trace.bestRescueSpanIndex] : null;
 
   return (
     <section className="prototype-card" style={{ marginTop: "0.75rem" }}>
@@ -210,11 +216,25 @@ export function PhoneticRescuePanel({ trace }: { trace: PhoneticRescueTrace }) {
       </header>
 
       <div className="prototype-summary">
+        <span>rev {trace.snapshotRevision.toString()}</span>
         <span>utterance norm {formatMetric(trace.utteranceFeatureSimilarity)}</span>
         <span>utterance raw {formatMetric(trace.utteranceSimilarity)}</span>
+        <span>tail volatile {trace.tailAmbiguity.volatileTokenCount}</span>
+        {bestRescueSpan ? <span>best rescue {bestRescueSpan.spanText}</span> : null}
+        {worstContentfulSpan ? (
+          <span>worst contentful {worstContentfulSpan.spanText}</span>
+        ) : null}
       </div>
 
       <div className="prototype-stack" style={{ gap: "0.35rem" }}>
+        <div className="token-row muted" style={{ userSelect: "text" }}>
+          aligned transcript: {trace.alignedTranscript || "∅"}
+        </div>
+        {trace.pendingText ? (
+          <div className="token-row muted" style={{ userSelect: "text" }}>
+            pending tail: {trace.pendingText}
+          </div>
+        ) : null}
         <div className="token-row muted" style={{ userSelect: "text" }}>
           transcript norm: {formatTokens(trace.utteranceTranscriptNormalized)}
         </div>
@@ -231,6 +251,18 @@ export function PhoneticRescuePanel({ trace }: { trace: PhoneticRescueTrace }) {
         transcriptLabel="Transcript"
         zipaLabel="ZIPA"
       />
+
+      {(bestRescueSpan || worstContentfulSpan || worstRawSpan) && (
+        <div className="prototype-summary" style={{ marginTop: "0.75rem" }}>
+          {bestRescueSpan ? (
+            <span>inspect rescue: {bestRescueSpan.spanText}</span>
+          ) : null}
+          {worstContentfulSpan ? (
+            <span>inspect contentful: {worstContentfulSpan.spanText}</span>
+          ) : null}
+          {worstRawSpan ? <span>inspect raw: {worstRawSpan.spanText}</span> : null}
+        </div>
+      )}
 
       {spans.length > 0 ? (
         <div style={{ display: "grid", gap: "0.75rem", marginTop: "0.75rem" }}>

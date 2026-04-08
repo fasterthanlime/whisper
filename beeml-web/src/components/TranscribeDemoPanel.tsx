@@ -2,8 +2,8 @@ import { useCallback, useRef, useState } from "react";
 import { channel } from "@bearcove/vox-core";
 import { connectBeeMl } from "../beeml.generated";
 import type {
-  Update,
   AlignedWord,
+  SessionSnapshot,
   TranscribePhoneticTrace as RpcTranscribePhoneticTrace,
 } from "../beeml.generated";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
@@ -24,6 +24,23 @@ function alignedWordsToTimedTokens(words: AlignedWord[]): TimedToken[] {
 
 function toPhoneticTrace(trace: RpcTranscribePhoneticTrace): PhoneticRescueTrace {
   return {
+    snapshotRevision: trace.snapshot_revision,
+    alignedTranscript: trace.aligned_transcript,
+    pendingText: trace.pending_text,
+    fullTranscript: trace.full_transcript,
+    tailAmbiguity: {
+      pendingTokenCount: trace.tail_ambiguity.pending_token_count,
+      lowConcentrationCount: trace.tail_ambiguity.low_concentration_count,
+      lowMarginCount: trace.tail_ambiguity.low_margin_count,
+      volatileTokenCount: trace.tail_ambiguity.volatile_token_count,
+      meanConcentration: trace.tail_ambiguity.mean_concentration,
+      meanMargin: trace.tail_ambiguity.mean_margin,
+      minConcentration: trace.tail_ambiguity.min_concentration,
+      minMargin: trace.tail_ambiguity.min_margin,
+    },
+    worstRawSpanIndex: trace.worst_raw_span_index,
+    worstContentfulSpanIndex: trace.worst_contentful_span_index,
+    bestRescueSpanIndex: trace.best_rescue_span_index,
     utteranceZipaRaw: trace.utterance_zipa_raw,
     utteranceZipaNormalized: trace.utterance_zipa_normalized,
     utteranceTranscriptNormalized: trace.utterance_transcript_normalized,
@@ -215,7 +232,7 @@ export function TranscribeDemoPanel({
 
       // Create channel pairs
       const [audioTx, audioRx] = channel<number[]>();
-      const [updatesTx, updatesRx] = channel<Update>();
+      const [updatesTx, updatesRx] = channel<SessionSnapshot>();
 
       // Start the RPC (it runs until we close audioTx)
       const rpcPromise = client.streamTranscribe(audioRx, updatesTx);
@@ -225,8 +242,8 @@ export function TranscribeDemoPanel({
         while (true) {
           const val = await updatesRx.recv();
           if (val === null) break;
-          setStreamText(val.text);
-          setStreamCommittedLen(val.text.length);
+          setStreamText(val.full_text);
+          setStreamCommittedLen(val.committed_text.length);
         }
       })();
 

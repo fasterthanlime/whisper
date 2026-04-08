@@ -20,6 +20,23 @@ function formatTokens(tokens: string[]) {
 
 function toPhoneticTrace(trace: RpcTranscribePhoneticTrace): PhoneticRescueTrace {
   return {
+    snapshotRevision: trace.snapshot_revision,
+    alignedTranscript: trace.aligned_transcript,
+    pendingText: trace.pending_text,
+    fullTranscript: trace.full_transcript,
+    tailAmbiguity: {
+      pendingTokenCount: trace.tail_ambiguity.pending_token_count,
+      lowConcentrationCount: trace.tail_ambiguity.low_concentration_count,
+      lowMarginCount: trace.tail_ambiguity.low_margin_count,
+      volatileTokenCount: trace.tail_ambiguity.volatile_token_count,
+      meanConcentration: trace.tail_ambiguity.mean_concentration,
+      meanMargin: trace.tail_ambiguity.mean_margin,
+      minConcentration: trace.tail_ambiguity.min_concentration,
+      minMargin: trace.tail_ambiguity.min_margin,
+    },
+    worstRawSpanIndex: trace.worst_raw_span_index,
+    worstContentfulSpanIndex: trace.worst_contentful_span_index,
+    bestRescueSpanIndex: trace.best_rescue_span_index,
     utteranceZipaRaw: trace.utterance_zipa_raw,
     utteranceZipaNormalized: trace.utterance_zipa_normalized,
     utteranceTranscriptNormalized: trace.utterance_transcript_normalized,
@@ -146,14 +163,14 @@ function RowCard({
 
 function lanePreviewOps(trace: PhoneticRescueTrace | null): PhoneticAlignmentOp[] {
   if (!trace) return [];
-  const worstSpan = trace.spans.reduce<PhoneticRescueSpan | null>((worst, span) => {
-    if (!worst) return span;
-    const left = span.transcriptFeatureSimilarity ?? Infinity;
-    const right = worst.transcriptFeatureSimilarity ?? Infinity;
-    return left < right ? span : worst;
-  }, null);
-  if (worstSpan && worstSpan.alignment.length > 0) {
-    return cropOps(worstSpan.alignment, 18);
+  const selectedSpan =
+    (trace.bestRescueSpanIndex != null ? trace.spans[trace.bestRescueSpanIndex] : null) ??
+    (trace.worstContentfulSpanIndex != null
+      ? trace.spans[trace.worstContentfulSpanIndex]
+      : null) ??
+    (trace.worstRawSpanIndex != null ? trace.spans[trace.worstRawSpanIndex] : null);
+  if (selectedSpan && selectedSpan.alignment.length > 0) {
+    return cropOps(selectedSpan.alignment, 18);
   }
   return cropOps(trace.utteranceAlignment, 18);
 }
