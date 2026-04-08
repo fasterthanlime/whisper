@@ -125,6 +125,51 @@ fn on_load() {
     });
 }
 
+// ── MLX worker thread ─────────────────────────────────────────────────
+
+/// A dedicated OS thread for all MLX/Metal work.
+///
+/// Metal command buffers must be accessed from the same thread.
+/// `tokio::task::spawn_blocking` dispatches to arbitrary pool threads,
+/// which causes Metal assertion failures. This pins all GPU work to one
+/// thread.
+struct MlxThread {
+    tx: std::sync::mpsc::Sender<Box<dyn FnOnce() + Send>>,
+}
+
+impl MlxThread {
+    fn new() -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<Box<dyn FnOnce() + Send>>();
+        std::thread::Builder::new()
+            .name("mlx-worker".into())
+            .spawn(move || {
+                info!("mlx-worker: thread started");
+                while let Ok(task) = rx.recv() {
+                    task();
+                }
+                info!("mlx-worker: thread exiting");
+            })
+            .expect("failed to spawn mlx worker thread");
+        Self { tx }
+    }
+
+    /// Run a closure on the MLX thread and await the result.
+    async fn run<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.tx
+            .send(Box::new(move || {
+                let result = f();
+                let _ = tx.send(result);
+            }))
+            .expect("mlx worker thread gone");
+        rx.await.expect("mlx worker dropped result")
+    }
+}
+
 // ── BeeService impl ───────────────────────────────────────────────────
 
 type SessionMap = DashMap<String, Arc<tokio::sync::Mutex<SessionInner>>>;
@@ -134,6 +179,7 @@ struct BeeServiceInner {
     sessions: SessionMap,
     next_session_id: AtomicU64,
     last_corrector: tokio::sync::Mutex<Option<Corrector>>,
+    mlx: MlxThread,
 }
 
 #[derive(Clone)]
@@ -149,6 +195,7 @@ impl BeeService {
                 sessions: DashMap::new(),
                 next_session_id: AtomicU64::new(1),
                 last_corrector: tokio::sync::Mutex::new(None),
+                mlx: MlxThread::new(),
             }),
         }
     }
@@ -264,16 +311,18 @@ impl bee_rpc::Bee for BeeService {
         let session = self.get_session(&session_id)?;
 
         let t0 = std::time::Instant::now();
-        let result = tokio::task::spawn_blocking(move || {
-            let mut guard = session.blocking_lock();
-            guard
-                .session
-                .as_mut()
-                .expect("BUG: feed on finished session")
-                .feed(&samples)
-        })
-        .await
-        .expect("spawn_blocking panicked");
+        let result = self
+            .inner
+            .mlx
+            .run(move || {
+                let mut guard = session.blocking_lock();
+                guard
+                    .session
+                    .as_mut()
+                    .expect("BUG: feed on finished session")
+                    .feed(&samples)
+            })
+            .await;
         let elapsed = t0.elapsed();
 
         let update = result.map_err(|e| {
@@ -314,16 +363,18 @@ impl bee_rpc::Bee for BeeService {
                 })?;
 
         let t0 = std::time::Instant::now();
-        let finish_result = tokio::task::spawn_blocking(move || {
-            let mut guard = session_arc.blocking_lock();
-            let session = guard
-                .session
-                .take()
-                .expect("BUG: finish on already-finished session");
-            session.finish()
-        })
-        .await
-        .expect("spawn_blocking panicked");
+        let finish_result = self
+            .inner
+            .mlx
+            .run(move || {
+                let mut guard = session_arc.blocking_lock();
+                let session = guard
+                    .session
+                    .take()
+                    .expect("BUG: finish on already-finished session");
+                session.finish()
+            })
+            .await;
         let elapsed = t0.elapsed();
 
         let finish = finish_result.map_err(|e| {
@@ -394,23 +445,24 @@ impl bee_rpc::Bee for BeeService {
             config: default_config,
         };
 
-        // feed + finish are CPU/GPU intensive
-        let result = tokio::task::spawn_blocking(move || {
-            // SessionInner is Send (unsafe impl) — same MLX safety as other paths.
-            let mut wrapper = wrapper;
-            let session = wrapper.session.as_mut().unwrap();
-            session
-                .feed(&samples)
-                .map_err(|e| BeeError::TranscriptionError {
-                    message: format!("feed: {e}"),
-                })?;
-            let session = wrapper.session.take().unwrap();
-            session.finish().map_err(|e| BeeError::TranscriptionError {
-                message: format!("finish: {e}"),
+        // feed + finish are CPU/GPU intensive — run on dedicated MLX thread
+        let result = self
+            .inner
+            .mlx
+            .run(move || {
+                let mut wrapper = wrapper;
+                let session = wrapper.session.as_mut().unwrap();
+                session
+                    .feed(&samples)
+                    .map_err(|e| BeeError::TranscriptionError {
+                        message: format!("feed: {e}"),
+                    })?;
+                let session = wrapper.session.take().unwrap();
+                session.finish().map_err(|e| BeeError::TranscriptionError {
+                    message: format!("finish: {e}"),
+                })
             })
-        })
-        .await
-        .expect("spawn_blocking panicked")?;
+            .await?;
 
         Ok(result.update.text)
     }
