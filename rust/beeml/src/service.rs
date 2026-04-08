@@ -25,7 +25,7 @@ use beeml::rpc::{
     SpanDebugTrace, SpanDebugView, TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
     TranscribePhoneticAlignmentKind, TranscribePhoneticAlignmentOp,
     TranscribePhoneticAnchorConfidence, TranscribePhoneticCandidate, TranscribePhoneticSpan,
-    TranscribePhoneticSpanUsefulness, TranscribePhoneticTrace,
+    TranscribePhoneticSpanClass, TranscribePhoneticSpanUsefulness, TranscribePhoneticTrace,
 };
 
 use crate::offline_eval::*;
@@ -253,6 +253,11 @@ impl BeeMlService {
                 transcript_token_count,
                 &selection.zipa_normalized,
             );
+            let span_class = span_class(
+                &span.text,
+                transcript_token_count,
+                &selection.zipa_normalized,
+            );
             let candidate_plausible = zipa_candidate_plausible(&candidates);
             let anchor_confidence = anchor_confidence(
                 selection.projected_alignment_score,
@@ -291,6 +296,7 @@ impl BeeMlService {
                 alignment_source: selection.alignment_source.to_string(),
                 anchor_confidence,
                 span_usefulness,
+                span_class,
                 zipa_rescue_eligible,
                 alignment: map_alignment_ops(&selection.alignment.ops),
                 candidates,
@@ -1566,17 +1572,91 @@ fn span_usefulness(
     transcript_phone_count: u32,
     zipa_normalized: &[String],
 ) -> TranscribePhoneticSpanUsefulness {
-    let normalized_text = span_text
-        .chars()
-        .filter(|ch| ch.is_alphanumeric() || ch.is_whitespace())
-        .collect::<String>()
-        .to_ascii_lowercase();
-    let word_count = normalized_text
+    let text = normalized_span_text(span_text);
+    let word_count = span_word_count(&text);
+    let low_content = is_low_content_text(&text);
+    let vowel_onlyish = is_vowel_onlyish(zipa_normalized);
+
+    if low_content || transcript_phone_count <= 2 || (word_count == 1 && vowel_onlyish) {
+        TranscribePhoneticSpanUsefulness::Low
+    } else if transcript_phone_count >= 5 || word_count >= 2 {
+        TranscribePhoneticSpanUsefulness::High
+    } else {
+        TranscribePhoneticSpanUsefulness::Medium
+    }
+}
+
+fn span_class(
+    span_text: &str,
+    transcript_phone_count: u32,
+    zipa_normalized: &[String],
+) -> TranscribePhoneticSpanClass {
+    let text = normalized_span_text(span_text);
+    let word_count = span_word_count(&text);
+    let token_count = text.split_whitespace().count();
+    let repeat = {
+        let words = text
+            .split_whitespace()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        words.len() >= 2 && words.windows(2).all(|pair| pair[0] == pair[1])
+    };
+    let low_content = is_low_content_text(&text);
+    let vowel_onlyish = is_vowel_onlyish(zipa_normalized);
+    let looks_codey = text.chars().any(|ch| ch.is_ascii_digit())
+        || text.contains('-')
+        || text.split_whitespace().any(|word| {
+            let has_upper = word.chars().any(|ch| ch.is_ascii_uppercase());
+            let has_lower = word.chars().any(|ch| ch.is_ascii_lowercase());
+            has_upper && has_lower
+        })
+        || text
+            .split_whitespace()
+            .any(|word| word.chars().all(|ch| ch.is_ascii_uppercase()) && word.len() >= 2);
+    let looks_proper = text
         .split_whitespace()
         .filter(|part| !part.is_empty())
-        .count();
-    let low_content = matches!(
-        normalized_text.trim(),
+        .all(|word| {
+            word.chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_uppercase())
+        })
+        && token_count > 0;
+
+    if repeat {
+        TranscribePhoneticSpanClass::Repeat
+    } else if low_content {
+        TranscribePhoneticSpanClass::FunctionWord
+    } else if looks_codey || transcript_phone_count <= 3 {
+        TranscribePhoneticSpanClass::ShortCodeTerm
+    } else if vowel_onlyish {
+        TranscribePhoneticSpanClass::VowelHeavy
+    } else if looks_proper || word_count >= 2 {
+        TranscribePhoneticSpanClass::ProperNoun
+    } else {
+        TranscribePhoneticSpanClass::Ordinary
+    }
+}
+
+fn normalized_span_text(span_text: &str) -> String {
+    span_text
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || ch.is_whitespace() || *ch == '-')
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+fn span_word_count(normalized_text: &str) -> usize {
+    normalized_text
+        .split_whitespace()
+        .filter(|part| !part.is_empty())
+        .count()
+}
+
+fn is_low_content_text(normalized_text: &str) -> bool {
+    matches!(
+        normalized_text.to_ascii_lowercase().trim(),
         "a" | "an"
             | "the"
             | "and"
@@ -1599,21 +1679,16 @@ fn span_usefulness(
             | "on"
             | "for"
             | "it"
-    );
-    let vowel_onlyish = zipa_normalized.iter().all(|token| {
+    )
+}
+
+fn is_vowel_onlyish(zipa_normalized: &[String]) -> bool {
+    zipa_normalized.iter().all(|token| {
         matches!(
             token.as_str(),
-            "a" | "ɑ" | "ɔ" | "ɛ" | "ə" | "ɪ" | "ʊ" | "i" | "u"
+            "a" | "ɑ" | "ɔ" | "ɛ" | "ə" | "ɪ" | "ʊ" | "i" | "u" | "e" | "o" | "æ" | "ʌ"
         )
-    });
-
-    if low_content || transcript_phone_count <= 2 || (word_count == 1 && vowel_onlyish) {
-        TranscribePhoneticSpanUsefulness::Low
-    } else if transcript_phone_count >= 5 || word_count >= 2 {
-        TranscribePhoneticSpanUsefulness::High
-    } else {
-        TranscribePhoneticSpanUsefulness::Medium
-    }
+    })
 }
 
 fn zipa_candidate_plausible(candidates: &[TranscribePhoneticCandidate]) -> bool {

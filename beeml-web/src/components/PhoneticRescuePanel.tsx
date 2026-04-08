@@ -147,6 +147,7 @@ function SpanCard({ span }: { span: PhoneticRescueSpan }) {
         </span>
         <span className="mini-badge">{span.alignmentSource}</span>
         <span className="mini-badge">{span.anchorConfidence.toLowerCase()}</span>
+        <span className="mini-badge">{span.spanClass.replaceAll(/([A-Z])/g, "-$1").toLowerCase().replace(/^-/, "")}</span>
         <span className="mini-badge">{span.spanUsefulness.toLowerCase()}</span>
         <span className="mini-badge">
           {span.zipaRescueEligible ? "eligible" : "not-eligible"}

@@ -106,6 +106,13 @@ export type PhoneticRescueCandidate = {
 export type PhoneticAlignmentKind = "Match" | "Substitute" | "Insert" | "Delete";
 export type PhoneticAnchorConfidence = "Low" | "Medium" | "High";
 export type PhoneticSpanUsefulness = "Low" | "Medium" | "High";
+export type PhoneticSpanClass =
+  | "Repeat"
+  | "ShortCodeTerm"
+  | "VowelHeavy"
+  | "ProperNoun"
+  | "FunctionWord"
+  | "Ordinary";
 
 export type PhoneticAlignmentOp = {
   kind: PhoneticAlignmentKind;
@@ -137,6 +144,7 @@ export type PhoneticRescueSpan = {
   alignmentScoreGap?: number | null;
   alignmentSource: string;
   anchorConfidence: PhoneticAnchorConfidence;
+  spanClass: PhoneticSpanClass;
   spanUsefulness: PhoneticSpanUsefulness;
   zipaRescueEligible: boolean;
   alignment: PhoneticAlignmentOp[];

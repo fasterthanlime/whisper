@@ -83,9 +83,10 @@ fn main() -> Result<()> {
             if let Some(span) = worst_span(trace) {
                 println!("worst span: {:?}", span.span_text);
                 println!(
-                    "alignment source={} confidence={} usefulness={} eligible={} phones {}->{} proj={} chosen={} second={} gap={}",
+                    "alignment source={} confidence={} class={} usefulness={} eligible={} phones {}->{} proj={} chosen={} second={} gap={}",
                     span.alignment_source,
                     format_confidence(&span.anchor_confidence),
+                    format_span_class(&span.span_class),
                     format_usefulness(&span.span_usefulness),
                     span.zipa_rescue_eligible,
                     span.transcript_phone_count,
@@ -186,6 +187,17 @@ fn format_usefulness(value: &beeml::rpc::TranscribePhoneticSpanUsefulness) -> &'
     }
 }
 
+fn format_span_class(value: &beeml::rpc::TranscribePhoneticSpanClass) -> &'static str {
+    match value {
+        beeml::rpc::TranscribePhoneticSpanClass::Repeat => "repeat",
+        beeml::rpc::TranscribePhoneticSpanClass::ShortCodeTerm => "short_code_term",
+        beeml::rpc::TranscribePhoneticSpanClass::VowelHeavy => "vowel_heavy",
+        beeml::rpc::TranscribePhoneticSpanClass::ProperNoun => "proper_noun",
+        beeml::rpc::TranscribePhoneticSpanClass::FunctionWord => "function_word",
+        beeml::rpc::TranscribePhoneticSpanClass::Ordinary => "ordinary",
+    }
+}
+
 #[derive(facet::Facet)]
 struct SnapshotRow {
     ordinal: u32,
@@ -199,6 +211,7 @@ struct SnapshotRow {
     worst_span_text: Option<String>,
     alignment_source: Option<String>,
     anchor_confidence: Option<String>,
+    span_class: Option<String>,
     span_usefulness: Option<String>,
     zipa_rescue_eligible: Option<bool>,
     transcript_phone_count: Option<u32>,
@@ -227,6 +240,7 @@ fn write_snapshot_jsonl(path: &str, rows: &[beeml::rpc::CorpusAlignmentEvalRow])
             alignment_source: worst_span.map(|span| span.alignment_source.clone()),
             anchor_confidence: worst_span
                 .map(|span| format_confidence(&span.anchor_confidence).to_string()),
+            span_class: worst_span.map(|span| format_span_class(&span.span_class).to_string()),
             span_usefulness: worst_span
                 .map(|span| format_usefulness(&span.span_usefulness).to_string()),
             zipa_rescue_eligible: worst_span.map(|span| span.zipa_rescue_eligible),
