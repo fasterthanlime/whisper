@@ -42,6 +42,7 @@ impl<'a> SessionV2<'a> {
         options: SessionOptions,
     ) -> Self {
         let chunk_size_samples = (options.chunk_duration * 16000.0) as usize;
+        assert!(chunk_size_samples > 0, "chunk_duration too small");
         Self {
             model,
             tokenizer,

@@ -184,31 +184,25 @@ impl DecodeSession {
     }
 
     /// Build pending TokenEntry values from text tokens (for TextBuffer).
-    /// These don't have word boundaries yet — that comes from the tokenizer.
+    /// Word boundaries are detected via DecodeStream: if a token's
+    /// contribution starts with a space or newline, it begins a new word.
     pub fn pending_entries(&self, tokenizer: &Tokenizer) -> Vec<TokenEntry> {
         let text_tokens = self.text_tokens();
         if text_tokens.is_empty() {
             return Vec::new();
         }
 
-        // Determine word boundaries by decoding incrementally and checking
-        // for spaces at the start of each token's contribution.
-        let ids: Vec<TokenId> = text_tokens.iter().map(|t| t.id).collect();
+        let mut stream = tokenizer.decode_stream(true);
         let mut entries = Vec::with_capacity(text_tokens.len());
 
         for (i, token) in text_tokens.iter().enumerate() {
+            let chunk = stream.step(token.id).ok().flatten();
             let is_word_start = if i == 0 {
                 true
             } else {
-                // Decode with and without this token, check if it introduces a space
-                let with = tokenizer.decode(&ids[..=i], true).unwrap_or_default();
-                let without = tokenizer.decode(&ids[..i], true).unwrap_or_default();
-                let contribution = if with.len() >= without.len() {
-                    &with[without.len()..]
-                } else {
-                    ""
-                };
-                contribution.starts_with(' ') || contribution.starts_with('\n')
+                chunk
+                    .as_ref()
+                    .map_or(false, |c| c.starts_with(' ') || c.starts_with('\n'))
             };
 
             entries.push(TokenEntry {
