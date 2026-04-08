@@ -218,11 +218,11 @@ impl BeeService {
         Ok(entry.value().clone())
     }
 
-    /// Create a new ASR session with VAD, returning a SessionV2.
+    /// Create a new ASR session with VAD.
     fn make_session(
         &self,
         config: &bee_rpc::SessionConfig,
-    ) -> Result<bee_transcribe::session_v2::SessionV2<'static>, BeeError> {
+    ) -> Result<bee_transcribe::session::Session<'static>, BeeError> {
         let engine = self.engine()?;
         let defaults = SessionOptions::default();
         let lang = if config.language.is_empty() {
