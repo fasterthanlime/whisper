@@ -31,44 +31,62 @@ CONFIG = {
 }
 
 
-README = """# ZIPA Small CR-CTC NS No-Diacritics 700k (MLX Q8)
+README = """---
+library_name: mlx
+license: mit
+base_model:
+  - anyspeech/zipa-small-crctc-ns-no-diacritics-700k
+tags:
+  - automatic-speech-recognition
+  - speech
+  - ctc
+  - ipa
+  - mlx
+  - quantized
+  - bee
+pipeline_tag: automatic-speech-recognition
+---
 
-This directory contains an MLX-native Q8 checkpoint bundle for the ZIPA small CR-CTC non-streaming no-diacritics model.
+# ZIPA Small CR-CTC NS No-Diacritics 700k (MLX Q8)
 
-## Contents
+This repository contains an MLX-native Q8 checkpoint bundle for the ZIPA small CR-CTC non-streaming no-diacritics model.
 
-- `model-q8.safetensors`: quantized MLX checkpoint in the `zipa-mlx-quantized-v1` format
+## What This Is
+
+- Base model family: `anyspeech/zipa-small-crctc-ns-no-diacritics-700k`
+- Quantization target: MLX Q8
+- Intended consumer: the Bee repository
+- Reference implementation: `rust/bee-zipa-mlx` inside Bee
+
+This is a Bee model bundle. It is not currently intended as a standalone general-purpose MLX package with its own separately published loader crate.
+
+## Files
+
+- `model.safetensors`: quantized MLX checkpoint in the `zipa-mlx-quantized-v1` format
 - `tokens.txt`: CTC vocabulary
 - `config.json`: model architecture and quantization metadata
 
-## Source model
-
-- Base model family: `anyspeech/zipa-small-crctc-ns-no-diacritics-700k`
-- Dense source artifacts were exported locally from the ZIPA reference checkout and then quantized with `bee-zipa-mlx`
-
-## Quantization notes
+## Quantization Scheme
 
 - Linear layers are quantized to 8-bit where MLX supports the target group size
 - Small incompatible projections remain dense inside the checkpoint
-- Non-linear modules such as norms, bypass scales, conv weights, and downsample weights remain dense
+- Norms, bypass scales, convolution weights, and downsample weights remain dense
+- Group size: `64`
 
-## Intended consumer
-
-This bundle is intended to be used from the Bee repository.
-
-The reference loader and inference implementation currently live in-tree in:
-
-- `rust/bee-zipa-mlx`
+## Usage From Bee
 
 Example from a Bee checkout:
 
 ```bash
 cargo run -q -p bee-zipa-mlx --bin zipa-infer -- \\
-  --quantized-checkpoint model-q8.safetensors \\
+  --quantized-checkpoint /path/to/model.safetensors \\
   /path/to/audio.wav
 ```
 
-This artifact format is currently project-specific and should be treated as a Bee model bundle, not a general-purpose standalone MLX package.
+## Notes
+
+- This bundle was generated from local dense ZIPA reference artifacts and quantized with `bee-zipa-mlx`
+- The artifact layout is currently project-specific to Bee
 """
 
 
@@ -98,7 +116,7 @@ def main() -> None:
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    model_path = output_dir / "model-q8.safetensors"
+    model_path = output_dir / "model.safetensors"
     tokens_path = Path(args.tokens).expanduser().resolve()
 
     subprocess.run(
@@ -128,7 +146,7 @@ def main() -> None:
         "format": "zipa-mlx-quantized-v1",
         "bits": args.bits,
         "group_size": args.group_size,
-        "checkpoint": "model-q8.safetensors",
+        "checkpoint": "model.safetensors",
     }
     config["source_model_id"] = "anyspeech/zipa-small-crctc-ns-no-diacritics-700k"
     config["consumer_repo"] = "fasterthanlime/bee"
@@ -136,6 +154,7 @@ def main() -> None:
 
     (output_dir / "config.json").write_text(json.dumps(config, indent=2) + "\n")
     (output_dir / "README.md").write_text(README)
+    (output_dir / ".gitattributes").write_text("*.safetensors filter=lfs diff=lfs merge=lfs -text\n")
 
     print(f"bundle: {output_dir}")
     print(f"model: {model_path}")
