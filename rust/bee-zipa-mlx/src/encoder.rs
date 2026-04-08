@@ -13,6 +13,59 @@ use mlx_rs::Array;
 use crate::config::ZipaModelConfig;
 use crate::model::BiasNorm;
 
+#[derive(Debug, Clone)]
+pub struct CompactRelPositionalEncoding {
+    pub embed_dim: i32,
+    pub length_factor: f32,
+}
+
+impl CompactRelPositionalEncoding {
+    pub fn new(embed_dim: i32, length_factor: f32) -> Self {
+        Self {
+            embed_dim,
+            length_factor,
+        }
+    }
+
+    pub fn forward(&self, seq_len: i32, left_context_len: i32) -> Result<Array, Exception> {
+        let t = seq_len + left_context_len;
+        let total = 2 * t - 1;
+        let half_dim = self.embed_dim / 2;
+        let compression_length = (self.embed_dim as f32).sqrt();
+        let length_scale = self.length_factor * self.embed_dim as f32 / (2.0 * std::f32::consts::PI);
+
+        let mut pe = vec![0.0f32; (total * self.embed_dim) as usize];
+        for row in 0..total {
+            let rel = row - (t - 1);
+            let rel_f = rel as f32;
+            let x_compressed = compression_length
+                * rel_f.signum()
+                * ((rel_f.abs() + compression_length).ln() - compression_length.ln());
+            let x_atan = (x_compressed / length_scale).atan();
+
+            for i in 0..half_dim {
+                let angle = x_atan * (i + 1) as f32;
+                let base = (row * self.embed_dim + 2 * i) as usize;
+                pe[base] = angle.cos();
+                pe[base + 1] = angle.sin();
+            }
+            pe[(row * self.embed_dim + (self.embed_dim - 1)) as usize] = 1.0;
+        }
+
+        let start = t - seq_len;
+        let end = t + seq_len - 1;
+        let mut out = vec![0.0f32; ((2 * seq_len - 1) * self.embed_dim) as usize];
+        for row in start..end {
+            let src = (row * self.embed_dim) as usize;
+            let dst = ((row - start) * self.embed_dim) as usize;
+            out[dst..dst + self.embed_dim as usize]
+                .copy_from_slice(&pe[src..src + self.embed_dim as usize]);
+        }
+
+        Ok(Array::from_slice(&out, &[1, 2 * seq_len - 1, self.embed_dim]))
+    }
+}
+
 #[derive(Debug, Clone, ModuleParameters)]
 pub struct BypassModule {
     #[param]
@@ -264,6 +317,27 @@ pub struct ZipformerEncoderLayer {
     pub bypass: BypassModule,
 }
 
+#[derive(Debug, Clone)]
+pub struct Stage0Encoder {
+    pub encoder_pos: CompactRelPositionalEncoding,
+    pub layer0: ZipformerEncoderLayer,
+}
+
+impl Stage0Encoder {
+    pub fn new(config: &ZipaModelConfig) -> Result<Self, Exception> {
+        Ok(Self {
+            encoder_pos: CompactRelPositionalEncoding::new(config.pos_dim as i32, 1.0),
+            layer0: ZipformerEncoderLayer::new_for_stage(config, 0)?,
+        })
+    }
+
+    pub fn forward(&self, src: &Array) -> Result<Array, Exception> {
+        let seq_len = src.shape()[0];
+        let pos_emb = self.encoder_pos.forward(seq_len, 0)?;
+        self.layer0.forward(src, &pos_emb)
+    }
+}
+
 impl ZipformerEncoderLayer {
     pub fn new_for_stage(config: &ZipaModelConfig, stage: usize) -> Result<Self, Exception> {
         let embed_dim = config.encoder_dim[stage] as i32;
@@ -346,7 +420,7 @@ mod tests {
     use crate::config::{ZipaModelConfig, ZipaVariant};
     use crate::load::load_stage0_layer_weights_from_map;
 
-    use super::ZipformerEncoderLayer;
+    use super::{CompactRelPositionalEncoding, Stage0Encoder, ZipformerEncoderLayer};
     use mlx_rs::Array;
     use mlx_rs::ops::indexing::IndexOp;
     use std::path::PathBuf;
@@ -379,6 +453,28 @@ mod tests {
         assert_eq!(layer.bypass_mid.bypass_scale.shape(), vec![192]);
         assert_eq!(layer.norm.bias.shape(), vec![192]);
         assert_eq!(layer.bypass.bypass_scale.shape(), vec![192]);
+    }
+
+    #[test]
+    fn compact_positional_encoding_matches_onnx_reference_when_local_artifacts_exist() {
+        let home = match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home),
+            None => return,
+        };
+        let reference = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/authored_282_take_1_layer0_ref.safetensors",
+        );
+        if !reference.exists() {
+            return;
+        }
+
+        let tensors = Array::load_safetensors(&reference).unwrap();
+        let expected = tensors.get("pos_emb").unwrap();
+        let seq_len = tensors.get("layer0_in").unwrap().shape()[0];
+        let pos = CompactRelPositionalEncoding::new(48, 1.0)
+            .forward(seq_len, 0)
+            .unwrap();
+        assert_close("pos_emb", &pos, expected);
     }
 
     #[test]
@@ -462,6 +558,36 @@ mod tests {
 
         let full_actual = layer.forward(layer0_in, pos_emb).unwrap();
         assert_close("layer0_out_full", &full_actual, tensors.get("layer0_out").unwrap());
+    }
+
+    #[test]
+    fn stage0_encoder_wrapper_matches_onnx_reference_when_local_artifacts_exist() {
+        let home = match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home),
+            None => return,
+        };
+        let weights = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/frontend_ctc.safetensors",
+        );
+        let reference = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/authored_282_take_1_layer0_ref.safetensors",
+        );
+        if !(weights.exists() && reference.exists()) {
+            return;
+        }
+
+        let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
+        let mut stage0 = Stage0Encoder::new(&config).unwrap();
+        let params = Array::load_safetensors(&weights).unwrap();
+        let stats = load_stage0_layer_weights_from_map(&mut stage0.layer0, &params).unwrap();
+        assert!(stats.missing.is_empty(), "missing: {:?}", stats.missing);
+
+        let tensors = Array::load_safetensors(&reference).unwrap();
+        let layer0_in = tensors.get("layer0_in").unwrap();
+        let expected = tensors.get("layer0_out").unwrap();
+
+        let actual = stage0.forward(layer0_in).unwrap();
+        assert_close("stage0_wrapper", &actual, expected);
     }
 
     fn assert_close(name: &str, actual: &Array, expected: &Array) {
