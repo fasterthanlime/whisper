@@ -1820,4 +1820,200 @@ mod tests {
         assert_eq!(ctx.right_tokens, vec!["crate", "today"]);
         assert!(!ctx.sentence_start);
     }
+
+    #[test]
+    fn trained_gate_weights_survive_save_load_roundtrip() {
+        // Simulate the full production flow:
+        //   1. seed gate model
+        //   2. train on data
+        //   3. save weights
+        //   4. seed gate model again (fresh TwoStageJudge)
+        //   5. load weights
+        //   6. predictions must match step 2, not step 4
+        use crate::sparse_ftrl::{Feature, SparseFtrl};
+
+        let featurize = |vals: &[f64]| -> Vec<Feature> {
+            vals.iter()
+                .enumerate()
+                .map(|(i, &v)| Feature { index: i as u64, value: v })
+                .collect()
+        };
+
+        // Step 1+2: seed then train
+        let mut trained = SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
+        seed_gate_model(&mut trained);
+        // Simulate offline training with dense + sparse features
+        for _ in 0..30 {
+            // Positive: good candidate match
+            trained.update(
+                &{
+                    let mut f = featurize(&[1.0, 0.4, 0.5, 0.0, -0.12, -0.18, 0.04, 0.01, 0.0, 0.65, 0.60, 1.0, 1.0, 0.4]);
+                    f.push(Feature { index: 1000, value: 1.0 }); // sparse context
+                    f
+                },
+                true,
+            );
+            // Negative: no match
+            trained.update(
+                &{
+                    let mut f = featurize(&[1.0, 0.5, 0.5, 0.0, -0.03, -0.04, 0.25, 0.20, 0.0, 0.15, 0.10, 0.0, 0.0, 0.3]);
+                    f.push(Feature { index: 2000, value: 1.0 });
+                    f
+                },
+                false,
+            );
+        }
+
+        // Collect trained predictions
+        let test_cases = vec![
+            featurize(&[1.0, 0.4, 0.5, 0.0, -0.10, -0.15, 0.05, 0.02, 0.0, 0.70, 0.65, 1.0, 1.0, 0.5]),
+            featurize(&[1.0, 0.5, 0.5, 0.0, -0.02, -0.03, 0.30, 0.25, 0.0, 0.20, 0.15, 0.0, 0.0, 0.5]),
+            featurize(&[1.0, 0.3, 0.4, 0.0, -0.08, -0.12, 0.08, 0.04, 0.0, 0.55, 0.50, 1.0, 0.0, 0.3]),
+        ];
+        let trained_probs: Vec<f64> = test_cases.iter().map(|f| trained.predict_prob(f)).collect();
+
+        // Step 3: save
+        let mut buf = Vec::new();
+        trained.save_weights(&mut buf).unwrap();
+
+        // Step 4: fresh seed (simulating TwoStageJudge::new)
+        let mut loaded = SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
+        seed_gate_model(&mut loaded);
+        let seeded_probs: Vec<f64> = test_cases.iter().map(|f| loaded.predict_prob(f)).collect();
+
+        // Step 5: load
+        loaded.load_weights(&mut &buf[..]).unwrap();
+        let loaded_probs: Vec<f64> = test_cases.iter().map(|f| loaded.predict_prob(f)).collect();
+
+        // Step 6: verify
+        for (i, ((trained_p, loaded_p), seeded_p)) in trained_probs.iter()
+            .zip(&loaded_probs)
+            .zip(&seeded_probs)
+            .enumerate()
+        {
+            assert!(
+                (trained_p - loaded_p).abs() < 1e-6,
+                "case {i}: loaded prediction {loaded_p:.6} should match trained {trained_p:.6}, not seeded {seeded_p:.6}"
+            );
+        }
+
+        // Also verify that loaded != seeded (the training actually changed something)
+        let any_different = trained_probs.iter().zip(&seeded_probs).any(|(t, s)| (t - s).abs() > 0.01);
+        assert!(any_different, "trained predictions should differ from seed-only predictions");
+    }
+
+    #[test]
+    fn trained_ranker_weights_survive_save_load_roundtrip() {
+        use crate::sparse_ftrl::{Feature, SparseFtrl};
+
+        let featurize = |vals: &[f64]| -> Vec<Feature> {
+            vals.iter()
+                .enumerate()
+                .map(|(i, &v)| Feature { index: i as u64, value: v })
+                .collect()
+        };
+
+        // Seed + train ranker
+        let mut trained = SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
+        seed_ranker_model(&mut trained);
+        for _ in 0..30 {
+            // Gold candidate: strong scores
+            trained.update(
+                &featurize(&[1.0, 0.75, 0.70, 0.60, 0.55, 0.50, 0.30, 0.30, 0.50, 0.40, 0.35, 1.0, 0.80,
+                             1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+                             1.0, 0.15, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+                true,
+            );
+            // Wrong candidate: weak scores
+            trained.update(
+                &featurize(&[1.0, 0.25, 0.20, 0.15, 0.10, 0.15, 0.05, 0.10, 0.17, 0.10, 0.05, 0.0, 0.40,
+                             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
+                             0.25, 0.02, 0.0, 0.0, 0.33, 0.40, 0.0, 0.0, 0.0, 0.0, 0.0]),
+                false,
+            );
+        }
+
+        let test_cases = vec![
+            featurize(&[1.0, 0.65, 0.60, 0.50, 0.45, 0.45, 0.25, 0.25, 0.33, 0.35, 0.30, 1.0, 0.75,
+                        1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+                        1.0, 0.12, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            featurize(&[1.0, 0.30, 0.25, 0.20, 0.15, 0.20, 0.08, 0.12, 0.20, 0.12, 0.08, 0.0, 0.45,
+                        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
+                        0.33, 0.03, 0.0, 0.0, 0.40, 0.50, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        ];
+        let trained_probs: Vec<f64> = test_cases.iter().map(|f| trained.predict_prob(f)).collect();
+
+        // Save + load into fresh seeded model
+        let mut buf = Vec::new();
+        trained.save_weights(&mut buf).unwrap();
+
+        let mut loaded = SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
+        seed_ranker_model(&mut loaded);
+        loaded.load_weights(&mut &buf[..]).unwrap();
+
+        let loaded_probs: Vec<f64> = test_cases.iter().map(|f| loaded.predict_prob(f)).collect();
+
+        for (i, (trained_p, loaded_p)) in trained_probs.iter().zip(&loaded_probs).enumerate() {
+            assert!(
+                (trained_p - loaded_p).abs() < 1e-6,
+                "ranker case {i}: loaded={loaded_p:.6} should match trained={trained_p:.6}"
+            );
+        }
+    }
+
+    #[test]
+    fn gate_with_loaded_weights_discriminates_positive_negative() {
+        // The exported gate weights should produce high probs for positive
+        // cases and low probs for negative cases — not near-zero for everything.
+        use crate::sparse_ftrl::{Feature, SparseFtrl};
+
+        let featurize = |vals: &[f64]| -> Vec<Feature> {
+            vals.iter()
+                .enumerate()
+                .map(|(i, &v)| Feature { index: i as u64, value: v })
+                .collect()
+        };
+
+        let mut trained = SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
+        seed_gate_model(&mut trained);
+        for _ in 0..50 {
+            trained.update(
+                &featurize(&[1.0, 0.4, 0.5, 0.0, -0.12, -0.18, 0.04, 0.01, 0.0, 0.65, 0.60, 1.0, 1.0, 0.4]),
+                true,
+            );
+            trained.update(
+                &featurize(&[1.0, 0.5, 0.5, 0.0, -0.03, -0.04, 0.25, 0.20, 0.0, 0.15, 0.10, 0.0, 0.0, 0.3]),
+                false,
+            );
+        }
+
+        let mut buf = Vec::new();
+        trained.save_weights(&mut buf).unwrap();
+
+        let mut loaded = SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
+        seed_gate_model(&mut loaded);
+        loaded.load_weights(&mut &buf[..]).unwrap();
+
+        // Positive-like input
+        let pos_prob = loaded.predict_prob(
+            &featurize(&[1.0, 0.4, 0.5, 0.0, -0.10, -0.15, 0.05, 0.02, 0.0, 0.70, 0.65, 1.0, 1.0, 0.5]),
+        );
+        // Negative-like input
+        let neg_prob = loaded.predict_prob(
+            &featurize(&[1.0, 0.5, 0.5, 0.0, -0.02, -0.03, 0.30, 0.25, 0.0, 0.20, 0.15, 0.0, 0.0, 0.5]),
+        );
+
+        assert!(
+            pos_prob > 0.3,
+            "positive case should have gate_prob > 0.3, got {pos_prob:.6}"
+        );
+        assert!(
+            neg_prob < 0.3,
+            "negative case should have gate_prob < 0.3, got {neg_prob:.6}"
+        );
+        assert!(
+            pos_prob > neg_prob,
+            "positive ({pos_prob:.6}) should score higher than negative ({neg_prob:.6})"
+        );
+    }
 }
