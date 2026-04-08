@@ -58,6 +58,7 @@ build-bee-debut/
 build-bee-release/
 .venv/
 venv/
+node_modules/
 profile.json.gz
 
 # souuunds
