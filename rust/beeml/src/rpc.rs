@@ -48,6 +48,14 @@ pub enum TranscribePhoneticAnchorConfidence {
 }
 
 #[derive(Clone, Debug, Facet)]
+#[repr(u8)]
+pub enum TranscribePhoneticSpanUsefulness {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Clone, Debug, Facet)]
 pub struct TranscribePhoneticSpan {
     pub span_text: String,
     pub token_start: u32,
@@ -69,6 +77,8 @@ pub struct TranscribePhoneticSpan {
     pub alignment_score_gap: Option<f32>,
     pub alignment_source: String,
     pub anchor_confidence: TranscribePhoneticAnchorConfidence,
+    pub span_usefulness: TranscribePhoneticSpanUsefulness,
+    pub zipa_rescue_eligible: bool,
     pub alignment: Vec<TranscribePhoneticAlignmentOp>,
     pub candidates: Vec<TranscribePhoneticCandidate>,
 }

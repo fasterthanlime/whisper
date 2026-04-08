@@ -147,6 +147,10 @@ function SpanCard({ span }: { span: PhoneticRescueSpan }) {
         </span>
         <span className="mini-badge">{span.alignmentSource}</span>
         <span className="mini-badge">{span.anchorConfidence.toLowerCase()}</span>
+        <span className="mini-badge">{span.spanUsefulness.toLowerCase()}</span>
+        <span className="mini-badge">
+          {span.zipaRescueEligible ? "eligible" : "not-eligible"}
+        </span>
         <span className="failure-score">
           base {formatMetric(span.transcriptFeatureSimilarity)}
         </span>
