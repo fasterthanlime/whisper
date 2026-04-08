@@ -795,6 +795,14 @@ pub struct CorpusAlignmentBucketSummary {
 }
 
 #[derive(Clone, Debug, Facet)]
+#[repr(u8)]
+pub enum CorpusAlignmentSelectedSpanRole {
+    BestRescue,
+    WorstContentful,
+    WorstRaw,
+}
+
+#[derive(Clone, Debug, Facet)]
 pub struct CorpusAlignmentEvalRow {
     pub prompt_id: String,
     pub ordinal: u32,
@@ -807,9 +815,17 @@ pub struct CorpusAlignmentEvalRow {
     pub asr_transcript: String,
     pub utterance_similarity: Option<f32>,
     pub utterance_feature_similarity: Option<f32>,
+    pub tail_volatile_token_count: u32,
+    pub row_rescue_ready: bool,
     pub positive_span_count: u32,
+    pub contentful_span_count: u32,
+    pub rescue_eligible_span_count: u32,
     pub worst_span_feature_similarity: Option<f32>,
     pub best_span_delta: Option<f32>,
+    pub selected_span_role: Option<CorpusAlignmentSelectedSpanRole>,
+    pub selected_span_text: Option<String>,
+    pub selected_span_feature_similarity: Option<f32>,
+    pub selected_span_best_delta: Option<f32>,
     pub trace: Option<TranscribePhoneticTrace>,
     pub error: Option<String>,
 }

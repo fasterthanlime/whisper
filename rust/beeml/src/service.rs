@@ -18,9 +18,10 @@ use beeml::g2p::CachedEspeakG2p;
 use beeml::judge::{OnlineJudge, extract_span_context};
 use beeml::rpc::{
     CorpusAlignmentBucketSummary, CorpusAlignmentEvalJob, CorpusAlignmentEvalJobStatus,
-    CorpusAlignmentEvalResult, CorpusAlignmentEvalRow, CorpusCapturePrompt, FilterDecision,
-    JudgeOptionDebug, JudgeStateDebug, PhoneticComparisonRequest, PhoneticComparisonResult,
-    PhoneticComparisonRow, PhoneticComparisonSummary, RapidFireChoice, RetrievalCandidateDebug,
+    CorpusAlignmentEvalResult, CorpusAlignmentEvalRow, CorpusAlignmentSelectedSpanRole,
+    CorpusCapturePrompt, FilterDecision, JudgeOptionDebug, JudgeStateDebug,
+    PhoneticComparisonRequest, PhoneticComparisonResult, PhoneticComparisonRow,
+    PhoneticComparisonSummary, RapidFireChoice, RetrievalCandidateDebug,
     RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
     SpanDebugTrace, SpanDebugView, TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
     TranscribePhoneticAlignmentKind, TranscribePhoneticAlignmentOp,
@@ -469,6 +470,8 @@ impl BeeMlService {
 
             match self.build_transcribe_phonetic_trace(&audio, &snapshot) {
                 Ok(trace) => {
+                    let tail_volatile_token_count = trace.tail_ambiguity.volatile_token_count;
+                    let row_rescue_ready = tail_volatile_token_count == 0;
                     let positive_span_count = trace
                         .spans
                         .iter()
@@ -477,6 +480,22 @@ impl BeeMlService {
                                 .iter()
                                 .any(|candidate| candidate.similarity_delta.unwrap_or(0.0) > 0.0)
                         })
+                        .count()
+                        .min(u32::MAX as usize)
+                        as u32;
+                    let contentful_span_count = trace
+                        .spans
+                        .iter()
+                        .filter(|span| {
+                            !matches!(span.span_usefulness, TranscribePhoneticSpanUsefulness::Low)
+                        })
+                        .count()
+                        .min(u32::MAX as usize)
+                        as u32;
+                    let rescue_eligible_span_count = trace
+                        .spans
+                        .iter()
+                        .filter(|span| span.zipa_rescue_eligible)
                         .count()
                         .min(u32::MAX as usize)
                         as u32;
@@ -494,6 +513,24 @@ impl BeeMlService {
                                 .filter_map(|candidate| candidate.similarity_delta)
                         })
                         .max_by(|a, b| a.total_cmp(b));
+                    let selected_span_role = trace
+                        .best_rescue_span_index
+                        .map(|_| CorpusAlignmentSelectedSpanRole::BestRescue)
+                        .or_else(|| {
+                            trace
+                                .worst_contentful_span_index
+                                .map(|_| CorpusAlignmentSelectedSpanRole::WorstContentful)
+                        })
+                        .or_else(|| {
+                            trace
+                                .worst_raw_span_index
+                                .map(|_| CorpusAlignmentSelectedSpanRole::WorstRaw)
+                        });
+                    let selected_span = trace
+                        .best_rescue_span_index
+                        .or(trace.worst_contentful_span_index)
+                        .or(trace.worst_raw_span_index)
+                        .and_then(|index| trace.spans.get(index as usize));
                     rows.push(CorpusAlignmentEvalRow {
                         prompt_id: prompt.prompt_id,
                         ordinal: prompt.ordinal,
@@ -506,9 +543,23 @@ impl BeeMlService {
                         asr_transcript: snapshot.full_text.clone(),
                         utterance_similarity: trace.utterance_similarity,
                         utterance_feature_similarity: trace.utterance_feature_similarity,
+                        tail_volatile_token_count,
+                        row_rescue_ready,
                         positive_span_count,
+                        contentful_span_count,
+                        rescue_eligible_span_count,
                         worst_span_feature_similarity,
                         best_span_delta,
+                        selected_span_role,
+                        selected_span_text: selected_span.map(|span| span.span_text.clone()),
+                        selected_span_feature_similarity: selected_span
+                            .and_then(|span| span.transcript_feature_similarity),
+                        selected_span_best_delta: selected_span.and_then(|span| {
+                            span.candidates
+                                .iter()
+                                .filter_map(|candidate| candidate.similarity_delta)
+                                .max_by(|a, b| a.total_cmp(b))
+                        }),
                         trace: Some(trace),
                         error: None,
                     });
@@ -525,9 +576,17 @@ impl BeeMlService {
                     asr_transcript: snapshot.full_text,
                     utterance_similarity: None,
                     utterance_feature_similarity: None,
+                    tail_volatile_token_count: 0,
+                    row_rescue_ready: false,
                     positive_span_count: 0,
+                    contentful_span_count: 0,
+                    rescue_eligible_span_count: 0,
                     worst_span_feature_similarity: None,
                     best_span_delta: None,
+                    selected_span_role: None,
+                    selected_span_text: None,
+                    selected_span_feature_similarity: None,
+                    selected_span_best_delta: None,
                     trace: None,
                     error: Some(error),
                 }),
