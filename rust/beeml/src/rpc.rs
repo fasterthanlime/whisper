@@ -1,7 +1,7 @@
 use facet::Facet;
 use vox::{Rx, Tx};
 
-use bee_transcribe::{AlignedWord, SessionSnapshot};
+use bee_transcribe::{AlignedWord, SessionAmbiguitySummary, SessionSnapshot};
 
 #[derive(Clone, Debug, Facet)]
 pub struct TranscribeWavResult {
@@ -97,6 +97,11 @@ pub struct TranscribePhoneticSpan {
 
 #[derive(Clone, Debug, Facet)]
 pub struct TranscribePhoneticTrace {
+    pub snapshot_revision: u64,
+    pub aligned_transcript: String,
+    pub pending_text: String,
+    pub full_transcript: String,
+    pub tail_ambiguity: SessionAmbiguitySummary,
     pub utterance_zipa_raw: Vec<String>,
     pub utterance_zipa_normalized: Vec<String>,
     pub utterance_transcript_normalized: Vec<String>,

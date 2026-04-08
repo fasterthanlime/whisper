@@ -11,7 +11,7 @@ use bee_phonetic::{
     phoneme_similarity, query_index, reduce_ipa_tokens, score_shortlist, sentence_word_tokens,
     top_right_anchor_windows,
 };
-use bee_transcribe::{AlignedWord, Engine};
+use bee_transcribe::{AlignedWord, Engine, SessionSnapshot};
 use bee_zipa_mlx::audio::AudioBuffer;
 use bee_zipa_mlx::infer::ZipaInference;
 use beeml::g2p::CachedEspeakG2p;
@@ -130,9 +130,10 @@ impl BeeMlService {
     pub(crate) fn build_transcribe_phonetic_trace(
         &self,
         audio: &AudioBuffer,
-        transcript: &str,
-        words: &[AlignedWord],
+        snapshot: &SessionSnapshot,
     ) -> Result<TranscribePhoneticTrace, String> {
+        let transcript = snapshot.committed_text.trim();
+        let words = &snapshot.committed_words;
         let alignments = words
             .iter()
             .map(|word| TranscriptAlignmentToken {
@@ -165,10 +166,13 @@ impl BeeMlService {
             .iter()
             .map(|token| token.token.clone())
             .collect::<Vec<_>>();
-        let utterance_transcript_raw = g2p
-            .ipa_tokens(transcript)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("espeak produced no tokens for '{transcript}'"))?;
+        let utterance_transcript_raw = if transcript.is_empty() {
+            Vec::new()
+        } else {
+            g2p.ipa_tokens(transcript)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("espeak produced no tokens for '{transcript}'"))?
+        };
         let transcript_word_normalized_ranges =
             transcript_word_normalized_ranges(&mut g2p, transcript)?;
         let utterance_transcript_normalized = transcript_word_normalized_ranges
@@ -334,6 +338,11 @@ impl BeeMlService {
         });
 
         Ok(TranscribePhoneticTrace {
+            snapshot_revision: snapshot.revision,
+            aligned_transcript: snapshot.committed_text.clone(),
+            pending_text: snapshot.pending_text.clone(),
+            full_transcript: snapshot.full_text.clone(),
+            tail_ambiguity: snapshot.ambiguity.clone(),
             utterance_similarity: phoneme_similarity(
                 &utterance_zipa_raw,
                 &utterance_transcript_raw,
@@ -417,11 +426,7 @@ impl BeeMlService {
             let result = self.transcribe_samples_chunked(&samples)?;
             let snapshot = result.snapshot;
 
-            match self.build_transcribe_phonetic_trace(
-                &audio,
-                &snapshot.full_text,
-                &snapshot.committed_words,
-            ) {
+            match self.build_transcribe_phonetic_trace(&audio, &snapshot) {
                 Ok(trace) => {
                     let positive_span_count = trace
                         .spans
