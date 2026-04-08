@@ -187,14 +187,14 @@ impl ZipaModel {
     }
 }
 
-fn swoosh_l(x: &Array) -> Result<Array, Exception> {
+pub(crate) fn swoosh_l(x: &Array) -> Result<Array, Exception> {
     let zero = Array::from_f32(0.0);
     ops::logaddexp(&zero, &x.subtract(Array::from_f32(4.0))?)?
         .subtract(x.multiply(Array::from_f32(0.08))?)?
         .subtract(Array::from_f32(0.035))
 }
 
-fn swoosh_r(x: &Array) -> Result<Array, Exception> {
+pub(crate) fn swoosh_r(x: &Array) -> Result<Array, Exception> {
     let zero = Array::from_f32(0.0);
     ops::logaddexp(&zero, &x.subtract(Array::from_f32(1.0))?)?
         .subtract(x.multiply(Array::from_f32(0.08))?)?

@@ -1,8 +1,12 @@
 use mlx_rs::builder::Builder;
 use mlx_rs::error::Exception;
 use mlx_rs::macros::ModuleParameters;
+use mlx_rs::module::Module;
 use mlx_rs::module::Param;
 use mlx_rs::nn;
+use mlx_rs::ops::indexing::IndexOp;
+use mlx_rs::ops::softmax_axis;
+use mlx_rs::ops::tanh;
 use mlx_rs::ops::zeros;
 use mlx_rs::Array;
 
@@ -21,6 +25,10 @@ impl BypassModule {
             bypass_scale: Param::new(zeros::<f32>(&[embed_dim])?),
         })
     }
+
+    pub fn forward(&self, src_orig: &Array, src: &Array) -> Result<Array, Exception> {
+        src_orig.add(src.subtract(src_orig)?.multiply(self.bypass_scale.as_ref())?)
+    }
 }
 
 #[derive(Debug, Clone, ModuleParameters)]
@@ -29,6 +37,9 @@ pub struct RelPositionAttentionWeights {
     pub in_proj: nn::Linear,
     #[param]
     pub linear_pos: nn::Linear,
+    pub num_heads: i32,
+    pub query_head_dim: i32,
+    pub pos_head_dim: i32,
 }
 
 impl RelPositionAttentionWeights {
@@ -45,7 +56,46 @@ impl RelPositionAttentionWeights {
             linear_pos: nn::LinearBuilder::new(pos_dim, num_heads * pos_head_dim)
                 .bias(false)
                 .build()?,
+            num_heads,
+            query_head_dim,
+            pos_head_dim,
         })
+    }
+
+    pub fn forward_with_position(
+        &self,
+        x: &Array,
+        pos_emb: &Array,
+    ) -> Result<Array, Exception> {
+        let shape = x.shape();
+        let seq_len = shape[0];
+        let batch_size = shape[1];
+        let query_dim = self.num_heads * self.query_head_dim;
+        let pos_query_dim = self.num_heads * self.pos_head_dim;
+
+        let proj = self.in_proj.forward(x)?;
+        let q = proj
+            .index((.., .., 0..query_dim))
+            .reshape(&[seq_len, batch_size, self.num_heads, self.query_head_dim])?
+            .transpose_axes(&[2, 1, 0, 3])?;
+        let k = proj
+            .index((.., .., query_dim..(2 * query_dim)))
+            .reshape(&[seq_len, batch_size, self.num_heads, self.query_head_dim])?
+            .transpose_axes(&[2, 1, 3, 0])?;
+        let p = proj
+            .index((.., .., (2 * query_dim)..(2 * query_dim + pos_query_dim)))
+            .reshape(&[seq_len, batch_size, self.num_heads, self.pos_head_dim])?
+            .transpose_axes(&[2, 1, 0, 3])?;
+
+        let attn_scores = q.matmul(&k)?;
+        let pos = self
+            .linear_pos
+            .forward(pos_emb)?
+            .reshape(&[1, 2 * seq_len - 1, self.num_heads, self.pos_head_dim])?
+            .transpose_axes(&[2, 0, 3, 1])?;
+        let rel_scores = p.matmul(&pos)?;
+        let abs_scores = relative_to_absolute(&rel_scores, seq_len)?;
+        softmax_axis(attn_scores.add(&abs_scores)?, -1, false)
     }
 }
 
@@ -65,6 +115,26 @@ impl SelfAttention {
             out_proj: nn::LinearBuilder::new(value_dim, embed_dim).build()?,
         })
     }
+
+    pub fn forward(&self, x: &Array, attn_weights: &Array) -> Result<Array, Exception> {
+        let shape = x.shape();
+        let seq_len = shape[0];
+        let batch_size = shape[1];
+        let num_heads = attn_weights.shape()[0];
+        let value_dim = self.in_proj.weight.shape()[0];
+        let value_head_dim = value_dim / num_heads;
+
+        let values = self
+            .in_proj
+            .forward(x)?
+            .reshape(&[seq_len, batch_size, num_heads, value_head_dim])?
+            .transpose_axes(&[2, 1, 0, 3])?;
+        let mixed = attn_weights.matmul(&values)?;
+        let merged = mixed
+            .transpose_axes(&[2, 1, 0, 3])?
+            .reshape(&[seq_len, batch_size, value_dim])?;
+        self.out_proj.forward(&merged)
+    }
 }
 
 #[derive(Debug, Clone, ModuleParameters)]
@@ -82,6 +152,12 @@ impl FeedForwardModule {
             out_proj: nn::LinearBuilder::new(feedforward_dim, embed_dim).build()?,
         })
     }
+
+    pub fn forward(&self, x: &Array) -> Result<Array, Exception> {
+        let x = self.in_proj.forward(x)?;
+        let x = crate::model::swoosh_l(&x)?;
+        self.out_proj.forward(&x)
+    }
 }
 
 #[derive(Debug, Clone, ModuleParameters)]
@@ -98,6 +174,30 @@ impl NonlinAttention {
             in_proj: nn::LinearBuilder::new(embed_dim, hidden_channels * 3).build()?,
             out_proj: nn::LinearBuilder::new(hidden_channels, embed_dim).build()?,
         })
+    }
+
+    pub fn forward(&self, x: &Array, attn_weights: &Array) -> Result<Array, Exception> {
+        let shape = x.shape();
+        let seq_len = shape[0];
+        let batch_size = shape[1];
+        let hidden = self.out_proj.weight.shape()[1];
+        let third = hidden;
+
+        let proj = self.in_proj.forward(x)?;
+        let s = tanh(proj.index((.., .., 0..third)))?;
+        let x_gate = proj.index((.., .., third..(2 * third))).multiply(&s)?;
+        let y = proj.index((.., .., (2 * third)..(3 * third)));
+
+        let num_heads = attn_weights.shape()[0];
+        let head_dim = hidden / num_heads;
+        let x_heads = x_gate
+            .reshape(&[seq_len, batch_size, num_heads, head_dim])?
+            .transpose_axes(&[2, 1, 0, 3])?;
+        let mixed = attn_weights
+            .matmul(&x_heads)?
+            .transpose_axes(&[2, 1, 0, 3])?
+            .reshape(&[seq_len, batch_size, hidden])?;
+        self.out_proj.forward(&mixed.multiply(&y)?)
     }
 }
 
@@ -121,6 +221,18 @@ impl ConvolutionModule {
                 .build()?,
             out_proj: nn::LinearBuilder::new(embed_dim, embed_dim).build()?,
         })
+    }
+
+    pub fn forward(&self, x: &Array) -> Result<Array, Exception> {
+        let channels = self.out_proj.weight.shape()[0];
+        let proj = self.in_proj.forward(x)?;
+        let main = proj.index((.., .., 0..channels));
+        let gate = nn::sigmoid(proj.index((.., .., channels..(2 * channels))))?;
+        let mixed = main.multiply(&gate)?;
+        let conv_in = mixed.transpose_axes(&[1, 0, 2])?;
+        let conv_out = self.depthwise_conv.forward(&conv_in)?.transpose_axes(&[1, 0, 2])?;
+        let x = crate::model::swoosh_r(&conv_out)?;
+        self.out_proj.forward(&x)
     }
 }
 
@@ -187,13 +299,48 @@ impl ZipformerEncoderLayer {
             bypass: BypassModule::new(embed_dim)?,
         })
     }
+
+    pub fn forward_with_attn_weights(
+        &self,
+        src: &Array,
+        attn_weights: &Array,
+    ) -> Result<Array, Exception> {
+        let src_orig = src.clone();
+        let selected_attn_weights = attn_weights.index((0..1, .., .., ..));
+
+        let src = src.add(&self.feed_forward1.forward(src)?)?;
+        let src = src.add(&self.nonlin_attention.forward(&src, &selected_attn_weights)?)?;
+        let src = src.add(&self.self_attn1.forward(&src, attn_weights)?)?;
+        let src = src.add(&self.conv_module1.forward(&src)?)?;
+        let src = src.add(&self.feed_forward2.forward(&src)?)?;
+        let src = self.bypass_mid.forward(&src_orig, &src)?;
+        let src = src.add(&self.self_attn2.forward(&src, attn_weights)?)?;
+        let src = src.add(&self.conv_module2.forward(&src)?)?;
+        let src = src.add(&self.feed_forward3.forward(&src)?)?;
+        let src = self.norm.forward(&src)?;
+        self.bypass.forward(&src_orig, &src)
+    }
+}
+
+fn relative_to_absolute(pos_scores: &Array, seq_len: i32) -> Result<Array, Exception> {
+    let mut rows = Vec::with_capacity(seq_len as usize);
+    for t in 0..seq_len {
+        let start = seq_len - 1 - t;
+        let row = pos_scores.index((.., .., t, start..(start + seq_len)));
+        rows.push(row.expand_dims_axes(&[2])?);
+    }
+    mlx_rs::ops::concatenate_axis(&rows, 2)
 }
 
 #[cfg(test)]
 mod tests {
     use crate::config::{ZipaModelConfig, ZipaVariant};
+    use crate::load::load_stage0_layer_weights_from_map;
 
     use super::ZipformerEncoderLayer;
+    use mlx_rs::Array;
+    use mlx_rs::ops::indexing::IndexOp;
+    use std::path::PathBuf;
 
     #[test]
     fn stage0_layer_matches_reference_shapes() {
@@ -223,5 +370,89 @@ mod tests {
         assert_eq!(layer.bypass_mid.bypass_scale.shape(), vec![192]);
         assert_eq!(layer.norm.bias.shape(), vec![192]);
         assert_eq!(layer.bypass.bypass_scale.shape(), vec![192]);
+    }
+
+    #[test]
+    fn stage0_layer_matches_onnx_reference_when_local_artifacts_exist() {
+        let home = match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home),
+            None => return,
+        };
+        let weights = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/frontend_ctc.safetensors",
+        );
+        let reference = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/authored_282_take_1_layer0_ref.safetensors",
+        );
+        if !(weights.exists() && reference.exists()) {
+            return;
+        }
+
+        let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
+        let mut layer = ZipformerEncoderLayer::new_for_stage(&config, 0).unwrap();
+        let params = Array::load_safetensors(&weights).unwrap();
+        let stats = load_stage0_layer_weights_from_map(&mut layer, &params).unwrap();
+        assert!(stats.missing.is_empty(), "missing: {:?}", stats.missing);
+
+        let tensors = Array::load_safetensors(&reference).unwrap();
+        let layer0_in = tensors.get("layer0_in").unwrap();
+        let attn_weights = tensors.get("attn_weights").unwrap();
+        let src_orig = layer0_in.clone();
+
+        let add0 = layer0_in.add(&layer.feed_forward1.forward(layer0_in).unwrap()).unwrap();
+        assert_close("add0", &add0, tensors.get("add0").unwrap());
+
+        let selected_attn_weights = attn_weights.index((0..1, .., .., ..));
+        let add1 = add0
+            .add(
+                &layer
+                    .nonlin_attention
+                    .forward(&add0, &selected_attn_weights)
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_close("add1", &add1, tensors.get("add1").unwrap());
+
+        let add2 = add1
+            .add(&layer.self_attn1.forward(&add1, attn_weights).unwrap())
+            .unwrap();
+        assert_close("add2", &add2, tensors.get("add2").unwrap());
+
+        let add3 = add2.add(&layer.conv_module1.forward(&add2).unwrap()).unwrap();
+        assert_close("add3", &add3, tensors.get("add3").unwrap());
+
+        let add4 = add3.add(&layer.feed_forward2.forward(&add3).unwrap()).unwrap();
+        assert_close("add4", &add4, tensors.get("add4").unwrap());
+
+        let mid = layer.bypass_mid.forward(&src_orig, &add4).unwrap();
+        assert_close("mid", &mid, tensors.get("mid").unwrap());
+
+        let add5 = mid
+            .add(&layer.self_attn2.forward(&mid, attn_weights).unwrap())
+            .unwrap();
+        assert_close("add5", &add5, tensors.get("add5").unwrap());
+
+        let add6 = add5.add(&layer.conv_module2.forward(&add5).unwrap()).unwrap();
+        assert_close("add6", &add6, tensors.get("add6").unwrap());
+
+        let add7 = add6.add(&layer.feed_forward3.forward(&add6).unwrap()).unwrap();
+        assert_close("add7", &add7, tensors.get("add7").unwrap());
+
+        let norm = layer.norm.forward(&add7).unwrap();
+        assert_close("norm", &norm, tensors.get("norm").unwrap());
+
+        let actual = layer.bypass.forward(&src_orig, &norm).unwrap();
+        assert_close("layer0_out", &actual, tensors.get("layer0_out").unwrap());
+    }
+
+    fn assert_close(name: &str, actual: &Array, expected: &Array) {
+        assert_eq!(actual.shape(), expected.shape(), "{name} shape mismatch");
+        assert!(
+            actual
+                .all_close(expected, 1e-4, 1e-4, None)
+                .unwrap()
+                .item::<bool>(),
+            "{name} diverged from ONNX reference"
+        );
     }
 }
