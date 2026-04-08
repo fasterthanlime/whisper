@@ -1,6 +1,6 @@
 use mlx_rs::builder::Builder;
 use mlx_rs::error::Exception;
-use mlx_rs::macros::ModuleParameters;
+use mlx_rs::macros::{ModuleParameters, Quantizable};
 use mlx_rs::module::Module;
 use mlx_rs::module::Param;
 use mlx_rs::nn;
@@ -9,10 +9,21 @@ use mlx_rs::ops::softmax_axis;
 use mlx_rs::ops::sum_axes;
 use mlx_rs::ops::tanh;
 use mlx_rs::ops::zeros;
+use mlx_rs::quantization::MaybeQuantized;
 use mlx_rs::Array;
 
 use crate::config::ZipaModelConfig;
-use crate::model::BiasNorm;
+use crate::model::{quantize_linear_adaptive, BiasNorm};
+
+fn linear_weight_shape(linear: &MaybeQuantized<nn::Linear>) -> Vec<i32> {
+    match linear {
+        MaybeQuantized::Original(linear) => linear.weight.shape().to_vec(),
+        MaybeQuantized::Quantized(linear) => {
+            let shape = linear.inner.weight.shape();
+            vec![shape[0], shape[1] * (32 / linear.bits)]
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct CompactRelPositionalEncoding {
@@ -139,12 +150,14 @@ impl Downsample2 {
     }
 }
 
-#[derive(Debug, Clone, ModuleParameters)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct RelPositionAttentionWeights {
     #[param]
-    pub in_proj: nn::Linear,
+    #[quantizable]
+    pub in_proj: MaybeQuantized<nn::Linear>,
     #[param]
-    pub linear_pos: nn::Linear,
+    #[quantizable]
+    pub linear_pos: MaybeQuantized<nn::Linear>,
     pub num_heads: i32,
     pub query_head_dim: i32,
     pub pos_head_dim: i32,
@@ -160,10 +173,12 @@ impl RelPositionAttentionWeights {
     ) -> Result<Self, Exception> {
         let in_proj_dim = (query_head_dim * 2 + pos_head_dim) * num_heads;
         Ok(Self {
-            in_proj: nn::LinearBuilder::new(embed_dim, in_proj_dim).build()?,
-            linear_pos: nn::LinearBuilder::new(pos_dim, num_heads * pos_head_dim)
-                .bias(false)
-                .build()?,
+            in_proj: MaybeQuantized::new(nn::LinearBuilder::new(embed_dim, in_proj_dim).build()?),
+            linear_pos: MaybeQuantized::new(
+                nn::LinearBuilder::new(pos_dim, num_heads * pos_head_dim)
+                    .bias(false)
+                    .build()?,
+            ),
             num_heads,
             query_head_dim,
             pos_head_dim,
@@ -201,22 +216,30 @@ impl RelPositionAttentionWeights {
         let abs_scores = relative_to_absolute(&rel_scores, seq_len)?;
         softmax_axis(attn_scores.add(&abs_scores)?, -1, false)
     }
+
+    pub fn quantize_linears(&mut self, max_group_size: i32, bits: i32) -> Result<(), Exception> {
+        quantize_linear_adaptive(&mut self.in_proj, max_group_size, bits)?;
+        quantize_linear_adaptive(&mut self.linear_pos, max_group_size, bits)?;
+        Ok(())
+    }
 }
 
-#[derive(Debug, Clone, ModuleParameters)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct SelfAttention {
     #[param]
-    pub in_proj: nn::Linear,
+    #[quantizable]
+    pub in_proj: MaybeQuantized<nn::Linear>,
     #[param]
-    pub out_proj: nn::Linear,
+    #[quantizable]
+    pub out_proj: MaybeQuantized<nn::Linear>,
 }
 
 impl SelfAttention {
     pub fn new(embed_dim: i32, num_heads: i32, value_head_dim: i32) -> Result<Self, Exception> {
         let value_dim = num_heads * value_head_dim;
         Ok(Self {
-            in_proj: nn::LinearBuilder::new(embed_dim, value_dim).build()?,
-            out_proj: nn::LinearBuilder::new(value_dim, embed_dim).build()?,
+            in_proj: MaybeQuantized::new(nn::LinearBuilder::new(embed_dim, value_dim).build()?),
+            out_proj: MaybeQuantized::new(nn::LinearBuilder::new(value_dim, embed_dim).build()?),
         })
     }
 
@@ -225,7 +248,7 @@ impl SelfAttention {
         let seq_len = shape[0];
         let batch_size = shape[1];
         let num_heads = attn_weights.shape()[0];
-        let value_dim = self.in_proj.weight.shape()[0];
+        let value_dim = linear_weight_shape(&self.in_proj)[0];
         let value_head_dim = value_dim / num_heads;
 
         let values = self
@@ -239,21 +262,33 @@ impl SelfAttention {
             .reshape(&[seq_len, batch_size, value_dim])?;
         self.out_proj.forward(&merged)
     }
+
+    pub fn quantize_linears(&mut self, max_group_size: i32, bits: i32) -> Result<(), Exception> {
+        quantize_linear_adaptive(&mut self.in_proj, max_group_size, bits)?;
+        quantize_linear_adaptive(&mut self.out_proj, max_group_size, bits)?;
+        Ok(())
+    }
 }
 
-#[derive(Debug, Clone, ModuleParameters)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct FeedForwardModule {
     #[param]
-    pub in_proj: nn::Linear,
+    #[quantizable]
+    pub in_proj: MaybeQuantized<nn::Linear>,
     #[param]
-    pub out_proj: nn::Linear,
+    #[quantizable]
+    pub out_proj: MaybeQuantized<nn::Linear>,
 }
 
 impl FeedForwardModule {
     pub fn new(embed_dim: i32, feedforward_dim: i32) -> Result<Self, Exception> {
         Ok(Self {
-            in_proj: nn::LinearBuilder::new(embed_dim, feedforward_dim).build()?,
-            out_proj: nn::LinearBuilder::new(feedforward_dim, embed_dim).build()?,
+            in_proj: MaybeQuantized::new(
+                nn::LinearBuilder::new(embed_dim, feedforward_dim).build()?,
+            ),
+            out_proj: MaybeQuantized::new(
+                nn::LinearBuilder::new(feedforward_dim, embed_dim).build()?,
+            ),
         })
     }
 
@@ -262,21 +297,33 @@ impl FeedForwardModule {
         let x = crate::model::swoosh_l(&x)?;
         self.out_proj.forward(&x)
     }
+
+    pub fn quantize_linears(&mut self, max_group_size: i32, bits: i32) -> Result<(), Exception> {
+        quantize_linear_adaptive(&mut self.in_proj, max_group_size, bits)?;
+        quantize_linear_adaptive(&mut self.out_proj, max_group_size, bits)?;
+        Ok(())
+    }
 }
 
-#[derive(Debug, Clone, ModuleParameters)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct NonlinAttention {
     #[param]
-    pub in_proj: nn::Linear,
+    #[quantizable]
+    pub in_proj: MaybeQuantized<nn::Linear>,
     #[param]
-    pub out_proj: nn::Linear,
+    #[quantizable]
+    pub out_proj: MaybeQuantized<nn::Linear>,
 }
 
 impl NonlinAttention {
     pub fn new(embed_dim: i32, hidden_channels: i32) -> Result<Self, Exception> {
         Ok(Self {
-            in_proj: nn::LinearBuilder::new(embed_dim, hidden_channels * 3).build()?,
-            out_proj: nn::LinearBuilder::new(hidden_channels, embed_dim).build()?,
+            in_proj: MaybeQuantized::new(
+                nn::LinearBuilder::new(embed_dim, hidden_channels * 3).build()?,
+            ),
+            out_proj: MaybeQuantized::new(
+                nn::LinearBuilder::new(hidden_channels, embed_dim).build()?,
+            ),
         })
     }
 
@@ -284,7 +331,7 @@ impl NonlinAttention {
         let shape = x.shape();
         let seq_len = shape[0];
         let batch_size = shape[1];
-        let hidden = self.out_proj.weight.shape()[1];
+        let hidden = linear_weight_shape(&self.out_proj)[1];
         let third = hidden;
 
         let proj = self.in_proj.forward(x)?;
@@ -303,32 +350,42 @@ impl NonlinAttention {
             .reshape(&[seq_len, batch_size, hidden])?;
         self.out_proj.forward(&mixed.multiply(&y)?)
     }
+
+    pub fn quantize_linears(&mut self, max_group_size: i32, bits: i32) -> Result<(), Exception> {
+        quantize_linear_adaptive(&mut self.in_proj, max_group_size, bits)?;
+        quantize_linear_adaptive(&mut self.out_proj, max_group_size, bits)?;
+        Ok(())
+    }
 }
 
-#[derive(Debug, Clone, ModuleParameters)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct ConvolutionModule {
     #[param]
-    pub in_proj: nn::Linear,
+    #[quantizable]
+    pub in_proj: MaybeQuantized<nn::Linear>,
     #[param]
     pub depthwise_conv: nn::Conv1d,
     #[param]
-    pub out_proj: nn::Linear,
+    #[quantizable]
+    pub out_proj: MaybeQuantized<nn::Linear>,
 }
 
 impl ConvolutionModule {
     pub fn new(embed_dim: i32, kernel_size: i32) -> Result<Self, Exception> {
         Ok(Self {
-            in_proj: nn::LinearBuilder::new(embed_dim, embed_dim * 2).build()?,
+            in_proj: MaybeQuantized::new(
+                nn::LinearBuilder::new(embed_dim, embed_dim * 2).build()?,
+            ),
             depthwise_conv: nn::Conv1dBuilder::new(1, embed_dim, kernel_size)
                 .groups(embed_dim)
                 .padding(kernel_size / 2)
                 .build()?,
-            out_proj: nn::LinearBuilder::new(embed_dim, embed_dim).build()?,
+            out_proj: MaybeQuantized::new(nn::LinearBuilder::new(embed_dim, embed_dim).build()?),
         })
     }
 
     pub fn forward(&self, x: &Array) -> Result<Array, Exception> {
-        let channels = self.out_proj.weight.shape()[0];
+        let channels = linear_weight_shape(&self.out_proj)[0];
         let proj = self.in_proj.forward(x)?;
         let main = proj.index((.., .., 0..channels));
         let gate = nn::sigmoid(proj.index((.., .., channels..(2 * channels))))?;
@@ -341,27 +398,42 @@ impl ConvolutionModule {
         let x = crate::model::swoosh_r(&conv_out)?;
         self.out_proj.forward(&x)
     }
+
+    pub fn quantize_linears(&mut self, max_group_size: i32, bits: i32) -> Result<(), Exception> {
+        quantize_linear_adaptive(&mut self.in_proj, max_group_size, bits)?;
+        quantize_linear_adaptive(&mut self.out_proj, max_group_size, bits)?;
+        Ok(())
+    }
 }
 
-#[derive(Debug, Clone, ModuleParameters)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct ZipformerEncoderLayer {
     #[param]
+    #[quantizable]
     pub self_attn_weights: RelPositionAttentionWeights,
     #[param]
+    #[quantizable]
     pub self_attn1: SelfAttention,
     #[param]
+    #[quantizable]
     pub self_attn2: SelfAttention,
     #[param]
+    #[quantizable]
     pub feed_forward1: FeedForwardModule,
     #[param]
+    #[quantizable]
     pub feed_forward2: FeedForwardModule,
     #[param]
+    #[quantizable]
     pub feed_forward3: FeedForwardModule,
     #[param]
+    #[quantizable]
     pub nonlin_attention: NonlinAttention,
     #[param]
+    #[quantizable]
     pub conv_module1: ConvolutionModule,
     #[param]
+    #[quantizable]
     pub conv_module2: ConvolutionModule,
     #[param]
     pub bypass_mid: BypassModule,
@@ -371,27 +443,32 @@ pub struct ZipformerEncoderLayer {
     pub bypass: BypassModule,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Quantizable)]
 pub struct Stage0Encoder {
     pub encoder_pos: CompactRelPositionalEncoding,
+    #[quantizable]
     pub layer0: ZipformerEncoderLayer,
+    #[quantizable]
     pub layer1: ZipformerEncoderLayer,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Quantizable)]
 pub struct Stage1EncoderPrefix {
     pub downsample: Downsample2,
     pub encoder_pos: CompactRelPositionalEncoding,
+    #[quantizable]
     pub layer0: ZipformerEncoderLayer,
+    #[quantizable]
     pub layer1: ZipformerEncoderLayer,
     pub out_combiner: BypassModule,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Quantizable)]
 pub struct StageEncoder {
     pub stage: usize,
     pub downsample: Downsample2,
     pub encoder_pos: CompactRelPositionalEncoding,
+    #[quantizable]
     pub layers: Vec<ZipformerEncoderLayer>,
     pub out_combiner: BypassModule,
 }
@@ -410,6 +487,12 @@ impl Stage0Encoder {
         let pos_emb = self.encoder_pos.forward(seq_len, 0)?;
         let src = self.layer0.forward(src, &pos_emb)?;
         self.layer1.forward(&src, &pos_emb)
+    }
+
+    pub fn quantize_linears(&mut self, max_group_size: i32, bits: i32) -> Result<(), Exception> {
+        self.layer0.quantize_linears(max_group_size, bits)?;
+        self.layer1.quantize_linears(max_group_size, bits)?;
+        Ok(())
     }
 }
 
@@ -433,6 +516,12 @@ impl Stage1EncoderPrefix {
         let src = self.layer1.forward(&src, &pos_emb)?;
         let src = upsample_by_repeat(&src, src_padded.shape()[0])?;
         self.out_combiner.forward(&src_padded, &src)
+    }
+
+    pub fn quantize_linears(&mut self, max_group_size: i32, bits: i32) -> Result<(), Exception> {
+        self.layer0.quantize_linears(max_group_size, bits)?;
+        self.layer1.quantize_linears(max_group_size, bits)?;
+        Ok(())
     }
 }
 
@@ -465,6 +554,13 @@ impl StageEncoder {
         }
         let src = upsample_by_repeat(&src, src_padded.shape()[0])?;
         self.out_combiner.forward(&src_padded, &src)
+    }
+
+    pub fn quantize_linears(&mut self, max_group_size: i32, bits: i32) -> Result<(), Exception> {
+        for layer in &mut self.layers {
+            layer.quantize_linears(max_group_size, bits)?;
+        }
+        Ok(())
     }
 }
 
@@ -533,6 +629,20 @@ impl ZipformerEncoderLayer {
         let attn_weights = self.self_attn_weights.forward_with_position(src, pos_emb)?;
         self.forward_with_attn_weights(src, &attn_weights)
     }
+
+    pub fn quantize_linears(&mut self, max_group_size: i32, bits: i32) -> Result<(), Exception> {
+        self.self_attn_weights
+            .quantize_linears(max_group_size, bits)?;
+        self.self_attn1.quantize_linears(max_group_size, bits)?;
+        self.self_attn2.quantize_linears(max_group_size, bits)?;
+        self.feed_forward1.quantize_linears(max_group_size, bits)?;
+        self.feed_forward2.quantize_linears(max_group_size, bits)?;
+        self.feed_forward3.quantize_linears(max_group_size, bits)?;
+        self.nonlin_attention.quantize_linears(max_group_size, bits)?;
+        self.conv_module1.quantize_linears(max_group_size, bits)?;
+        self.conv_module2.quantize_linears(max_group_size, bits)?;
+        Ok(())
+    }
 }
 
 fn relative_to_absolute(pos_scores: &Array, seq_len: i32) -> Result<Array, Exception> {
@@ -583,8 +693,8 @@ mod tests {
     };
 
     use super::{
-        CompactRelPositionalEncoding, Downsample2, Stage0Encoder, Stage1EncoderPrefix,
-        StageEncoder, ZipformerEncoderLayer,
+        linear_weight_shape, CompactRelPositionalEncoding, Downsample2, Stage0Encoder,
+        Stage1EncoderPrefix, StageEncoder, ZipformerEncoderLayer,
     };
     use mlx_rs::ops::indexing::IndexOp;
     use mlx_rs::Array;
@@ -595,44 +705,35 @@ mod tests {
         let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
         let layer = ZipformerEncoderLayer::new_for_stage(&config, 0).unwrap();
 
+        assert_eq!(linear_weight_shape(&layer.self_attn_weights.in_proj), vec![272, 192]);
         assert_eq!(
-            layer.self_attn_weights.in_proj.weight.shape(),
-            vec![272, 192]
-        );
-        assert_eq!(
-            layer.self_attn_weights.linear_pos.weight.shape(),
+            linear_weight_shape(&layer.self_attn_weights.linear_pos),
             vec![16, 48]
         );
-        assert_eq!(layer.self_attn1.in_proj.weight.shape(), vec![48, 192]);
-        assert_eq!(layer.self_attn1.out_proj.weight.shape(), vec![192, 48]);
-        assert_eq!(layer.feed_forward1.in_proj.weight.shape(), vec![384, 192]);
-        assert_eq!(layer.feed_forward1.out_proj.weight.shape(), vec![192, 384]);
-        assert_eq!(
-            layer.nonlin_attention.in_proj.weight.shape(),
-            vec![432, 192]
-        );
-        assert_eq!(
-            layer.nonlin_attention.out_proj.weight.shape(),
-            vec![192, 144]
-        );
-        assert_eq!(layer.conv_module1.in_proj.weight.shape(), vec![384, 192]);
+        assert_eq!(linear_weight_shape(&layer.self_attn1.in_proj), vec![48, 192]);
+        assert_eq!(linear_weight_shape(&layer.self_attn1.out_proj), vec![192, 48]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward1.in_proj), vec![384, 192]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward1.out_proj), vec![192, 384]);
+        assert_eq!(linear_weight_shape(&layer.nonlin_attention.in_proj), vec![432, 192]);
+        assert_eq!(linear_weight_shape(&layer.nonlin_attention.out_proj), vec![192, 144]);
+        assert_eq!(linear_weight_shape(&layer.conv_module1.in_proj), vec![384, 192]);
         assert_eq!(
             layer.conv_module1.depthwise_conv.weight.shape(),
             vec![192, 31, 1]
         );
-        assert_eq!(layer.conv_module1.out_proj.weight.shape(), vec![192, 192]);
-        assert_eq!(layer.feed_forward2.in_proj.weight.shape(), vec![512, 192]);
-        assert_eq!(layer.feed_forward2.out_proj.weight.shape(), vec![192, 512]);
-        assert_eq!(layer.self_attn2.in_proj.weight.shape(), vec![48, 192]);
-        assert_eq!(layer.self_attn2.out_proj.weight.shape(), vec![192, 48]);
-        assert_eq!(layer.conv_module2.in_proj.weight.shape(), vec![384, 192]);
+        assert_eq!(linear_weight_shape(&layer.conv_module1.out_proj), vec![192, 192]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward2.in_proj), vec![512, 192]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward2.out_proj), vec![192, 512]);
+        assert_eq!(linear_weight_shape(&layer.self_attn2.in_proj), vec![48, 192]);
+        assert_eq!(linear_weight_shape(&layer.self_attn2.out_proj), vec![192, 48]);
+        assert_eq!(linear_weight_shape(&layer.conv_module2.in_proj), vec![384, 192]);
         assert_eq!(
             layer.conv_module2.depthwise_conv.weight.shape(),
             vec![192, 31, 1]
         );
-        assert_eq!(layer.conv_module2.out_proj.weight.shape(), vec![192, 192]);
-        assert_eq!(layer.feed_forward3.in_proj.weight.shape(), vec![640, 192]);
-        assert_eq!(layer.feed_forward3.out_proj.weight.shape(), vec![192, 640]);
+        assert_eq!(linear_weight_shape(&layer.conv_module2.out_proj), vec![192, 192]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward3.in_proj), vec![640, 192]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward3.out_proj), vec![192, 640]);
         assert_eq!(layer.bypass_mid.bypass_scale.shape(), vec![192]);
         assert_eq!(layer.norm.bias.shape(), vec![192]);
         assert_eq!(layer.bypass.bypass_scale.shape(), vec![192]);
@@ -843,44 +944,35 @@ mod tests {
         let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
         let layer = ZipformerEncoderLayer::new_for_stage(&config, 1).unwrap();
 
+        assert_eq!(linear_weight_shape(&layer.self_attn_weights.in_proj), vec![272, 256]);
         assert_eq!(
-            layer.self_attn_weights.in_proj.weight.shape(),
-            vec![272, 256]
-        );
-        assert_eq!(
-            layer.self_attn_weights.linear_pos.weight.shape(),
+            linear_weight_shape(&layer.self_attn_weights.linear_pos),
             vec![16, 48]
         );
-        assert_eq!(layer.self_attn1.in_proj.weight.shape(), vec![48, 256]);
-        assert_eq!(layer.self_attn1.out_proj.weight.shape(), vec![256, 48]);
-        assert_eq!(layer.feed_forward1.in_proj.weight.shape(), vec![576, 256]);
-        assert_eq!(layer.feed_forward1.out_proj.weight.shape(), vec![256, 576]);
-        assert_eq!(
-            layer.nonlin_attention.in_proj.weight.shape(),
-            vec![576, 256]
-        );
-        assert_eq!(
-            layer.nonlin_attention.out_proj.weight.shape(),
-            vec![256, 192]
-        );
-        assert_eq!(layer.conv_module1.in_proj.weight.shape(), vec![512, 256]);
+        assert_eq!(linear_weight_shape(&layer.self_attn1.in_proj), vec![48, 256]);
+        assert_eq!(linear_weight_shape(&layer.self_attn1.out_proj), vec![256, 48]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward1.in_proj), vec![576, 256]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward1.out_proj), vec![256, 576]);
+        assert_eq!(linear_weight_shape(&layer.nonlin_attention.in_proj), vec![576, 256]);
+        assert_eq!(linear_weight_shape(&layer.nonlin_attention.out_proj), vec![256, 192]);
+        assert_eq!(linear_weight_shape(&layer.conv_module1.in_proj), vec![512, 256]);
         assert_eq!(
             layer.conv_module1.depthwise_conv.weight.shape(),
             vec![256, 31, 1]
         );
-        assert_eq!(layer.conv_module1.out_proj.weight.shape(), vec![256, 256]);
-        assert_eq!(layer.feed_forward2.in_proj.weight.shape(), vec![768, 256]);
-        assert_eq!(layer.feed_forward2.out_proj.weight.shape(), vec![256, 768]);
-        assert_eq!(layer.self_attn2.in_proj.weight.shape(), vec![48, 256]);
-        assert_eq!(layer.self_attn2.out_proj.weight.shape(), vec![256, 48]);
-        assert_eq!(layer.conv_module2.in_proj.weight.shape(), vec![512, 256]);
+        assert_eq!(linear_weight_shape(&layer.conv_module1.out_proj), vec![256, 256]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward2.in_proj), vec![768, 256]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward2.out_proj), vec![256, 768]);
+        assert_eq!(linear_weight_shape(&layer.self_attn2.in_proj), vec![48, 256]);
+        assert_eq!(linear_weight_shape(&layer.self_attn2.out_proj), vec![256, 48]);
+        assert_eq!(linear_weight_shape(&layer.conv_module2.in_proj), vec![512, 256]);
         assert_eq!(
             layer.conv_module2.depthwise_conv.weight.shape(),
             vec![256, 31, 1]
         );
-        assert_eq!(layer.conv_module2.out_proj.weight.shape(), vec![256, 256]);
-        assert_eq!(layer.feed_forward3.in_proj.weight.shape(), vec![960, 256]);
-        assert_eq!(layer.feed_forward3.out_proj.weight.shape(), vec![256, 960]);
+        assert_eq!(linear_weight_shape(&layer.conv_module2.out_proj), vec![256, 256]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward3.in_proj), vec![960, 256]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward3.out_proj), vec![256, 960]);
         assert_eq!(layer.bypass_mid.bypass_scale.shape(), vec![256]);
         assert_eq!(layer.norm.bias.shape(), vec![256]);
         assert_eq!(layer.bypass.bypass_scale.shape(), vec![256]);
@@ -1069,44 +1161,35 @@ mod tests {
         let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
         let layer = ZipformerEncoderLayer::new_for_stage(&config, 2).unwrap();
 
+        assert_eq!(linear_weight_shape(&layer.self_attn_weights.in_proj), vec![272, 384]);
         assert_eq!(
-            layer.self_attn_weights.in_proj.weight.shape(),
-            vec![272, 384]
-        );
-        assert_eq!(
-            layer.self_attn_weights.linear_pos.weight.shape(),
+            linear_weight_shape(&layer.self_attn_weights.linear_pos),
             vec![16, 48]
         );
-        assert_eq!(layer.self_attn1.in_proj.weight.shape(), vec![48, 384]);
-        assert_eq!(layer.self_attn1.out_proj.weight.shape(), vec![384, 48]);
-        assert_eq!(layer.feed_forward1.in_proj.weight.shape(), vec![768, 384]);
-        assert_eq!(layer.feed_forward1.out_proj.weight.shape(), vec![384, 768]);
-        assert_eq!(
-            layer.nonlin_attention.in_proj.weight.shape(),
-            vec![864, 384]
-        );
-        assert_eq!(
-            layer.nonlin_attention.out_proj.weight.shape(),
-            vec![384, 288]
-        );
-        assert_eq!(layer.conv_module1.in_proj.weight.shape(), vec![768, 384]);
+        assert_eq!(linear_weight_shape(&layer.self_attn1.in_proj), vec![48, 384]);
+        assert_eq!(linear_weight_shape(&layer.self_attn1.out_proj), vec![384, 48]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward1.in_proj), vec![768, 384]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward1.out_proj), vec![384, 768]);
+        assert_eq!(linear_weight_shape(&layer.nonlin_attention.in_proj), vec![864, 384]);
+        assert_eq!(linear_weight_shape(&layer.nonlin_attention.out_proj), vec![384, 288]);
+        assert_eq!(linear_weight_shape(&layer.conv_module1.in_proj), vec![768, 384]);
         assert_eq!(
             layer.conv_module1.depthwise_conv.weight.shape(),
             vec![384, 15, 1]
         );
-        assert_eq!(layer.conv_module1.out_proj.weight.shape(), vec![384, 384]);
-        assert_eq!(layer.feed_forward2.in_proj.weight.shape(), vec![1024, 384]);
-        assert_eq!(layer.feed_forward2.out_proj.weight.shape(), vec![384, 1024]);
-        assert_eq!(layer.self_attn2.in_proj.weight.shape(), vec![48, 384]);
-        assert_eq!(layer.self_attn2.out_proj.weight.shape(), vec![384, 48]);
-        assert_eq!(layer.conv_module2.in_proj.weight.shape(), vec![768, 384]);
+        assert_eq!(linear_weight_shape(&layer.conv_module1.out_proj), vec![384, 384]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward2.in_proj), vec![1024, 384]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward2.out_proj), vec![384, 1024]);
+        assert_eq!(linear_weight_shape(&layer.self_attn2.in_proj), vec![48, 384]);
+        assert_eq!(linear_weight_shape(&layer.self_attn2.out_proj), vec![384, 48]);
+        assert_eq!(linear_weight_shape(&layer.conv_module2.in_proj), vec![768, 384]);
         assert_eq!(
             layer.conv_module2.depthwise_conv.weight.shape(),
             vec![384, 15, 1]
         );
-        assert_eq!(layer.conv_module2.out_proj.weight.shape(), vec![384, 384]);
-        assert_eq!(layer.feed_forward3.in_proj.weight.shape(), vec![1280, 384]);
-        assert_eq!(layer.feed_forward3.out_proj.weight.shape(), vec![384, 1280]);
+        assert_eq!(linear_weight_shape(&layer.conv_module2.out_proj), vec![384, 384]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward3.in_proj), vec![1280, 384]);
+        assert_eq!(linear_weight_shape(&layer.feed_forward3.out_proj), vec![384, 1280]);
         assert_eq!(layer.bypass_mid.bypass_scale.shape(), vec![384]);
         assert_eq!(layer.norm.bias.shape(), vec![384]);
         assert_eq!(layer.bypass.bypass_scale.shape(), vec![384]);

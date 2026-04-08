@@ -131,6 +131,16 @@ impl ZipaInference {
             tokens,
         })
     }
+
+    pub fn quantize_linears(&mut self, group_size: i32, bits: i32) -> Result<()> {
+        self.model.quantize_linears(group_size, bits)?;
+        self.stage0.quantize_linears(group_size, bits)?;
+        self.stage1.quantize_linears(group_size, bits)?;
+        for stage in &mut self.stages_2_to_5 {
+            stage.quantize_linears(group_size, bits)?;
+        }
+        Ok(())
+    }
 }
 
 fn load_stage0(

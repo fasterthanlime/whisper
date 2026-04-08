@@ -1,11 +1,13 @@
 use mlx_rs::builder::Builder;
 use mlx_rs::error::Exception;
-use mlx_rs::macros::ModuleParameters;
+use mlx_rs::macros::{ModuleParameters, Quantizable};
 use mlx_rs::module::Module;
 use mlx_rs::module::Param;
 use mlx_rs::nn;
+use mlx_rs::nn::QuantizedLinear;
 use mlx_rs::ops;
 use mlx_rs::ops::zeros;
+use mlx_rs::quantization::MaybeQuantized;
 use mlx_rs::Array;
 
 use crate::config::{ZipaModelConfig, ZipaVariant};
@@ -70,7 +72,7 @@ impl ConvNeXtFrontend {
     }
 }
 
-#[derive(Debug, Clone, ModuleParameters)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct EncoderEmbed {
     #[param]
     pub conv0: nn::Conv2d,
@@ -81,7 +83,8 @@ pub struct EncoderEmbed {
     #[param]
     pub convnext: ConvNeXtFrontend,
     #[param]
-    pub out: nn::Linear,
+    #[quantizable]
+    pub out: MaybeQuantized<nn::Linear>,
     #[param]
     pub out_norm: BiasNorm,
 }
@@ -105,11 +108,10 @@ impl EncoderEmbed {
                 .stride((1, 2))
                 .build()?,
             convnext: ConvNeXtFrontend::new(Self::LAYER3_CHANNELS)?,
-            out: nn::LinearBuilder::new(
-                out_width * Self::LAYER3_CHANNELS,
-                config.encoder_dim[0] as i32,
-            )
-            .build()?,
+            out: MaybeQuantized::new(
+                nn::LinearBuilder::new(out_width * Self::LAYER3_CHANNELS, config.encoder_dim[0] as i32)
+                    .build()?,
+            ),
             out_norm: BiasNorm::new(config.encoder_dim[0] as i32)?,
         })
     }
@@ -138,12 +140,18 @@ impl EncoderEmbed {
         let x = self.out.forward(&x)?;
         self.out_norm.forward(&x)
     }
+
+    pub fn quantize_linears(&mut self, max_group_size: i32, bits: i32) -> Result<(), Exception> {
+        quantize_linear_adaptive(&mut self.out, max_group_size, bits)?;
+        Ok(())
+    }
 }
 
-#[derive(Debug, Clone, ModuleParameters)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct CtcHead {
     #[param]
-    pub linear: nn::Linear,
+    #[quantizable]
+    pub linear: MaybeQuantized<nn::Linear>,
 }
 
 impl CtcHead {
@@ -155,20 +163,29 @@ impl CtcHead {
             .max()
             .unwrap_or(config.encoder_dim[0]) as i32;
         Ok(Self {
-            linear: nn::LinearBuilder::new(encoder_dim, config.vocab_size as i32).build()?,
+            linear: MaybeQuantized::new(
+                nn::LinearBuilder::new(encoder_dim, config.vocab_size as i32).build()?,
+            ),
         })
     }
 
     pub fn forward(&self, x: &Array) -> Result<Array, Exception> {
         nn::log_softmax(self.linear.forward(x)?, -1)
     }
+
+    pub fn quantize_linears(&mut self, max_group_size: i32, bits: i32) -> Result<(), Exception> {
+        quantize_linear_adaptive(&mut self.linear, max_group_size, bits)?;
+        Ok(())
+    }
 }
 
-#[derive(Debug, Clone, ModuleParameters)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct ZipaModel {
     #[param]
+    #[quantizable]
     pub encoder_embed: EncoderEmbed,
     #[param]
+    #[quantizable]
     pub ctc_head: CtcHead,
 }
 
@@ -188,6 +205,57 @@ impl ZipaModel {
     pub fn forward_frontend(&self, features: &Array) -> Result<Array, Exception> {
         self.encoder_embed.forward(features)
     }
+
+    pub fn quantize_linears(&mut self, max_group_size: i32, bits: i32) -> Result<(), Exception> {
+        self.encoder_embed.quantize_linears(max_group_size, bits)?;
+        self.ctc_head.quantize_linears(max_group_size, bits)?;
+        Ok(())
+    }
+}
+
+pub(crate) fn adaptive_group_size(input_dims: i32, max_group_size: i32) -> Option<i32> {
+    if input_dims <= 0 || max_group_size <= 0 {
+        return None;
+    }
+    for group_size in [128, 64, 32] {
+        if group_size <= max_group_size && group_size <= input_dims && input_dims % group_size == 0
+        {
+            return Some(group_size);
+        }
+    }
+    None
+}
+
+pub(crate) fn quantize_linear_adaptive(
+    linear: &mut MaybeQuantized<nn::Linear>,
+    max_group_size: i32,
+    bits: i32,
+) -> Result<Option<i32>, Exception> {
+    let input_dims = match linear {
+        MaybeQuantized::Original(linear) => linear.shape().1,
+        MaybeQuantized::Quantized(linear) => return Ok(Some(linear.group_size)),
+    };
+    let Some(group_size) = adaptive_group_size(input_dims, max_group_size) else {
+        return Ok(None);
+    };
+    let quantized = std::mem::replace(
+        linear,
+        MaybeQuantized::new(nn::LinearBuilder::new(1, 1).build()?),
+    )
+    .quantize_with(|linear| QuantizedLinear::try_from_linear(linear, group_size, bits))?;
+    *linear = quantized;
+    Ok(Some(group_size))
+}
+
+#[cfg(test)]
+fn linear_weight_shape(linear: &MaybeQuantized<nn::Linear>) -> Vec<i32> {
+    match linear {
+        MaybeQuantized::Original(linear) => linear.weight.shape().to_vec(),
+        MaybeQuantized::Quantized(linear) => {
+            let shape = linear.inner.weight.shape();
+            vec![shape[0], shape[1] * (32 / linear.bits)]
+        }
+    }
 }
 
 pub(crate) fn swoosh_l(x: &Array) -> Result<Array, Exception> {
@@ -206,7 +274,7 @@ pub(crate) fn swoosh_r(x: &Array) -> Result<Array, Exception> {
 
 #[cfg(test)]
 mod tests {
-    use super::{EncoderEmbed, ZipaModel};
+    use super::{linear_weight_shape, EncoderEmbed, ZipaModel};
     use crate::config::{ZipaModelConfig, ZipaVariant};
     use crate::load::load_frontend_and_ctc_weights;
     use mlx_rs::array;
@@ -238,8 +306,8 @@ mod tests {
             model.encoder_embed.convnext.pointwise_conv2.weight.shape(),
             vec![128, 1, 1, 384]
         );
-        assert_eq!(model.encoder_embed.out.weight.shape(), vec![192, 2432]);
-        assert_eq!(model.ctc_head.linear.weight.shape(), vec![127, 512]);
+        assert_eq!(linear_weight_shape(&model.encoder_embed.out), vec![192, 2432]);
+        assert_eq!(linear_weight_shape(&model.ctc_head.linear), vec![127, 512]);
     }
 
     #[test]
