@@ -1,7 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use bee_qwen3_asr::generate::TOP_K;
+use bee_transcribe::text_buffer::TokenEntry;
 use bee_transcribe::{EngineConfig, SessionOptions, Update};
+use tokenizers::Tokenizer;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> anyhow::Result<()> {
@@ -10,14 +13,14 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let args: Vec<String> = std::env::args().collect();
-    let use_v2 = args.iter().any(|a| a == "--v2");
+    let show_alts = args.iter().any(|a| a == "--alternatives" || a == "--alts");
     let positional: Vec<&str> = args[1..]
         .iter()
         .filter(|a| !a.starts_with("--"))
         .map(|s| s.as_str())
         .collect();
     if positional.is_empty() {
-        eprintln!("Usage: transcribe [--v2] <audio.wav>");
+        eprintln!("Usage: transcribe [--alternatives] <audio.wav>");
         std::process::exit(1);
     }
     let audio_path = positional[0];
@@ -93,24 +96,10 @@ fn main() -> anyhow::Result<()> {
     let chunk_samples = (options.chunk_duration * 16000.0) as usize;
 
     println!(
-        "\n--- Streaming{} (chunk={:.0}ms) ---\n",
-        if use_v2 { " [v2]" } else { "" },
+        "\n--- Streaming (chunk={:.0}ms) ---\n",
         chunk_samples as f64 / 16.0
     );
 
-    if use_v2 {
-        run_v2(&engine, options, &samples, chunk_samples)
-    } else {
-        run_v1(&engine, options, &samples, chunk_samples)
-    }
-}
-
-fn run_v1(
-    engine: &bee_transcribe::Engine,
-    options: SessionOptions,
-    samples: &[f32],
-    chunk_samples: usize,
-) -> anyhow::Result<()> {
     let mut session = engine.session(options)?;
 
     let t_total = Instant::now();
@@ -136,50 +125,8 @@ fn run_v1(
                 } else {
                     println!("  chunk {chunk_idx}: {ms:.0}ms (unchanged)");
                 }
-            }
-            None => {
-                println!("  chunk {chunk_idx}: {ms:.0}ms (silence/buffering)");
-            }
-        }
-    }
-
-    let t0 = Instant::now();
-    let result = session.finish()?;
-    let final_update = result.update;
-    print_final(&final_update, t0, t_total);
-    Ok(())
-}
-
-fn run_v2(
-    engine: &bee_transcribe::Engine,
-    options: SessionOptions,
-    samples: &[f32],
-    chunk_samples: usize,
-) -> anyhow::Result<()> {
-    let mut session = engine.session_v2(options)?;
-
-    let t_total = Instant::now();
-    let mut chunk_idx = 0;
-    let mut offset = 0;
-    let mut last_text = String::new();
-
-    while offset < samples.len() {
-        let end = (offset + chunk_samples).min(samples.len());
-        let chunk = &samples[offset..end];
-        offset = end;
-        chunk_idx += 1;
-
-        let t0 = Instant::now();
-        let result = session.feed(chunk)?;
-        let ms = t0.elapsed().as_millis();
-
-        match result {
-            Some(update) => {
-                if update.text != last_text {
-                    print_update(chunk_idx, ms, &update);
-                    last_text = update.text.clone();
-                } else {
-                    println!("  chunk {chunk_idx}: {ms:.0}ms (unchanged)");
+                if show_alts {
+                    print_alternatives(session.tokenizer(), session.pending_entries());
                 }
             }
             None => {
@@ -190,26 +137,108 @@ fn run_v2(
 
     let t0 = Instant::now();
     let result = session.finish()?;
-    print_final(&result.update, t0, t_total);
-    Ok(())
-}
-
-fn print_final(update: &Update, t0: Instant, t_total: Instant) {
     let finish_ms = t0.elapsed().as_millis();
     println!(
         "\n--- Final ({finish_ms:.0}ms, total {:.0}ms) ---",
         t_total.elapsed().as_millis()
     );
-    println!("  text: {:?}", update.text);
+    println!("  text: {:?}", result.update.text);
 
-    if !update.alignments.is_empty() {
+    if !result.update.alignments.is_empty() {
         println!("\nAlignments:");
-        for w in &update.alignments {
+        for w in &result.update.alignments {
             println!("  [{:.3}s - {:.3}s] {}", w.start, w.end, w.word);
         }
     }
+
+    Ok(())
 }
 
 fn print_update(chunk: usize, ms: u128, update: &Update) {
     println!("  chunk {chunk}: {ms:.0}ms | {}", update.text);
+}
+
+/// Print per-word alternatives with confidence info.
+///
+/// Groups tokens by word boundaries (WordStart markers), decodes each
+/// alternative token, and shows concentration/margin for the chosen token.
+fn print_alternatives(tokenizer: &Tokenizer, entries: &[TokenEntry]) {
+    if entries.is_empty() {
+        return;
+    }
+
+    // Group entries into words
+    let mut words: Vec<&[TokenEntry]> = Vec::new();
+    let mut word_start = None;
+    for (i, entry) in entries.iter().enumerate() {
+        if entry.word.is_some() {
+            if let Some(start) = word_start {
+                words.push(&entries[start..i]);
+            }
+            word_start = Some(i);
+        }
+    }
+    if let Some(start) = word_start {
+        words.push(&entries[start..]);
+    }
+
+    println!("    ┌─ alternatives ─────────────────────────────────");
+    for word_entries in &words {
+        // Decode the chosen word
+        let word_ids: Vec<u32> = word_entries.iter().map(|e| e.token.id).collect();
+        let word_text = tokenizer.decode(&word_ids, true).unwrap_or_default();
+
+        // Average confidence across tokens in this word
+        let n = word_entries.len() as f32;
+        let avg_conc: f32 = word_entries
+            .iter()
+            .map(|e| e.token.concentration)
+            .sum::<f32>()
+            / n;
+        let avg_margin: f32 = word_entries.iter().map(|e| e.token.margin).sum::<f32>() / n;
+
+        // Collect alternatives for each token position
+        let mut alt_columns: Vec<Vec<String>> = vec![Vec::new(); TOP_K];
+        for entry in *word_entries {
+            for k in 0..TOP_K {
+                let alt_text = tokenizer
+                    .decode(&[entry.token.top_ids[k]], true)
+                    .unwrap_or_default();
+                alt_columns[k].push(alt_text);
+            }
+        }
+
+        // Format: chosen word, then alternatives
+        let alts: Vec<String> = (1..TOP_K)
+            .map(|k| {
+                let alt_word: String = alt_columns[k].join("");
+                let alt_word = alt_word.trim();
+                if alt_word.is_empty() || alt_word == word_text.trim() {
+                    return String::new();
+                }
+                // Show the logit delta from top-1
+                let avg_delta: f32 = word_entries
+                    .iter()
+                    .map(|e| e.token.top_logits[0] - e.token.top_logits[k])
+                    .sum::<f32>()
+                    / n;
+                format!("{alt_word}(-{avg_delta:.1})")
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let alts_str = if alts.is_empty() {
+            String::new()
+        } else {
+            format!("  alts: {}", alts.join(", "))
+        };
+
+        println!(
+            "    │ {:>20}  conc={:5.1} margin={:5.1}{alts_str}",
+            word_text.trim(),
+            avg_conc,
+            avg_margin,
+        );
+    }
+    println!("    └──────────────────────────────────────────────");
 }

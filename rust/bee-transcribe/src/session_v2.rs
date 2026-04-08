@@ -88,6 +88,16 @@ impl<'a> SessionV2<'a> {
         }
     }
 
+    /// Access the current pending token entries (for inspecting alternatives).
+    pub fn pending_entries(&self) -> &[TokenEntry] {
+        self.pending.entries()
+    }
+
+    /// Access the tokenizer (for decoding token IDs to text).
+    pub fn tokenizer(&self) -> &Tokenizer {
+        self.tokenizer
+    }
+
     pub fn feed(&mut self, samples: &[f32]) -> Result<Option<Update>, Exception> {
         self.incoming.extend_from_slice(samples);
         tracing::trace!(
@@ -407,10 +417,10 @@ impl<'a> SessionV2<'a> {
         // This prevents uncertain tokens from flickering in the UI.
         let pending_entries = self.pending.entries();
         if !pending_entries.is_empty() {
-            const CONFIDENCE_GATE: f32 = -1.0; // logprob threshold (~37% probability)
+            const CONFIDENCE_GATE: f32 = 3.0; // concentration threshold (top1 - mean(rest))
             let confident_count = pending_entries
                 .iter()
-                .rposition(|e| e.token.logprob >= CONFIDENCE_GATE)
+                .rposition(|e| e.token.concentration >= CONFIDENCE_GATE)
                 .map(|i| i + 1)
                 .unwrap_or(0);
             if confident_count > 0 {

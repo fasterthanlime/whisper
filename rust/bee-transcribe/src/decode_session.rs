@@ -4,7 +4,7 @@
 //! The start_time tracks where this sub-session begins in the timeline.
 
 use bee_qwen3_asr::encoder::EncoderCache;
-use bee_qwen3_asr::generate::{self, TokenLogprob};
+use bee_qwen3_asr::generate::{self, TOP_K, TokenConfidence};
 use bee_qwen3_asr::mel::MelExtractor;
 use bee_qwen3_asr::model::Qwen3ASRModel;
 use mlx_rs::Array;
@@ -370,20 +370,22 @@ impl DecodeSession {
 
     /// Merge prefix tokens + newly generated tokens into a single Vec<AsrToken>.
     ///
-    /// The prefix already carries correct logprobs from the previous step.
-    /// Generated tokens get fresh logprobs from this step.
+    /// The prefix already carries correct confidence from the previous step.
+    /// Generated tokens get fresh confidence from this step.
     fn merge_tokens(
         prefix: Option<Vec<AsrToken>>,
         generated: &[i32],
-        logprobs: &[TokenLogprob],
+        logprobs: &[TokenConfidence],
     ) -> Vec<AsrToken> {
         let mut merged: Vec<AsrToken> = prefix.unwrap_or_default();
         for (i, &token_id) in generated.iter().enumerate() {
             let lp = logprobs.get(i);
             merged.push(AsrToken {
                 id: token_id as TokenId,
-                logprob: lp.map_or(0.0, |l| l.logprob),
+                concentration: lp.map_or(0.0, |l| l.concentration),
                 margin: lp.map_or(0.0, |l| l.margin),
+                top_ids: lp.map_or([0; TOP_K], |l| l.top_ids.map(|id| id as TokenId)),
+                top_logits: lp.map_or([0.0; TOP_K], |l| l.top_logits),
             });
         }
         merged

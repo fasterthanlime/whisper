@@ -1,28 +1,41 @@
 //! Autoregressive text generation for Qwen3-ASR.
 
+use mlx_rs::Array;
 use mlx_rs::error::Exception;
-use mlx_rs::nn;
 use mlx_rs::ops;
 use mlx_rs::ops::indexing::{self, IndexOp};
-use mlx_rs::Array;
 
 use crate::decoder::KVCache;
-use crate::model::{Qwen3ASRModel, EOS_TOKEN_IDS};
 use crate::model::{AUDIO_END_TOKEN_ID, AUDIO_PAD_TOKEN_ID, AUDIO_START_TOKEN_ID};
+use crate::model::{EOS_TOKEN_IDS, Qwen3ASRModel};
 
 /// TokenID type used by qwen3-asr generation
 pub type TokenId = i32;
 
+/// Number of top-k alternatives stored per token.
+pub const TOP_K: usize = 4;
+
 /// Per-token confidence information extracted during decoding.
+///
+/// Stores the top-k token alternatives and their raw logits.
+/// Derived metrics (margin, concentration) are computed from these.
 #[derive(Debug, Clone, Copy)]
-pub struct TokenLogprob {
-    /// The chosen token ID.
+pub struct TokenConfidence {
+    /// The chosen (top-1) token ID.
     pub token_id: TokenId,
 
-    /// Log-probability of the chosen token.
-    pub logprob: f32,
+    /// Top-k token IDs, sorted by descending logit.
+    pub top_ids: [TokenId; TOP_K],
 
-    /// Gap between the top-1 and top-2 log-probabilities (always >= 0).
+    /// Top-k raw logits (unnormalized), sorted descending.
+    pub top_logits: [f32; TOP_K],
+
+    /// Concentration: how far the winner is above the pack.
+    /// `top1_logit - mean(top2..topk_logits)`. Higher = more confident.
+    pub concentration: f32,
+
+    /// Margin: difference between top-1 and top-2 logits.
+    /// Higher = more decisive choice. Useful for gating uncertain tokens.
     pub margin: f32,
 }
 
@@ -162,8 +175,8 @@ pub fn build_followup_prompt(
 /// Prefill a prompt (initial or followup) into an existing cache, then
 /// autoregressively decode up to max_new_tokens.
 ///
-/// Returns generated token IDs, per-token logprob info, and the updated
-/// next_position. Position tracking: the cache contains exactly the prompt
+/// Returns generated token IDs, per-token confidence (top-k info), and the
+/// updated next_position. Position tracking: the cache contains exactly the prompt
 /// tokens plus each non-EOS generated token that was stepped through. EOS
 /// tokens are NOT added to the cache (matching the Python reference).
 pub fn prefill_and_decode(
@@ -173,7 +186,7 @@ pub fn prefill_and_decode(
     cache: &mut Option<KVCache>,
     start_position: usize,
     max_new_tokens: usize,
-) -> Result<(Vec<TokenId>, Vec<TokenLogprob>, usize), Exception> {
+) -> Result<(Vec<TokenId>, Vec<TokenConfidence>, usize), Exception> {
     let seq_len = prompt_tokens.len();
     let input_ids = Array::from_slice(prompt_tokens, &[1, seq_len as i32]);
 
@@ -191,18 +204,15 @@ pub fn prefill_and_decode(
     // Position after prefill: prompt tokens are in the cache
     let mut position = start_position + seq_len;
 
-    let simple_token = argmax(&logits)?;
-    let tlp = argmax_with_logprob(&logits)?;
+    let tlp = topk_confidence(&logits)?;
     let mut token = tlp.token_id;
-    if simple_token != token {
-        tracing::error!("TOKEN MISMATCH: argmax={simple_token} vs argmax_with_logprob={token}");
-    }
     let mut generated = Vec::new();
-    let mut logprobs = Vec::new();
+    let mut confidences = Vec::new();
 
     tracing::debug!(
-        "prefill_and_decode: first_token={token} (simple={simple_token}) logprob={:.3} is_eos={} prompt_len={seq_len} max_new={max_new_tokens}",
-        tlp.logprob,
+        "prefill_and_decode: first_token={token} concentration={:.3} margin={:.3} is_eos={} prompt_len={seq_len} max_new={max_new_tokens}",
+        tlp.concentration,
+        tlp.margin,
         is_eos(token),
     );
 
@@ -210,13 +220,13 @@ pub fn prefill_and_decode(
         // EOS on first token — nothing added to cache beyond prompt
         if !is_eos(token) {
             generated.push(token);
-            logprobs.push(tlp);
+            confidences.push(tlp);
         }
-        return Ok((generated, logprobs, position));
+        return Ok((generated, confidences, position));
     }
 
     generated.push(token);
-    logprobs.push(tlp);
+    confidences.push(tlp);
 
     // Autoregressive decode — each step adds the token to the cache
     for _ in 1..max_new_tokens {
@@ -229,7 +239,7 @@ pub fn prefill_and_decode(
         let logits = model.step(&next_ids, &pos_arr, cache)?;
         position += 1; // token was fed into cache
 
-        let tlp = argmax_with_logprob(&logits)?;
+        let tlp = topk_confidence(&logits)?;
         token = tlp.token_id;
 
         if is_eos(token) {
@@ -237,7 +247,7 @@ pub fn prefill_and_decode(
         }
 
         generated.push(token);
-        logprobs.push(tlp);
+        confidences.push(tlp);
 
         if detect_repetition(&generated) {
             break;
@@ -248,7 +258,7 @@ pub fn prefill_and_decode(
         }
     }
 
-    Ok((generated, logprobs, position))
+    Ok((generated, confidences, position))
 }
 
 fn argmax(logits: &Array) -> Result<i32, Exception> {
@@ -257,27 +267,54 @@ fn argmax(logits: &Array) -> Result<i32, Exception> {
     Ok(idx.item::<i32>())
 }
 
-/// Extract the argmax token along with its logprob and top1-top2 margin.
-fn argmax_with_logprob(logits: &Array) -> Result<TokenLogprob, Exception> {
+/// Extract top-k tokens and their raw logits efficiently.
+///
+/// Uses argpartition (O(n) partial sort) on negated logits to find
+/// top-k indices, then gathers their values. Single pass over the vocab.
+///
+/// Requires TOP_K >= 2 (margin needs at least two candidates).
+/// Derives concentration (top1 - mean of rest) as a confidence signal.
+fn topk_confidence(logits: &Array) -> Result<TokenConfidence, Exception> {
+    const { assert!(TOP_K >= 2, "TOP_K must be >= 2 for margin computation") };
     let flat = logits.reshape(&[-1])?;
-    let idx = indexing::argmax(&flat, None)?;
-    let token_id = idx.item::<i32>();
 
-    // Compute log-softmax, then index the chosen token's logprob directly
-    let log_probs = nn::log_softmax(&flat, -1)?;
-    log_probs.eval()?;
-    let top1_lp = log_probs.index(token_id).item::<f32>();
+    // argpartition on negated logits: first k elements are the k largest
+    let neg = ops::negative(&flat)?;
+    let partitioned_indices = ops::argpartition(&neg, TOP_K as i32 - 1)?;
 
-    // For margin: get top-2 values (unsorted!), then sort descending
-    let top2 = indexing::topk(&log_probs, 2)?;
-    top2.eval()?;
-    let a = top2.index(0).item::<f32>();
-    let b = top2.index(1).item::<f32>();
-    let margin = if a >= b { a - b } else { b - a };
+    // Take first TOP_K indices, gather their logit values, then sort descending
+    let topk_indices = partitioned_indices.index(..TOP_K as i32);
+    let topk_values = flat.index(&topk_indices);
 
-    Ok(TokenLogprob {
-        token_id,
-        logprob: top1_lp,
+    // Sort these k values descending (sort ascending on negated)
+    let neg_topk = ops::negative(&topk_values)?;
+    let sort_order = ops::argsort(&neg_topk)?;
+    let sorted_indices = topk_indices.index(&sort_order);
+    let sorted_values = topk_values.index(&sort_order);
+
+    sorted_indices.eval()?;
+    sorted_values.eval()?;
+
+    let mut top_ids = [0i32; TOP_K];
+    let mut top_logits = [0.0f32; TOP_K];
+    for i in 0..TOP_K {
+        top_ids[i] = sorted_indices.index(i as i32).item::<i32>();
+        top_logits[i] = sorted_values.index(i as i32).item::<f32>();
+    }
+
+    // Concentration: top1 - mean(top2..topk)
+    let rest_sum: f32 = top_logits[1..].iter().sum();
+    let rest_mean = rest_sum / (TOP_K - 1) as f32;
+    let concentration = top_logits[0] - rest_mean;
+
+    // Margin: top1 - top2
+    let margin = top_logits[0] - top_logits[1];
+
+    Ok(TokenConfidence {
+        token_id: top_ids[0],
+        top_ids,
+        top_logits,
+        concentration,
         margin,
     })
 }

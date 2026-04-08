@@ -4,6 +4,8 @@
 //! splitting and merging — no index math needed. Alignment is a pure
 //! function: takes a buffer, returns a buffer with alignment filled in.
 
+use bee_qwen3_asr::generate::TOP_K;
+
 use crate::audio_buffer::{AudioBuffer, Seconds, TimeRange};
 
 // ── Token types ────────────────────────────────────────────────────────
@@ -15,8 +17,12 @@ pub type TokenId = u32;
 #[derive(Debug, Clone, Copy)]
 pub struct AsrToken {
     pub id: TokenId,
-    pub logprob: f32,
+    pub concentration: f32,
     pub margin: f32,
+    /// Top-k alternative token IDs (sorted by descending logit).
+    pub top_ids: [TokenId; TOP_K],
+    /// Top-k raw logits (sorted descending).
+    pub top_logits: [f32; TOP_K],
 }
 
 /// A count of tokens.
@@ -197,10 +203,10 @@ pub fn align(
 pub fn confidence(entries: &[TokenEntry]) -> bee_types::Confidence {
     let n = entries.len() as f32;
     bee_types::Confidence {
-        mean_lp: entries.iter().map(|e| e.token.logprob).sum::<f32>() / n,
+        mean_lp: entries.iter().map(|e| e.token.concentration).sum::<f32>() / n,
         min_lp: entries
             .iter()
-            .map(|e| e.token.logprob)
+            .map(|e| e.token.concentration)
             .fold(f32::INFINITY, f32::min),
         mean_m: entries.iter().map(|e| e.token.margin).sum::<f32>() / n,
         min_m: entries
@@ -249,8 +255,10 @@ mod tests {
         TokenEntry {
             token: AsrToken {
                 id,
-                logprob: -0.5,
+                concentration: -0.5,
                 margin: 0.3,
+                top_ids: [id, 0, 0, 0],
+                top_logits: [0.0; TOP_K],
             },
             word: if word {
                 Some(WordStart { alignment: None })

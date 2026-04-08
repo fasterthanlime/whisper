@@ -260,7 +260,7 @@ impl BeeService {
         );
         let session = engine
             .inner
-            .session_v2(opts)
+            .session(opts)
             .map_err(|e| BeeError::TranscriptionError {
                 message: format!("{e}"),
             })?;

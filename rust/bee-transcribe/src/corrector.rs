@@ -12,7 +12,6 @@ use bee_types::{IdentifierFlags, SpanContext};
 
 use bee_types::AlignedWord;
 
-use crate::aligner::AlignedChunk;
 use crate::correct::{CorrectionEngine, PendingEdit};
 
 /// Runs phonetic correction on ASR-committed chunks.
@@ -47,16 +46,6 @@ impl Corrector {
             pending: HashMap::new(),
             edit_counter: 0,
         }
-    }
-
-    /// Run correction pipeline on an aligned chunk (v1 — no neighbor context).
-    pub fn process_chunk(
-        &mut self,
-        engine: &mut CorrectionEngine,
-        chunk: &AlignedChunk,
-        app_id: Option<&str>,
-    ) {
-        self.process_chunk_with_context(engine, &chunk.text, &chunk.words, &[], &[], app_id);
     }
 
     /// Run correction pipeline on a chunk with explicit neighbor context.
