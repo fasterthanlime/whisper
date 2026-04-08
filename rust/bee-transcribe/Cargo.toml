@@ -11,7 +11,11 @@ bee-vad = { path = "../bee-vad" }
 mlx-rs.workspace = true
 tokenizers.workspace = true
 bee-types = { path = "../bee-types" }
+bee-correct = { path = "../bee-correct" }
+bee-phonetic = { path = "../bee-phonetic" }
+bee-rpc = { path = "../bee-rpc" }
 facet = "0.44.3"
+facet-json = "0.44"
 hound = "3"
 log = "0.4"
 tracing = "0.1"

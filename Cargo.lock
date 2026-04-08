@@ -238,11 +238,15 @@ name = "bee-transcribe"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bee-correct",
+ "bee-phonetic",
  "bee-qwen3-asr",
+ "bee-rpc",
  "bee-types",
  "bee-vad",
  "env_logger",
  "facet",
+ "facet-json",
  "hound",
  "log",
  "mlx-rs",

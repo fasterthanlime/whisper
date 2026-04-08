@@ -184,7 +184,7 @@ fn transcribe_file(
 
     let options = SessionOptions::default();
     let chunk_samples = (options.chunk_duration * 16000.0) as usize;
-    let mut session = engine.session(options)?;
+    let mut session = engine.session(options, None)?;
 
     let mut offset = 0;
     while offset < samples.len() {
@@ -193,7 +193,8 @@ fn transcribe_file(
         offset = end;
     }
 
-    let update = session.finish().map_err(|e| anyhow::anyhow!("transcription: {e}"))?;
+    let result = session.finish().map_err(|e| anyhow::anyhow!("transcription: {e}"))?;
+    let update = result.update;
 
     let words = update
         .alignments

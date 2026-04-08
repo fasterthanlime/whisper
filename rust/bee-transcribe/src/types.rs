@@ -59,6 +59,9 @@ pub struct SessionOptions {
 
     /// Language of the audio.
     pub language: Language,
+
+    /// App bundle ID for correction context features.
+    pub app_id: Option<String>,
 }
 
 impl Default for SessionOptions {
@@ -71,6 +74,7 @@ impl Default for SessionOptions {
             max_tokens_streaming: 32,
             max_tokens_final: 512,
             language: Language::default(),
+            app_id: None,
         }
     }
 }
@@ -78,13 +82,16 @@ impl Default for SessionOptions {
 /// Result of a `feed()` or `finish()` call.
 #[derive(Debug, Clone, Facet)]
 pub struct Update {
-    /// Full transcription so far (committed + in-progress).
+    /// Full transcription so far (corrected where available + ASR for the rest + in-progress tail).
     pub text: String,
 
-    /// Byte offset into `text` where the committed (stable) portion ends.
-    /// `text[..committed_len]` is final and won't change.
-    /// `text[committed_len..]` is the in-progress tail that may be revised.
-    pub committed_len: usize,
+    /// Byte offset: `text[..asr_committed_len]` is ASR-committed
+    /// (won't change via rollback, but may still be corrected).
+    pub asr_committed_len: usize,
+
+    /// Byte offset: `text[..correction_committed_len]` has been through the
+    /// correction pipeline and is truly final.
+    pub correction_committed_len: usize,
 
     /// Word-level timestamps for committed words.
     pub alignments: Vec<AlignedWord>,

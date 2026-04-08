@@ -4,28 +4,22 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use bee_phonetic::{
-    enumerate_transcript_spans_with, feature_tokens_for_ipa, query_index, score_shortlist,
-    RetrievalQuery,
-};
 use bee_rpc::{
-    BeeDispatcher, BeeError, CorrectionEdit, CorrectionOutput, EditResolution, EngineStats,
+    BeeDispatcher, BeeError, CorrectionOutput, EditResolution, EngineStats,
     FeedResult, RepoDownload,
 };
+use bee_transcribe::correct::{CorrectionConfig, CorrectionEngine, load_correction_engine};
+use bee_transcribe::corrector::Corrector;
 use bee_transcribe::{Language, SessionOptions};
 
-use bee_types::SpanContext;
 use dashmap::DashMap;
 use tracing::info;
 use vox::acceptor_on;
 use vox_ffi::declare_link_endpoint;
 
-mod correct;
 mod engine;
 mod session;
 mod stats;
-
-use correct::{load_correction_engine, CorrectionEngine};
 use engine::{load_engine, AsrEngine};
 use session::SessionInner;
 
@@ -143,7 +137,7 @@ struct BeeServiceInner {
     engine: OnceLock<AsrEngine>,
     sessions: SessionMap,
     next_session_id: AtomicU64,
-    correction: tokio::sync::Mutex<Option<CorrectionEngine>>,
+    correction: tokio::sync::Mutex<Option<(CorrectionEngine, Corrector)>>,
 }
 
 #[derive(Clone)]
@@ -220,7 +214,7 @@ impl BeeService {
             "make_session: chunk={:.2}s vad_thresh={:.2} rollback={} commit={}",
             opts.chunk_duration, opts.vad_threshold, opts.rollback_tokens, opts.commit_token_count,
         );
-        let session = engine.inner.session(opts).map_err(|e| BeeError::TranscriptionError {
+        let session = engine.inner.session(opts, None).map_err(|e| BeeError::TranscriptionError {
             message: format!("{e}"),
         })?;
         Ok(session)
@@ -296,7 +290,7 @@ impl bee_rpc::Bee for BeeService {
             return Ok(None);
         };
 
-        let committed_utf16_len = update.text[..update.committed_len].encode_utf16().count() as u32;
+        let committed_utf16_len = update.text[..update.asr_committed_len].encode_utf16().count() as u32;
         let text_preview: String = update.text.chars().take(80).collect();
         info!("feed: {session_id} {elapsed:.1?} committed_utf16={committed_utf16_len} text={text_preview:?}");
 
@@ -321,7 +315,7 @@ impl bee_rpc::Bee for BeeService {
                 })?;
 
         let t0 = std::time::Instant::now();
-        let result = tokio::task::spawn_blocking(move || {
+        let finish_result = tokio::task::spawn_blocking(move || {
             let mut guard = session_arc.blocking_lock();
             let session = guard
                 .session
@@ -333,13 +327,19 @@ impl bee_rpc::Bee for BeeService {
         .expect("spawn_blocking panicked");
         let elapsed = t0.elapsed();
 
-        let update = result.map_err(|e| {
+        let finish = finish_result.map_err(|e| {
             tracing::error!("finish_session: {session_id} error: {e} ({elapsed:.1?})");
             BeeError::TranscriptionError {
                 message: e.to_string(),
             }
         })?;
 
+        // Stash correction state for teach/save
+        if let Some((engine, corrector)) = finish.correction {
+            *self.inner.correction.lock().await = Some((engine, corrector));
+        }
+
+        let update = finish.update;
         let text_preview: String = update.text.chars().take(80).collect();
         info!("finish_session: {session_id} {elapsed:.1?} → {text_preview:?}");
         let committed_utf16_len = update.text.encode_utf16().count() as u32;
@@ -394,7 +394,7 @@ impl bee_rpc::Bee for BeeService {
         .await
         .expect("spawn_blocking panicked")?;
 
-        Ok(result.text)
+        Ok(result.update.text)
     }
 
     async fn get_stats(&self) -> EngineStats {
@@ -429,253 +429,66 @@ impl bee_rpc::Bee for BeeService {
         } else {
             Some(PathBuf::from(events_path))
         };
-        let engine = load_correction_engine(
-            Path::new(&dataset_dir),
-            events,
+        let config = CorrectionConfig {
+            dataset_dir: Path::new(&dataset_dir),
+            events_path: events,
             gate_threshold,
             ranker_threshold,
-        )
-        .map_err(|e| {
+        };
+        let engine = load_correction_engine(&config).map_err(|e| {
             tracing::error!("correct_load: {e}");
             BeeError::CorrectionError { message: e }
         })?;
         info!("correct_load: success");
-        *self.inner.correction.lock().await = Some(engine);
+        // Store engine with a fresh corrector — will be moved into sessions
+        *self.inner.correction.lock().await = Some((engine, Corrector::new()));
         Ok(true)
     }
 
     async fn correct_process(
         &self,
-        text: String,
-        app_id: String,
-        words: Vec<bee_types::AlignedWord>,
+        _text: String,
+        _app_id: String,
+        _words: Vec<bee_types::AlignedWord>,
     ) -> CorrectionOutput {
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut guard = inner.correction.blocking_lock();
-            let Some(engine) = guard.as_mut() else {
-                tracing::warn!("correct_process: correction engine not loaded, passing through");
-                return CorrectionOutput {
-                    session_id: String::new(),
-                    best_text: text,
-                    edits: vec![],
-                };
-            };
-
-            let app_id_opt = if app_id.is_empty() {
-                None
-            } else {
-                Some(app_id)
-            };
-
-            // Log alignment data being fed in
-            for (i, w) in words.iter().enumerate() {
-                tracing::debug!(
-                    "correct_process: word[{i}]={:?} logprob=({:.3},{:.3}) margin=({:.3},{:.3})",
-                    w.word,
-                    w.confidence.mean_lp, w.confidence.min_lp,
-                    w.confidence.mean_m, w.confidence.min_m,
-                );
-            }
-
-            let spans =
-                enumerate_transcript_spans_with(&text, 3, Some(words.as_slice()), |span_text| {
-                    engine.g2p.ipa_tokens(span_text).ok().flatten()
-                });
-
-            tracing::info!(
-                "correct_process: text={:?} spans={}",
-                text.chars().take(60).collect::<String>(),
-                spans.len()
-            );
-
-            let session_id = format!(
-                "{:x}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-            );
-
-            // Phase 1: score all spans, collect candidates
-            struct ScoredEdit {
-                span: bee_types::TranscriptSpan,
-                candidates: Vec<(
-                    bee_phonetic::phonetic_verify::CandidateFeatureRow,
-                    bee_types::IdentifierFlags,
-                )>,
-                ctx: SpanContext,
-                edit: CorrectionEdit,
-                score: f64,
-            }
-
-            let mut candidates: Vec<ScoredEdit> = Vec::new();
-
-            for span in &spans {
-                tracing::debug!(
-                    "correct_process: span={:?} mean_logprob={:?} min_logprob={:?} mean_margin={:?} min_margin={:?}",
-                    span.text,
-                    span.mean_logprob,
-                    span.min_logprob,
-                    span.mean_margin,
-                    span.min_margin,
-                );
-                let query = RetrievalQuery {
-                    text: span.text.clone(),
-                    ipa_tokens: span.ipa_tokens.clone(),
-                    reduced_ipa_tokens: span.reduced_ipa_tokens.clone(),
-                    feature_tokens: feature_tokens_for_ipa(&span.ipa_tokens),
-                    token_count: (span.token_end - span.token_start) as u8,
-                };
-                let shortlist = query_index(&engine.index, &query, 50);
-                if shortlist.is_empty() {
-                    continue;
-                }
-                let scored = score_shortlist(span, &shortlist, &engine.index);
-                if scored.is_empty() {
-                    continue;
-                }
-
-                let candidates_with_flags: Vec<_> = scored
-                    .iter()
-                    .map(|c| {
-                        let flags = engine
-                            .index
-                            .aliases
-                            .iter()
-                            .find(|a| a.alias_id == c.alias_id)
-                            .map(|a| a.identifier_flags.clone())
-                            .unwrap_or_default();
-                        (c.clone(), flags)
-                    })
-                    .collect();
-
-                let ctx =
-                    bee_correct::judge::extract_span_context(&text, span.char_start, span.char_end);
-                let ctx = SpanContext {
-                    app_id: app_id_opt.clone(),
-                    ..ctx
-                };
-
-                let decision = engine.judge.score_span(span, &candidates_with_flags, &ctx);
-
-                tracing::debug!(
-                    "correct_process: span={:?} gate={:.3} chosen={} top_candidate={:?}",
-                    span.text,
-                    decision.gate_prob,
-                    decision.chosen.is_some(),
-                    scored.first().map(|c| &c.term),
-                );
-
-                if let Some(ref chosen) = decision.chosen {
-                    let score = decision.gate_prob as f64 * chosen.ranker_prob as f64;
-                    candidates.push(ScoredEdit {
-                        span: span.clone(),
-                        candidates: candidates_with_flags,
-                        ctx,
-                        edit: CorrectionEdit {
-                            edit_id: String::new(), // assigned after selection
-                            span_start: span.char_start as u32,
-                            span_end: span.char_end as u32,
-                            original: span.text.clone(),
-                            replacement: chosen.replacement_text.clone(),
-                            term: chosen.term.clone(),
-                            alias_id: chosen.alias_id as i32,
-                            ranker_prob: chosen.ranker_prob as f64,
-                            gate_prob: decision.gate_prob as f64,
-                        },
-                        score,
-                    });
-                }
-            }
-
-            // Phase 2: greedy non-overlapping selection, best score first
-            candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
-
-            let mut edits = Vec::new();
-            let mut session_pending = std::collections::HashMap::new();
-            let mut claimed: Vec<(usize, usize)> = Vec::new();
-
-            for mut cand in candidates {
-                let cs = cand.span.char_start;
-                let ce = cand.span.char_end;
-                if claimed.iter().any(|&(s, e)| cs < e && ce > s) {
-                    continue;
-                }
-                claimed.push((cs, ce));
-
-                let edit_id = format!("e{}", edits.len());
-                let alias_id = cand.edit.alias_id as u32;
-                cand.edit.edit_id = edit_id.clone();
-                edits.push(cand.edit);
-
-                session_pending.insert(
-                    edit_id,
-                    crate::correct::PendingEdit {
-                        span: cand.span,
-                        candidates: cand.candidates,
-                        ctx: cand.ctx,
-                        chosen_alias_id: Some(alias_id),
-                    },
-                );
-            }
-
-            // Sort edits by position for correct text composition
-            edits.sort_by_key(|e| e.span_start);
-
-            let mut best_text = text.clone();
-            let mut offset: i64 = 0;
-            for edit in &edits {
-                let start = edit.span_start as usize;
-                let end = edit.span_end as usize;
-                let adj_start = (start as i64 + offset) as usize;
-                let adj_end = (end as i64 + offset) as usize;
-                best_text.replace_range(adj_start..adj_end, &edit.replacement);
-                offset += edit.replacement.len() as i64 - (end - start) as i64;
-            }
-
-            if !session_pending.is_empty() {
-                engine.pending.insert(session_id.clone(), session_pending);
-            }
-
-            CorrectionOutput {
-                session_id,
-                best_text,
-                edits,
-            }
-        })
-        .await
-        .expect("spawn_blocking panicked")
+        // Corrections now run inline during feed/finish.
+        // Return the accumulated results from the corrector.
+        let guard = self.inner.correction.lock().await;
+        match guard.as_ref() {
+            Some((_engine, corrector)) => CorrectionOutput {
+                session_id: corrector.session_id().to_string(),
+                best_text: corrector.committed_text().to_string(),
+                edits: corrector.committed_edits().to_vec(),
+            },
+            None => CorrectionOutput {
+                session_id: String::new(),
+                best_text: _text,
+                edits: vec![],
+            },
+        }
     }
 
     async fn correct_teach(
         &self,
-        session_id: String,
+        _session_id: String,
         resolutions: Vec<EditResolution>,
     ) -> Result<bool, BeeError> {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
             let mut guard = inner.correction.blocking_lock();
-            let Some(engine) = guard.as_mut() else {
+            let Some((engine, corrector)) = guard.as_mut() else {
                 return Err(BeeError::CorrectionError {
                     message: "correction engine not loaded".into(),
                 });
             };
 
-            let session_edits =
-                engine
-                    .pending
-                    .remove(&session_id)
-                    .ok_or_else(|| BeeError::CorrectionError {
-                        message: format!("no pending edits for session {session_id}"),
-                    })?;
+            let pending_edits = corrector.take_pending();
 
             for res in &resolutions {
-                let Some(pending) = session_edits.get(&res.edit_id) else {
+                let Some(pending) = pending_edits.get(&res.edit_id) else {
                     tracing::warn!(
-                        "correct_teach: unknown edit_id {} in session {}",
+                        "correct_teach: unknown edit_id {}",
                         res.edit_id,
-                        session_id
                     );
                     continue;
                 };
@@ -686,9 +499,6 @@ impl bee_rpc::Bee for BeeService {
                     None
                 };
 
-                // teach_span needs &mut self for judge AND &mut self for sink,
-                // but CorrectionEngine is both. Split the borrow:
-                // collect the event manually instead.
                 let event = engine.judge.teach_span_event(
                     &pending.span,
                     &pending.candidates,
@@ -699,7 +509,6 @@ impl bee_rpc::Bee for BeeService {
             }
 
             tracing::info!(
-                session_id,
                 resolutions = resolutions.len(),
                 "correct_teach: applied"
             );
@@ -713,7 +522,7 @@ impl bee_rpc::Bee for BeeService {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
             let mut guard = inner.correction.blocking_lock();
-            let Some(engine) = guard.as_mut() else {
+            let Some((engine, _)) = guard.as_mut() else {
                 return Err(BeeError::CorrectionError {
                     message: "correction engine not loaded".into(),
                 });
@@ -724,7 +533,6 @@ impl bee_rpc::Bee for BeeService {
                 return Ok(true);
             };
 
-            // Append new events to file
             use std::io::Write;
             let file = std::fs::OpenOptions::new()
                 .create(true)

@@ -2,6 +2,8 @@
 
 mod aligner;
 mod asr;
+pub mod correct;
+pub mod corrector;
 mod generator;
 mod mlx_stuff;
 mod speech_gate;
@@ -28,8 +30,17 @@ use tokenizers::Tokenizer;
 
 pub use bee_types::AlignedWord;
 
+/// Result of `Session::finish()`. Contains the final update and optionally
+/// the correction engine + corrector state (for teach/save).
+pub struct FinishResult {
+    pub update: Update,
+    pub correction: Option<(CorrectionEngine, Corrector)>,
+}
+
 use crate::aligner::Aligner;
 use crate::asr::load_tokenizer;
+use crate::correct::CorrectionEngine;
+use crate::corrector::Corrector;
 use crate::generator::Generator;
 use crate::speech_gate::{FeedResult, SpeechGate};
 use crate::structured_output::StructuredAsrOutput;
@@ -93,17 +104,26 @@ impl Engine {
     }
 
     /// Create a new transcription session.
-    pub fn session(&self, options: SessionOptions) -> Result<Session<'_>, Exception> {
+    ///
+    /// Pass a `CorrectionEngine` to enable inline corrections during dictation.
+    pub fn session(
+        &self,
+        options: SessionOptions,
+        correction_engine: Option<CorrectionEngine>,
+    ) -> Result<Session<'_>, Exception> {
         let chunk_size_samples = (options.chunk_duration * 16000.0) as usize;
 
         let vad = SileroVad::from_tensors(&self.vad_tensors)
             .map_err(|e| Exception::custom(format!("vad creation failed: {e}")))?;
+
+        let correction = correction_engine.map(|ce| (ce, Corrector::new()));
 
         Ok(Session {
             engine: self,
             speech_gate: SpeechGate::new(vad, chunk_size_samples, options.vad_threshold),
             generator: Generator::new(options.rollback_tokens),
             aligner: Aligner::new(options.commit_token_count),
+            correction,
             options,
         })
     }
@@ -117,6 +137,7 @@ pub struct Session<'a> {
     speech_gate: SpeechGate,
     generator: Generator,
     aligner: Aligner,
+    correction: Option<(CorrectionEngine, Corrector)>,
     options: SessionOptions,
 }
 
@@ -168,6 +189,9 @@ impl<'a> Session<'a> {
             output.metadata_token_count(),
             self.options.rollback_tokens,
         )? {
+            // Layer 5: Corrector — run corrections on committed chunk
+            self.run_correction(&chunk);
+
             // Rotate upstream layers
             self.generator.rotate(chunk.rotate.raw_tokens_to_drop);
             self.speech_gate.rotate(chunk.rotate.audio_cut_samples);
@@ -176,9 +200,9 @@ impl<'a> Session<'a> {
 
         let update = self.make_update();
         tracing::debug!(
-            "feed: text={:?} committed_len={}",
+            "feed: text={:?} asr_committed={}",
             &update.text[..update.text.len().min(80)],
-            update.committed_len
+            update.asr_committed_len
         );
 
         Ok(Some(update))
@@ -186,7 +210,7 @@ impl<'a> Session<'a> {
 
     /// Finalize the session: flush remaining audio with a higher token
     /// budget and return the final transcription.
-    pub fn finish(mut self) -> Result<Update, Exception> {
+    pub fn finish(mut self) -> Result<FinishResult, Exception> {
         self.speech_gate.flush();
 
         if !self.speech_gate.audio().is_empty() {
@@ -208,56 +232,90 @@ impl<'a> Session<'a> {
         self.aligner
             .detect_language(&self.engine.tokenizer, output.metadata_ids);
 
-        self.aligner.finish_commit(
+        if let Some(chunk) = self.aligner.finish_commit(
             &self.engine.aligner,
             &self.engine.tokenizer,
             self.speech_gate.audio(),
             output.text_ids,
             output.text_logprobs,
-        )?;
+        )? {
+            self.run_correction(&chunk);
+        }
 
-        Ok(self.make_update())
+        let update = self.make_update();
+        let correction = self.correction.take();
+        Ok(FinishResult { update, correction })
+    }
+
+    /// Take ownership of the correction engine + corrector state.
+    /// Used by bee-ffi for teach/save after the session ends.
+    pub fn take_correction(&mut self) -> Option<(CorrectionEngine, Corrector)> {
+        self.correction.take()
     }
 
     // ── Internal ────────────────────────────────────────────────────
 
+    fn run_correction(&mut self, chunk: &crate::aligner::AlignedChunk) {
+        if let Some((ref mut engine, ref mut corrector)) = self.correction {
+            corrector.process_chunk(engine, chunk, self.options.app_id.as_deref());
+        }
+    }
+
     fn make_update(&self) -> Update {
-        // Decode all committed text tokens + pending text tokens together
-        // so the tokenizer preserves whitespace across the boundary.
         let output = StructuredAsrOutput::from_raw(
             self.generator.raw_token_ids(),
             self.generator.raw_token_logprobs(),
         );
 
-        let mut all_text_ids: Vec<TokenId> = self.aligner.committed_text_tokens().to_vec();
-        all_text_ids.extend_from_slice(output.text_ids);
+        // Build text from three parts:
+        // 1. Correction-committed text (corrected, truly final)
+        // 2. ASR-committed text not yet corrected (decoded from tokens)
+        // 3. In-progress tail (pending text tokens from generator)
+        //
+        // When no corrector is active, parts 1+2 collapse to just "ASR committed".
 
-        let text = self
-            .engine
-            .tokenizer
-            .decode(
-                &all_text_ids,
-                true,
-            )
-            .unwrap_or_default();
+        let correction_text = self
+            .correction
+            .as_ref()
+            .map(|(_, c)| c.committed_text())
+            .unwrap_or("");
 
-        let committed_len = if self.aligner.committed_text_tokens().is_empty() {
-            0
+        // Decode uncommitted text tokens (pending in generator, not yet ASR-committed)
+        let pending_text = if output.text_ids.is_empty() {
+            String::new()
         } else {
-            let committed_text = self
-                .engine
+            self.engine
                 .tokenizer
-                .decode(
-                    self.aligner.committed_text_tokens(),
-                    true,
-                )
-                .unwrap_or_default();
-            committed_text.len()
+                .decode(output.text_ids, true)
+                .unwrap_or_default()
         };
+
+        // ASR-committed but not yet correction-committed: decode from aligner tokens
+        // that haven't been consumed by the corrector yet.
+        let asr_only_text = if self.correction.is_some() {
+            // Corrector consumed all committed tokens via process_chunk,
+            // so there's no gap between correction-committed and pending.
+            String::new()
+        } else {
+            // No corrector — decode all ASR-committed tokens
+            if self.aligner.committed_text_tokens().is_empty() {
+                String::new()
+            } else {
+                self.engine
+                    .tokenizer
+                    .decode(self.aligner.committed_text_tokens(), true)
+                    .unwrap_or_default()
+            }
+        };
+
+        let text = format!("{correction_text}{asr_only_text}{pending_text}");
+        let correction_committed_len = correction_text.len();
+        let asr_committed_len = correction_text.len() + asr_only_text.len();
 
         Update {
             text,
-            committed_len,
+            asr_committed_len,
+            correction_committed_len,
             alignments: self.aligner.committed_alignments().to_vec(),
             detected_language: self.aligner.detected_language().to_string(),
         }

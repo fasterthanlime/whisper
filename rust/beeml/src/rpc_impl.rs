@@ -26,10 +26,11 @@ impl BeeMl for BeeMlService {
     async fn transcribe_wav(&self, wav_bytes: Vec<u8>) -> Result<TranscribeWavResult, String> {
         let samples = bee_transcribe::decode_wav(&wav_bytes).map_err(|e| e.to_string())?;
 
-        let mut session = self.inner.engine.session(SessionOptions::default()).map_err(|e| e.to_string())?;
+        let mut session = self.inner.engine.session(SessionOptions::default(), None).map_err(|e| e.to_string())?;
 
         session.feed(&samples).map_err(|e| e.to_string())?;
-        let update = session.finish().map_err(|e| e.to_string())?;
+        let result = session.finish().map_err(|e| e.to_string())?;
+        let update = result.update;
 
         Ok(TranscribeWavResult {
             transcript: update.text,

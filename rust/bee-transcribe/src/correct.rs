@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+//! Correction engine: judge, phonetic index, G2P.
+//! Moved from bee-ffi to live alongside the transcription pipeline.
+
 use std::path::{Path, PathBuf};
 
 use bee_correct::g2p::CachedEspeakG2p;
@@ -8,23 +10,21 @@ use bee_phonetic::{PhoneticIndex, SeedDataset};
 use bee_types::{CorrectionEvent, IdentifierFlags, SpanContext, TranscriptSpan};
 
 /// Data stashed from correct_process so correct_teach can call teach_span.
-pub(crate) struct PendingEdit {
+pub struct PendingEdit {
     pub span: TranscriptSpan,
     pub candidates: Vec<(CandidateFeatureRow, IdentifierFlags)>,
     pub ctx: SpanContext,
     pub chosen_alias_id: Option<u32>,
 }
 
-pub(crate) struct CorrectionEngine {
-    pub(crate) judge: TwoStageJudge,
-    pub(crate) index: PhoneticIndex,
-    pub(crate) g2p: CachedEspeakG2p,
-    /// session_id -> edit_id -> PendingEdit
-    pub(crate) pending: HashMap<String, HashMap<String, PendingEdit>>,
+pub struct CorrectionEngine {
+    pub judge: TwoStageJudge,
+    pub index: PhoneticIndex,
+    pub g2p: CachedEspeakG2p,
     /// Accumulated events since last save.
-    pub(crate) event_log: Vec<CorrectionEvent>,
+    pub event_log: Vec<CorrectionEvent>,
     /// Path to persist events (JSONL).
-    pub(crate) events_path: Option<PathBuf>,
+    pub events_path: Option<PathBuf>,
 }
 
 impl CorrectionEventSink for CorrectionEngine {
@@ -33,32 +33,36 @@ impl CorrectionEventSink for CorrectionEngine {
     }
 }
 
-pub(crate) fn load_correction_engine(
-    dataset_dir: &Path,
-    events_path: Option<PathBuf>,
-    gate_threshold: f32,
-    ranker_threshold: f32,
-) -> Result<CorrectionEngine, String> {
-    let dataset = SeedDataset::load(dataset_dir).map_err(|e| format!("load dataset: {e}"))?;
+/// Configuration for loading a correction engine.
+pub struct CorrectionConfig<'a> {
+    pub dataset_dir: &'a Path,
+    pub events_path: Option<PathBuf>,
+    pub gate_threshold: f32,
+    pub ranker_threshold: f32,
+}
+
+pub fn load_correction_engine(config: &CorrectionConfig<'_>) -> Result<CorrectionEngine, String> {
+    let dataset =
+        SeedDataset::load(config.dataset_dir).map_err(|e| format!("load dataset: {e}"))?;
     let index = dataset.phonetic_index();
 
-    let g2p = CachedEspeakG2p::english(dataset_dir).map_err(|e| format!("init g2p: {e}"))?;
+    let g2p =
+        CachedEspeakG2p::english(config.dataset_dir).map_err(|e| format!("init g2p: {e}"))?;
 
-    let gt = if gate_threshold > 0.0 {
-        gate_threshold
+    let gt = if config.gate_threshold > 0.0 {
+        config.gate_threshold
     } else {
         0.5
     };
-    let rt = if ranker_threshold > 0.0 {
-        ranker_threshold
+    let rt = if config.ranker_threshold > 0.0 {
+        config.ranker_threshold
     } else {
         0.2
     };
-    let mut judge = TwoStageJudge::new(gt, rt, Some(dataset_dir));
+    let mut judge = TwoStageJudge::new(gt, rt, Some(config.dataset_dir));
 
     // Replay persisted events to rebuild TermMemory
-    let resolved_path = events_path.clone();
-    if let Some(ref path) = resolved_path {
+    if let Some(ref path) = config.events_path {
         if path.exists() {
             match std::fs::read_to_string(path) {
                 Ok(contents) => {
@@ -88,8 +92,7 @@ pub(crate) fn load_correction_engine(
         judge,
         index,
         g2p,
-        pending: HashMap::new(),
         event_log: Vec::new(),
-        events_path: resolved_path,
+        events_path: config.events_path.clone(),
     })
 }

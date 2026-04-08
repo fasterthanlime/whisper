@@ -64,7 +64,7 @@ fn main() -> anyhow::Result<()> {
         options.max_tokens_final = v.parse().unwrap();
     }
     let chunk_samples = (options.chunk_duration * 16000.0) as usize;
-    let mut session = engine.session(options)?;
+    let mut session = engine.session(options, None)?;
 
     println!(
         "\n--- Streaming (chunk={:.0}ms) ---\n",
@@ -104,7 +104,8 @@ fn main() -> anyhow::Result<()> {
 
     // Finish
     let t0 = Instant::now();
-    let final_update = session.finish()?;
+    let result = session.finish()?;
+    let final_update = result.update;
     let finish_ms = t0.elapsed().as_millis();
 
     println!(
@@ -113,7 +114,7 @@ fn main() -> anyhow::Result<()> {
     );
     println!(
         "  committed: {:?}",
-        &final_update.text[..final_update.committed_len]
+        &final_update.text[..final_update.asr_committed_len]
     );
     println!("  full:      {:?}", final_update.text);
 
@@ -128,8 +129,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn print_update(chunk: usize, ms: u128, update: &Update) {
-    let committed = &update.text[..update.committed_len];
-    let pending = &update.text[update.committed_len..];
+    let committed = &update.text[..update.asr_committed_len];
+    let pending = &update.text[update.asr_committed_len..];
     if committed.is_empty() {
         println!("  chunk {chunk}: {ms:.0}ms | {pending}");
     } else {
