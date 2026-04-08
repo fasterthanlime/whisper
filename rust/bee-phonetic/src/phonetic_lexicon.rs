@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use facet::Facet;
 
+use crate::alignment::ComparisonToken;
 use crate::types::{ReviewedConfusionSurfaceRow, VocabRow};
 use crate::word_split::count_sentence_words;
 
@@ -334,68 +335,165 @@ pub fn reduce_ipa_tokens(tokens: &[String]) -> Vec<String> {
 }
 
 pub fn normalize_ipa_for_comparison(tokens: &[String]) -> Vec<String> {
-    let mut out = Vec::new();
+    normalize_ipa_for_comparison_with_spans(tokens)
+        .into_iter()
+        .map(|token| token.token)
+        .collect()
+}
+
+pub fn normalize_ipa_for_comparison_with_spans(tokens: &[String]) -> Vec<ComparisonToken> {
     let reduced = reduce_ipa_tokens(tokens);
+    let reduced = reduced
+        .into_iter()
+        .enumerate()
+        .map(|(index, token)| ComparisonToken {
+            token,
+            source_start: index,
+            source_end: index + 1,
+        })
+        .collect::<Vec<_>>();
+    normalize_vowel_sequences_with_spans(expand_comparison_tokens(reduced))
+}
+
+fn expand_comparison_tokens(tokens: Vec<ComparisonToken>) -> Vec<ComparisonToken> {
+    let mut out = Vec::new();
     let mut index = 0usize;
-    while index < reduced.len() {
-        let token = &reduced[index];
-        let next = reduced.get(index + 1).map(String::as_str);
-        if next == Some("ɹ") && is_vowel_like(token) {
-            out.push(normalize_vowel_family(token));
+    while index < tokens.len() {
+        let token = &tokens[index];
+        let next = tokens.get(index + 1);
+        if next.as_ref().map(|token| token.token.as_str()) == Some("ɹ")
+            && is_vowel_like(&token.token)
+        {
+            out.push(ComparisonToken {
+                token: normalize_vowel_family(&token.token),
+                source_start: token.source_start,
+                source_end: next.expect("checked above").source_end,
+            });
             index += 2;
             continue;
         }
 
-        match token.as_str() {
+        match token.token.as_str() {
             "t͡ʃ" | "tʃ" => {
-                out.push("t".to_string());
-                out.push("ʃ".to_string());
+                out.push(ComparisonToken {
+                    token: "t".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
+                out.push(ComparisonToken {
+                    token: "ʃ".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
             }
             "d͡ʒ" | "dʒ" => {
-                out.push("d".to_string());
-                out.push("ʒ".to_string());
+                out.push(ComparisonToken {
+                    token: "d".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
+                out.push(ComparisonToken {
+                    token: "ʒ".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
             }
             "eɪ" => {
-                out.push("ɛ".to_string());
-                out.push("ɪ".to_string());
+                out.push(ComparisonToken {
+                    token: "ɛ".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
+                out.push(ComparisonToken {
+                    token: "ɪ".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
             }
             "aɪ" => {
-                out.push("a".to_string());
-                out.push("ɪ".to_string());
+                out.push(ComparisonToken {
+                    token: "a".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
+                out.push(ComparisonToken {
+                    token: "ɪ".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
             }
             "ɔɪ" => {
-                out.push("ɔ".to_string());
-                out.push("ɪ".to_string());
+                out.push(ComparisonToken {
+                    token: "ɔ".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
+                out.push(ComparisonToken {
+                    token: "ɪ".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
             }
             "aʊ" => {
-                out.push("a".to_string());
-                out.push("ʊ".to_string());
+                out.push(ComparisonToken {
+                    token: "a".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
+                out.push(ComparisonToken {
+                    token: "ʊ".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
             }
             "oʊ" | "əʊ" => {
-                out.push("ə".to_string());
-                out.push("ʊ".to_string());
+                out.push(ComparisonToken {
+                    token: "ə".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
+                out.push(ComparisonToken {
+                    token: "ʊ".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
             }
             "ɪə" => {
-                out.push("ɪ".to_string());
+                out.push(ComparisonToken {
+                    token: "ɪ".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
             }
             "eə" => {
-                out.push("ɛ".to_string());
+                out.push(ComparisonToken {
+                    token: "ɛ".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
             }
             "ʊə" => {
-                out.push("ʊ".to_string());
+                out.push(ComparisonToken {
+                    token: "ʊ".to_string(),
+                    source_start: token.source_start,
+                    source_end: token.source_end,
+                });
             }
-            _ => out.push(normalize_vowel_family(token)),
+            _ => out.push(ComparisonToken {
+                token: normalize_vowel_family(&token.token),
+                source_start: token.source_start,
+                source_end: token.source_end,
+            }),
         }
         index += 1;
     }
-    normalize_vowel_sequences(out)
+    out
 }
 
 fn is_vowel_like(token: &str) -> bool {
     matches!(
         token,
-        "a"
-            | "æ"
+        "a" | "æ"
             | "ɑ"
             | "ɒ"
             | "ɔ"
@@ -431,23 +529,36 @@ fn normalize_vowel_family(token: &str) -> String {
     }
 }
 
-fn normalize_vowel_sequences(tokens: Vec<String>) -> Vec<String> {
+fn normalize_vowel_sequences_with_spans(tokens: Vec<ComparisonToken>) -> Vec<ComparisonToken> {
     let mut out = Vec::new();
     let mut index = 0usize;
     while index < tokens.len() {
-        let token = tokens[index].as_str();
-        let next = tokens.get(index + 1).map(String::as_str);
-        let next_next = tokens.get(index + 2).map(String::as_str);
-        match (token, next) {
+        let token = tokens[index].token.as_str();
+        let next = tokens.get(index + 1);
+        let next_next = tokens.get(index + 2).map(|token| token.token.as_str());
+        match (token, next.map(|token| token.token.as_str())) {
             ("ɛ", Some("ə")) | ("ɪ", Some("ə")) | ("ʊ", Some("ə"))
                 if next_next.is_none_or(|token| !is_vowel_like(token)) =>
             {
-                out.push(token.to_string());
+                out.push(ComparisonToken {
+                    token: token.to_string(),
+                    source_start: tokens[index].source_start,
+                    source_end: next.expect("matched Some").source_end,
+                });
                 index += 2;
             }
             ("ɔ", Some("ʊ")) => {
-                out.push("ə".to_string());
-                out.push("ʊ".to_string());
+                let span = tokens[index].source_start..next.expect("matched Some").source_end;
+                out.push(ComparisonToken {
+                    token: "ə".to_string(),
+                    source_start: span.start,
+                    source_end: span.end,
+                });
+                out.push(ComparisonToken {
+                    token: "ʊ".to_string(),
+                    source_start: span.start,
+                    source_end: span.end,
+                });
                 index += 2;
             }
             _ => {
@@ -730,11 +841,7 @@ mod tests {
     #[test]
     fn normalize_ipa_for_comparison_collapses_centering_diphthongs() {
         assert_eq!(
-            normalize_ipa_for_comparison(&[
-                "eə".to_string(),
-                "ɪə".to_string(),
-                "ʊə".to_string(),
-            ]),
+            normalize_ipa_for_comparison(&["eə".to_string(), "ɪə".to_string(), "ʊə".to_string(),]),
             vec!["ɛ", "ɪ", "ʊ"]
         );
         assert_eq!(
@@ -761,6 +868,22 @@ mod tests {
         assert_eq!(
             normalize_ipa_for_comparison(&["ɔ".to_string(), "ʊ".to_string()]),
             vec!["ə", "ʊ"]
+        );
+    }
+
+    #[test]
+    fn normalize_ipa_for_comparison_with_spans_preserves_source_ranges() {
+        let normalized = normalize_ipa_for_comparison_with_spans(&[
+            "ə".to_string(),
+            "ɹ".to_string(),
+            "i".to_string(),
+        ]);
+        assert_eq!(
+            normalized
+                .iter()
+                .map(|token| (token.token.as_str(), token.source_start, token.source_end))
+                .collect::<Vec<_>>(),
+            vec![("ə", 0, 2), ("ɪ", 2, 3)]
         );
     }
 }

@@ -4,9 +4,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bee_phonetic::{
-    enumerate_transcript_spans_with, query_index, score_shortlist,
-    feature_similarity, normalize_ipa_for_comparison, phoneme_similarity, reduce_ipa_tokens,
-    PhoneticIndex, RetrievalQuery, SeedDataset, TranscriptAlignmentToken,
+    align_token_sequences, enumerate_transcript_spans_with, feature_similarity,
+    normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans, phoneme_similarity,
+    query_index, reduce_ipa_tokens, score_shortlist, sentence_word_tokens, PhoneticIndex,
+    RetrievalQuery, SeedDataset, TranscriptAlignmentToken,
 };
 use bee_transcribe::{AlignedWord, Engine};
 use bee_zipa_mlx::audio::AudioBuffer;
@@ -14,14 +15,12 @@ use bee_zipa_mlx::infer::ZipaInference;
 use beeml::g2p::CachedEspeakG2p;
 use beeml::judge::{extract_span_context, OnlineJudge};
 use beeml::rpc::{
-    FilterDecision, JudgeOptionDebug,
-    PhoneticComparisonRequest, PhoneticComparisonResult, PhoneticComparisonRow,
-    PhoneticComparisonSummary,
-    JudgeStateDebug, RapidFireChoice, RetrievalCandidateDebug,
-    RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
-    SpanDebugTrace, SpanDebugView,
-    TranscribePhoneticCandidate, TranscribePhoneticSpan, TranscribePhoneticTrace,
-    TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
+    FilterDecision, JudgeOptionDebug, JudgeStateDebug, PhoneticComparisonRequest,
+    PhoneticComparisonResult, PhoneticComparisonRow, PhoneticComparisonSummary, RapidFireChoice,
+    RetrievalCandidateDebug, RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest,
+    RetrievalPrototypeProbeResult, SpanDebugTrace, SpanDebugView,
+    TeachRetrievalPrototypeJudgeRequest, TimingBreakdown, TranscribePhoneticCandidate,
+    TranscribePhoneticSpan, TranscribePhoneticTrace,
 };
 
 use crate::offline_eval::*;
@@ -94,46 +93,62 @@ impl BeeMlService {
             .into_iter()
             .filter(|token| token != "▁")
             .collect::<Vec<_>>();
-        let utterance_zipa_normalized = normalize_ipa_for_comparison(&utterance_zipa_raw);
+        let utterance_zipa_normalized_with_spans =
+            normalize_ipa_for_comparison_with_spans(&utterance_zipa_raw);
+        let utterance_zipa_normalized = utterance_zipa_normalized_with_spans
+            .iter()
+            .map(|token| token.token.clone())
+            .collect::<Vec<_>>();
         let utterance_transcript_raw = g2p
             .ipa_tokens(transcript)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("espeak produced no tokens for '{transcript}'"))?;
-        let utterance_transcript_normalized =
-            normalize_ipa_for_comparison(&utterance_transcript_raw);
+        let transcript_word_normalized_ranges =
+            transcript_word_normalized_ranges(&mut g2p, transcript)?;
+        let utterance_transcript_normalized = transcript_word_normalized_ranges
+            .iter()
+            .flat_map(|(_, tokens)| tokens.iter().cloned())
+            .collect::<Vec<_>>();
+        let utterance_alignment =
+            align_token_sequences(&utterance_transcript_normalized, &utterance_zipa_normalized);
 
-        let spans = enumerate_transcript_spans_with(
-            transcript,
-            3,
-            Some(&alignments[..]),
-            |text| g2p.ipa_tokens(text).ok().flatten(),
-        );
+        let spans = enumerate_transcript_spans_with(transcript, 3, Some(&alignments[..]), |text| {
+            g2p.ipa_tokens(text).ok().flatten()
+        });
 
         let mut phonetic_spans = Vec::new();
         for span in spans {
-            let (Some(start_sec), Some(end_sec)) = (span.start_sec, span.end_sec) else {
+            let transcript_normalized = transcript_normalized_for_span(
+                &transcript_word_normalized_ranges,
+                span.token_start,
+                span.token_end,
+            );
+            if transcript_normalized.is_empty() {
+                continue;
+            }
+            let Some(zipa_norm_range) =
+                utterance_alignment.project_left_range(transcript_token_range_for_span(
+                    &transcript_word_normalized_ranges,
+                    span.token_start,
+                    span.token_end,
+                ))
+            else {
                 continue;
             };
-            let clipped = clip_audio_span(audio, start_sec, end_sec, 0.05);
-            if clipped.samples.is_empty() {
+            let zipa_normalized = utterance_zipa_normalized
+                .get(zipa_norm_range.clone())
+                .unwrap_or(&[])
+                .to_vec();
+            if zipa_normalized.is_empty() {
                 continue;
             }
-            let zipa_span = zipa.infer_audio(&clipped).map_err(|e| e.to_string())?;
-            let zipa_raw = zipa_span
-                .tokens
-                .into_iter()
-                .filter(|token| token != "▁")
-                .collect::<Vec<_>>();
-            if zipa_raw.is_empty() {
-                continue;
-            }
-            let zipa_normalized = normalize_ipa_for_comparison(&zipa_raw);
-            let transcript_raw = g2p
-                .ipa_tokens(&span.text)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| format!("espeak produced no tokens for '{}'", span.text))?;
-            let transcript_normalized = normalize_ipa_for_comparison(&transcript_raw);
-            let transcript_similarity = phoneme_similarity(&zipa_raw, &transcript_raw);
+            let zipa_raw = raw_slice_for_normalized_range(
+                &utterance_zipa_raw,
+                &utterance_zipa_normalized_with_spans,
+                zipa_norm_range,
+            );
+            let transcript_similarity =
+                phoneme_similarity(&zipa_normalized, &transcript_normalized);
             let transcript_feature_similarity =
                 feature_similarity(&zipa_normalized, &transcript_normalized);
 
@@ -197,8 +212,8 @@ impl BeeMlService {
                 span_text: span.text,
                 token_start: span.token_start as u32,
                 token_end: span.token_end as u32,
-                start_sec,
-                end_sec,
+                start_sec: span.start_sec.unwrap_or(0.0),
+                end_sec: span.end_sec.unwrap_or(0.0),
                 zipa_raw,
                 zipa_normalized,
                 transcript_normalized,
@@ -215,7 +230,10 @@ impl BeeMlService {
         });
 
         Ok(TranscribePhoneticTrace {
-            utterance_similarity: phoneme_similarity(&utterance_zipa_raw, &utterance_transcript_raw),
+            utterance_similarity: phoneme_similarity(
+                &utterance_zipa_raw,
+                &utterance_transcript_raw,
+            ),
             utterance_feature_similarity: feature_similarity(
                 &utterance_zipa_normalized,
                 &utterance_transcript_normalized,
@@ -310,15 +328,11 @@ impl BeeMlService {
                 reduced_exact: rows.iter().filter(|row| row.reduced_exact).count() as u32,
                 normalized_exact: rows.iter().filter(|row| row.normalized_exact).count() as u32,
                 raw_similarity_mean: mean_option(rows.iter().map(|row| row.raw_similarity)),
-                reduced_similarity_mean: mean_option(
-                    rows.iter().map(|row| row.reduced_similarity),
-                ),
+                reduced_similarity_mean: mean_option(rows.iter().map(|row| row.reduced_similarity)),
                 normalized_similarity_mean: mean_option(
                     rows.iter().map(|row| row.normalized_similarity),
                 ),
-                feature_similarity_mean: mean_option(
-                    rows.iter().map(|row| row.feature_similarity),
-                ),
+                feature_similarity_mean: mean_option(rows.iter().map(|row| row.feature_similarity)),
                 normalized_feature_similarity_mean: mean_option(
                     rows.iter().map(|row| row.normalized_feature_similarity),
                 ),
@@ -606,10 +620,7 @@ impl BeeMlService {
         })
     }
 
-    fn zipa_wav_path(
-        &self,
-        row: &bee_phonetic::RecordingExampleRow,
-    ) -> Result<PathBuf, String> {
+    fn zipa_wav_path(&self, row: &bee_phonetic::RecordingExampleRow) -> Result<PathBuf, String> {
         let stem = PathBuf::from(&row.audio_path)
             .file_stem()
             .ok_or_else(|| format!("audio path has no file stem: {}", row.audio_path))?
@@ -1035,16 +1046,67 @@ fn mean_option(values: impl Iterator<Item = Option<f32>>) -> Option<f32> {
     (count > 0).then_some(total / count as f32)
 }
 
-fn clip_audio_span(audio: &AudioBuffer, start_sec: f64, end_sec: f64, pad_sec: f64) -> AudioBuffer {
-    let sample_rate = audio.sample_rate_hz as f64;
-    let start = ((start_sec - pad_sec).max(0.0) * sample_rate).floor() as usize;
-    let end = ((end_sec + pad_sec).max(start_sec) * sample_rate)
-        .ceil()
-        .min(audio.samples.len() as f64) as usize;
-    AudioBuffer {
-        samples: audio.samples[start.min(audio.samples.len())..end.min(audio.samples.len())].to_vec(),
-        sample_rate_hz: audio.sample_rate_hz,
+fn transcript_word_normalized_ranges(
+    g2p: &mut CachedEspeakG2p,
+    transcript: &str,
+) -> Result<Vec<(std::ops::Range<usize>, Vec<String>)>, String> {
+    let mut out = Vec::new();
+    for word in sentence_word_tokens(transcript) {
+        let raw = g2p
+            .ipa_tokens(&word.text)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("espeak produced no tokens for '{}'", word.text))?;
+        out.push((
+            word.char_start..word.char_end,
+            normalize_ipa_for_comparison(&raw),
+        ));
     }
+    Ok(out)
+}
+
+fn transcript_token_range_for_span(
+    word_ranges: &[(std::ops::Range<usize>, Vec<String>)],
+    token_start: usize,
+    token_end: usize,
+) -> std::ops::Range<usize> {
+    let start = word_ranges
+        .iter()
+        .take(token_start)
+        .map(|(_, tokens)| tokens.len())
+        .sum::<usize>();
+    let len = word_ranges[token_start..token_end]
+        .iter()
+        .map(|(_, tokens)| tokens.len())
+        .sum::<usize>();
+    start..(start + len)
+}
+
+fn transcript_normalized_for_span(
+    word_ranges: &[(std::ops::Range<usize>, Vec<String>)],
+    token_start: usize,
+    token_end: usize,
+) -> Vec<String> {
+    word_ranges[token_start..token_end]
+        .iter()
+        .flat_map(|(_, tokens)| tokens.iter().cloned())
+        .collect()
+}
+
+fn raw_slice_for_normalized_range(
+    raw_tokens: &[String],
+    normalized: &[bee_phonetic::ComparisonToken],
+    normalized_range: std::ops::Range<usize>,
+) -> Vec<String> {
+    let Some(first) = normalized.get(normalized_range.start) else {
+        return Vec::new();
+    };
+    let Some(last) = normalized.get(normalized_range.end.saturating_sub(1)) else {
+        return Vec::new();
+    };
+    raw_tokens
+        .get(first.source_start..last.source_end)
+        .unwrap_or(&[])
+        .to_vec()
 }
 
 fn best_delta(candidates: &[TranscribePhoneticCandidate]) -> f32 {

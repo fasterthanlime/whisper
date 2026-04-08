@@ -1,3 +1,4 @@
+pub mod alignment;
 pub mod dataset;
 pub mod feature_view;
 pub mod phonetic_index;
@@ -8,6 +9,9 @@ pub mod region_proposal;
 pub mod types;
 pub mod word_split;
 
+pub use alignment::{
+    align_token_sequences, AlignmentOp, AlignmentOpKind, ComparisonToken, TokenAlignment,
+};
 pub use dataset::{
     CounterexampleRecordingRow, RecordingExampleRow, SeedDataset, SeedDatasetError,
     SeedDatasetValidationError, SeedTermRow, SentenceExampleRow,
@@ -22,7 +26,8 @@ pub use phonetic_index::{
 };
 pub use phonetic_lexicon::{
     build_phonetic_lexicon, derive_identifier_flags, normalize_ipa_for_comparison,
-    reduce_ipa_tokens, AliasSource, IdentifierFlags, LexiconAlias,
+    normalize_ipa_for_comparison_with_spans, reduce_ipa_tokens, AliasSource, IdentifierFlags,
+    LexiconAlias,
 };
 pub use phonetic_verify::{
     score_shortlist, verify_shortlist, CandidateFeatureRow, VerifiedCandidate,
