@@ -80,6 +80,30 @@ pub(crate) struct EvalCase {
 }
 
 impl BeeMlService {
+    pub(crate) fn transcribe_samples_chunked(
+        &self,
+        samples: &[f32],
+    ) -> Result<bee_transcribe::FinishResult, String> {
+        let options = bee_transcribe::SessionOptions::default();
+        let chunk_samples = (options.chunk_duration * 16_000.0) as usize;
+        let mut session = self
+            .inner
+            .engine
+            .session(options)
+            .map_err(|e| e.to_string())?;
+
+        let mut offset = 0;
+        while offset < samples.len() {
+            let end = (offset + chunk_samples).min(samples.len());
+            session
+                .feed(&samples[offset..end])
+                .map_err(|e| e.to_string())?;
+            offset = end;
+        }
+
+        session.finish().map_err(|e| e.to_string())
+    }
+
     pub(crate) fn corpus_capture_prompts(&self) -> Vec<beeml::rpc::CorpusCapturePrompt> {
         const PROMPT_SET_PREFIX: &str = "zipa-targeted-v1";
         load_corpus_prompt_rows()
@@ -390,13 +414,7 @@ impl BeeMlService {
                 sample_rate_hz: 16_000,
             };
 
-            let mut session = self
-                .inner
-                .engine
-                .session(bee_transcribe::SessionOptions::default())
-                .map_err(|e| e.to_string())?;
-            session.feed(&samples).map_err(|e| e.to_string())?;
-            let result = session.finish().map_err(|e| e.to_string())?;
+            let result = self.transcribe_samples_chunked(&samples)?;
             let update = result.update;
 
             match self.build_transcribe_phonetic_trace(&audio, &update.text, &update.alignments) {
