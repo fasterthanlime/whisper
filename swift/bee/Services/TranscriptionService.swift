@@ -90,15 +90,9 @@ final class TranscriptionService: @unchecked Sendable {
         return await feed(session: session, samples: samples)
     }
 
-    func finish(session: StreamingSession) async -> FeedResult? {
-        do {
-            let client = try await client()
-            let result = try await client.finishSession(sessionId: session.id).get()
-            return result.text.isEmpty ? nil : result
-        } catch {
-            Self.logger.error("finish error: \(error)")
-            return nil
-        }
+    func finish(session: StreamingSession) async throws -> FeedResult {
+        let client = try await client()
+        return try await client.finishSession(sessionId: session.id).get()
     }
 
     func setLanguage(session: StreamingSession, language: String?) async -> Bool {

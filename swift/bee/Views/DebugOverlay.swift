@@ -372,7 +372,13 @@ struct CorrectionTestView: View {
         _ = await ts.feed(session: session, samples: samples)
 
         statusText = "finalizing..."
-        let finishResult = await ts.finish(session: session)
+        let finishResult: FeedResult?
+        do {
+            finishResult = try await ts.finish(session: session)
+        } catch {
+            corrTestLogger.error("finish error: \(error)")
+            finishResult = nil
+        }
         let transcript = finishResult?.text ?? ""
         let words = finishResult?.alignments ?? []
         corrTestLogger.info("Transcript for \(session.id): \"\(transcript)\"")

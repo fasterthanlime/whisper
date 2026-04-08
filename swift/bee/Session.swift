@@ -341,7 +341,13 @@ actor Session {
                 // End of stream — finalize
                 if let endMode {
                     let t0 = ProcessInfo.processInfo.systemUptime
-                    let result = await ts.finish(session: asrSession)
+                    let result: FeedResult?
+                    do {
+                        result = try await ts.finish(session: asrSession)
+                    } catch {
+                        logger.error("[\(sessionID)] finish error: \(error)")
+                        result = nil
+                    }
                     let finalizeUs = Int((ProcessInfo.processInfo.systemUptime - t0) * 1_000_000)
 
                     let rawText = result?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
