@@ -265,6 +265,12 @@ impl DecodeSession {
             "commit: aligning text"
         );
 
+        // Guard: can't align against empty audio
+        if self.audio.is_empty() {
+            tracing::warn!("commit: no audio to align against, skipping");
+            return Ok(None);
+        }
+
         // Run forced alignment against our audio
         let items = forced_aligner
             .align(self.audio.samples(), &commit_text)

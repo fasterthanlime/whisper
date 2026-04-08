@@ -132,20 +132,26 @@ impl Default for ClippingGuard {
 // ── VAD filter ─────────────────────────────────────────────────────────
 
 /// Voice Activity Detection filter using Silero VAD.
-/// Gates audio: returns `None` for silence before speech is detected.
-/// Once speech is detected, passes everything through (mid-speech silence
-/// is not gated — that's the decoder's problem).
+/// Gates audio: returns `None` for silence chunks.
+/// Tracks speech → silence transitions: after `SILENCE_CHUNKS_TO_GATE`
+/// consecutive silence chunks, gates again (end-of-speech).
 pub struct VadFilter {
     vad: bee_vad::SileroVad,
     speech_detected: bool,
+    /// Consecutive silence chunks since last speech.
+    silence_streak: usize,
     threshold: f32,
 }
+
+/// How many consecutive silence chunks after speech before we gate again.
+const SILENCE_CHUNKS_TO_GATE: usize = 3;
 
 impl VadFilter {
     pub fn new(vad: bee_vad::SileroVad, threshold: f32) -> Self {
         Self {
             vad,
             speech_detected: false,
+            silence_streak: 0,
             threshold,
         }
     }
@@ -153,21 +159,47 @@ impl VadFilter {
 
 impl AudioFilter for VadFilter {
     fn process(&mut self, chunk: AudioBuffer) -> Option<AudioBuffer> {
-        if self.speech_detected {
+        let prob = self.vad.process_audio(chunk.samples()).unwrap_or(0.0);
+
+        if prob >= self.threshold {
+            // Speech detected
+            if !self.speech_detected {
+                tracing::info!("vad_filter: speech detected (prob={prob:.3})");
+            }
+            self.speech_detected = true;
+            self.silence_streak = 0;
             return Some(chunk);
         }
-        let prob = self.vad.process_audio(chunk.samples()).unwrap_or(0.0);
-        if prob < self.threshold {
-            tracing::debug!("vad_filter: silence (prob={prob:.3})");
+
+        // Below threshold — silence
+        if !self.speech_detected {
+            tracing::debug!("vad_filter: pre-speech silence (prob={prob:.3})");
             return None;
         }
-        tracing::info!("vad_filter: speech detected (prob={prob:.3})");
-        self.speech_detected = true;
+
+        // Mid/post-speech silence
+        self.silence_streak += 1;
+        if self.silence_streak >= SILENCE_CHUNKS_TO_GATE {
+            tracing::info!(
+                "vad_filter: end-of-speech after {} silence chunks (prob={prob:.3})",
+                self.silence_streak
+            );
+            self.speech_detected = false;
+            self.silence_streak = 0;
+            return None;
+        }
+
+        tracing::debug!(
+            "vad_filter: mid-speech silence {}/{} (prob={prob:.3})",
+            self.silence_streak,
+            SILENCE_CHUNKS_TO_GATE,
+        );
         Some(chunk)
     }
 
     fn reset(&mut self) {
         self.speech_detected = false;
+        self.silence_streak = 0;
     }
 }
 
