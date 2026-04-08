@@ -5,14 +5,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use bee_phonetic::{
     enumerate_transcript_spans_with, query_index, score_shortlist,
-    PhoneticIndex, RetrievalQuery,
-    SeedDataset, TranscriptAlignmentToken,
+    feature_similarity, normalize_ipa_for_comparison, phoneme_similarity, reduce_ipa_tokens,
+    PhoneticIndex, RetrievalQuery, SeedDataset, TranscriptAlignmentToken,
 };
 use bee_transcribe::{AlignedWord, Engine};
+use bee_zipa_mlx::infer::ZipaInference;
 use beeml::g2p::CachedEspeakG2p;
 use beeml::judge::{extract_span_context, OnlineJudge};
 use beeml::rpc::{
     FilterDecision, JudgeOptionDebug,
+    PhoneticComparisonRequest, PhoneticComparisonResult, PhoneticComparisonRow,
+    PhoneticComparisonSummary,
     JudgeStateDebug, RapidFireChoice, RetrievalCandidateDebug,
     RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
     SpanDebugTrace, SpanDebugView,
@@ -34,6 +37,8 @@ pub(crate) struct BeemlServiceInner {
     pub(crate) dataset: SeedDataset,
     pub(crate) counterexamples: Vec<CounterexampleRecordingRow>,
     pub(crate) g2p: Mutex<CachedEspeakG2p>,
+    pub(crate) zipa: Mutex<ZipaInference>,
+    pub(crate) zipa_wav_dir: PathBuf,
     pub(crate) judge: Mutex<OnlineJudge>,
     pub(crate) event_log_path: PathBuf,
 }
@@ -55,6 +60,106 @@ pub(crate) struct EvalCase {
 }
 
 impl BeeMlService {
+    pub(crate) fn run_phonetic_comparison(
+        &self,
+        request: PhoneticComparisonRequest,
+    ) -> Result<PhoneticComparisonResult, String> {
+        let mut g2p = self
+            .inner
+            .g2p
+            .lock()
+            .map_err(|_| "g2p cache mutex poisoned".to_string())?;
+        let zipa = self
+            .inner
+            .zipa
+            .lock()
+            .map_err(|_| "zipa mutex poisoned".to_string())?;
+
+        let mut rows = Vec::new();
+        for row in &self.inner.dataset.recording_examples {
+            if request
+                .term
+                .as_ref()
+                .is_some_and(|term| !row.term.eq_ignore_ascii_case(term))
+            {
+                continue;
+            }
+            if request.limit > 0 && rows.len() >= request.limit as usize {
+                break;
+            }
+
+            let wav_path = self.zipa_wav_path(row)?;
+            let zipa_result = zipa.infer_wav(&wav_path).map_err(|e| e.to_string())?;
+            let zipa_raw = zipa_result
+                .tokens
+                .into_iter()
+                .filter(|token| token != "▁")
+                .collect::<Vec<_>>();
+            let zipa_reduced = reduce_ipa_tokens(&zipa_raw);
+            let zipa_normalized = normalize_ipa_for_comparison(&zipa_raw);
+
+            let text = if request.use_transcript {
+                row.transcript.clone()
+            } else {
+                row.text.clone()
+            };
+            let espeak_raw = g2p
+                .ipa_tokens(&text)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("espeak produced no tokens for '{text}'"))?;
+            let espeak_reduced = reduce_ipa_tokens(&espeak_raw);
+            let espeak_normalized = normalize_ipa_for_comparison(&espeak_raw);
+
+            rows.push(PhoneticComparisonRow {
+                term: row.term.clone(),
+                text,
+                wav_path: wav_path.display().to_string(),
+                raw_similarity: phoneme_similarity(&zipa_raw, &espeak_raw),
+                reduced_similarity: phoneme_similarity(&zipa_reduced, &espeak_reduced),
+                normalized_similarity: phoneme_similarity(&zipa_normalized, &espeak_normalized),
+                feature_similarity: feature_similarity(&zipa_raw, &espeak_raw),
+                normalized_feature_similarity: feature_similarity(
+                    &zipa_normalized,
+                    &espeak_normalized,
+                ),
+                reduced_exact: zipa_reduced == espeak_reduced,
+                normalized_exact: zipa_normalized == espeak_normalized,
+                zipa_raw,
+                espeak_raw,
+                zipa_reduced,
+                espeak_reduced,
+                zipa_normalized,
+                espeak_normalized,
+            });
+        }
+
+        if rows.is_empty() {
+            return Err("no matching recording examples".to_string());
+        }
+
+        Ok(PhoneticComparisonResult {
+            summary: PhoneticComparisonSummary {
+                rows: rows.len() as u32,
+                reduced_exact: rows.iter().filter(|row| row.reduced_exact).count() as u32,
+                normalized_exact: rows.iter().filter(|row| row.normalized_exact).count() as u32,
+                raw_similarity_mean: mean_option(rows.iter().map(|row| row.raw_similarity)),
+                reduced_similarity_mean: mean_option(
+                    rows.iter().map(|row| row.reduced_similarity),
+                ),
+                normalized_similarity_mean: mean_option(
+                    rows.iter().map(|row| row.normalized_similarity),
+                ),
+                feature_similarity_mean: mean_option(
+                    rows.iter().map(|row| row.feature_similarity),
+                ),
+                normalized_feature_similarity_mean: mean_option(
+                    rows.iter().map(|row| row.normalized_feature_similarity),
+                ),
+            },
+            rows,
+        })
+    }
+
     pub(crate) fn run_probe(
         &self,
         request: RetrievalPrototypeProbeRequest,
@@ -332,6 +437,26 @@ impl BeeMlService {
             },
             rapid_fire,
         })
+    }
+
+    fn zipa_wav_path(
+        &self,
+        row: &bee_phonetic::RecordingExampleRow,
+    ) -> Result<PathBuf, String> {
+        let stem = PathBuf::from(&row.audio_path)
+            .file_stem()
+            .ok_or_else(|| format!("audio path has no file stem: {}", row.audio_path))?
+            .to_string_lossy()
+            .into_owned();
+        let wav_path = self.inner.zipa_wav_dir.join(format!("{stem}.wav"));
+        if !wav_path.is_file() {
+            return Err(format!(
+                "ZIPA WAV mirror is missing {} for {}",
+                wav_path.display(),
+                row.audio_path
+            ));
+        }
+        Ok(wav_path)
     }
 
     pub(crate) fn teaching_cases(
@@ -731,4 +856,14 @@ impl BeeMlService {
             first_failure,
         })
     }
+}
+
+fn mean_option(values: impl Iterator<Item = Option<f32>>) -> Option<f32> {
+    let mut total = 0.0f32;
+    let mut count = 0usize;
+    for value in values.flatten() {
+        total += value;
+        count += 1;
+    }
+    (count > 0).then_some(total / count as f32)
 }

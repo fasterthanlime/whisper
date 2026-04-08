@@ -568,6 +568,51 @@ pub struct OfflineJudgeEvalResult {
     pub fold_results: Vec<OfflineJudgeFoldResult>,
 }
 
+#[derive(Clone, Debug, Facet)]
+pub struct PhoneticComparisonRequest {
+    pub limit: u32,
+    pub term: Option<String>,
+    pub use_transcript: bool,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct PhoneticComparisonRow {
+    pub term: String,
+    pub text: String,
+    pub wav_path: String,
+    pub zipa_raw: Vec<String>,
+    pub espeak_raw: Vec<String>,
+    pub zipa_reduced: Vec<String>,
+    pub espeak_reduced: Vec<String>,
+    pub zipa_normalized: Vec<String>,
+    pub espeak_normalized: Vec<String>,
+    pub raw_similarity: Option<f32>,
+    pub reduced_similarity: Option<f32>,
+    pub normalized_similarity: Option<f32>,
+    pub feature_similarity: Option<f32>,
+    pub normalized_feature_similarity: Option<f32>,
+    pub reduced_exact: bool,
+    pub normalized_exact: bool,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct PhoneticComparisonSummary {
+    pub rows: u32,
+    pub reduced_exact: u32,
+    pub normalized_exact: u32,
+    pub raw_similarity_mean: Option<f32>,
+    pub reduced_similarity_mean: Option<f32>,
+    pub normalized_similarity_mean: Option<f32>,
+    pub feature_similarity_mean: Option<f32>,
+    pub normalized_feature_similarity_mean: Option<f32>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct PhoneticComparisonResult {
+    pub summary: PhoneticComparisonSummary,
+    pub rows: Vec<PhoneticComparisonRow>,
+}
+
 #[vox::service]
 pub trait BeeMl {
     async fn transcribe_wav(&self, wav_bytes: Vec<u8>) -> Result<TranscribeWavResult, String>;
@@ -619,4 +664,9 @@ pub trait BeeMl {
         &self,
         request: OfflineJudgeEvalRequest,
     ) -> Result<OfflineJudgeEvalResult, String>;
+
+    async fn run_phonetic_comparison(
+        &self,
+        request: PhoneticComparisonRequest,
+    ) -> Result<PhoneticComparisonResult, String>;
 }

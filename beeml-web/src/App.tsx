@@ -6,12 +6,13 @@ import { RetrievalPrototypeLab } from "./components/RetrievalPrototypeLab";
 import { TranscribeDemoPanel } from "./components/TranscribeDemoPanel";
 import { OfflineJudgeEvalPanel } from "./components/OfflineJudgeEvalPanel";
 import { CorrectionReviewPanel } from "./components/CorrectionReviewPanel";
+import { PhoneticComparisonPanel } from "./components/PhoneticComparisonPanel";
 
 const WS_URL = "ws://127.0.0.1:9944";
 
 export default function App() {
   const [tab, setTab] = useState<
-    "transcribe" | "retrieval" | "rapid-fire" | "judge-eval" | "offline-eval" | "correction-ui"
+    "transcribe" | "retrieval" | "rapid-fire" | "judge-eval" | "offline-eval" | "correction-ui" | "phonetics"
   >("correction-ui");
 
   return (
@@ -61,6 +62,14 @@ export default function App() {
           </button>
           <button
             role="tab"
+            aria-selected={tab === "phonetics"}
+            className={tab === "phonetics" ? "primary" : ""}
+            onClick={() => setTab("phonetics")}
+          >
+            Phonetics
+          </button>
+          <button
+            role="tab"
             aria-selected={tab === "transcribe"}
             className={tab === "transcribe" ? "primary" : ""}
             onClick={() => setTab("transcribe")}
@@ -81,6 +90,8 @@ export default function App() {
             <JudgeEvalPanel wsUrl={WS_URL} />
           ) : tab === "offline-eval" ? (
             <OfflineJudgeEvalPanel wsUrl={WS_URL} />
+          ) : tab === "phonetics" ? (
+            <PhoneticComparisonPanel wsUrl={WS_URL} />
           ) : (
             <RetrievalPrototypeLab wsUrl={WS_URL} />
           )}

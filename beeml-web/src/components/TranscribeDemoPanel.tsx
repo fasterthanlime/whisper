@@ -11,10 +11,10 @@ function alignedWordsToTimedTokens(words: AlignedWord[]): TimedToken[] {
     w: word.word,
     s: word.start,
     e: word.end,
-    meanLogprob: word.mean_logprob,
-    minLogprob: word.min_logprob,
-    meanMargin: word.mean_margin,
-    minMargin: word.min_margin,
+    meanLogprob: word.confidence.mean_lp,
+    minLogprob: word.confidence.min_lp,
+    meanMargin: word.confidence.mean_m,
+    minMargin: word.confidence.min_m,
   }));
 }
 
@@ -150,7 +150,7 @@ export function TranscribeDemoPanel({
           const val = await updatesRx.recv();
           if (val === null) break;
           setStreamText(val.text);
-          setStreamCommittedLen(Number(val.committed_len));
+          setStreamCommittedLen(val.text.length);
         }
       })();
 

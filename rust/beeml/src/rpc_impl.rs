@@ -6,6 +6,7 @@ use beeml::rpc::{
     AcceptedEdit, BeeMl, CorrectionDebugResult, CorrectionRequest, CorrectionResult,
     JudgeEvalFailure, ModelSummary, OfflineJudgeEvalRequest,
     OfflineJudgeEvalResult, ProbDistribution, RerankerDebugTrace,
+    PhoneticComparisonRequest, PhoneticComparisonResult,
     RetrievalEvalMiss, RetrievalEvalTermSummary,
     RetrievalPrototypeEvalProgress, RetrievalPrototypeEvalRequest, RetrievalPrototypeEvalResult,
     RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
@@ -1468,5 +1469,12 @@ impl BeeMl for BeeMlService {
             counterexample_total: 0,
             fold_results: vec![],
         })
+    }
+
+    async fn run_phonetic_comparison(
+        &self,
+        request: PhoneticComparisonRequest,
+    ) -> Result<PhoneticComparisonResult, String> {
+        self.run_phonetic_comparison(request)
     }
 }

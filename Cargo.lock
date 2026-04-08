@@ -295,6 +295,7 @@ dependencies = [
  "bee-qwen3-asr",
  "bee-transcribe",
  "bee-types",
+ "bee-zipa-mlx",
  "dirs 5.0.1",
  "facet",
  "facet-json",

@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use bee_phonetic::SeedDataset;
 use bee_transcribe::{Engine, EngineConfig};
+use bee_zipa_mlx::infer::ZipaInference;
 use beeml::g2p::CachedEspeakG2p;
 use beeml::judge::OnlineJudge;
 use beeml::rpc::{BeeMl, OfflineJudgeEvalRequest};
@@ -96,6 +97,20 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".beeml")
         .join("events.jsonl");
+    let zipa_bundle_dir = env::var("BEE_ZIPA_BUNDLE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("bearcove/zipa-mlx-hf")
+        });
+    let zipa_wav_dir = env::var("BEE_PHONETIC_WAV_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("bearcove/bee/data/phonetic-seed/audio-wav")
+        });
 
     let mut judge = OnlineJudge::default();
     // Replay correction events from previous sessions
@@ -111,6 +126,10 @@ async fn main() -> Result<()> {
         }
     }
 
+    info!(bundle = %zipa_bundle_dir.display(), "loading ZIPA inference");
+    let zipa = ZipaInference::load_quantized_bundle_dir(&zipa_bundle_dir)
+        .with_context(|| format!("loading ZIPA bundle {}", zipa_bundle_dir.display()))?;
+
     let handler = BeeMlService {
         inner: Arc::new(BeemlServiceInner {
             engine,
@@ -125,6 +144,8 @@ async fn main() -> Result<()> {
                 )
                 .context("initializing g2p engine")?,
             ),
+            zipa: Mutex::new(zipa),
+            zipa_wav_dir,
             judge: Mutex::new(judge),
             event_log_path,
         }),

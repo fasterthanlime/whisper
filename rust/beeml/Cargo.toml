@@ -26,6 +26,7 @@ bee-correct = { path = "../bee-correct" }
 bee-phonetic = { path = "../bee-phonetic" }
 bee-types = { path = "../bee-types" }
 bee-qwen3-asr = { path = "../bee-qwen3-asr" }
+bee-zipa-mlx = { path = "../bee-zipa-mlx" }
 bee-transcribe = { path = "../bee-transcribe" }
 anyhow = { workspace = true }
 dirs = "5"
