@@ -29,6 +29,10 @@ NORM = "/encoder/0/layers.0/norm/Mul_1_output_0"
 LAYER0_OUTPUT = "/encoder/0/layers.0/bypass/Add_output_0"
 LAYER1_ATTN_WEIGHTS = "/encoder/0/layers.1/self_attn_weights/Softmax_output_0"
 LAYER1_OUTPUT = "/encoder/0/layers.1/bypass/Add_output_0"
+STAGE1_DOWNSAMPLE_OUT = "/encoder/1/downsample/ReduceSum_output_0"
+STAGE1_POS_EMB = "/encoder/1/encoder/encoder_pos/Unsqueeze_35_output_0"
+STAGE1_LAYER0_ATTN_WEIGHTS = "/encoder/1/encoder/0/self_attn_weights/Softmax_output_0"
+STAGE1_LAYER0_OUTPUT = "/encoder/1/encoder/0/bypass/Add_output_0"
 
 
 def ensure_outputs(model_path: Path, output_path: Path) -> Path:
@@ -52,6 +56,10 @@ def ensure_outputs(model_path: Path, output_path: Path) -> Path:
         LAYER0_OUTPUT,
         LAYER1_ATTN_WEIGHTS,
         LAYER1_OUTPUT,
+        STAGE1_DOWNSAMPLE_OUT,
+        STAGE1_POS_EMB,
+        STAGE1_LAYER0_ATTN_WEIGHTS,
+        STAGE1_LAYER0_OUTPUT,
     ]:
         if name not in existing:
             model.graph.output.append(
@@ -105,6 +113,10 @@ def main() -> None:
             LAYER0_OUTPUT,
             LAYER1_ATTN_WEIGHTS,
             LAYER1_OUTPUT,
+            STAGE1_DOWNSAMPLE_OUT,
+            STAGE1_POS_EMB,
+            STAGE1_LAYER0_ATTN_WEIGHTS,
+            STAGE1_LAYER0_OUTPUT,
         ],
         {"x": features, "x_lens": feat_lens},
     )
@@ -125,6 +137,10 @@ def main() -> None:
         layer0_out,
         layer1_attn_weights,
         layer1_out,
+        stage1_downsample_out,
+        stage1_pos_emb,
+        stage1_layer0_attn_weights,
+        stage1_layer0_out,
     ) = outputs
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -147,6 +163,10 @@ def main() -> None:
             "layer1_attn_weights": layer1_attn_weights.astype(np.float32),
             "layer1_out": layer1_out.astype(np.float32),
             "stage0_out": layer1_out.astype(np.float32),
+            "stage1_downsample_out": stage1_downsample_out.astype(np.float32),
+            "stage1_pos_emb": stage1_pos_emb.astype(np.float32),
+            "stage1_layer0_attn_weights": stage1_layer0_attn_weights.astype(np.float32),
+            "stage1_layer0_out": stage1_layer0_out.astype(np.float32),
         },
         str(args.output),
     )

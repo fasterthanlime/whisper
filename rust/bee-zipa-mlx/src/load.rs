@@ -5,7 +5,7 @@ use mlx_rs::error::Exception;
 use mlx_rs::module::ModuleParameters;
 use mlx_rs::Array;
 
-use crate::encoder::ZipformerEncoderLayer;
+use crate::encoder::{Downsample2, ZipformerEncoderLayer};
 use crate::model::ZipaModel;
 
 const DIRECT_KEYS: &[(&str, &str)] = &[
@@ -236,6 +236,28 @@ pub fn load_stage_layer_weights_from_map(
         loaded: loaded_count,
         missing,
     })
+}
+
+pub fn load_downsample_weights_from_map(
+    downsample: &mut Downsample2,
+    source_key: &str,
+    tensors: &HashMap<String, Array>,
+) -> Result<LoadStats, Exception> {
+    let mut params = downsample.parameters_mut().flatten();
+    let mut missing = Vec::new();
+    let mut loaded = 0usize;
+
+    match tensors.get(source_key) {
+        Some(value) => {
+            if let Some(param) = params.get_mut("weights") {
+                **param = value.clone();
+                loaded += 1;
+            }
+        }
+        None => missing.push(source_key.to_owned()),
+    }
+
+    Ok(LoadStats { loaded, missing })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
