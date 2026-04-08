@@ -10,37 +10,37 @@ pub mod types;
 pub mod word_split;
 
 pub use alignment::{
-    align_token_sequences, AlignmentOp, AlignmentOpKind, ComparisonToken, TokenAlignment,
+    AlignmentOp, AlignmentOpKind, AlignmentWindowCandidate, ComparisonToken, TokenAlignment,
+    align_token_sequences, top_right_anchor_windows,
 };
 pub use dataset::{
     CounterexampleRecordingRow, RecordingExampleRow, SeedDataset, SeedDatasetError,
     SeedDatasetValidationError, SeedTermRow, SentenceExampleRow,
 };
 pub use feature_view::{
-    feature_similarity, feature_similarity_from_vectors, feature_tokens_for_ipa,
-    feature_vector_for_token, feature_vectors_for_ipa, FeatureEditKind, FeatureEditOp,
-    FeatureSimilarityDetails,
+    FeatureEditKind, FeatureEditOp, FeatureSimilarityDetails, feature_similarity,
+    feature_similarity_from_vectors, feature_tokens_for_ipa, feature_vector_for_token,
+    feature_vectors_for_ipa,
 };
 pub use phonetic_index::{
-    build_index, query_index, IndexView, PhoneticIndex, RetrievalCandidate, RetrievalQuery,
+    IndexView, PhoneticIndex, RetrievalCandidate, RetrievalQuery, build_index, query_index,
 };
 pub use phonetic_lexicon::{
-    build_phonetic_lexicon, derive_identifier_flags, normalize_ipa_for_comparison,
-    normalize_ipa_for_comparison_with_spans, reduce_ipa_tokens, AliasSource, IdentifierFlags,
-    LexiconAlias,
+    AliasSource, IdentifierFlags, LexiconAlias, build_phonetic_lexicon, derive_identifier_flags,
+    normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans, reduce_ipa_tokens,
 };
 pub use phonetic_verify::{
-    score_shortlist, verify_shortlist, CandidateFeatureRow, VerifiedCandidate,
+    CandidateFeatureRow, VerifiedCandidate, score_shortlist, verify_shortlist,
 };
 pub use prototype::{
-    parse_reviewed_ipa, phoneme_similarity, phoneme_similarity_details, PhonemeSimilarityDetails,
-    TokenEditKind, TokenEditOp,
+    PhonemeSimilarityDetails, TokenEditKind, TokenEditOp, parse_reviewed_ipa, phoneme_similarity,
+    phoneme_similarity_details,
 };
 pub use region_proposal::{
-    enumerate_transcript_spans_with, TranscriptAlignmentTiming, TranscriptAlignmentToken,
-    TranscriptSpan,
+    TranscriptAlignmentTiming, TranscriptAlignmentToken, TranscriptSpan,
+    enumerate_transcript_spans_with,
 };
 pub use types::{ReviewedConfusionSurfaceRow, VocabRow};
 pub use word_split::{
-    count_sentence_words, sentence_word_tokens, split_sentence_words, SentenceWordToken,
+    SentenceWordToken, count_sentence_words, sentence_word_tokens, split_sentence_words,
 };
