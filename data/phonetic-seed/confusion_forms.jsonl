@@ -1,11 +1,11 @@
-{"id":1,"term":"bearcove","surface_form":"Berko","reviewed_ipa":"bˈɜːkoʊ","status":"approved","source":"asr_observed","created_at":"2026-04-08","updated_at":"2026-04-08"}
-{"id":2,"term":"bearcove","surface_form":"Berghof","reviewed_ipa":"bˈɜːɡɑːf","status":"approved","source":"asr_observed","created_at":"2026-04-08","updated_at":"2026-04-08"}
-{"id":3,"term":"bearcove","surface_form":"Barricove","reviewed_ipa":"bˈæɹɪkˌoʊv","status":"approved","source":"asr_observed","created_at":"2026-04-08","updated_at":"2026-04-08"}
-{"id":5,"term":"serde","surface_form":"Sirdal","reviewed_ipa":"sˈɜːdəl","status":"approved","source":"asr_observed","created_at":"2026-04-08","updated_at":"2026-04-08"}
-{"id":6,"term":"serde","surface_form":"sturdy","reviewed_ipa":"stˈɜːdi","status":"approved","source":"asr_observed","created_at":"2026-04-08","updated_at":"2026-04-08"}
-{"id":7,"term":"miri","surface_form":"Miriam","reviewed_ipa":"mˈɪɹiəm","status":"approved","source":"asr_observed","created_at":"2026-04-08","updated_at":"2026-04-08"}
-{"id":8,"term":"DWARF","surface_form":"dwarf","reviewed_ipa":"dwˈɔːɹf","status":"approved","source":"asr_observed","created_at":"2026-04-08","updated_at":"2026-04-08"}
-{"id":9,"term":"DWARF","surface_form":"door","reviewed_ipa":"dˈɔːɹ","status":"approved","source":"asr_observed","created_at":"2026-04-08","updated_at":"2026-04-08"}
-{"id":10,"term":"QEMU","surface_form":"kemoo","reviewed_ipa":"kˈɛmuː","status":"approved","source":"asr_observed","created_at":"2026-04-08","updated_at":"2026-04-08"}
-{"id":11,"term":"repr","surface_form":"rapper","reviewed_ipa":"ɹˈæpɚ","status":"approved","source":"asr_observed","created_at":"2026-04-08","updated_at":"2026-04-08"}
-{"id":12,"term":"repr","surface_form":"wrapper","reviewed_ipa":"ɹˈæpɚ","status":"approved","source":"asr_observed","created_at":"2026-04-08","updated_at":"2026-04-08"}
+{"id": 1, "term": "bearcove", "surface_form": "Berko", "reviewed_ipa": "bˈɜːkoʊ", "status": "approved", "source": "asr_observed", "created_at": "2026-04-08", "updated_at": "2026-04-08"}
+{"id": 2, "term": "bearcove", "surface_form": "Berghof", "reviewed_ipa": "bˈɜːɡɑːf", "status": "approved", "source": "asr_observed", "created_at": "2026-04-08", "updated_at": "2026-04-08"}
+{"id": 3, "term": "bearcove", "surface_form": "Barricove", "reviewed_ipa": "bˈæɹɪkˌoʊv", "status": "approved", "source": "asr_observed", "created_at": "2026-04-08", "updated_at": "2026-04-08"}
+{"id": 5, "term": "serde", "surface_form": "Sirdal", "reviewed_ipa": "sˈɜːdəl", "status": "approved", "source": "asr_observed", "created_at": "2026-04-08", "updated_at": "2026-04-08"}
+{"id": 6, "term": "serde", "surface_form": "sturdy", "reviewed_ipa": "stˈɜːdi", "status": "approved", "source": "asr_observed", "created_at": "2026-04-08", "updated_at": "2026-04-08"}
+{"id": 7, "term": "miri", "surface_form": "Miriam", "reviewed_ipa": "mˈɪɹiəm", "status": "approved", "source": "asr_observed", "created_at": "2026-04-08", "updated_at": "2026-04-08"}
+{"id": 8, "term": "DWARF", "surface_form": "dwarf", "reviewed_ipa": "dwˈɔːɹf", "status": "approved", "source": "asr_observed", "created_at": "2026-04-08", "updated_at": "2026-04-08"}
+{"id": 9, "term": "DWARF", "surface_form": "door", "reviewed_ipa": "dˈɔːɹ", "status": "approved", "source": "asr_observed", "created_at": "2026-04-08", "updated_at": "2026-04-08"}
+{"id": 10, "term": "QEMU", "surface_form": "kemoo", "reviewed_ipa": "kˈɛmuː", "status": "approved", "source": "asr_observed", "created_at": "2026-04-08", "updated_at": "2026-04-08"}
+{"id": 11, "term": "repr", "surface_form": "rapper", "reviewed_ipa": "ɹˈæpɚ", "status": "approved", "source": "asr_observed", "created_at": "2026-04-08", "updated_at": "2026-04-08"}
+{"id": 12, "term": "repr", "surface_form": "wrapper", "reviewed_ipa": "ɹˈæpɚ", "status": "approved", "source": "asr_observed", "created_at": "2026-04-08", "updated_at": "2026-04-08"}

@@ -1,26 +1,26 @@
-{"term":"AArch64","spoken":"A arch sixty-four","ipa":"ɐ ˈɑːɹtʃ sˈɪkstifˈɔːɹ","description":"The 64-bit ARM architecture target name"}
-{"term":"arborium","spoken":"arboreum","ipa":"ˌɑːɹbɔːɹˈiːəm","description":"A set of tree-sitter grammars to for syntax highlighting languages"}
-{"term":"bearcove","spoken":"bear cove","ipa":"bˈɛɹ kˈoʊv","description":"Tech blog and company by Amos"}
-{"term":"DWARF","spoken":"dworf","ipa":"dwˈɜːf","description":"A debugging information format used by compilers and debuggers"}
-{"term":"fasterthanlime","spoken":"faster than lime","ipa":"fˈæstɚ ðɐn lˈaɪm","description":"Online handle and tech blog mostly focused on Rust"}
-{"term":"kajit","spoken":"kah-djit","ipa":"kˈɑːdʒˈɪt","description":"Optimizing compiler backend for Rust serialization and deserialization, with an RVSDG-based IR. Complements facet."}
-{"term":"Mach-O","spoken":"mach oh","ipa":"mˈɑːk ˈoʊ","description":"The Mach-O executable format used on macOS"}
-{"term":"MIR","spoken":"meer","ipa":"mˈɪɹ","description":"Rust's Mid-level Intermediate Representation in the compiler"}
-{"term":"miri","spoken":"miri","ipa":"mˈiəɹi","description":"Rust interpreter for detecting undefined behavior"}
-{"term":"QEMU","spoken":"Q emu","ipa":"kjˈuː ˈiːmjuː","description":"An emulator and virtualizer often used for cross-architecture testing"}
-{"term":"qwen","spoken":"kwen","ipa":"kwˈɛn","description":"Qwen (also known as Tongyi Qianwen, Chinese: 通义千问; pinyin: Tōngyì Qiānwèn) is a family of large language models developed by Alibaba Cloud."}
-{"term":"regalloc","spoken":"regg-alloc","ipa":"ɹˈɛɡˈælɑːk","description":"Register allocator in a compiler backend"}
-{"term":"repr","spoken":"reppur","ipa":"ɹˈɛpʊɹ","description":"Rust memory layout attribute"}
-{"term":"reqwest","spoken":"request","ipa":"ɹᵻkwˈɛst","description":"HTTP client library for Rust"}
-{"term":"ripgrep","spoken":"rip grep","ipa":"ɹˈɪp ɡɹˈɛp","description":"A fast recursive search tool commonly used by developers"}
-{"term":"rustc","spoken":"rust sea","ipa":"ɹˈʌst sˈiː","description":"Rust compiler"}
-{"term":"serde","spoken":"sirday","ipa":"sˈɜːdeɪ","description":"Rust serialization/deserialization framework"}
-{"term":"serde_json","spoken":"sirday jason","ipa":"sˈɜːdeɪ dʒˈeɪsən","description":"JSON library for serde"}
-{"term":"SQLite","spoken":"sequel light","ipa":"sˈiːkwəl lˈaɪt","description":"SQLite embedded database engine"}
-{"term":"tokio","spoken":"tokio","ipa":"tˈoʊkɪˌoʊ","description":"Async runtime for Rust"}
-{"term":"u32","spoken":"you thirty-two","ipa":"juː θˈɜːɾitˈuː","description":"A 32-bit unsigned integer type in Rust"}
-{"term":"u8","spoken":"you eight","ipa":"juː ˈeɪt","description":"An 8-bit unsigned integer type in Rust"}
-{"term":"Vec","spoken":"vec","ipa":"vˈɛk","description":"Growable array type in Rust"}
-{"term":"vox","spoken":"vox","ipa":"vˈɑːks","description":"An RPC library made by bearcove that is used in a bunch of Rust projects. It supports retries and everything."}
-{"term":"WASM","spoken":"waz-um","ipa":"wˈæzˈʌm","description":"WebAssembly bytecode format"}
-{"term":"x86_64","spoken":"ex eighty-six sixty-four","ipa":"ˈɛks ˈeɪɾisˈɪks sˈɪkstifˈɔːɹ","description":"A 64-bit x86 architecture target identifier"}
+{"term": "AArch64", "spoken": "A arch sixty-four", "ipa": "ɐ ˈɑːɹtʃ sˈɪkstifˈɔːɹ", "description": "The 64-bit ARM architecture target name"}
+{"term": "arborium", "spoken": "arboreum", "ipa": "ˌɑːɹbɔːɹˈiːəm", "description": "A set of tree-sitter grammars to for syntax highlighting languages"}
+{"term": "bearcove", "spoken": "bear cove", "ipa": "bˈɛɹ kˈoʊv", "description": "Tech blog and company by Amos"}
+{"term": "DWARF", "spoken": "dworf", "ipa": "dwˈɜːf", "description": "A debugging information format used by compilers and debuggers"}
+{"term": "fasterthanlime", "spoken": "faster than lime", "ipa": "fˈæstɚ ðɐn lˈaɪm", "description": "Online handle and tech blog mostly focused on Rust"}
+{"term": "kajit", "spoken": "kah-djit", "ipa": "kˈɑːdʒˈɪt", "description": "Optimizing compiler backend for Rust serialization and deserialization, with an RVSDG-based IR. Complements facet."}
+{"term": "Mach-O", "spoken": "mach oh", "ipa": "mˈɑːk ˈoʊ", "description": "The Mach-O executable format used on macOS"}
+{"term": "MIR", "spoken": "meer", "ipa": "mˈɪɹ", "description": "Rust's Mid-level Intermediate Representation in the compiler"}
+{"term": "miri", "spoken": "miri", "ipa": "mˈiəɹi", "description": "Rust interpreter for detecting undefined behavior"}
+{"term": "QEMU", "spoken": "Q emu", "ipa": "kjˈuː ˈiːmjuː", "description": "An emulator and virtualizer often used for cross-architecture testing"}
+{"term": "qwen", "spoken": "kwen", "ipa": "kwˈɛn", "description": "Qwen (also known as Tongyi Qianwen, Chinese: 通义千问; pinyin: Tōngyì Qiānwèn) is a family of large language models developed by Alibaba Cloud."}
+{"term": "regalloc", "spoken": "regg-alloc", "ipa": "ɹˈɛɡˈælɑːk", "description": "Register allocator in a compiler backend"}
+{"term": "repr", "spoken": "reppur", "ipa": "ɹˈɛpʊɹ", "description": "Rust memory layout attribute"}
+{"term": "reqwest", "spoken": "request", "ipa": "ɹᵻkwˈɛst", "description": "HTTP client library for Rust"}
+{"term": "ripgrep", "spoken": "rip grep", "ipa": "ɹˈɪp ɡɹˈɛp", "description": "A fast recursive search tool commonly used by developers"}
+{"term": "rustc", "spoken": "rust sea", "ipa": "ɹˈʌst sˈiː", "description": "Rust compiler"}
+{"term": "serde", "spoken": "sirday", "ipa": "sˈɜːdeɪ", "description": "Rust serialization/deserialization framework"}
+{"term": "serde_json", "spoken": "sirday jason", "ipa": "sˈɜːdeɪ dʒˈeɪsən", "description": "JSON library for serde"}
+{"term": "SQLite", "spoken": "sequel light", "ipa": "sˈiːkwəl lˈaɪt", "description": "SQLite embedded database engine"}
+{"term": "tokio", "spoken": "tokio", "ipa": "tˈoʊkɪˌoʊ", "description": "Async runtime for Rust"}
+{"term": "u32", "spoken": "you thirty-two", "ipa": "juː θˈɜːɾitˈuː", "description": "A 32-bit unsigned integer type in Rust"}
+{"term": "u8", "spoken": "you eight", "ipa": "juː ˈeɪt", "description": "An 8-bit unsigned integer type in Rust"}
+{"term": "Vec", "spoken": "vec", "ipa": "vˈɛk", "description": "Growable array type in Rust"}
+{"term": "vox", "spoken": "vox", "ipa": "vˈɑːks", "description": "An RPC library made by bearcove that is used in a bunch of Rust projects. It supports retries and everything."}
+{"term": "WASM", "spoken": "waz-um", "ipa": "wˈæzˈʌm", "description": "WebAssembly bytecode format"}
+{"term": "x86_64", "spoken": "ex eighty-six sixty-four", "ipa": "ˈɛks ˈeɪɾisˈɪks sˈɪkstifˈɔːɹ", "description": "A 64-bit x86 architecture target identifier"}
