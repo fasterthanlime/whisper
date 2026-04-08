@@ -82,7 +82,7 @@ function AlignmentLane({
   );
 }
 
-function AlignmentView({
+export function AlignmentView({
   ops,
   transcriptLabel,
   zipaLabel,
