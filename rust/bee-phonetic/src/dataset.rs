@@ -322,7 +322,7 @@ mod tests {
         .expect("write sentence_examples");
         fs::write(
             dir.join("recording_examples.jsonl"),
-            "{\"term\":\"serde\",\"text\":\"serde handles config\",\"take\":1,\"audio_path\":\"audio/authored_1_take_1.ogg\",\"transcript\":\"sir day handles config\"}\n",
+            "{\"term\":\"serde\",\"text\":\"serde handles config\",\"take\":1,\"audio_path\":\"audio/authored_1_take_1.ogg\",\"transcript\":\"sir day handles config\",\"words\":[]}\n",
         )
         .expect("write recording_examples");
         fs::create_dir_all(dir.join("audio")).expect("create audio dir");
@@ -365,7 +365,7 @@ mod tests {
         .expect("write sentence_examples");
         fs::write(
             dir.join("recording_examples.jsonl"),
-            "{\"term\":\"serde\",\"text\":\"serde handles config\",\"take\":1,\"audio_path\":\"audio/missing.ogg\",\"transcript\":\"sir day handles config\"}\n",
+            "{\"term\":\"serde\",\"text\":\"serde handles config\",\"take\":1,\"audio_path\":\"audio/missing.ogg\",\"transcript\":\"sir day handles config\",\"words\":[]}\n",
         )
         .expect("write recording_examples");
 
