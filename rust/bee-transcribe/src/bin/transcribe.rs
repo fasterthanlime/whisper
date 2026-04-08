@@ -29,6 +29,8 @@ fn main() -> anyhow::Result<()> {
         tokenizer_dir: Path::new(&tokenizer_dir),
         aligner_dir: Path::new(&aligner_dir),
         silero_dir: Path::new(&vad_dir),
+        correction_dir: None,
+        correction_events_path: None,
     })?;
     println!("Engine loaded in {:.0}ms", t0.elapsed().as_millis());
 
@@ -64,7 +66,7 @@ fn main() -> anyhow::Result<()> {
         options.max_tokens_final = v.parse().unwrap();
     }
     let chunk_samples = (options.chunk_duration * 16000.0) as usize;
-    let mut session = engine.session(options, None)?;
+    let mut session = engine.session(options)?;
 
     println!(
         "\n--- Streaming (chunk={:.0}ms) ---\n",

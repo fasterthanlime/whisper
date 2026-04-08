@@ -75,11 +75,24 @@ fn resolve_engine_config(
     let aligner_dir: &'static Path = Box::leak(aligner_dir.into_boxed_path());
     let silero_dir: &'static Path = Box::leak(silero_dir.into_boxed_path());
 
+    // Look for the correction dataset directory
+    let correction_dir_path = cache_base.join("bee-correct-dataset");
+    let correction_dir: Option<&'static Path> = if correction_dir_path.exists() {
+        Some(Box::leak(correction_dir_path.into_boxed_path()))
+    } else {
+        None
+    };
+
+    // Events path for online learning (next to correction dataset)
+    let correction_events_path = correction_dir.map(|d| d.join("events.jsonl"));
+
     Ok(EngineConfig {
         model_dir,
         tokenizer_dir,
         aligner_dir,
         silero_dir,
+        correction_dir,
+        correction_events_path,
     })
 }
 

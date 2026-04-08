@@ -46,6 +46,8 @@ fn main() -> anyhow::Result<()> {
         tokenizer_dir: Path::new(&tokenizer_dir),
         aligner_dir: Path::new(&aligner_dir),
         silero_dir: Path::new(&silero_dir),
+        correction_dir: None,
+        correction_events_path: None,
     })?;
     println!("done ({:.0}ms)", t0.elapsed().as_millis());
 
@@ -184,7 +186,7 @@ fn transcribe_file(
 
     let options = SessionOptions::default();
     let chunk_samples = (options.chunk_duration * 16000.0) as usize;
-    let mut session = engine.session(options, None)?;
+    let mut session = engine.session(options)?;
 
     let mut offset = 0;
     while offset < samples.len() {

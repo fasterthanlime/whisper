@@ -12,6 +12,7 @@ mod types;
 mod wav_util;
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use bee_types::Confidence;
 use bee_vad::SileroVad;
@@ -30,11 +31,15 @@ use tokenizers::Tokenizer;
 
 pub use bee_types::AlignedWord;
 
+/// Shared handle to a correction engine. Cloneable — multiple sessions
+/// can reference the same engine (locked during use).
+pub type SharedCorrectionEngine = Arc<Mutex<CorrectionEngine>>;
+
 /// Result of `Session::finish()`. Contains the final update and optionally
-/// the correction engine + corrector state (for teach/save).
+/// the corrector state (for teach/save).
 pub struct FinishResult {
     pub update: Update,
-    pub correction: Option<(CorrectionEngine, Corrector)>,
+    pub corrector: Option<Corrector>,
 }
 
 use crate::aligner::Aligner;
@@ -56,6 +61,7 @@ pub struct Engine {
     model: Qwen3ASRModel,
     aligner: ForcedAligner,
     vad_tensors: HashMap<String, mlx_rs::Array>,
+    correction: Option<SharedCorrectionEngine>,
 }
 
 // SAFETY: Engine is immutable after construction. The MLX arrays inside are
@@ -64,6 +70,11 @@ unsafe impl Send for Engine {}
 unsafe impl Sync for Engine {}
 
 impl Engine {
+    /// Access the shared correction engine, if loaded.
+    pub fn correction(&self) -> Option<&SharedCorrectionEngine> {
+        self.correction.as_ref()
+    }
+
     /// Load an engine from explicit paths.
     pub fn load(config: &EngineConfig<'_>) -> Result<Self, Exception> {
         let config_path = config.model_dir.join("config.json");
@@ -95,28 +106,40 @@ impl Engine {
         let vad_tensors = mlx_rs::Array::load_safetensors(&st_path)
             .map_err(|e| Exception::custom(format!("vad weights load: {e}")))?;
 
+        let correction = if let Some(dataset_dir) = config.correction_dir {
+            let cc = crate::correct::CorrectionConfig {
+                dataset_dir,
+                events_path: config.correction_events_path.clone(),
+                gate_threshold: 0.0, // uses default
+                ranker_threshold: 0.0, // uses default
+            };
+            let ce = crate::correct::load_correction_engine(&cc)
+                .map_err(|e| Exception::custom(format!("correction engine: {e}")))?;
+            log::info!("Correction engine loaded");
+            Some(Arc::new(Mutex::new(ce)))
+        } else {
+            None
+        };
+
         Ok(Engine {
             model,
             tokenizer,
             aligner,
             vad_tensors,
+            correction,
         })
     }
 
     /// Create a new transcription session.
     ///
-    /// Pass a `CorrectionEngine` to enable inline corrections during dictation.
-    pub fn session(
-        &self,
-        options: SessionOptions,
-        correction_engine: Option<CorrectionEngine>,
-    ) -> Result<Session<'_>, Exception> {
+    /// Create a new transcription session.
+    pub fn session(&self, options: SessionOptions) -> Result<Session<'_>, Exception> {
         let chunk_size_samples = (options.chunk_duration * 16000.0) as usize;
 
         let vad = SileroVad::from_tensors(&self.vad_tensors)
             .map_err(|e| Exception::custom(format!("vad creation failed: {e}")))?;
 
-        let correction = correction_engine.map(|ce| (ce, Corrector::new()));
+        let correction = self.correction.as_ref().map(|ce| (ce.clone(), Corrector::new()));
 
         Ok(Session {
             engine: self,
@@ -137,7 +160,7 @@ pub struct Session<'a> {
     speech_gate: SpeechGate,
     generator: Generator,
     aligner: Aligner,
-    correction: Option<(CorrectionEngine, Corrector)>,
+    correction: Option<(SharedCorrectionEngine, Corrector)>,
     options: SessionOptions,
 }
 
@@ -243,21 +266,16 @@ impl<'a> Session<'a> {
         }
 
         let update = self.make_update();
-        let correction = self.correction.take();
-        Ok(FinishResult { update, correction })
-    }
-
-    /// Take ownership of the correction engine + corrector state.
-    /// Used by bee-ffi for teach/save after the session ends.
-    pub fn take_correction(&mut self) -> Option<(CorrectionEngine, Corrector)> {
-        self.correction.take()
+        let corrector = self.correction.take().map(|(_, c)| c);
+        Ok(FinishResult { update, corrector })
     }
 
     // ── Internal ────────────────────────────────────────────────────
 
     fn run_correction(&mut self, chunk: &crate::aligner::AlignedChunk) {
-        if let Some((ref mut engine, ref mut corrector)) = self.correction {
-            corrector.process_chunk(engine, chunk, self.options.app_id.as_deref());
+        if let Some((ref engine_arc, ref mut corrector)) = self.correction {
+            let mut engine = engine_arc.lock().expect("correction engine lock poisoned");
+            corrector.process_chunk(&mut engine, chunk, self.options.app_id.as_deref());
         }
     }
 

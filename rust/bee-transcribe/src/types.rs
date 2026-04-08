@@ -115,4 +115,11 @@ pub struct EngineConfig<'a> {
 
     /// Directory containing silero VAD weights
     pub silero_dir: &'a Path,
+
+    /// Optional directory containing the correction dataset (phonetic index,
+    /// espeak data, seed weights). If set, inline corrections are enabled.
+    pub correction_dir: Option<&'a Path>,
+
+    /// Optional path to the correction events JSONL file (for online learning).
+    pub correction_events_path: Option<std::path::PathBuf>,
 }

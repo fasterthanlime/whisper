@@ -1,6 +1,6 @@
 //! bee-ffi — vox-ffi service exposing the Bee engine to Swift.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -8,7 +8,6 @@ use bee_rpc::{
     BeeDispatcher, BeeError, EditResolution, EngineStats,
     FeedResult, RepoDownload,
 };
-use bee_transcribe::correct::{CorrectionConfig, CorrectionEngine, load_correction_engine};
 use bee_transcribe::corrector::Corrector;
 use bee_transcribe::{Language, SessionOptions};
 
@@ -137,7 +136,7 @@ struct BeeServiceInner {
     engine: OnceLock<AsrEngine>,
     sessions: SessionMap,
     next_session_id: AtomicU64,
-    correction: tokio::sync::Mutex<Option<(CorrectionEngine, Corrector)>>,
+    last_corrector: tokio::sync::Mutex<Option<Corrector>>,
 }
 
 #[derive(Clone)]
@@ -152,7 +151,7 @@ impl BeeService {
                 engine: OnceLock::new(),
                 sessions: DashMap::new(),
                 next_session_id: AtomicU64::new(1),
-                correction: tokio::sync::Mutex::new(None),
+                last_corrector: tokio::sync::Mutex::new(None),
             }),
         }
     }
@@ -177,9 +176,10 @@ impl BeeService {
 
     /// Create a new ASR session with VAD, returning the raw Session.
     fn make_session(
-        engine: &AsrEngine,
+        &self,
         config: &bee_rpc::SessionConfig,
     ) -> Result<bee_transcribe::Session<'static>, BeeError> {
+        let engine = self.engine()?;
         let defaults = SessionOptions::default();
         let lang = if config.language.is_empty() {
             Language::default()
@@ -214,7 +214,7 @@ impl BeeService {
             "make_session: chunk={:.2}s vad_thresh={:.2} rollback={} commit={}",
             opts.chunk_duration, opts.vad_threshold, opts.rollback_tokens, opts.commit_token_count,
         );
-        let session = engine.inner.session(opts, None).map_err(|e| BeeError::TranscriptionError {
+        let session = engine.inner.session(opts).map_err(|e| BeeError::TranscriptionError {
             message: format!("{e}"),
         })?;
         Ok(session)
@@ -240,13 +240,11 @@ impl bee_rpc::Bee for BeeService {
     }
 
     async fn create_session(&self, config: bee_rpc::SessionConfig) -> Result<String, BeeError> {
-        let engine = self.engine()?;
-
         let id_num = self.inner.next_session_id.fetch_add(1, Ordering::Relaxed);
         let id = format!("session-{id_num}");
         info!("create_session: {id} language={}", config.language);
 
-        let session = Self::make_session(engine, &config)?;
+        let session = self.make_session(&config)?;
         self.inner.sessions.insert(
             id.clone(),
             Arc::new(tokio::sync::Mutex::new(SessionInner {
@@ -338,7 +336,7 @@ impl bee_rpc::Bee for BeeService {
 
         // Extract correction data before stashing
         let (correction_edits, correction_session_id) =
-            if let Some((ref _engine, ref corrector)) = finish.correction {
+            if let Some(ref corrector) = finish.corrector {
                 (
                     corrector.committed_edits().to_vec(),
                     corrector.session_id().to_string(),
@@ -347,9 +345,9 @@ impl bee_rpc::Bee for BeeService {
                 (vec![], String::new())
             };
 
-        // Stash correction state for teach/save
-        if let Some((engine, corrector)) = finish.correction {
-            *self.inner.correction.lock().await = Some((engine, corrector));
+        // Stash corrector for teach/save
+        if let Some(corrector) = finish.corrector {
+            *self.inner.last_corrector.lock().await = Some(corrector);
         }
 
         let update = finish.update;
@@ -374,18 +372,16 @@ impl bee_rpc::Bee for BeeService {
             });
         }
 
-        let engine = self.engine()?;
         let session = self.get_session(&session_id)?;
         let mut guard = session.lock().await;
 
         info!("set_language: {session_id} → {language}");
         guard.config.language = language;
-        guard.session = Some(Self::make_session(engine, &guard.config)?);
+        guard.session = Some(self.make_session(&guard.config)?);
         Ok(true)
     }
 
     async fn transcribe_samples(&self, samples: Vec<f32>) -> Result<String, BeeError> {
-        let engine = self.engine()?;
         let default_config = bee_rpc::SessionConfig {
             language: String::new(),
             chunk_duration: 0.0,
@@ -393,7 +389,7 @@ impl bee_rpc::Bee for BeeService {
             rollback_tokens: 0,
             commit_token_count: 0,
         };
-        let mut session = Self::make_session(engine, &default_config)?;
+        let mut session = self.make_session(&default_config)?;
 
         // feed + finish are CPU/GPU intensive
         let result = tokio::task::spawn_blocking(move || {
@@ -434,30 +430,21 @@ impl bee_rpc::Bee for BeeService {
 
     async fn correct_load(
         &self,
-        dataset_dir: String,
-        events_path: String,
-        gate_threshold: f32,
-        ranker_threshold: f32,
+        _dataset_dir: String,
+        _events_path: String,
+        _gate_threshold: f32,
+        _ranker_threshold: f32,
     ) -> Result<bool, BeeError> {
-        let events = if events_path.is_empty() {
-            None
+        // Correction engine is now loaded by Engine at load_engine time.
+        // This RPC exists for backwards compat — just report whether it's available.
+        let engine = self.engine()?;
+        let loaded = engine.inner.correction().is_some();
+        if loaded {
+            info!("correct_load: correction engine available (loaded with engine)");
         } else {
-            Some(PathBuf::from(events_path))
-        };
-        let config = CorrectionConfig {
-            dataset_dir: Path::new(&dataset_dir),
-            events_path: events,
-            gate_threshold,
-            ranker_threshold,
-        };
-        let engine = load_correction_engine(&config).map_err(|e| {
-            tracing::error!("correct_load: {e}");
-            BeeError::CorrectionError { message: e }
-        })?;
-        info!("correct_load: success");
-        // Store engine with a fresh corrector — will be moved into sessions
-        *self.inner.correction.lock().await = Some((engine, Corrector::new()));
-        Ok(true)
+            info!("correct_load: no correction engine (dataset not found at load time)");
+        }
+        Ok(loaded)
     }
 
     async fn correct_teach(
@@ -465,15 +452,23 @@ impl bee_rpc::Bee for BeeService {
         _session_id: String,
         resolutions: Vec<EditResolution>,
     ) -> Result<bool, BeeError> {
+        let engine_asr = self.engine()?;
+        let correction_arc = engine_asr.inner.correction().cloned().ok_or_else(|| {
+            BeeError::CorrectionError {
+                message: "correction engine not loaded".into(),
+            }
+        })?;
+
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
-            let mut guard = inner.correction.blocking_lock();
-            let Some((engine, corrector)) = guard.as_mut() else {
+            let mut corrector_guard = inner.last_corrector.blocking_lock();
+            let Some(corrector) = corrector_guard.as_mut() else {
                 return Err(BeeError::CorrectionError {
-                    message: "correction engine not loaded".into(),
+                    message: "no corrector from last session".into(),
                 });
             };
 
+            let mut engine = correction_arc.lock().expect("correction engine lock poisoned");
             let pending_edits = corrector.take_pending();
 
             for res in &resolutions {
@@ -511,25 +506,27 @@ impl bee_rpc::Bee for BeeService {
     }
 
     async fn correct_save(&self) -> Result<bool, BeeError> {
-        let inner = self.inner.clone();
+        let engine_asr = self.engine()?;
+        let correction_arc = engine_asr.inner.correction().cloned().ok_or_else(|| {
+            BeeError::CorrectionError {
+                message: "correction engine not loaded".into(),
+            }
+        })?;
+
         tokio::task::spawn_blocking(move || {
-            let mut guard = inner.correction.blocking_lock();
-            let Some((engine, _)) = guard.as_mut() else {
-                return Err(BeeError::CorrectionError {
-                    message: "correction engine not loaded".into(),
-                });
-            };
+            let mut engine = correction_arc.lock().expect("correction engine lock poisoned");
 
             let Some(ref path) = engine.events_path else {
                 tracing::warn!("correct_save: no events_path configured, skipping");
                 return Ok(true);
             };
+            let path = path.clone();
 
             use std::io::Write;
             let file = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(path)
+                .open(&path)
                 .map_err(|e| BeeError::CorrectionError {
                     message: format!("open events file: {e}"),
                 })?;

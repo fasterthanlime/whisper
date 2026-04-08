@@ -78,6 +78,8 @@ async fn main() -> Result<()> {
         tokenizer_dir: &tokenizer_dir,
         aligner_dir: &aligner_dir,
         silero_dir: &silero_dir,
+        correction_dir: None,
+        correction_events_path: None,
     })
     .context("loading engine")?;
 
