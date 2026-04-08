@@ -97,9 +97,40 @@ pub struct PendingToken {
     pub alternatives: Vec<TokenAlternative>,
 }
 
+/// Summary of how volatile the current pending decode tail is.
+#[derive(Debug, Clone, Facet)]
+pub struct SessionAmbiguitySummary {
+    /// Number of pending tail tokens included in this summary.
+    pub pending_token_count: u32,
+
+    /// Tokens whose concentration falls below the stability gate.
+    pub low_concentration_count: u32,
+
+    /// Tokens whose top-1 vs top-2 margin falls below the tie gate.
+    pub low_margin_count: u32,
+
+    /// Tokens that are unstable by either concentration or margin.
+    pub volatile_token_count: u32,
+
+    /// Mean concentration across pending tokens, or 0 when none exist.
+    pub mean_concentration: f32,
+
+    /// Mean margin across pending tokens, or 0 when none exist.
+    pub mean_margin: f32,
+
+    /// Minimum concentration across pending tokens, or 0 when none exist.
+    pub min_concentration: f32,
+
+    /// Minimum margin across pending tokens, or 0 when none exist.
+    pub min_margin: f32,
+}
+
 /// Native Session snapshot returned by `feed()` and `finish()`.
 #[derive(Debug, Clone, Facet)]
 pub struct SessionSnapshot {
+    /// Monotonic per-session revision. Increments whenever a new snapshot is produced.
+    pub revision: u64,
+
     /// Fully committed text only.
     pub committed_text: String,
 
@@ -109,11 +140,23 @@ pub struct SessionSnapshot {
     /// Full visible text (`committed_text + pending_text`).
     pub full_text: String,
 
+    /// Number of committed tokens currently frozen into `committed_text`.
+    pub committed_token_count: u32,
+
+    /// Number of volatile tail tokens currently represented by `pending_tokens`.
+    pub pending_token_count: u32,
+
     /// Word-level timestamps for committed words only.
     pub committed_words: Vec<AlignedWord>,
 
     /// Current pending token alternatives from the decode tail.
+    ///
+    /// These are decoder-local token alternatives, not final word alternatives.
+    /// They are volatile and may be rewritten on the next `feed()`.
     pub pending_tokens: Vec<PendingToken>,
+
+    /// Summary of pending-tail instability derived from `pending_tokens`.
+    pub ambiguity: SessionAmbiguitySummary,
 
     /// Language detected by the model (empty if language was forced).
     pub detected_language: String,
