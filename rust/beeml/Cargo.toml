@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 default-run = "beeml"
 
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
 [features]
 default = ["server"]
 server = ["dep:tokio", "dep:vox-core", "dep:vox-websocket"]

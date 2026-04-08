@@ -5,6 +5,11 @@ edition = "2021"
 description = "Silero VAD v5 voice activity detection via MLX on Apple Silicon"
 license = "MIT"
 
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
 [dependencies]
 mlx-rs.workspace = true
 log = "0.4"

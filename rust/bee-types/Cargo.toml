@@ -3,5 +3,10 @@ name = "bee-types"
 version = "0.1.0"
 edition = "2021"
 
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
 [dependencies]
 facet = "0.44.3"

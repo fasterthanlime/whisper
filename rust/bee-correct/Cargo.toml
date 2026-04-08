@@ -5,6 +5,11 @@ edition = "2021"
 description = "Core correction logic: judge, FTRL optimizer, G2P cache"
 license = "MIT"
 
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
 [dependencies]
 bee-types = { path = "../bee-types" }
 bee-phonetic = { path = "../bee-phonetic" }

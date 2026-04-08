@@ -5,6 +5,11 @@ edition = "2021"
 description = "Qwen3-ASR inference via MLX on Apple Silicon"
 license = "MIT"
 
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
 [dependencies]
 mlx-rs.workspace = true
 tokenizers.workspace = true

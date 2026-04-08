@@ -3,6 +3,11 @@ name = "bee-phonetic"
 version = "0.1.0"
 edition = "2021"
 
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
 [dependencies]
 bee-types = { path = "../bee-types" }
 rspanphon = { path = "../vendor/rspanphon" }

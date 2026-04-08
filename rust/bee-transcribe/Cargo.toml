@@ -5,6 +5,11 @@ edition = "2021"
 description = "High-level streaming transcription built on bee-qwen3-asr"
 license = "MIT"
 
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
 [dependencies]
 bee-qwen3-asr = { path = "../bee-qwen3-asr" }
 bee-vad = { path = "../bee-vad" }

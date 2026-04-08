@@ -5,6 +5,11 @@ edition = "2021"
 description = "ZIPA inference via MLX on Apple Silicon"
 license = "MIT"
 
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
 [dependencies]
 anyhow.workspace = true
 bee-correct = { path = "../bee-correct" }
