@@ -81,11 +81,11 @@ pub(crate) struct EvalCase {
 }
 
 impl BeeMlService {
-    pub(crate) fn transcribe_samples_chunked(
+    pub(crate) fn transcribe_samples_with_options(
         &self,
         samples: &[f32],
+        options: bee_transcribe::SessionOptions,
     ) -> Result<bee_transcribe::FinishResult, String> {
-        let options = bee_transcribe::SessionOptions::default();
         let chunk_samples = (options.chunk_duration * 16_000.0) as usize;
         let mut session = self
             .inner
@@ -103,6 +103,13 @@ impl BeeMlService {
         }
 
         session.finish().map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn transcribe_samples_chunked(
+        &self,
+        samples: &[f32],
+    ) -> Result<bee_transcribe::FinishResult, String> {
+        self.transcribe_samples_with_options(samples, bee_transcribe::SessionOptions::default())
     }
 
     pub(crate) fn corpus_capture_prompts(&self) -> Vec<beeml::rpc::CorpusCapturePrompt> {
@@ -133,6 +140,9 @@ impl BeeMlService {
         audio: &AudioBuffer,
         snapshot: &SessionSnapshot,
     ) -> Result<TranscribePhoneticTrace, String> {
+        let tail_blocks_rescue = !snapshot.pending_text.trim().is_empty()
+            || snapshot.pending_token_count > 0
+            || snapshot.ambiguity.volatile_token_count > 0;
         let transcript = snapshot.committed_text.trim();
         let words = &snapshot.committed_words;
         let alignments = words
@@ -301,7 +311,8 @@ impl BeeMlService {
                     TranscribePhoneticAnchorConfidence::Medium
                         | TranscribePhoneticAnchorConfidence::High
                 ) && !matches!(span_usefulness, TranscribePhoneticSpanUsefulness::Low)
-                    && candidate_plausible;
+                    && candidate_plausible
+                    && !tail_blocks_rescue;
 
             phonetic_spans.push(TranscribePhoneticSpan {
                 span_text: span.text,
@@ -465,20 +476,24 @@ impl BeeMlService {
                 sample_rate_hz: 16_000,
             };
 
-            let result = self.transcribe_samples_chunked(&samples)?;
+            let mut options = bee_transcribe::SessionOptions::default();
+            options.language = bee_transcribe::Language("English".to_string());
+            let result = self.transcribe_samples_with_options(&samples, options)?;
             let snapshot = result.snapshot;
 
             match self.build_transcribe_phonetic_trace(&audio, &snapshot) {
                 Ok(trace) => {
                     let tail_volatile_token_count = trace.tail_ambiguity.volatile_token_count;
-                    let row_rescue_ready = tail_volatile_token_count == 0;
+                    let row_rescue_ready =
+                        tail_volatile_token_count == 0 && trace.pending_text.trim().is_empty();
                     let positive_span_count = trace
                         .spans
                         .iter()
                         .filter(|span| {
-                            span.candidates
-                                .iter()
-                                .any(|candidate| candidate.similarity_delta.unwrap_or(0.0) > 0.0)
+                            span.zipa_rescue_eligible
+                                && span.candidates.iter().any(|candidate| {
+                                    candidate.similarity_delta.unwrap_or(0.0) > 0.0
+                                })
                         })
                         .count()
                         .min(u32::MAX as usize)
@@ -507,6 +522,7 @@ impl BeeMlService {
                     let best_span_delta = trace
                         .spans
                         .iter()
+                        .filter(|span| span.zipa_rescue_eligible)
                         .flat_map(|span| {
                             span.candidates
                                 .iter()
