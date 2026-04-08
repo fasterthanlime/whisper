@@ -5,15 +5,16 @@ use bee_zipa_mlx::audio::AudioBuffer;
 use beeml::judge::OnlineJudge;
 use beeml::rpc::{
     AcceptedEdit, BeeMl, CorpusCapturePlanResult, CorrectionDebugResult, CorrectionRequest,
-    CorrectionResult, JudgeEvalFailure, ModelSummary, OfflineJudgeEvalRequest,
-    OfflineJudgeEvalResult, PhoneticComparisonRequest, PhoneticComparisonResult, ProbDistribution,
-    RerankerDebugTrace, RetrievalEvalMiss, RetrievalEvalTermSummary,
-    RetrievalPrototypeEvalProgress, RetrievalPrototypeEvalRequest, RetrievalPrototypeEvalResult,
-    RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult, RetrievalPrototypeTeachingCase,
-    RetrievalPrototypeTeachingDeckRequest, RetrievalPrototypeTeachingDeckResult,
-    SaveCorpusRecordingRequest, SaveCorpusRecordingResult, TeachRetrievalPrototypeJudgeRequest,
-    TermAliasView, TermInspectionRequest, TermInspectionResult, ThresholdRow, TimingBreakdown,
-    TranscribeWavResult, TwoStageGridPoint, TwoStageResult,
+    CorrectionResult, DeleteCorpusRecordingRequest, DeleteCorpusRecordingResult, JudgeEvalFailure,
+    ModelSummary, OfflineJudgeEvalRequest, OfflineJudgeEvalResult, PhoneticComparisonRequest,
+    PhoneticComparisonResult, ProbDistribution, RerankerDebugTrace, RetrievalEvalMiss,
+    RetrievalEvalTermSummary, RetrievalPrototypeEvalProgress, RetrievalPrototypeEvalRequest,
+    RetrievalPrototypeEvalResult, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
+    RetrievalPrototypeTeachingCase, RetrievalPrototypeTeachingDeckRequest,
+    RetrievalPrototypeTeachingDeckResult, SaveCorpusRecordingRequest, SaveCorpusRecordingResult,
+    TeachRetrievalPrototypeJudgeRequest, TermAliasView, TermInspectionRequest,
+    TermInspectionResult, ThresholdRow, TimingBreakdown, TranscribeWavResult, TwoStageGridPoint,
+    TwoStageResult,
 };
 use tracing::info;
 use vox::{Rx, Tx};
@@ -1646,6 +1647,22 @@ impl BeeMl for BeeMlService {
             .min(u32::MAX as usize) as u32;
         Ok(SaveCorpusRecordingResult {
             recording,
+            total_recordings,
+        })
+    }
+
+    async fn delete_corpus_recording(
+        &self,
+        request: DeleteCorpusRecordingRequest,
+    ) -> Result<DeleteCorpusRecordingResult, String> {
+        let deleted =
+            delete_corpus_recording(&self.inner.corpus_dir, &request).map_err(|e| e.to_string())?;
+        let total_recordings = load_corpus_recordings(&self.inner.corpus_dir)
+            .map_err(|e| e.to_string())?
+            .len()
+            .min(u32::MAX as usize) as u32;
+        Ok(DeleteCorpusRecordingResult {
+            deleted,
             total_recordings,
         })
     }

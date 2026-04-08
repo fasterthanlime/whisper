@@ -146,6 +146,36 @@ export function CorpusCapturePanel({ wsUrl }: { wsUrl: string }) {
     }
   }, [audioUrl, currentPrompt, moveToNextUnrecorded, notes, recorder, wsUrl]);
 
+  const handleDeleteTake = useCallback(
+    async (recording: CorpusCaptureRecording) => {
+      try {
+        setStatus(`Deleting take ${recording.take}...`);
+        setError(null);
+        const client = await connectBeeMl(wsUrl);
+        const result = await client.deleteCorpusRecording({
+          prompt_id: recording.prompt_id,
+          take: recording.take,
+        });
+        if (!result.ok) throw new Error(result.error);
+        setPlan((prev) =>
+          prev
+            ? {
+                ...prev,
+                recordings: prev.recordings.filter(
+                  (row) => !(row.prompt_id === recording.prompt_id && row.take === recording.take),
+                ),
+              }
+            : prev,
+        );
+        setStatus(`Deleted take ${recording.take}.`);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setStatus(null);
+      }
+    },
+    [wsUrl],
+  );
+
   return (
     <div className="prototype-lab prototype-stack judge-eval-layout">
       <section className="prototype-card prototype-card-tight">
@@ -237,10 +267,33 @@ export function CorpusCapturePanel({ wsUrl }: { wsUrl: string }) {
           ) : null}
 
           {latestRecording ? (
-            <div className="prototype-summary">
-              <span>saved {formatTimestamp(latestRecording.created_at_unix_ms)}</span>
-              <span>{latestRecording.num_bytes} bytes</span>
-              <span>{latestRecording.wav_path}</span>
+            <div style={{ display: "grid", gap: "0.65rem" }}>
+              <strong>Saved takes</strong>
+              {currentRecordings.map((recording) => (
+                <div
+                  key={`${recording.prompt_id}-${recording.take}`}
+                  className="prototype-summary"
+                  style={{
+                    alignItems: "center",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(0, max-content)) 1fr auto",
+                    gap: "0.65rem",
+                  }}
+                >
+                  <span>take {recording.take}</span>
+                  <span>saved {formatTimestamp(recording.created_at_unix_ms)}</span>
+                  <span>{recording.num_bytes} bytes</span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {recording.wav_path}
+                  </span>
+                  <button
+                    className="danger"
+                    onClick={() => void handleDeleteTake(recording)}
+                    disabled={recorder.state === "recording"}
+                  >
+                    Delete
+                  </button>
+                </div>
+              ))}
             </div>
           ) : (
             <div className="prototype-empty">No saved takes for this prompt yet.</div>

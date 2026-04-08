@@ -4,8 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use beeml::rpc::{
-    AliasSource, CandidateFeatureDebug, CorpusCaptureRecording, IdentifierFlags,
-    RetrievalIndexView, SaveCorpusRecordingRequest,
+    AliasSource, CandidateFeatureDebug, CorpusCaptureRecording, DeleteCorpusRecordingRequest,
+    IdentifierFlags, RetrievalIndexView, SaveCorpusRecordingRequest,
 };
 
 use crate::service::{CounterexampleRecordingRow, EvalCase};
@@ -237,4 +237,50 @@ pub(crate) fn save_corpus_recording(
     writeln!(file, "{json}")?;
 
     Ok(row)
+}
+
+pub(crate) fn delete_corpus_recording(
+    corpus_dir: &std::path::Path,
+    request: &DeleteCorpusRecordingRequest,
+) -> Result<bool> {
+    let existing = load_corpus_recordings(corpus_dir)?;
+    let mut deleted_path = None;
+    let retained: Vec<_> = existing
+        .into_iter()
+        .filter(|row| {
+            let keep = !(row.prompt_id == request.prompt_id && row.take == request.take);
+            if !keep {
+                deleted_path = Some(row.wav_path.clone());
+            }
+            keep
+        })
+        .collect();
+
+    let Some(wav_path) = deleted_path else {
+        return Ok(false);
+    };
+
+    let index_path = corpus_dir.join("recordings.jsonl");
+    if retained.is_empty() {
+        if index_path.exists() {
+            std::fs::remove_file(&index_path)
+                .with_context(|| format!("removing {}", index_path.display()))?;
+        }
+    } else {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&index_path)
+            .with_context(|| format!("writing {}", index_path.display()))?;
+        for row in &retained {
+            let json = facet_json::to_string(row).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            writeln!(file, "{json}")?;
+        }
+    }
+
+    let wav_path = std::path::PathBuf::from(wav_path);
+    if wav_path.exists() {
+        std::fs::remove_file(&wav_path)
+            .with_context(|| format!("removing {}", wav_path.display()))?;
+    }
+
+    Ok(true)
 }
