@@ -21,8 +21,6 @@ pub(crate) struct AsrEngine {
     /// Leaked via `Box::leak` — lives for process lifetime. Gives us a genuine
     /// `&'static Engine` so sessions can borrow it without transmute.
     pub(crate) inner: &'static Engine,
-    /// Pre-loaded VAD tensors (loaded once, cloned per session).
-    pub(crate) vad_tensors: Option<std::collections::HashMap<String, mlx_rs::Array>>,
     pub(crate) stats: StatsSampler,
 }
 
@@ -140,7 +138,6 @@ pub(crate) fn required_downloads() -> Vec<RepoDownload> {
                 RepoFile {
                     name: "model.safetensors".into(),
                     url: hf_file_url("mlx-community/Qwen3-ASR-1.7B-4bit", "model.safetensors"),
-
                 },
                 RepoFile {
                     name: "generation_config.json".into(),
@@ -148,7 +145,6 @@ pub(crate) fn required_downloads() -> Vec<RepoDownload> {
                         "mlx-community/Qwen3-ASR-1.7B-4bit",
                         "generation_config.json",
                     ),
-
                 },
                 RepoFile {
                     name: "preprocessor_config.json".into(),
@@ -156,7 +152,6 @@ pub(crate) fn required_downloads() -> Vec<RepoDownload> {
                         "mlx-community/Qwen3-ASR-1.7B-4bit",
                         "preprocessor_config.json",
                     ),
-
                 },
             ],
         },
@@ -166,11 +161,7 @@ pub(crate) fn required_downloads() -> Vec<RepoDownload> {
             files: vec![
                 RepoFile {
                     name: "config.json".into(),
-                    url: hf_file_url(
-                        "mlx-community/Qwen3-ForcedAligner-0.6B-4bit",
-                        "config.json",
-                    ),
-
+                    url: hf_file_url("mlx-community/Qwen3-ForcedAligner-0.6B-4bit", "config.json"),
                 },
                 RepoFile {
                     name: "model.safetensors".into(),
@@ -187,7 +178,6 @@ pub(crate) fn required_downloads() -> Vec<RepoDownload> {
             files: vec![RepoFile {
                 name: "model.safetensors".into(),
                 url: hf_file_url("aitytech/Silero-VAD-v5-MLX", "model.safetensors"),
-
             }],
         },
     ]

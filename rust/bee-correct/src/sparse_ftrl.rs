@@ -98,10 +98,16 @@ impl SparseFtrl {
         let g = p - if label { 1.0 } else { 0.0 };
 
         for f in features {
-            if self.frozen.contains(&f.index) { continue; }
+            if self.frozen.contains(&f.index) {
+                continue;
+            }
             let g_i = g * f.value;
             // Compute current weight before mutating accumulators
-            let (z_old, n_old) = self.accumulators.get(&f.index).copied().unwrap_or((0.0, 0.0));
+            let (z_old, n_old) = self
+                .accumulators
+                .get(&f.index)
+                .copied()
+                .unwrap_or((0.0, 0.0));
             let w_i = if z_old.abs() <= self.l1 {
                 0.0
             } else {
@@ -201,9 +207,15 @@ impl SparseFtrl {
             let target = if i == gold_index { 1.0 } else { 0.0 };
             let g = probs[i] - target;
             for f in features {
-                if self.frozen.contains(&f.index) { continue; }
+                if self.frozen.contains(&f.index) {
+                    continue;
+                }
                 let g_i = g * f.value;
-                let (z_old, n_old) = self.accumulators.get(&f.index).copied().unwrap_or((0.0, 0.0));
+                let (z_old, n_old) = self
+                    .accumulators
+                    .get(&f.index)
+                    .copied()
+                    .unwrap_or((0.0, 0.0));
                 let w_i = if z_old.abs() <= self.l1 {
                     0.0
                 } else {
@@ -271,15 +283,27 @@ mod tests {
         for _ in 0..30 {
             ftrl.update(
                 &[
-                    Feature { index: 0, value: 1.0 },
-                    Feature { index: 1000, value: 1.0 },
+                    Feature {
+                        index: 0,
+                        value: 1.0,
+                    },
+                    Feature {
+                        index: 1000,
+                        value: 1.0,
+                    },
                 ],
                 true,
             );
             ftrl.update(
                 &[
-                    Feature { index: 0, value: 1.0 },
-                    Feature { index: 2000, value: 1.0 },
+                    Feature {
+                        index: 0,
+                        value: 1.0,
+                    },
+                    Feature {
+                        index: 2000,
+                        value: 1.0,
+                    },
                 ],
                 false,
             );
@@ -287,8 +311,14 @@ mod tests {
 
         let w1000 = ftrl.weight_at(1000);
         let w2000 = ftrl.weight_at(2000);
-        assert!(w1000 > 0.0, "feature 1000 should have positive weight: {w1000}");
-        assert!(w2000 < 0.0, "feature 2000 should have negative weight: {w2000}");
+        assert!(
+            w1000 > 0.0,
+            "feature 1000 should have positive weight: {w1000}"
+        );
+        assert!(
+            w2000 < 0.0,
+            "feature 2000 should have negative weight: {w2000}"
+        );
     }
 
     #[test]
@@ -320,7 +350,16 @@ mod tests {
         }
         // Also add sparse features
         ftrl.update(
-            &[Feature { index: 5000, value: 1.0 }, Feature { index: 9999, value: 0.5 }],
+            &[
+                Feature {
+                    index: 5000,
+                    value: 1.0,
+                },
+                Feature {
+                    index: 9999,
+                    value: 0.5,
+                },
+            ],
             true,
         );
 
@@ -354,7 +393,7 @@ mod tests {
         }
 
         // Collect predictions from trained model
-        let test_cases = vec![
+        let test_cases = [
             features_from_dense(&[1.0, 0.9, 0.2]),
             features_from_dense(&[1.0, 0.1, 0.8]),
             features_from_dense(&[1.0, 0.5, 0.5]),
@@ -418,19 +457,40 @@ mod tests {
             model.update(&features_from_dense(&[1.0, 0.5, 0.1]), false);
         }
         let seeded_w2 = model.weight_at(2);
-        assert!(seeded_w2.abs() > 0.1, "seed should give feature 2 a weight: {seeded_w2}");
+        assert!(
+            seeded_w2.abs() > 0.1,
+            "seed should give feature 2 a weight: {seeded_w2}"
+        );
 
         // Load weights that only cover features 0 and 1
         let mut trained = SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
         for _ in 0..50 {
-            trained.update(&[
-                Feature { index: 0, value: 1.0 },
-                Feature { index: 1, value: 0.9 },
-            ], true);
-            trained.update(&[
-                Feature { index: 0, value: 1.0 },
-                Feature { index: 1, value: 0.1 },
-            ], false);
+            trained.update(
+                &[
+                    Feature {
+                        index: 0,
+                        value: 1.0,
+                    },
+                    Feature {
+                        index: 1,
+                        value: 0.9,
+                    },
+                ],
+                true,
+            );
+            trained.update(
+                &[
+                    Feature {
+                        index: 0,
+                        value: 1.0,
+                    },
+                    Feature {
+                        index: 1,
+                        value: 0.1,
+                    },
+                ],
+                false,
+            );
         }
         let mut buf = Vec::new();
         trained.save_weights(&mut buf).unwrap();
@@ -502,33 +562,87 @@ mod tests {
         for _ in 0..30 {
             trained.update(
                 &[
-                    Feature { index: 0, value: 1.0 },
-                    Feature { index: 1, value: 0.9 },
-                    Feature { index: 5000, value: 1.0 },  // sparse context
-                    Feature { index: 12345, value: 1.0 },
+                    Feature {
+                        index: 0,
+                        value: 1.0,
+                    },
+                    Feature {
+                        index: 1,
+                        value: 0.9,
+                    },
+                    Feature {
+                        index: 5000,
+                        value: 1.0,
+                    }, // sparse context
+                    Feature {
+                        index: 12345,
+                        value: 1.0,
+                    },
                 ],
                 true,
             );
             trained.update(
                 &[
-                    Feature { index: 0, value: 1.0 },
-                    Feature { index: 1, value: 0.1 },
-                    Feature { index: 6000, value: 1.0 },
-                    Feature { index: 54321, value: 1.0 },
+                    Feature {
+                        index: 0,
+                        value: 1.0,
+                    },
+                    Feature {
+                        index: 1,
+                        value: 0.1,
+                    },
+                    Feature {
+                        index: 6000,
+                        value: 1.0,
+                    },
+                    Feature {
+                        index: 54321,
+                        value: 1.0,
+                    },
                 ],
                 false,
             );
         }
 
         // Collect predictions on various inputs
-        let test_inputs = vec![
+        let test_inputs = [
             features_from_dense(&[1.0, 0.9, 0.2]),
             features_from_dense(&[1.0, 0.1, 0.8]),
-            vec![Feature { index: 0, value: 1.0 }, Feature { index: 5000, value: 1.0 }],
-            vec![Feature { index: 0, value: 1.0 }, Feature { index: 6000, value: 1.0 }],
-            vec![Feature { index: 0, value: 1.0 }, Feature { index: 99999, value: 1.0 }],  // unseen sparse
+            vec![
+                Feature {
+                    index: 0,
+                    value: 1.0,
+                },
+                Feature {
+                    index: 5000,
+                    value: 1.0,
+                },
+            ],
+            vec![
+                Feature {
+                    index: 0,
+                    value: 1.0,
+                },
+                Feature {
+                    index: 6000,
+                    value: 1.0,
+                },
+            ],
+            vec![
+                Feature {
+                    index: 0,
+                    value: 1.0,
+                },
+                Feature {
+                    index: 99999,
+                    value: 1.0,
+                },
+            ], // unseen sparse
         ];
-        let trained_preds: Vec<f64> = test_inputs.iter().map(|f| trained.predict_prob(f)).collect();
+        let trained_preds: Vec<f64> = test_inputs
+            .iter()
+            .map(|f| trained.predict_prob(f))
+            .collect();
 
         // Save
         let mut buf = Vec::new();

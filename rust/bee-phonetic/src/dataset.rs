@@ -181,7 +181,7 @@ pub enum SeedDatasetError {
     Json {
         path: PathBuf,
         line: usize,
-        source: facet_json::DeserializeError,
+        source: Box<facet_json::DeserializeError>,
     },
 }
 
@@ -308,7 +308,7 @@ where
         let row = facet_json::from_str(&line).map_err(|source| SeedDatasetError::Json {
             path: path.clone(),
             line: idx + 1,
-            source,
+            source: Box::new(source),
         })?;
         rows.push(row);
     }

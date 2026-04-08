@@ -404,15 +404,15 @@ fn structure_bonus(
         }
     }
 
-    if query_has_name_like_token && !query_identifier_like {
-        if alias_identifier_like {
-            bonus -= 0.12;
-        } else if alias.token_count == 1
-            && alias.alias_text.chars().all(|ch| ch.is_ascii_lowercase())
-            && alias.alias_text.chars().any(|ch| ch.is_ascii_alphabetic())
-        {
-            bonus -= 0.12;
-        }
+    if query_has_name_like_token
+        && !query_identifier_like
+        && (alias_identifier_like
+            || (alias.token_count == 1
+                && alias.alias_text.chars().all(|ch| ch.is_ascii_lowercase())
+                && alias.alias_text.chars().any(|ch| ch.is_ascii_alphabetic())))
+    {
+        bonus -= 0.12;
+        bonus -= 0.12;
     }
 
     bonus

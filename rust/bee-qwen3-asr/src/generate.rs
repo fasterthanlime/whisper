@@ -10,13 +10,18 @@ use crate::decoder::KVCache;
 use crate::model::{Qwen3ASRModel, EOS_TOKEN_IDS};
 use crate::model::{AUDIO_END_TOKEN_ID, AUDIO_PAD_TOKEN_ID, AUDIO_START_TOKEN_ID};
 
+/// TokenID type used by qwen3-asr generation
+pub type TokenId = i32;
+
 /// Per-token confidence information extracted during decoding.
 #[derive(Debug, Clone, Copy)]
 pub struct TokenLogprob {
     /// The chosen token ID.
-    pub token_id: i32,
+    pub token_id: TokenId,
+
     /// Log-probability of the chosen token.
     pub logprob: f32,
+
     /// Gap between the top-1 and top-2 log-probabilities (always >= 0).
     pub margin: f32,
 }
@@ -24,13 +29,13 @@ pub struct TokenLogprob {
 const REPETITION_THRESHOLD: usize = 20;
 
 // Chat template token IDs
-pub const TOK_IM_START: i32 = 151644;
-pub const TOK_IM_END: i32 = 151645;
-pub const TOK_SYSTEM: i32 = 8948;
-pub const TOK_USER: i32 = 872;
-pub const TOK_ASSISTANT: i32 = 77091;
-pub const TOK_NEWLINE: i32 = 198;
-pub const TOK_ASR_TEXT: i32 = 151704;
+pub const TOK_IM_START: TokenId = 151644;
+pub const TOK_IM_END: TokenId = 151645;
+pub const TOK_SYSTEM: TokenId = 8948;
+pub const TOK_USER: TokenId = 872;
+pub const TOK_ASSISTANT: TokenId = 77091;
+pub const TOK_NEWLINE: TokenId = 198;
+pub const TOK_ASR_TEXT: TokenId = 151704;
 
 /// Greedy autoregressive generation (batch mode, fresh cache).
 pub fn generate(
@@ -39,7 +44,7 @@ pub fn generate(
     audio_features: &Array,
     position_ids: &Array,
     max_new_tokens: usize,
-) -> Result<Vec<i32>, Exception> {
+) -> Result<Vec<TokenId>, Exception> {
     let mut cache = Some(model.create_cache());
 
     let logits = model.prefill(input_ids, audio_features, position_ids, &mut cache)?;
@@ -87,12 +92,8 @@ pub fn build_initial_prompt(
     language: &str,
     context: &str,
     tokenizer: &tokenizers::Tokenizer,
-) -> Vec<i32> {
-    let mut prompt: Vec<i32> = vec![
-        TOK_IM_START,
-        TOK_SYSTEM,
-        TOK_NEWLINE,
-    ];
+) -> Vec<TokenId> {
+    let mut prompt: Vec<TokenId> = vec![TOK_IM_START, TOK_SYSTEM, TOK_NEWLINE];
     if !context.is_empty() {
         prompt.extend(tokenize(tokenizer, context));
     }
@@ -132,8 +133,8 @@ pub fn build_followup_prompt(
     n_audio_tokens: usize,
     language: &str,
     tokenizer: &tokenizers::Tokenizer,
-) -> Vec<i32> {
-    let mut prompt: Vec<i32> = vec![
+) -> Vec<TokenId> {
+    let mut prompt: Vec<TokenId> = vec![
         TOK_IM_END,
         TOK_NEWLINE,
         TOK_IM_START,
@@ -167,12 +168,12 @@ pub fn build_followup_prompt(
 /// tokens are NOT added to the cache (matching the Python reference).
 pub fn prefill_and_decode(
     model: &Qwen3ASRModel,
-    prompt_tokens: &[i32],
+    prompt_tokens: &[TokenId],
     audio_features: &Array,
     cache: &mut Option<KVCache>,
     start_position: usize,
     max_new_tokens: usize,
-) -> Result<(Vec<i32>, Vec<TokenLogprob>, usize), Exception> {
+) -> Result<(Vec<TokenId>, Vec<TokenLogprob>, usize), Exception> {
     let seq_len = prompt_tokens.len();
     let input_ids = Array::from_slice(prompt_tokens, &[1, seq_len as i32]);
 
@@ -194,9 +195,7 @@ pub fn prefill_and_decode(
     let tlp = argmax_with_logprob(&logits)?;
     let mut token = tlp.token_id;
     if simple_token != token {
-        tracing::error!(
-            "TOKEN MISMATCH: argmax={simple_token} vs argmax_with_logprob={token}"
-        );
+        tracing::error!("TOKEN MISMATCH: argmax={simple_token} vs argmax_with_logprob={token}");
     }
     let mut generated = Vec::new();
     let mut logprobs = Vec::new();

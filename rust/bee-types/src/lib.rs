@@ -11,13 +11,33 @@ use facet::Facet;
 /// A single word with its time boundaries from forced alignment.
 #[derive(Debug, Clone, Facet)]
 pub struct AlignedWord {
+    /// The word as a string, ie. "platypus"
     pub word: String,
+
+    /// The start of the word in seconds
     pub start: f64,
+
+    /// The end of the word in seconds
     pub end: f64,
-    pub mean_logprob: Option<f32>,
-    pub min_logprob: Option<f32>,
-    pub mean_margin: Option<f32>,
-    pub min_margin: Option<f32>,
+
+    /// How confident the ASR is about hearing this word
+    pub confidence: Confidence,
+}
+
+/// Statistics for a word.
+#[derive(Debug, Clone, Facet)]
+pub struct Confidence {
+    /// Mean logprob
+    pub mean_lp: f32,
+
+    /// Minimum logprob
+    pub min_lp: f32,
+
+    /// Mean margin
+    pub mean_m: f32,
+
+    /// Minimum margin
+    pub min_m: f32,
 }
 
 /// A span of transcript text with phonetic representations and ASR uncertainty.

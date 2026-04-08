@@ -18,6 +18,7 @@ tracing = "0.1"
 env_logger = "0.11"
 serde_json = "1"
 anyhow = "1"
+thiserror.workspace = true
 
 [[bin]]
 name = "transcribe"

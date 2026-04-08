@@ -2,18 +2,18 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::time::SystemTime;
 
-use bee_phonetic::{CandidateFeatureRow, sentence_word_tokens};
+use bee_phonetic::{sentence_word_tokens, CandidateFeatureRow};
 // Re-export types that consumers need
-pub use bee_types::{CorrectionEvent, SpanContext};
 use bee_types::{AliasSource, IdentifierFlags, SentenceWordToken, TranscriptSpan};
+pub use bee_types::{CorrectionEvent, SpanContext};
 
 use crate::sparse_ftrl::{Feature, SparseFtrl};
 
 const LOW_CONTENT: &[&str] = &[
-    "a", "an", "and", "the", "then", "that", "this", "these", "those", "if", "you", "we",
-    "they", "he", "she", "it", "i", "me", "my", "your", "our", "their", "him", "her", "them",
-    "about", "not", "sure", "what", "yeah", "well", "oh", "hmm", "uh", "um", "want", "some",
-    "there", "here",
+    "a", "an", "and", "the", "then", "that", "this", "these", "those", "if", "you", "we", "they",
+    "he", "she", "it", "i", "me", "my", "your", "our", "their", "him", "her", "them", "about",
+    "not", "sure", "what", "yeah", "well", "oh", "hmm", "uh", "um", "want", "some", "there",
+    "here",
 ];
 
 // ── Dense feature layout ────────────────────────────────────────────
@@ -90,47 +90,92 @@ fn context_features(ctx: &SpanContext, candidate_term: &str) -> Vec<Feature> {
 
     // Left context tokens
     if let Some(l1) = ctx.left_tokens.first() {
-        features.push(Feature { index: hash_feature(&format!("L1={l1}")), value: 1.0 });
-        features.push(Feature { index: hash_feature(&format!("TERM={term_lower}|L1={l1}")), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature(&format!("L1={l1}")),
+            value: 1.0,
+        });
+        features.push(Feature {
+            index: hash_feature(&format!("TERM={term_lower}|L1={l1}")),
+            value: 1.0,
+        });
     }
     if ctx.left_tokens.len() >= 2 {
         let bigram = format!("{}_{}", ctx.left_tokens[0], ctx.left_tokens[1]);
-        features.push(Feature { index: hash_feature(&format!("L2={bigram}")), value: 1.0 });
-        features.push(Feature { index: hash_feature(&format!("TERM={term_lower}|L2={bigram}")), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature(&format!("L2={bigram}")),
+            value: 1.0,
+        });
+        features.push(Feature {
+            index: hash_feature(&format!("TERM={term_lower}|L2={bigram}")),
+            value: 1.0,
+        });
     }
 
     // Right context tokens
     if let Some(r1) = ctx.right_tokens.first() {
-        features.push(Feature { index: hash_feature(&format!("R1={r1}")), value: 1.0 });
-        features.push(Feature { index: hash_feature(&format!("TERM={term_lower}|R1={r1}")), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature(&format!("R1={r1}")),
+            value: 1.0,
+        });
+        features.push(Feature {
+            index: hash_feature(&format!("TERM={term_lower}|R1={r1}")),
+            value: 1.0,
+        });
     }
     if ctx.right_tokens.len() >= 2 {
         let bigram = format!("{}_{}", ctx.right_tokens[0], ctx.right_tokens[1]);
-        features.push(Feature { index: hash_feature(&format!("R2={bigram}")), value: 1.0 });
-        features.push(Feature { index: hash_feature(&format!("TERM={term_lower}|R2={bigram}")), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature(&format!("R2={bigram}")),
+            value: 1.0,
+        });
+        features.push(Feature {
+            index: hash_feature(&format!("TERM={term_lower}|R2={bigram}")),
+            value: 1.0,
+        });
     }
 
     // Candidate identity
-    features.push(Feature { index: hash_feature(&format!("TERM={term_lower}")), value: 1.0 });
+    features.push(Feature {
+        index: hash_feature(&format!("TERM={term_lower}")),
+        value: 1.0,
+    });
 
     // Context type flags
     if ctx.code_like {
-        features.push(Feature { index: hash_feature("CTX=code"), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature("CTX=code"),
+            value: 1.0,
+        });
     }
     if ctx.prose_like {
-        features.push(Feature { index: hash_feature("CTX=prose"), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature("CTX=prose"),
+            value: 1.0,
+        });
     }
     if ctx.list_like {
-        features.push(Feature { index: hash_feature("CTX=list"), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature("CTX=list"),
+            value: 1.0,
+        });
     }
     if ctx.sentence_start {
-        features.push(Feature { index: hash_feature("CTX=sent_start"), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature("CTX=sent_start"),
+            value: 1.0,
+        });
     }
 
     // App context
     if let Some(app) = &ctx.app_id {
-        features.push(Feature { index: hash_feature(&format!("APP={app}")), value: 1.0 });
-        features.push(Feature { index: hash_feature(&format!("TERM={term_lower}|APP={app}")), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature(&format!("APP={app}")),
+            value: 1.0,
+        });
+        features.push(Feature {
+            index: hash_feature(&format!("TERM={term_lower}|APP={app}")),
+            value: 1.0,
+        });
     }
 
     features
@@ -161,7 +206,10 @@ impl TermMemory {
     }
 
     fn span_text_count(&self, text: &str) -> u32 {
-        self.span_text_correct.get(&text.to_ascii_lowercase()).copied().unwrap_or(0)
+        self.span_text_correct
+            .get(&text.to_ascii_lowercase())
+            .copied()
+            .unwrap_or(0)
     }
 
     fn record_accept(&mut self, term: &str, now: SystemTime) {
@@ -184,7 +232,6 @@ impl TermMemory {
         *self.span_text_correct.entry(key).or_default() += 1;
     }
 }
-
 
 // ── Judge ────────────────────────────────────────────────────────────
 
@@ -270,9 +317,8 @@ fn seed_model(model: &mut SparseFtrl) {
 
     for epoch in 0..20 {
         for &(accept, phonetic, coarse, token, feature, verified, target) in levels {
-            let features = dense_features_from_synthetic(
-                accept, phonetic, coarse, token, feature, verified,
-            );
+            let features =
+                dense_features_from_synthetic(accept, phonetic, coarse, token, feature, verified);
             model.update(&features, target);
         }
         // Early epochs use higher alpha for faster convergence
@@ -285,48 +331,71 @@ fn seed_model(model: &mut SparseFtrl) {
 }
 
 fn dense_features_from_synthetic(
-    accept: f64, phonetic: f64, coarse: f64, token: f64, feature: f64, verified: f64,
+    accept: f64,
+    phonetic: f64,
+    coarse: f64,
+    token: f64,
+    feature: f64,
+    verified: f64,
 ) -> Vec<Feature> {
     let values = [
-        1.0,                                                        // bias
-        accept,                                                     // acceptance_score
-        phonetic,                                                   // phonetic_score
-        coarse,                                                     // coarse_score
-        token,                                                      // token_score
-        feature,                                                    // feature_score
-        (feature - token).max(0.0),                                 // feature_bonus
-        coarse * 0.9,                                               // best_view_score
-        0.33,                                                       // cross_view_support
-        coarse * 0.5,                                               // qgram_overlap
-        coarse * 0.8,                                               // total_qgram_overlap
-        if accept > 0.5 { 1.0 } else { 0.0 },                      // token_count_match
-        if accept > 0.5 { 0.80 } else { 0.40 },                    // phone_closeness
-        0.0,                                                        // alias_source_spoken
-        0.0,                                                        // alias_source_identifier
-        0.0,                                                        // alias_source_confusion
-        0.0, 0.0, 0.0, 0.0, 0.0,                                   // identifier flags
-        if verified > 0.5 { 1.0 } else { 0.0 },                    // short_guard_passed
-        1.0,                                                        // low_content_guard_passed
-        if accept > 0.35 { 1.0 } else { 0.0 },                     // acceptance_floor_passed
-        verified,                                                   // verified
-        0.25,                                                       // span_token_count
-        0.40,                                                       // span_phone_count
-        0.0,                                                        // span_low_content
+        1.0,                                    // bias
+        accept,                                 // acceptance_score
+        phonetic,                               // phonetic_score
+        coarse,                                 // coarse_score
+        token,                                  // token_score
+        feature,                                // feature_score
+        (feature - token).max(0.0),             // feature_bonus
+        coarse * 0.9,                           // best_view_score
+        0.33,                                   // cross_view_support
+        coarse * 0.5,                           // qgram_overlap
+        coarse * 0.8,                           // total_qgram_overlap
+        if accept > 0.5 { 1.0 } else { 0.0 },   // token_count_match
+        if accept > 0.5 { 0.80 } else { 0.40 }, // phone_closeness
+        0.0,                                    // alias_source_spoken
+        0.0,                                    // alias_source_identifier
+        0.0,                                    // alias_source_confusion
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,                                    // identifier flags
+        if verified > 0.5 { 1.0 } else { 0.0 }, // short_guard_passed
+        1.0,                                    // low_content_guard_passed
+        if accept > 0.35 { 1.0 } else { 0.0 },  // acceptance_floor_passed
+        verified,                               // verified
+        0.25,                                   // span_token_count
+        0.40,                                   // span_phone_count
+        0.0,                                    // span_low_content
         // ASR uncertainty: not available in synthetic data
-        0.0, 0.0, 0.0, 0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
         // Memory features: not available in synthetic data
-        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
     ];
     values
         .iter()
         .enumerate()
-        .map(|(i, &v)| Feature { index: i as u64, value: v })
+        .map(|(i, &v)| Feature {
+            index: i as u64,
+            value: v,
+        })
         .collect()
 }
 
 impl OnlineJudge {
     pub fn feature_names(&self) -> Vec<String> {
-        FEATURE_NAMES.iter().map(|name| (*name).to_string()).collect()
+        FEATURE_NAMES
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect()
     }
 
     /// Get dense feature weights (indices 0..NUM_DENSE) for debugging.
@@ -443,10 +512,8 @@ impl OnlineJudge {
                 self.model.update(&gold.features, true);
             }
             // Hard negatives: top-scoring non-gold candidates
-            let mut negatives: Vec<&JudgeExample> = examples
-                .iter()
-                .filter(|e| e.alias_id != gold_id)
-                .collect();
+            let mut negatives: Vec<&JudgeExample> =
+                examples.iter().filter(|e| e.alias_id != gold_id).collect();
             negatives.sort_by(|a, b| {
                 let sa = self.model.predict(&a.features);
                 let sb = self.model.predict(&b.features);
@@ -457,13 +524,11 @@ impl OnlineJudge {
             }
         } else {
             // Counterexample: single hardest false positive
-            let hardest = examples
-                .iter()
-                .max_by(|a, b| {
-                    let sa = self.model.predict(&a.features);
-                    let sb = self.model.predict(&b.features);
-                    sa.total_cmp(&sb)
-                });
+            let hardest = examples.iter().max_by(|a, b| {
+                let sa = self.model.predict(&a.features);
+                let sb = self.model.predict(&b.features);
+                sa.total_cmp(&sb)
+            });
             if let Some(neg) = hardest {
                 self.model.update(&neg.features, false);
             }
@@ -486,10 +551,8 @@ impl OnlineJudge {
         }
 
         // Build feature vecs for all candidates + keep_original
-        let mut all_features: Vec<Vec<Feature>> = examples
-            .iter()
-            .map(|e| e.features.clone())
-            .collect();
+        let mut all_features: Vec<Vec<Feature>> =
+            examples.iter().map(|e| e.features.clone()).collect();
 
         // keep_original candidate: bias=1, candidate scores=0, but context/ASR features present
         let keep_features = build_keep_original_features(span, ctx);
@@ -498,15 +561,22 @@ impl OnlineJudge {
         // Gold index: if gold_alias_id matches a candidate, use that index.
         // Otherwise (keep_original), gold is the last index.
         let gold_index = if let Some(gold_id) = gold_alias_id {
-            examples.iter().position(|e| e.alias_id == gold_id)
+            examples
+                .iter()
+                .position(|e| e.alias_id == gold_id)
                 .unwrap_or(all_features.len() - 1) // fallback to keep_original
         } else {
             all_features.len() - 1 // keep_original
         };
 
         self.model.update_softmax(
-            &all_features.iter().map(|f| f.as_slice()).collect::<Vec<_>>()
-                .iter().map(|f| f.to_vec()).collect::<Vec<_>>(),
+            &all_features
+                .iter()
+                .map(|f| f.as_slice())
+                .collect::<Vec<_>>()
+                .iter()
+                .map(|f| f.to_vec())
+                .collect::<Vec<_>>(),
             gold_index,
         );
     }
@@ -534,13 +604,12 @@ impl OnlineJudge {
     /// Replay events to rebuild memory counters (e.g., on startup from JSONL).
     pub fn replay_events(&mut self, events: Vec<CorrectionEvent>) {
         for event in &events {
-            let ts = std::time::UNIX_EPOCH
-                + std::time::Duration::from_secs(event.timestamp_secs);
+            let ts = std::time::UNIX_EPOCH + std::time::Duration::from_secs(event.timestamp_secs);
             if let Some(_alias_id) = event.chosen_alias_id {
                 // Accept the chosen term, reject others
                 self.memory.record_accept(&event.chosen_term, ts);
                 for term in &event.all_candidate_terms {
-                    if term.to_ascii_lowercase() != event.chosen_term.to_ascii_lowercase() {
+                    if !term.eq_ignore_ascii_case(&event.chosen_term) {
                         self.memory.record_reject(term, ts);
                     }
                 }
@@ -640,7 +709,11 @@ pub struct TwoStageJudge {
 }
 
 impl TwoStageJudge {
-    pub fn new(gate_threshold: f32, ranker_threshold: f32, weights_dir: Option<&std::path::Path>) -> Self {
+    pub fn new(
+        gate_threshold: f32,
+        ranker_threshold: f32,
+        weights_dir: Option<&std::path::Path>,
+    ) -> Self {
         let mut gate = SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
         seed_gate_model(&mut gate);
         let mut ranker = SparseFtrl::new(0.5, 1.0, 0.0001, 0.001);
@@ -764,10 +837,7 @@ impl TwoStageJudge {
         }
 
         // Update memory
-        let all_terms: Vec<String> = candidates
-            .iter()
-            .map(|(c, _)| c.term.clone())
-            .collect();
+        let all_terms: Vec<String> = candidates.iter().map(|(c, _)| c.term.clone()).collect();
         let chosen_term = if let Some(gold_id) = chosen_alias_id {
             candidates
                 .iter()
@@ -781,7 +851,7 @@ impl TwoStageJudge {
         if is_correction {
             self.memory.record_accept(&chosen_term, now);
             for (c, _) in candidates {
-                if c.term.to_ascii_lowercase() != chosen_term.to_ascii_lowercase() {
+                if !c.term.eq_ignore_ascii_case(&chosen_term) {
                     self.memory.record_reject(&c.term, now);
                 }
             }
@@ -838,12 +908,11 @@ impl TwoStageJudge {
     /// Replay events to rebuild memory counters.
     pub fn replay_events(&mut self, events: &[CorrectionEvent]) {
         for event in events {
-            let ts = std::time::UNIX_EPOCH
-                + std::time::Duration::from_secs(event.timestamp_secs);
+            let ts = std::time::UNIX_EPOCH + std::time::Duration::from_secs(event.timestamp_secs);
             if event.chosen_alias_id.is_some() {
                 self.memory.record_accept(&event.chosen_term, ts);
                 for term in &event.all_candidate_terms {
-                    if term.to_ascii_lowercase() != event.chosen_term.to_ascii_lowercase() {
+                    if !term.eq_ignore_ascii_case(&event.chosen_term) {
                         self.memory.record_reject(term, ts);
                     }
                 }
@@ -894,54 +963,176 @@ pub fn build_examples(
                 .and_then(|m| m.last_used)
                 .and_then(|t| t.elapsed().ok())
                 .map(|d| {
-                    if d.as_secs() < 300 { 1.0 }       // < 5 min
-                    else if d.as_secs() < 1800 { 0.5 }  // < 30 min
-                    else { 0.0 }
+                    if d.as_secs() < 300 {
+                        1.0
+                    }
+                    // < 5 min
+                    else if d.as_secs() < 1800 {
+                        0.5
+                    }
+                    // < 30 min
+                    else {
+                        0.0
+                    }
                 })
                 .unwrap_or(0.0);
 
             // Dense features (indices 0..37)
             let mut features: Vec<Feature> = vec![
-                Feature { index: 0, value: 1.0 },                                              // bias
-                Feature { index: 1, value: candidate.acceptance_score as f64 },                 // acceptance_score
-                Feature { index: 2, value: candidate.phonetic_score as f64 },                   // phonetic_score
-                Feature { index: 3, value: candidate.coarse_score as f64 },                     // coarse_score
-                Feature { index: 4, value: candidate.token_score as f64 },                      // token_score
-                Feature { index: 5, value: candidate.feature_score as f64 },                    // feature_score
-                Feature { index: 6, value: candidate.feature_bonus as f64 },                    // feature_bonus
-                Feature { index: 7, value: candidate.best_view_score as f64 },                  // best_view_score
-                Feature { index: 8, value: candidate.cross_view_support as f64 / 6.0 },         // cross_view_support
-                Feature { index: 9, value: candidate.qgram_overlap as f64 / 10.0 },             // qgram_overlap
-                Feature { index: 10, value: candidate.total_qgram_overlap as f64 / 20.0 },      // total_qgram_overlap
-                Feature { index: 11, value: candidate.token_count_match as u8 as f64 },          // token_count_match
-                Feature { index: 12, value: 1.0 / (1.0 + candidate.phone_count_delta.abs() as f64) }, // phone_closeness
-                Feature { index: 13, value: (candidate.alias_source == AliasSource::Spoken) as u8 as f64 },
-                Feature { index: 14, value: (candidate.alias_source == AliasSource::Identifier) as u8 as f64 },
-                Feature { index: 15, value: (candidate.alias_source == AliasSource::Confusion) as u8 as f64 },
-                Feature { index: 16, value: flags.acronym_like as u8 as f64 },
-                Feature { index: 17, value: flags.has_digits as u8 as f64 },
-                Feature { index: 18, value: flags.snake_like as u8 as f64 },
-                Feature { index: 19, value: flags.camel_like as u8 as f64 },
-                Feature { index: 20, value: flags.symbol_like as u8 as f64 },
-                Feature { index: 21, value: candidate.short_guard_passed as u8 as f64 },
-                Feature { index: 22, value: candidate.low_content_guard_passed as u8 as f64 },
-                Feature { index: 23, value: candidate.acceptance_floor_passed as u8 as f64 },
-                Feature { index: 24, value: candidate.verified as u8 as f64 },
-                Feature { index: 25, value: span_token_count / 4.0 },
-                Feature { index: 26, value: span_phone_count / 12.0 },
-                Feature { index: 27, value: span_low_content },
+                Feature {
+                    index: 0,
+                    value: 1.0,
+                }, // bias
+                Feature {
+                    index: 1,
+                    value: candidate.acceptance_score as f64,
+                }, // acceptance_score
+                Feature {
+                    index: 2,
+                    value: candidate.phonetic_score as f64,
+                }, // phonetic_score
+                Feature {
+                    index: 3,
+                    value: candidate.coarse_score as f64,
+                }, // coarse_score
+                Feature {
+                    index: 4,
+                    value: candidate.token_score as f64,
+                }, // token_score
+                Feature {
+                    index: 5,
+                    value: candidate.feature_score as f64,
+                }, // feature_score
+                Feature {
+                    index: 6,
+                    value: candidate.feature_bonus as f64,
+                }, // feature_bonus
+                Feature {
+                    index: 7,
+                    value: candidate.best_view_score as f64,
+                }, // best_view_score
+                Feature {
+                    index: 8,
+                    value: candidate.cross_view_support as f64 / 6.0,
+                }, // cross_view_support
+                Feature {
+                    index: 9,
+                    value: candidate.qgram_overlap as f64 / 10.0,
+                }, // qgram_overlap
+                Feature {
+                    index: 10,
+                    value: candidate.total_qgram_overlap as f64 / 20.0,
+                }, // total_qgram_overlap
+                Feature {
+                    index: 11,
+                    value: candidate.token_count_match as u8 as f64,
+                }, // token_count_match
+                Feature {
+                    index: 12,
+                    value: 1.0 / (1.0 + candidate.phone_count_delta.abs() as f64),
+                }, // phone_closeness
+                Feature {
+                    index: 13,
+                    value: (candidate.alias_source == AliasSource::Spoken) as u8 as f64,
+                },
+                Feature {
+                    index: 14,
+                    value: (candidate.alias_source == AliasSource::Identifier) as u8 as f64,
+                },
+                Feature {
+                    index: 15,
+                    value: (candidate.alias_source == AliasSource::Confusion) as u8 as f64,
+                },
+                Feature {
+                    index: 16,
+                    value: flags.acronym_like as u8 as f64,
+                },
+                Feature {
+                    index: 17,
+                    value: flags.has_digits as u8 as f64,
+                },
+                Feature {
+                    index: 18,
+                    value: flags.snake_like as u8 as f64,
+                },
+                Feature {
+                    index: 19,
+                    value: flags.camel_like as u8 as f64,
+                },
+                Feature {
+                    index: 20,
+                    value: flags.symbol_like as u8 as f64,
+                },
+                Feature {
+                    index: 21,
+                    value: candidate.short_guard_passed as u8 as f64,
+                },
+                Feature {
+                    index: 22,
+                    value: candidate.low_content_guard_passed as u8 as f64,
+                },
+                Feature {
+                    index: 23,
+                    value: candidate.acceptance_floor_passed as u8 as f64,
+                },
+                Feature {
+                    index: 24,
+                    value: candidate.verified as u8 as f64,
+                },
+                Feature {
+                    index: 25,
+                    value: span_token_count / 4.0,
+                },
+                Feature {
+                    index: 26,
+                    value: span_phone_count / 12.0,
+                },
+                Feature {
+                    index: 27,
+                    value: span_low_content,
+                },
                 // ASR uncertainty
-                Feature { index: 28, value: mean_lp },
-                Feature { index: 29, value: min_lp },
-                Feature { index: 30, value: mean_m },
-                Feature { index: 31, value: min_m },
+                Feature {
+                    index: 28,
+                    value: mean_lp,
+                },
+                Feature {
+                    index: 29,
+                    value: min_lp,
+                },
+                Feature {
+                    index: 30,
+                    value: mean_m,
+                },
+                Feature {
+                    index: 31,
+                    value: min_m,
+                },
                 // Memory features
-                Feature { index: 32, value: (1.0 + accept_count as f64).ln() / 3.0 },
-                Feature { index: 33, value: (1.0 + reject_count as f64).ln() / 3.0 },
-                Feature { index: 34, value: (1.0 + (accept_count + reject_count) as f64).ln() / 3.0 },
-                Feature { index: 35, value: (1.0 + recent_accept as f64).ln() / 3.0 },
-                Feature { index: 36, value: recency },
-                Feature { index: 37, value: (1.0 + span_correct_count as f64).ln() / 3.0 },
+                Feature {
+                    index: 32,
+                    value: (1.0 + accept_count as f64).ln() / 3.0,
+                },
+                Feature {
+                    index: 33,
+                    value: (1.0 + reject_count as f64).ln() / 3.0,
+                },
+                Feature {
+                    index: 34,
+                    value: (1.0 + (accept_count + reject_count) as f64).ln() / 3.0,
+                },
+                Feature {
+                    index: 35,
+                    value: (1.0 + recent_accept as f64).ln() / 3.0,
+                },
+                Feature {
+                    index: 36,
+                    value: recency,
+                },
+                Feature {
+                    index: 37,
+                    value: (1.0 + span_correct_count as f64).ln() / 3.0,
+                },
             ];
 
             // Sparse context features (hashed into offset range)
@@ -1025,11 +1216,7 @@ fn is_low_content_span(text: &str) -> bool {
 }
 
 /// Extract SpanContext from a transcript and span boundaries.
-pub fn extract_span_context(
-    transcript: &str,
-    char_start: usize,
-    char_end: usize,
-) -> SpanContext {
+pub fn extract_span_context(transcript: &str, char_start: usize, char_end: usize) -> SpanContext {
     let before = &transcript[..char_start];
     let after = &transcript[char_end..];
 
@@ -1072,13 +1259,13 @@ pub fn extract_span_context(
     let line_prefix = transcript[line_start..char_start].trim_start();
     let list_like = line_prefix.starts_with('-')
         || line_prefix.starts_with('*')
-        || line_prefix.chars().next().is_some_and(|c| c.is_ascii_digit());
+        || line_prefix
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit());
 
     // Sentence start: span is at the beginning or after sentence-ending punctuation
-    let sentence_start = before.is_empty()
-        || before
-            .trim_end()
-            .ends_with(|c: char| c == '.' || c == '!' || c == '?' || c == '\n');
+    let sentence_start = before.is_empty() || before.trim_end().ends_with(['.', '!', '?', '\n']);
 
     SpanContext {
         left_tokens: left_words,
@@ -1103,47 +1290,98 @@ pub fn build_keep_original_features(span: &TranscriptSpan, ctx: &SpanContext) ->
     let min_m = span.min_margin.unwrap_or(0.0) as f64 / 5.0;
 
     let mut features = vec![
-        Feature { index: 0, value: 1.0 },   // bias
+        Feature {
+            index: 0,
+            value: 1.0,
+        }, // bias
         // indices 1-24: candidate-specific scores = 0 (no candidate)
-        Feature { index: 25, value: span_token_count / 4.0 },
-        Feature { index: 26, value: span_phone_count / 12.0 },
-        Feature { index: 27, value: span_low_content },
-        Feature { index: 28, value: mean_lp },
-        Feature { index: 29, value: min_lp },
-        Feature { index: 30, value: mean_m },
-        Feature { index: 31, value: min_m },
+        Feature {
+            index: 25,
+            value: span_token_count / 4.0,
+        },
+        Feature {
+            index: 26,
+            value: span_phone_count / 12.0,
+        },
+        Feature {
+            index: 27,
+            value: span_low_content,
+        },
+        Feature {
+            index: 28,
+            value: mean_lp,
+        },
+        Feature {
+            index: 29,
+            value: min_lp,
+        },
+        Feature {
+            index: 30,
+            value: mean_m,
+        },
+        Feature {
+            index: 31,
+            value: min_m,
+        },
         // indices 32-37: memory = 0 (no candidate)
     ];
 
     // Context features (same as any candidate, but no TERM= features)
     if let Some(l1) = ctx.left_tokens.first() {
-        features.push(Feature { index: hash_feature(&format!("L1={l1}")), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature(&format!("L1={l1}")),
+            value: 1.0,
+        });
     }
     if ctx.left_tokens.len() >= 2 {
         let bigram = format!("{}_{}", ctx.left_tokens[0], ctx.left_tokens[1]);
-        features.push(Feature { index: hash_feature(&format!("L2={bigram}")), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature(&format!("L2={bigram}")),
+            value: 1.0,
+        });
     }
     if let Some(r1) = ctx.right_tokens.first() {
-        features.push(Feature { index: hash_feature(&format!("R1={r1}")), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature(&format!("R1={r1}")),
+            value: 1.0,
+        });
     }
     if ctx.right_tokens.len() >= 2 {
         let bigram = format!("{}_{}", ctx.right_tokens[0], ctx.right_tokens[1]);
-        features.push(Feature { index: hash_feature(&format!("R2={bigram}")), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature(&format!("R2={bigram}")),
+            value: 1.0,
+        });
     }
     if ctx.code_like {
-        features.push(Feature { index: hash_feature("CTX=code"), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature("CTX=code"),
+            value: 1.0,
+        });
     }
     if ctx.prose_like {
-        features.push(Feature { index: hash_feature("CTX=prose"), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature("CTX=prose"),
+            value: 1.0,
+        });
     }
     if ctx.list_like {
-        features.push(Feature { index: hash_feature("CTX=list"), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature("CTX=list"),
+            value: 1.0,
+        });
     }
     if ctx.sentence_start {
-        features.push(Feature { index: hash_feature("CTX=sent_start"), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature("CTX=sent_start"),
+            value: 1.0,
+        });
     }
     if let Some(app) = &ctx.app_id {
-        features.push(Feature { index: hash_feature(&format!("APP={app}")), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature(&format!("APP={app}")),
+            value: 1.0,
+        });
     }
 
     features
@@ -1153,20 +1391,20 @@ pub fn build_keep_original_features(span: &TranscriptSpan, ctx: &SpanContext) ->
 
 /// Dense feature layout for the span gate model (Stage A).
 pub const GATE_FEATURE_NAMES: &[&str] = &[
-    "bias",                    // 0
-    "span_token_count",        // 1
-    "span_phone_count",        // 2
-    "span_low_content",        // 3
-    "span_mean_logprob",       // 4
-    "span_min_logprob",        // 5
-    "span_mean_margin",        // 6
-    "span_min_margin",         // 7
-    "span_correct_count",      // 8
-    "max_acceptance_score",    // 9
-    "max_phonetic_score",      // 10
-    "any_verified",            // 11
-    "any_acceptance_floor",    // 12
-    "candidate_count",         // 13
+    "bias",                 // 0
+    "span_token_count",     // 1
+    "span_phone_count",     // 2
+    "span_low_content",     // 3
+    "span_mean_logprob",    // 4
+    "span_min_logprob",     // 5
+    "span_mean_margin",     // 6
+    "span_min_margin",      // 7
+    "span_correct_count",   // 8
+    "max_acceptance_score", // 9
+    "max_phonetic_score",   // 10
+    "any_verified",         // 11
+    "any_acceptance_floor", // 12
+    "candidate_count",      // 13
 ];
 
 pub const NUM_GATE_DENSE: usize = 14;
@@ -1174,44 +1412,44 @@ pub const NUM_GATE_DENSE: usize = 14;
 /// Dense feature layout for the candidate ranker model (Stage B).
 /// Indices 0-24 are candidate-specific, 25-30 are candidate-relative.
 pub const RANKER_FEATURE_NAMES: &[&str] = &[
-    "bias",                    // 0
-    "acceptance_score",        // 1
-    "phonetic_score",          // 2
-    "coarse_score",            // 3
-    "token_score",             // 4
-    "feature_score",           // 5
-    "feature_bonus",           // 6
-    "best_view_score",         // 7
-    "cross_view_support",      // 8
-    "qgram_overlap",           // 9
-    "total_qgram_overlap",     // 10
-    "token_count_match",       // 11
-    "phone_closeness",         // 12
-    "alias_source_spoken",     // 13
-    "alias_source_identifier", // 14
-    "alias_source_confusion",  // 15
-    "identifier_acronym",      // 16
-    "identifier_digits",       // 17
-    "identifier_snake",        // 18
-    "identifier_camel",        // 19
-    "identifier_symbol",       // 20
-    "short_guard_passed",      // 21
-    "low_content_guard_passed",// 22
-    "acceptance_floor_passed", // 23
-    "verified",                // 24
+    "bias",                     // 0
+    "acceptance_score",         // 1
+    "phonetic_score",           // 2
+    "coarse_score",             // 3
+    "token_score",              // 4
+    "feature_score",            // 5
+    "feature_bonus",            // 6
+    "best_view_score",          // 7
+    "cross_view_support",       // 8
+    "qgram_overlap",            // 9
+    "total_qgram_overlap",      // 10
+    "token_count_match",        // 11
+    "phone_closeness",          // 12
+    "alias_source_spoken",      // 13
+    "alias_source_identifier",  // 14
+    "alias_source_confusion",   // 15
+    "identifier_acronym",       // 16
+    "identifier_digits",        // 17
+    "identifier_snake",         // 18
+    "identifier_camel",         // 19
+    "identifier_symbol",        // 20
+    "short_guard_passed",       // 21
+    "low_content_guard_passed", // 22
+    "acceptance_floor_passed",  // 23
+    "verified",                 // 24
     // Candidate-relative features
-    "rank_in_span",            // 25
-    "margin_to_next",          // 26
-    "is_best_verified",        // 27
-    "is_only_verified",        // 28
-    "normalized_acceptance",   // 29
-    "normalized_phonetic",     // 30
+    "rank_in_span",          // 25
+    "margin_to_next",        // 26
+    "is_best_verified",      // 27
+    "is_only_verified",      // 28
+    "normalized_acceptance", // 29
+    "normalized_phonetic",   // 30
     // Per-candidate memory
-    "prior_accept_count",      // 31
-    "prior_reject_count",      // 32
-    "total_count",             // 33
-    "recent_accept_count",     // 34
-    "session_recency",         // 35
+    "prior_accept_count",  // 31
+    "prior_reject_count",  // 32
+    "total_count",         // 33
+    "recent_accept_count", // 34
+    "session_recency",     // 35
 ];
 
 pub const NUM_RANKER_DENSE: usize = 36;
@@ -1234,10 +1472,17 @@ pub fn build_gate_features(
     let span_correct_count = memory.span_text_count(&span.text);
 
     // Summary stats from candidates
-    let max_acceptance = candidates.iter().map(|(c, _)| c.acceptance_score).fold(0.0f32, f32::max);
-    let max_phonetic = candidates.iter().map(|(c, _)| c.phonetic_score).fold(0.0f32, f32::max);
+    let max_acceptance = candidates
+        .iter()
+        .map(|(c, _)| c.acceptance_score)
+        .fold(0.0f32, f32::max);
+    let max_phonetic = candidates
+        .iter()
+        .map(|(c, _)| c.phonetic_score)
+        .fold(0.0f32, f32::max);
     let any_verified = candidates.iter().any(|(c, _)| c.verified) as u8 as f64;
-    let any_acceptance_floor = candidates.iter().any(|(c, _)| c.acceptance_floor_passed) as u8 as f64;
+    let any_acceptance_floor =
+        candidates.iter().any(|(c, _)| c.acceptance_floor_passed) as u8 as f64;
     let candidate_count = candidates.len() as f64;
 
     tracing::debug!(
@@ -1259,51 +1504,120 @@ pub fn build_gate_features(
     );
 
     let mut features = vec![
-        Feature { index: 0, value: 1.0 },                                        // bias
-        Feature { index: 1, value: span_token_count / 4.0 },                     // span_token_count
-        Feature { index: 2, value: span_phone_count / 12.0 },                    // span_phone_count
-        Feature { index: 3, value: span_low_content },                            // span_low_content
-        Feature { index: 4, value: mean_lp },                                     // span_mean_logprob
-        Feature { index: 5, value: min_lp },                                      // span_min_logprob
-        Feature { index: 6, value: mean_m },                                      // span_mean_margin
-        Feature { index: 7, value: min_m },                                       // span_min_margin
-        Feature { index: 8, value: (1.0 + span_correct_count as f64).ln() / 3.0 }, // span_correct_count
-        Feature { index: 9, value: max_acceptance as f64 },                        // max_acceptance_score
-        Feature { index: 10, value: max_phonetic as f64 },                         // max_phonetic_score
-        Feature { index: 11, value: any_verified },                                // any_verified
-        Feature { index: 12, value: any_acceptance_floor },                        // any_acceptance_floor
-        Feature { index: 13, value: (1.0 + candidate_count).ln() / 3.0 },         // candidate_count
+        Feature {
+            index: 0,
+            value: 1.0,
+        }, // bias
+        Feature {
+            index: 1,
+            value: span_token_count / 4.0,
+        }, // span_token_count
+        Feature {
+            index: 2,
+            value: span_phone_count / 12.0,
+        }, // span_phone_count
+        Feature {
+            index: 3,
+            value: span_low_content,
+        }, // span_low_content
+        Feature {
+            index: 4,
+            value: mean_lp,
+        }, // span_mean_logprob
+        Feature {
+            index: 5,
+            value: min_lp,
+        }, // span_min_logprob
+        Feature {
+            index: 6,
+            value: mean_m,
+        }, // span_mean_margin
+        Feature {
+            index: 7,
+            value: min_m,
+        }, // span_min_margin
+        Feature {
+            index: 8,
+            value: (1.0 + span_correct_count as f64).ln() / 3.0,
+        }, // span_correct_count
+        Feature {
+            index: 9,
+            value: max_acceptance as f64,
+        }, // max_acceptance_score
+        Feature {
+            index: 10,
+            value: max_phonetic as f64,
+        }, // max_phonetic_score
+        Feature {
+            index: 11,
+            value: any_verified,
+        }, // any_verified
+        Feature {
+            index: 12,
+            value: any_acceptance_floor,
+        }, // any_acceptance_floor
+        Feature {
+            index: 13,
+            value: (1.0 + candidate_count).ln() / 3.0,
+        }, // candidate_count
     ];
 
     // Sparse context features (no TERM= since this is span-level)
     if let Some(l1) = ctx.left_tokens.first() {
-        features.push(Feature { index: hash_feature(&format!("L1={l1}")), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature(&format!("L1={l1}")),
+            value: 1.0,
+        });
     }
     if ctx.left_tokens.len() >= 2 {
         let bigram = format!("{}_{}", ctx.left_tokens[0], ctx.left_tokens[1]);
-        features.push(Feature { index: hash_feature(&format!("L2={bigram}")), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature(&format!("L2={bigram}")),
+            value: 1.0,
+        });
     }
     if let Some(r1) = ctx.right_tokens.first() {
-        features.push(Feature { index: hash_feature(&format!("R1={r1}")), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature(&format!("R1={r1}")),
+            value: 1.0,
+        });
     }
     if ctx.right_tokens.len() >= 2 {
         let bigram = format!("{}_{}", ctx.right_tokens[0], ctx.right_tokens[1]);
-        features.push(Feature { index: hash_feature(&format!("R2={bigram}")), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature(&format!("R2={bigram}")),
+            value: 1.0,
+        });
     }
     if ctx.code_like {
-        features.push(Feature { index: hash_feature("CTX=code"), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature("CTX=code"),
+            value: 1.0,
+        });
     }
     if ctx.prose_like {
-        features.push(Feature { index: hash_feature("CTX=prose"), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature("CTX=prose"),
+            value: 1.0,
+        });
     }
     if ctx.list_like {
-        features.push(Feature { index: hash_feature("CTX=list"), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature("CTX=list"),
+            value: 1.0,
+        });
     }
     if ctx.sentence_start {
-        features.push(Feature { index: hash_feature("CTX=sent_start"), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature("CTX=sent_start"),
+            value: 1.0,
+        });
     }
     if let Some(app) = &ctx.app_id {
-        features.push(Feature { index: hash_feature(&format!("APP={app}")), value: 1.0 });
+        features.push(Feature {
+            index: hash_feature(&format!("APP={app}")),
+            value: 1.0,
+        });
     }
 
     features
@@ -1322,14 +1636,23 @@ pub fn build_ranker_features(
     }
 
     // Pre-compute candidate-relative stats
-    let max_acceptance = candidates.iter().map(|(c, _)| c.acceptance_score).fold(0.0f32, f32::max);
-    let max_phonetic = candidates.iter().map(|(c, _)| c.phonetic_score).fold(0.0f32, f32::max);
+    let max_acceptance = candidates
+        .iter()
+        .map(|(c, _)| c.acceptance_score)
+        .fold(0.0f32, f32::max);
+    let max_phonetic = candidates
+        .iter()
+        .map(|(c, _)| c.phonetic_score)
+        .fold(0.0f32, f32::max);
     let verified_count: usize = candidates.iter().filter(|(c, _)| c.verified).count();
 
     // Sort indices by acceptance_score desc for rank computation
     let mut sorted_indices: Vec<usize> = (0..candidates.len()).collect();
     sorted_indices.sort_by(|&a, &b| {
-        candidates[b].0.acceptance_score.total_cmp(&candidates[a].0.acceptance_score)
+        candidates[b]
+            .0
+            .acceptance_score
+            .total_cmp(&candidates[a].0.acceptance_score)
     });
     let mut ranks = vec![0usize; candidates.len()];
     for (rank, &idx) in sorted_indices.iter().enumerate() {
@@ -1337,13 +1660,15 @@ pub fn build_ranker_features(
     }
 
     // Find best verified candidate (by acceptance_score)
-    let best_verified_id = candidates.iter()
+    let best_verified_id = candidates
+        .iter()
         .filter(|(c, _)| c.verified)
         .max_by(|a, b| a.0.acceptance_score.total_cmp(&b.0.acceptance_score))
         .map(|(c, _)| c.alias_id);
 
     // Sorted acceptance scores for margin computation
-    let sorted_acceptance: Vec<f32> = sorted_indices.iter()
+    let sorted_acceptance: Vec<f32> = sorted_indices
+        .iter()
         .map(|&i| candidates[i].0.acceptance_score)
         .collect();
 
@@ -1367,10 +1692,14 @@ pub fn build_ranker_features(
             let is_only_verified = candidate.verified && verified_count == 1;
             let norm_acceptance = if max_acceptance > 0.0 {
                 candidate.acceptance_score as f64 / max_acceptance as f64
-            } else { 0.0 };
+            } else {
+                0.0
+            };
             let norm_phonetic = if max_phonetic > 0.0 {
                 candidate.phonetic_score as f64 / max_phonetic as f64
-            } else { 0.0 };
+            } else {
+                0.0
+            };
 
             // Per-candidate memory
             let mem = memory.get(&candidate.term);
@@ -1381,51 +1710,163 @@ pub fn build_ranker_features(
                 .and_then(|m| m.last_used)
                 .and_then(|t| t.elapsed().ok())
                 .map(|d| {
-                    if d.as_secs() < 300 { 1.0 }
-                    else if d.as_secs() < 1800 { 0.5 }
-                    else { 0.0 }
+                    if d.as_secs() < 300 {
+                        1.0
+                    } else if d.as_secs() < 1800 {
+                        0.5
+                    } else {
+                        0.0
+                    }
                 })
                 .unwrap_or(0.0);
 
             let features = vec![
-                Feature { index: 0, value: 1.0 },                                              // bias
-                Feature { index: 1, value: candidate.acceptance_score as f64 },                 // acceptance_score
-                Feature { index: 2, value: candidate.phonetic_score as f64 },                   // phonetic_score
-                Feature { index: 3, value: candidate.coarse_score as f64 },                     // coarse_score
-                Feature { index: 4, value: candidate.token_score as f64 },                      // token_score
-                Feature { index: 5, value: candidate.feature_score as f64 },                    // feature_score
-                Feature { index: 6, value: candidate.feature_bonus as f64 },                    // feature_bonus
-                Feature { index: 7, value: candidate.best_view_score as f64 },                  // best_view_score
-                Feature { index: 8, value: candidate.cross_view_support as f64 / 6.0 },         // cross_view_support
-                Feature { index: 9, value: candidate.qgram_overlap as f64 / 10.0 },             // qgram_overlap
-                Feature { index: 10, value: candidate.total_qgram_overlap as f64 / 20.0 },      // total_qgram_overlap
-                Feature { index: 11, value: candidate.token_count_match as u8 as f64 },          // token_count_match
-                Feature { index: 12, value: 1.0 / (1.0 + candidate.phone_count_delta.abs() as f64) }, // phone_closeness
-                Feature { index: 13, value: (candidate.alias_source == AliasSource::Spoken) as u8 as f64 },
-                Feature { index: 14, value: (candidate.alias_source == AliasSource::Identifier) as u8 as f64 },
-                Feature { index: 15, value: (candidate.alias_source == AliasSource::Confusion) as u8 as f64 },
-                Feature { index: 16, value: flags.acronym_like as u8 as f64 },
-                Feature { index: 17, value: flags.has_digits as u8 as f64 },
-                Feature { index: 18, value: flags.snake_like as u8 as f64 },
-                Feature { index: 19, value: flags.camel_like as u8 as f64 },
-                Feature { index: 20, value: flags.symbol_like as u8 as f64 },
-                Feature { index: 21, value: candidate.short_guard_passed as u8 as f64 },
-                Feature { index: 22, value: candidate.low_content_guard_passed as u8 as f64 },
-                Feature { index: 23, value: candidate.acceptance_floor_passed as u8 as f64 },
-                Feature { index: 24, value: candidate.verified as u8 as f64 },
+                Feature {
+                    index: 0,
+                    value: 1.0,
+                }, // bias
+                Feature {
+                    index: 1,
+                    value: candidate.acceptance_score as f64,
+                }, // acceptance_score
+                Feature {
+                    index: 2,
+                    value: candidate.phonetic_score as f64,
+                }, // phonetic_score
+                Feature {
+                    index: 3,
+                    value: candidate.coarse_score as f64,
+                }, // coarse_score
+                Feature {
+                    index: 4,
+                    value: candidate.token_score as f64,
+                }, // token_score
+                Feature {
+                    index: 5,
+                    value: candidate.feature_score as f64,
+                }, // feature_score
+                Feature {
+                    index: 6,
+                    value: candidate.feature_bonus as f64,
+                }, // feature_bonus
+                Feature {
+                    index: 7,
+                    value: candidate.best_view_score as f64,
+                }, // best_view_score
+                Feature {
+                    index: 8,
+                    value: candidate.cross_view_support as f64 / 6.0,
+                }, // cross_view_support
+                Feature {
+                    index: 9,
+                    value: candidate.qgram_overlap as f64 / 10.0,
+                }, // qgram_overlap
+                Feature {
+                    index: 10,
+                    value: candidate.total_qgram_overlap as f64 / 20.0,
+                }, // total_qgram_overlap
+                Feature {
+                    index: 11,
+                    value: candidate.token_count_match as u8 as f64,
+                }, // token_count_match
+                Feature {
+                    index: 12,
+                    value: 1.0 / (1.0 + candidate.phone_count_delta.abs() as f64),
+                }, // phone_closeness
+                Feature {
+                    index: 13,
+                    value: (candidate.alias_source == AliasSource::Spoken) as u8 as f64,
+                },
+                Feature {
+                    index: 14,
+                    value: (candidate.alias_source == AliasSource::Identifier) as u8 as f64,
+                },
+                Feature {
+                    index: 15,
+                    value: (candidate.alias_source == AliasSource::Confusion) as u8 as f64,
+                },
+                Feature {
+                    index: 16,
+                    value: flags.acronym_like as u8 as f64,
+                },
+                Feature {
+                    index: 17,
+                    value: flags.has_digits as u8 as f64,
+                },
+                Feature {
+                    index: 18,
+                    value: flags.snake_like as u8 as f64,
+                },
+                Feature {
+                    index: 19,
+                    value: flags.camel_like as u8 as f64,
+                },
+                Feature {
+                    index: 20,
+                    value: flags.symbol_like as u8 as f64,
+                },
+                Feature {
+                    index: 21,
+                    value: candidate.short_guard_passed as u8 as f64,
+                },
+                Feature {
+                    index: 22,
+                    value: candidate.low_content_guard_passed as u8 as f64,
+                },
+                Feature {
+                    index: 23,
+                    value: candidate.acceptance_floor_passed as u8 as f64,
+                },
+                Feature {
+                    index: 24,
+                    value: candidate.verified as u8 as f64,
+                },
                 // Candidate-relative features
-                Feature { index: 25, value: rank_feature },                                      // rank_in_span
-                Feature { index: 26, value: margin },                                            // margin_to_next
-                Feature { index: 27, value: is_best_verified as u8 as f64 },                     // is_best_verified
-                Feature { index: 28, value: is_only_verified as u8 as f64 },                     // is_only_verified
-                Feature { index: 29, value: norm_acceptance },                                   // normalized_acceptance
-                Feature { index: 30, value: norm_phonetic },                                     // normalized_phonetic
+                Feature {
+                    index: 25,
+                    value: rank_feature,
+                }, // rank_in_span
+                Feature {
+                    index: 26,
+                    value: margin,
+                }, // margin_to_next
+                Feature {
+                    index: 27,
+                    value: is_best_verified as u8 as f64,
+                }, // is_best_verified
+                Feature {
+                    index: 28,
+                    value: is_only_verified as u8 as f64,
+                }, // is_only_verified
+                Feature {
+                    index: 29,
+                    value: norm_acceptance,
+                }, // normalized_acceptance
+                Feature {
+                    index: 30,
+                    value: norm_phonetic,
+                }, // normalized_phonetic
                 // Per-candidate memory
-                Feature { index: 31, value: (1.0 + accept_count as f64).ln() / 3.0 },
-                Feature { index: 32, value: (1.0 + reject_count as f64).ln() / 3.0 },
-                Feature { index: 33, value: (1.0 + (accept_count + reject_count) as f64).ln() / 3.0 },
-                Feature { index: 34, value: (1.0 + recent_accept as f64).ln() / 3.0 },
-                Feature { index: 35, value: recency },
+                Feature {
+                    index: 31,
+                    value: (1.0 + accept_count as f64).ln() / 3.0,
+                },
+                Feature {
+                    index: 32,
+                    value: (1.0 + reject_count as f64).ln() / 3.0,
+                },
+                Feature {
+                    index: 33,
+                    value: (1.0 + (accept_count + reject_count) as f64).ln() / 3.0,
+                },
+                Feature {
+                    index: 34,
+                    value: (1.0 + recent_accept as f64).ln() / 3.0,
+                },
+                Feature {
+                    index: 35,
+                    value: recency,
+                },
             ];
 
             JudgeExample {
@@ -1450,30 +1891,83 @@ pub fn seed_gate_model(model: &mut SparseFtrl) {
 
     let examples: &[(&[f64], bool)] = &[
         // Positive: good candidate + uncertain ASR
-        (&[1.0, 0.5, 0.5, 0.0, -0.10, -0.15, 0.05, 0.02, 0.0, 0.70, 0.65, 1.0, 1.0, 0.5], true),
-        (&[1.0, 0.3, 0.4, 0.0, -0.08, -0.12, 0.08, 0.04, 0.0, 0.55, 0.50, 1.0, 0.0, 0.3], true),
-        (&[1.0, 0.5, 0.6, 0.0, -0.05, -0.10, 0.10, 0.05, 0.0, 0.80, 0.75, 1.0, 1.0, 0.7], true),
+        (
+            &[
+                1.0, 0.5, 0.5, 0.0, -0.10, -0.15, 0.05, 0.02, 0.0, 0.70, 0.65, 1.0, 1.0, 0.5,
+            ],
+            true,
+        ),
+        (
+            &[
+                1.0, 0.3, 0.4, 0.0, -0.08, -0.12, 0.08, 0.04, 0.0, 0.55, 0.50, 1.0, 0.0, 0.3,
+            ],
+            true,
+        ),
+        (
+            &[
+                1.0, 0.5, 0.6, 0.0, -0.05, -0.10, 0.10, 0.05, 0.0, 0.80, 0.75, 1.0, 1.0, 0.7,
+            ],
+            true,
+        ),
         // Positive: moderate candidate, low ASR confidence
-        (&[1.0, 0.4, 0.5, 0.0, -0.15, -0.20, 0.03, 0.01, 0.0, 0.50, 0.45, 0.0, 0.0, 0.3], true),
+        (
+            &[
+                1.0, 0.4, 0.5, 0.0, -0.15, -0.20, 0.03, 0.01, 0.0, 0.50, 0.45, 0.0, 0.0, 0.3,
+            ],
+            true,
+        ),
         // Negative: no good candidates
-        (&[1.0, 0.5, 0.5, 0.0, -0.10, -0.15, 0.05, 0.02, 0.0, 0.20, 0.15, 0.0, 0.0, 0.5], false),
-        (&[1.0, 0.3, 0.4, 0.0, -0.05, -0.08, 0.12, 0.08, 0.0, 0.15, 0.10, 0.0, 0.0, 0.2], false),
+        (
+            &[
+                1.0, 0.5, 0.5, 0.0, -0.10, -0.15, 0.05, 0.02, 0.0, 0.20, 0.15, 0.0, 0.0, 0.5,
+            ],
+            false,
+        ),
+        (
+            &[
+                1.0, 0.3, 0.4, 0.0, -0.05, -0.08, 0.12, 0.08, 0.0, 0.15, 0.10, 0.0, 0.0, 0.2,
+            ],
+            false,
+        ),
         // Negative: high ASR confidence (probably transcribed correctly)
-        (&[1.0, 0.5, 0.5, 0.0, -0.02, -0.03, 0.30, 0.25, 0.0, 0.60, 0.55, 1.0, 0.0, 0.5], false),
+        (
+            &[
+                1.0, 0.5, 0.5, 0.0, -0.02, -0.03, 0.30, 0.25, 0.0, 0.60, 0.55, 1.0, 0.0, 0.5,
+            ],
+            false,
+        ),
         // Negative: low content span
-        (&[1.0, 0.3, 0.3, 1.0, -0.10, -0.15, 0.05, 0.02, 0.0, 0.40, 0.35, 0.0, 0.0, 0.3], false),
+        (
+            &[
+                1.0, 0.3, 0.3, 1.0, -0.10, -0.15, 0.05, 0.02, 0.0, 0.40, 0.35, 0.0, 0.0, 0.3,
+            ],
+            false,
+        ),
         // Negative: span already corrected before
-        (&[1.0, 0.5, 0.5, 0.0, -0.10, -0.15, 0.05, 0.02, 0.8, 0.50, 0.45, 0.0, 0.0, 0.3], false),
+        (
+            &[
+                1.0, 0.5, 0.5, 0.0, -0.10, -0.15, 0.05, 0.02, 0.8, 0.50, 0.45, 0.0, 0.0, 0.3,
+            ],
+            false,
+        ),
     ];
 
     let featurize = |vals: &[f64]| -> Vec<Feature> {
-        vals.iter().enumerate().map(|(i, &v)| Feature { index: i as u64, value: v }).collect()
+        vals.iter()
+            .enumerate()
+            .map(|(i, &v)| Feature {
+                index: i as u64,
+                value: v,
+            })
+            .collect()
     };
 
     let orig_alpha = model.alpha;
     model.alpha = 1.0;
     for epoch in 0..20 {
-        if epoch == 5 { model.alpha = 0.5; }
+        if epoch == 5 {
+            model.alpha = 0.5;
+        }
         for &(vals, label) in examples {
             model.update(&featurize(vals), label);
         }
@@ -1491,35 +1985,68 @@ pub fn seed_ranker_model(model: &mut SparseFtrl) {
         //          [bias, accept, phon, coarse, token, feat, fb, bv, cvs, qg, tqg, tcm, pc,
         //           sp, id, cf, acr, dig, snk, cam, sym, sg, lcg, afp, ver,
         //           rank, margin, bv, ov, na, np, ac, rc, tc, rac, rec]
-        (&[1.0, 0.75, 0.70, 0.60, 0.55, 0.50, 0.30, 0.30, 0.50, 0.40, 0.35, 1.0, 0.80,
-           1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0,
-           1.0, 0.15, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0], true),
+        (
+            &[
+                1.0, 0.75, 0.70, 0.60, 0.55, 0.50, 0.30, 0.30, 0.50, 0.40, 0.35, 1.0, 0.80, 1.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.15, 1.0, 1.0, 1.0,
+                1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ],
+            true,
+        ),
         // Positive: good candidate, rank 1, not only verified
-        (&[1.0, 0.60, 0.55, 0.45, 0.40, 0.40, 0.20, 0.20, 0.33, 0.30, 0.25, 1.0, 0.70,
-           0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0,
-           1.0, 0.10, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0], true),
+        (
+            &[
+                1.0, 0.60, 0.55, 0.45, 0.40, 0.40, 0.20, 0.20, 0.33, 0.30, 0.25, 1.0, 0.70, 0.0,
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 0.10, 1.0, 0.0, 1.0,
+                1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ],
+            true,
+        ),
         // Negative: weak candidate, low rank
-        (&[1.0, 0.25, 0.20, 0.15, 0.10, 0.15, 0.05, 0.10, 0.17, 0.10, 0.05, 0.0, 0.40,
-           0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
-           0.25, 0.02, 0.0, 0.0, 0.33, 0.40, 0.0, 0.0, 0.0, 0.0, 0.0], false),
+        (
+            &[
+                1.0, 0.25, 0.20, 0.15, 0.10, 0.15, 0.05, 0.10, 0.17, 0.10, 0.05, 0.0, 0.40, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.25, 0.02, 0.0, 0.0, 0.33,
+                0.40, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ],
+            false,
+        ),
         // Negative: unverified, low scores
-        (&[1.0, 0.15, 0.10, 0.08, 0.05, 0.08, 0.02, 0.05, 0.17, 0.05, 0.02, 0.0, 0.30,
-           0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
-           0.50, 0.01, 0.0, 0.0, 0.20, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0], false),
+        (
+            &[
+                1.0, 0.15, 0.10, 0.08, 0.05, 0.08, 0.02, 0.05, 0.17, 0.05, 0.02, 0.0, 0.30, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.50, 0.01, 0.0, 0.0, 0.20,
+                0.25, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ],
+            false,
+        ),
         // Negative: decent scores but not verified, rank 2
-        (&[1.0, 0.50, 0.45, 0.35, 0.30, 0.35, 0.15, 0.15, 0.33, 0.25, 0.20, 1.0, 0.60,
-           1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
-           0.50, 0.05, 0.0, 0.0, 0.67, 0.75, 0.0, 0.0, 0.0, 0.0, 0.0], false),
+        (
+            &[
+                1.0, 0.50, 0.45, 0.35, 0.30, 0.35, 0.15, 0.15, 0.33, 0.25, 0.20, 1.0, 0.60, 1.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.50, 0.05, 0.0, 0.0, 0.67,
+                0.75, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ],
+            false,
+        ),
     ];
 
     let featurize = |vals: &[f64]| -> Vec<Feature> {
-        vals.iter().enumerate().map(|(i, &v)| Feature { index: i as u64, value: v }).collect()
+        vals.iter()
+            .enumerate()
+            .map(|(i, &v)| Feature {
+                index: i as u64,
+                value: v,
+            })
+            .collect()
     };
 
     let orig_alpha = model.alpha;
     model.alpha = 1.0;
     for epoch in 0..20 {
-        if epoch == 5 { model.alpha = 0.5; }
+        if epoch == 5 {
+            model.alpha = 0.5;
+        }
         for &(vals, label) in examples {
             model.update(&featurize(vals), label);
         }
@@ -1553,14 +2080,16 @@ impl FeatureSlice {
 
 /// Filter features to only include those allowed by the slice.
 pub fn filter_features(features: &[Feature], slice: FeatureSlice) -> Vec<Feature> {
-    features.iter().copied().filter(|f| {
-        match slice {
+    features
+        .iter()
+        .copied()
+        .filter(|f| match slice {
             FeatureSlice::PhoneticOnly => f.index < 28,
             FeatureSlice::PlusAsr => f.index < 32,
             FeatureSlice::PlusContext => f.index < 32 || f.index >= SPARSE_OFFSET,
             FeatureSlice::All => true,
-        }
-    }).collect()
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1685,7 +2214,10 @@ mod tests {
 
         assert_eq!(judge.update_count(), 5);
         // reqwest should still be the chosen candidate and above threshold
-        let chosen = after.iter().find(|o| o.chosen).expect("should have a chosen option");
+        let chosen = after
+            .iter()
+            .find(|o| o.chosen)
+            .expect("should have a chosen option");
         assert_eq!(chosen.alias_id, Some(7), "reqwest should be chosen");
         assert!(
             after_reqwest > ACCEPT_THRESHOLD,
@@ -1707,12 +2239,10 @@ mod tests {
     fn teach_keep_original_lowers_candidate_scores() {
         let mut judge = OnlineJudge::default();
         let span = span("req west");
-        let candidates = vec![
-            (
-                candidate(7, "reqwest", 0.75, 0.74, 0.70, true),
-                IdentifierFlags::default(),
-            ),
-        ];
+        let candidates = vec![(
+            candidate(7, "reqwest", 0.75, 0.74, 0.70, true),
+            IdentifierFlags::default(),
+        )];
 
         let before = judge.score_candidates(&span, &candidates, &ctx());
         let before_prob = before
@@ -1743,12 +2273,10 @@ mod tests {
     fn teaching_transfers_to_similar_candidates() {
         let mut judge = OnlineJudge::default();
         let span1 = span("sir day");
-        let candidates1 = vec![
-            (
-                candidate(1, "serde", 0.80, 0.78, 0.75, true),
-                IdentifierFlags::default(),
-            ),
-        ];
+        let candidates1 = vec![(
+            candidate(1, "serde", 0.80, 0.78, 0.75, true),
+            IdentifierFlags::default(),
+        )];
 
         // Teach: "serde" is correct for "sir day"
         for _ in 0..10 {
@@ -1757,12 +2285,10 @@ mod tests {
 
         // Now score a DIFFERENT case with similar features
         let span2 = span("toe key oh");
-        let candidates2 = vec![
-            (
-                candidate(2, "tokio", 0.78, 0.76, 0.72, true),
-                IdentifierFlags::default(),
-            ),
-        ];
+        let candidates2 = vec![(
+            candidate(2, "tokio", 0.78, 0.76, 0.72, true),
+            IdentifierFlags::default(),
+        )];
 
         let result = judge.score_candidates(&span2, &candidates2, &ctx());
         let tokio_prob = result
@@ -1862,7 +2388,10 @@ mod tests {
         let featurize = |vals: &[f64]| -> Vec<Feature> {
             vals.iter()
                 .enumerate()
-                .map(|(i, &v)| Feature { index: i as u64, value: v })
+                .map(|(i, &v)| Feature {
+                    index: i as u64,
+                    value: v,
+                })
                 .collect()
         };
 
@@ -1874,8 +2403,14 @@ mod tests {
             // Positive: good candidate match
             trained.update(
                 &{
-                    let mut f = featurize(&[1.0, 0.4, 0.5, 0.0, -0.12, -0.18, 0.04, 0.01, 0.0, 0.65, 0.60, 1.0, 1.0, 0.4]);
-                    f.push(Feature { index: 1000, value: 1.0 }); // sparse context
+                    let mut f = featurize(&[
+                        1.0, 0.4, 0.5, 0.0, -0.12, -0.18, 0.04, 0.01, 0.0, 0.65, 0.60, 1.0, 1.0,
+                        0.4,
+                    ]);
+                    f.push(Feature {
+                        index: 1000,
+                        value: 1.0,
+                    }); // sparse context
                     f
                 },
                 true,
@@ -1883,8 +2418,14 @@ mod tests {
             // Negative: no match
             trained.update(
                 &{
-                    let mut f = featurize(&[1.0, 0.5, 0.5, 0.0, -0.03, -0.04, 0.25, 0.20, 0.0, 0.15, 0.10, 0.0, 0.0, 0.3]);
-                    f.push(Feature { index: 2000, value: 1.0 });
+                    let mut f = featurize(&[
+                        1.0, 0.5, 0.5, 0.0, -0.03, -0.04, 0.25, 0.20, 0.0, 0.15, 0.10, 0.0, 0.0,
+                        0.3,
+                    ]);
+                    f.push(Feature {
+                        index: 2000,
+                        value: 1.0,
+                    });
                     f
                 },
                 false,
@@ -1892,10 +2433,16 @@ mod tests {
         }
 
         // Collect trained predictions
-        let test_cases = vec![
-            featurize(&[1.0, 0.4, 0.5, 0.0, -0.10, -0.15, 0.05, 0.02, 0.0, 0.70, 0.65, 1.0, 1.0, 0.5]),
-            featurize(&[1.0, 0.5, 0.5, 0.0, -0.02, -0.03, 0.30, 0.25, 0.0, 0.20, 0.15, 0.0, 0.0, 0.5]),
-            featurize(&[1.0, 0.3, 0.4, 0.0, -0.08, -0.12, 0.08, 0.04, 0.0, 0.55, 0.50, 1.0, 0.0, 0.3]),
+        let test_cases = [
+            featurize(&[
+                1.0, 0.4, 0.5, 0.0, -0.10, -0.15, 0.05, 0.02, 0.0, 0.70, 0.65, 1.0, 1.0, 0.5,
+            ]),
+            featurize(&[
+                1.0, 0.5, 0.5, 0.0, -0.02, -0.03, 0.30, 0.25, 0.0, 0.20, 0.15, 0.0, 0.0, 0.5,
+            ]),
+            featurize(&[
+                1.0, 0.3, 0.4, 0.0, -0.08, -0.12, 0.08, 0.04, 0.0, 0.55, 0.50, 1.0, 0.0, 0.3,
+            ]),
         ];
         let trained_probs: Vec<f64> = test_cases.iter().map(|f| trained.predict_prob(f)).collect();
 
@@ -1913,7 +2460,8 @@ mod tests {
         let loaded_probs: Vec<f64> = test_cases.iter().map(|f| loaded.predict_prob(f)).collect();
 
         // Step 6: verify
-        for (i, ((trained_p, loaded_p), seeded_p)) in trained_probs.iter()
+        for (i, ((trained_p, loaded_p), seeded_p)) in trained_probs
+            .iter()
             .zip(&loaded_probs)
             .zip(&seeded_probs)
             .enumerate()
@@ -1925,8 +2473,14 @@ mod tests {
         }
 
         // Also verify that loaded != seeded (the training actually changed something)
-        let any_different = trained_probs.iter().zip(&seeded_probs).any(|(t, s)| (t - s).abs() > 0.01);
-        assert!(any_different, "trained predictions should differ from seed-only predictions");
+        let any_different = trained_probs
+            .iter()
+            .zip(&seeded_probs)
+            .any(|(t, s)| (t - s).abs() > 0.01);
+        assert!(
+            any_different,
+            "trained predictions should differ from seed-only predictions"
+        );
     }
 
     #[test]
@@ -1936,7 +2490,10 @@ mod tests {
         let featurize = |vals: &[f64]| -> Vec<Feature> {
             vals.iter()
                 .enumerate()
-                .map(|(i, &v)| Feature { index: i as u64, value: v })
+                .map(|(i, &v)| Feature {
+                    index: i as u64,
+                    value: v,
+                })
                 .collect()
         };
 
@@ -1946,27 +2503,35 @@ mod tests {
         for _ in 0..30 {
             // Gold candidate: strong scores
             trained.update(
-                &featurize(&[1.0, 0.75, 0.70, 0.60, 0.55, 0.50, 0.30, 0.30, 0.50, 0.40, 0.35, 1.0, 0.80,
-                             1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0,
-                             1.0, 0.15, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+                &featurize(&[
+                    1.0, 0.75, 0.70, 0.60, 0.55, 0.50, 0.30, 0.30, 0.50, 0.40, 0.35, 1.0, 0.80,
+                    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.15, 1.0,
+                    1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                ]),
                 true,
             );
             // Wrong candidate: weak scores
             trained.update(
-                &featurize(&[1.0, 0.25, 0.20, 0.15, 0.10, 0.15, 0.05, 0.10, 0.17, 0.10, 0.05, 0.0, 0.40,
-                             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
-                             0.25, 0.02, 0.0, 0.0, 0.33, 0.40, 0.0, 0.0, 0.0, 0.0, 0.0]),
+                &featurize(&[
+                    1.0, 0.25, 0.20, 0.15, 0.10, 0.15, 0.05, 0.10, 0.17, 0.10, 0.05, 0.0, 0.40,
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.25, 0.02, 0.0,
+                    0.0, 0.33, 0.40, 0.0, 0.0, 0.0, 0.0, 0.0,
+                ]),
                 false,
             );
         }
 
-        let test_cases = vec![
-            featurize(&[1.0, 0.65, 0.60, 0.50, 0.45, 0.45, 0.25, 0.25, 0.33, 0.35, 0.30, 1.0, 0.75,
-                        1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0,
-                        1.0, 0.12, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-            featurize(&[1.0, 0.30, 0.25, 0.20, 0.15, 0.20, 0.08, 0.12, 0.20, 0.12, 0.08, 0.0, 0.45,
-                        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
-                        0.33, 0.03, 0.0, 0.0, 0.40, 0.50, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        let test_cases = [
+            featurize(&[
+                1.0, 0.65, 0.60, 0.50, 0.45, 0.45, 0.25, 0.25, 0.33, 0.35, 0.30, 1.0, 0.75, 1.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.12, 1.0, 1.0, 1.0,
+                1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ]),
+            featurize(&[
+                1.0, 0.30, 0.25, 0.20, 0.15, 0.20, 0.08, 0.12, 0.20, 0.12, 0.08, 0.0, 0.45, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.33, 0.03, 0.0, 0.0, 0.40,
+                0.50, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ]),
         ];
         let trained_probs: Vec<f64> = test_cases.iter().map(|f| trained.predict_prob(f)).collect();
 
@@ -1997,7 +2562,10 @@ mod tests {
         let featurize = |vals: &[f64]| -> Vec<Feature> {
             vals.iter()
                 .enumerate()
-                .map(|(i, &v)| Feature { index: i as u64, value: v })
+                .map(|(i, &v)| Feature {
+                    index: i as u64,
+                    value: v,
+                })
                 .collect()
         };
 
@@ -2005,11 +2573,15 @@ mod tests {
         seed_gate_model(&mut trained);
         for _ in 0..50 {
             trained.update(
-                &featurize(&[1.0, 0.4, 0.5, 0.0, -0.12, -0.18, 0.04, 0.01, 0.0, 0.65, 0.60, 1.0, 1.0, 0.4]),
+                &featurize(&[
+                    1.0, 0.4, 0.5, 0.0, -0.12, -0.18, 0.04, 0.01, 0.0, 0.65, 0.60, 1.0, 1.0, 0.4,
+                ]),
                 true,
             );
             trained.update(
-                &featurize(&[1.0, 0.5, 0.5, 0.0, -0.03, -0.04, 0.25, 0.20, 0.0, 0.15, 0.10, 0.0, 0.0, 0.3]),
+                &featurize(&[
+                    1.0, 0.5, 0.5, 0.0, -0.03, -0.04, 0.25, 0.20, 0.0, 0.15, 0.10, 0.0, 0.0, 0.3,
+                ]),
                 false,
             );
         }
@@ -2022,13 +2594,13 @@ mod tests {
         loaded.load_weights(&mut &buf[..]).unwrap();
 
         // Positive-like input
-        let pos_prob = loaded.predict_prob(
-            &featurize(&[1.0, 0.4, 0.5, 0.0, -0.10, -0.15, 0.05, 0.02, 0.0, 0.70, 0.65, 1.0, 1.0, 0.5]),
-        );
+        let pos_prob = loaded.predict_prob(&featurize(&[
+            1.0, 0.4, 0.5, 0.0, -0.10, -0.15, 0.05, 0.02, 0.0, 0.70, 0.65, 1.0, 1.0, 0.5,
+        ]));
         // Negative-like input
-        let neg_prob = loaded.predict_prob(
-            &featurize(&[1.0, 0.5, 0.5, 0.0, -0.02, -0.03, 0.30, 0.25, 0.0, 0.20, 0.15, 0.0, 0.0, 0.5]),
-        );
+        let neg_prob = loaded.predict_prob(&featurize(&[
+            1.0, 0.5, 0.5, 0.0, -0.02, -0.03, 0.30, 0.25, 0.0, 0.20, 0.15, 0.0, 0.0, 0.5,
+        ]));
 
         assert!(
             pos_prob > 0.3,

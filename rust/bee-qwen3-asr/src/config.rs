@@ -9,9 +9,11 @@ pub struct AsrConfig {
     /// Present only in ForcedAligner configs.
     #[serde(default)]
     pub classify_num: Option<usize>,
+
     /// Token ID for `<timestamp>` (e.g. 151705). Present only in ForcedAligner configs.
     #[serde(default)]
     pub timestamp_token_id: Option<i64>,
+
     /// Milliseconds per time bucket (e.g. 80.0). Present only in ForcedAligner configs.
     #[serde(default)]
     pub timestamp_segment_time: Option<f64>,
@@ -20,13 +22,18 @@ pub struct AsrConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ThinkerConfig {
     pub audio_config: AudioEncoderConfig,
+
     pub text_config: TextDecoderConfig,
+
     #[serde(default = "default_audio_start_token_id")]
     pub audio_start_token_id: i64,
+
     #[serde(default = "default_audio_end_token_id")]
     pub audio_end_token_id: i64,
+
     #[serde(default = "default_audio_token_id")]
     pub audio_token_id: i64,
+
     /// Number of timestamp classification buckets (ForcedAligner only).
     #[serde(default)]
     pub classify_num: Option<usize>,

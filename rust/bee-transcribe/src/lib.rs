@@ -1,50 +1,16 @@
 //! High-level streaming transcription built on `bee-qwen3-asr`.
-//!
-//! `Engine` holds the loaded model weights and is immutable after construction —
-//! multiple `Session`s can borrow it concurrently.
-//!
-//! Each `Session` processes a single audio stream, producing incremental text
-//! updates with word-level timestamps.
 
-use std::io::Cursor;
-use std::path::Path;
+mod asr;
+mod mlx_stuff;
+use std::collections::HashMap;
 
-extern "C" {
-    fn mlx_set_cache_limit(res: *mut usize, limit: usize) -> std::ffi::c_int;
-    fn mlx_clear_cache() -> std::ffi::c_int;
-}
-
-/// Install the mlx-rs error handler, replacing the default C handler
-/// which calls `exit(255)` on any error.
-fn ensure_mlx_error_handler() {
-    use std::sync::Once;
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        mlx_rs::error::setup_mlx_error_handler();
-    });
-}
-
-/// Release unused MLX Metal buffers from the pool back to the system.
-/// Safe to call concurrently — only frees buffers with no live references.
-pub fn clear_mlx_cache() {
-    ensure_mlx_error_handler();
-    unsafe {
-        mlx_clear_cache();
-    }
-}
-
-/// Set the MLX Metal buffer cache limit. Buffers beyond this are returned
-/// to the system instead of being pooled for reuse.
-pub fn set_mlx_cache_limit(limit: usize) -> Result<usize, String> {
-    ensure_mlx_error_handler();
-    let mut prev = 0usize;
-    let rc = unsafe { mlx_set_cache_limit(&mut prev, limit) };
-    if rc != 0 {
-        Err(format!("mlx_set_cache_limit failed (rc={rc})"))
-    } else {
-        Ok(prev)
-    }
-}
+use bee_types::Confidence;
+use bee_vad::SileroVad;
+pub use mlx_stuff::*;
+mod types;
+use tokenizers::Tokenizer;
+pub use types::*;
+mod wav_util;
 
 use bee_qwen3_asr::config::AsrConfig;
 use bee_qwen3_asr::encoder::EncoderCache;
@@ -53,157 +19,32 @@ use bee_qwen3_asr::generate::TokenLogprob;
 use bee_qwen3_asr::mel::MelExtractor;
 use bee_qwen3_asr::model::Qwen3ASRModel;
 use bee_qwen3_asr::{generate, load};
-use facet::Facet;
 use mlx_rs::error::Exception;
 use mlx_rs::module::ModuleParametersExt;
 use mlx_rs::Array;
 
-// ── Data types ──────────────────────────────────────────────────────────
-
-/// Language of the audio being transcribed.
-///
-/// Passed to the model as `"language {name}"`. Common values:
-/// `"English"`, `"Chinese"`, `"Japanese"`, `"Korean"`, `"French"`,
-/// `"German"`, `"Spanish"`.
-#[derive(Debug, Clone, Facet)]
-pub struct Language(pub String);
-
-impl Language {
-    fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Default for Language {
-    fn default() -> Self {
-        Language(String::new())
-    }
-}
-
-/// Configuration for a transcription session.
-#[derive(Debug, Clone, Facet)]
-pub struct SessionOptions {
-    /// Seconds of audio per processing chunk. Default: 0.4
-    pub chunk_duration: f32,
-
-    /// VAD speech probability threshold (0.0-1.0). Default: 0.5
-    pub vad_threshold: f32,
-
-    /// How many recent tokens the model is allowed to revise each step.
-    /// Everything before this tail is fed back as fixed context that
-    /// the model must continue from. Higher values give the model more
-    /// freedom to correct itself but make the output less stable between
-    /// steps. Default: 5
-    pub rollback_tokens: usize,
-
-    /// Minimum number of fixed tokens (total minus `rollback_tokens`)
-    /// before we commit and rotate the session. When the fixed portion
-    /// reaches this threshold, we find a word boundary, run the aligner,
-    /// and start a fresh session. Default: 12
-    pub commit_token_count: usize,
-
-    /// Max tokens to generate per streaming step. Default: 32
-    pub max_tokens_streaming: usize,
-
-    /// Max tokens for the final decode when `finish()` is called. Default: 512
-    pub max_tokens_final: usize,
-
-    /// Language of the audio.
-    pub language: Language,
-}
-
-impl Default for SessionOptions {
-    fn default() -> Self {
-        Self {
-            chunk_duration: 0.4,
-            vad_threshold: 0.5,
-            rollback_tokens: 5,
-            commit_token_count: 12,
-            max_tokens_streaming: 32,
-            max_tokens_final: 512,
-            language: Language::default(),
-        }
-    }
-}
-
-/// Result of a `feed()` or `finish()` call.
-#[derive(Debug, Clone, Facet)]
-pub struct Update {
-    /// Full transcription so far (committed + in-progress).
-    pub text: String,
-
-    /// Byte offset into `text` where the committed (stable) portion ends.
-    /// `text[..committed_len]` is final and won't change.
-    /// `text[committed_len..]` is the in-progress tail that may be revised.
-    pub committed_len: usize,
-
-    /// Word-level timestamps for committed words.
-    pub alignments: Vec<AlignedWord>,
-
-    /// Language detected by the model (empty if language was forced).
-    pub detected_language: String,
-}
-
 pub use bee_types::AlignedWord;
 
-/// Load a tokenizer from a directory. Tries `tokenizer.json` first (consolidated
-/// HuggingFace format), then falls back to building from `vocab.json` + `merges.txt`.
-fn load_tokenizer(dir: &Path) -> Result<tokenizers::Tokenizer, mlx_rs::error::Exception> {
-    let consolidated = dir.join("tokenizer.json");
-    if consolidated.exists() {
-        return tokenizers::Tokenizer::from_file(&consolidated)
-            .map_err(|e| mlx_rs::error::Exception::custom(format!("load tokenizer.json: {e}")));
-    }
-
-    let vocab_path = dir.join("vocab.json");
-    let merges_path = dir.join("merges.txt");
-    if vocab_path.exists() && merges_path.exists() {
-        let bpe = tokenizers::models::bpe::BPE::from_file(
-            vocab_path.to_str().unwrap(),
-            merges_path.to_str().unwrap(),
-        )
-        .byte_fallback(true)
-        .build()
-        .map_err(|e| mlx_rs::error::Exception::custom(format!("build BPE tokenizer: {e}")))?;
-        let mut tokenizer = tokenizers::Tokenizer::new(bpe);
-
-        // GPT-2 style BPE uses byte-level pre-tokenizer and decoder to handle
-        // the Ġ (U+0120) → space mapping and other byte-level encodings.
-        tokenizer.with_pre_tokenizer(Some(
-            tokenizers::pre_tokenizers::byte_level::ByteLevel::new(false, true, false),
-        ));
-        tokenizer.with_decoder(Some(tokenizers::decoders::byte_level::ByteLevel::default()));
-        return Ok(tokenizer);
-    }
-
-    Err(mlx_rs::error::Exception::custom(format!(
-        "no tokenizer found in {} (need tokenizer.json or vocab.json + merges.txt)",
-        dir.display()
-    )))
-}
+use crate::asr::load_tokenizer;
 
 // ── Engine ──────────────────────────────────────────────────────────────
-
-/// Paths required to load an engine.
-pub struct EngineConfig<'a> {
-    /// Directory containing `config.json` and `*.safetensors` for the
-    /// ASR model weights.
-    pub model_dir: &'a Path,
-    /// Directory containing tokenizer files — either a single `tokenizer.json`,
-    /// or `vocab.json` + `merges.txt` (GPT-2 style BPE).
-    pub tokenizer_dir: &'a Path,
-    /// Directory containing the forced aligner model weights.
-    pub aligner_dir: &'a Path,
-}
 
 /// Holds loaded model weights, tokenizer, and forced aligner.
 ///
 /// Immutable after construction — multiple sessions can borrow it
 /// concurrently via `&Engine`.
 pub struct Engine {
+    /// Qwen3-compatible tokenizer
+    tokenizer: Tokenizer,
+
+    /// Qwen3-ASR
     model: Qwen3ASRModel,
-    tokenizer: tokenizers::Tokenizer,
+
+    /// Qwen3-ASR-ForcedAligner
     aligner: ForcedAligner,
+
+    /// Pre-loaded VAD tensors
+    vad_tensors: HashMap<String, mlx_rs::Array>,
 }
 
 // SAFETY: Engine is immutable after construction. The MLX arrays inside are
@@ -234,23 +75,33 @@ impl Engine {
         );
 
         let tokenizer = load_tokenizer(config.tokenizer_dir)?;
+        log::info!("Tokenizer loaded");
 
         let aligner = ForcedAligner::load(config.aligner_dir, tokenizer.clone())?;
+        log::info!("Aligner loaded");
+
+        let st_path = config.silero_dir.join("model.safetensors");
+        let vad_tensors = mlx_rs::Array::load_safetensors(&st_path)
+            .map_err(|e| Exception::custom(format!("vad weights load: {e}")))?;
 
         Ok(Engine {
             model,
             tokenizer,
             aligner,
+            vad_tensors,
         })
     }
 
     /// Create a new transcription session.
-    pub fn session(&self, options: SessionOptions) -> Session<'_> {
+    pub fn session(&self, options: SessionOptions) -> Result<Session<'_>, Exception> {
         let chunk_size_samples = (options.chunk_duration * 16000.0) as usize;
 
-        Session {
+        let vad = SileroVad::from_tensors(tensors)
+            .map_err(|e| Exception::custom(format!("vad creation failed: {e}")))?;
+
+        let session = Session {
             engine: self,
-            vad: None, // caller sets this via set_vad()
+            vad,
             buffer: Vec::new(),
             audio: Vec::new(),
             chunk_size_samples,
@@ -266,7 +117,8 @@ impl Engine {
             options,
             speech_detected: false,
             detected_language: String::new(),
-        }
+        };
+        Ok(session)
     }
 }
 
@@ -275,7 +127,7 @@ impl Engine {
 /// A live transcription session. Borrows the engine immutably.
 pub struct Session<'a> {
     engine: &'a Engine,
-    vad: Option<bee_vad::SileroVad>,
+    vad: SileroVad,
 
     // Audio buffering
     buffer: Vec<f32>,
@@ -288,11 +140,11 @@ pub struct Session<'a> {
     mel_extractor: MelExtractor,
 
     // Decoder output for the current segment
-    token_ids: Vec<u32>,
+    token_ids: Vec<TokenId>,
     token_logprobs: Vec<TokenLogprob>,
 
     // Committed state (accumulated across rotations)
-    committed_tokens: Vec<u32>,
+    committed_tokens: Vec<TokenId>,
     committed_logprobs: Vec<TokenLogprob>,
     committed_alignments: Vec<AlignedWord>,
     committed_audio_offset: f64,
@@ -304,11 +156,6 @@ pub struct Session<'a> {
 }
 
 impl<'a> Session<'a> {
-    /// Attach a VAD instance for speech detection gating.
-    pub fn set_vad(&mut self, vad: bee_vad::SileroVad) {
-        self.vad = Some(vad);
-    }
-
     /// Feed raw 16kHz mono f32 audio samples.
     ///
     /// Returns `Ok(Some(update))` when new text is available,
@@ -330,14 +177,12 @@ impl<'a> Session<'a> {
 
         // VAD gate: run on full chunks for reliable detection
         if !self.speech_detected {
-            if let Some(ref mut vad) = self.vad {
-                let prob = vad.process_audio(&chunk).unwrap_or(0.0);
-                if prob < self.options.vad_threshold {
-                    tracing::debug!("feed: pre-speech silence (vad={prob:.3})");
-                    return Ok(None);
-                }
-                tracing::info!("feed: speech detected (vad={prob:.3})");
+            let prob = vad.process_audio(&chunk).unwrap_or(0.0);
+            if prob < self.options.vad_threshold {
+                tracing::debug!("feed: pre-speech silence (vad={prob:.3})");
+                return Ok(None);
             }
+            tracing::info!("feed: speech detected (vad={prob:.3})");
             self.speech_detected = true;
         }
 
@@ -346,22 +191,10 @@ impl<'a> Session<'a> {
 
         // Skip decode if this chunk is silence (but keep the audio)
         if self.chunk_count > 1 {
-            let is_silence = if let Some(ref mut vad) = self.vad {
-                let prob = vad.process_audio(&chunk).unwrap_or(0.0);
-                let silent = prob < self.options.vad_threshold;
-                if silent {
-                    tracing::debug!("feed: mid-speech silence (vad={prob:.3}), skipping decode");
-                }
-                silent
-            } else {
-                let rms = compute_rms(&chunk);
-                let silent = rms < 0.006;
-                if silent {
-                    tracing::debug!("feed: mid-speech silence (rms={rms:.4}), skipping decode");
-                }
-                silent
-            };
-            if is_silence {
+            let prob = vad.process_audio(&chunk).unwrap_or(0.0);
+            let silent = prob < self.options.vad_threshold;
+            if silent {
+                tracing::debug!("feed: mid-speech silence (vad={prob:.3}), skipping decode");
                 return Ok(None);
             }
         }
@@ -416,15 +249,11 @@ impl<'a> Session<'a> {
                 );
                 let offset = self.committed_audio_offset;
                 for (i, item) in items.iter().enumerate() {
-                    let (mean_logprob, min_logprob, mean_margin, min_margin) = wstats[i];
                     self.committed_alignments.push(AlignedWord {
                         word: item.word.clone(),
                         start: item.start_time + offset,
                         end: item.end_time + offset,
-                        mean_logprob,
-                        min_logprob,
-                        mean_margin,
-                        min_margin,
+                        confidence: wstats[i],
                     });
                 }
             }
@@ -483,7 +312,7 @@ impl<'a> Session<'a> {
             prompt.len(),
         );
 
-        let (all_ids, all_logprobs): (Vec<u32>, Vec<TokenLogprob>) =
+        let (all_ids, all_logprobs): (Vec<TokenId>, Vec<TokenLogprob>) =
             if let Some(prefix) = prefix_ids {
                 // Prefix tokens reuse their previous logprobs; generated tokens get fresh ones.
                 let prefix_len = prefix.len();
@@ -503,12 +332,12 @@ impl<'a> Session<'a> {
                     lps
                 };
                 let mut ids = prefix;
-                ids.extend(generated.iter().map(|&t| t as u32));
+                ids.extend(generated.iter().map(|&t| t as TokenId));
                 let mut lps = prefix_logprobs;
                 lps.extend_from_slice(&logprobs);
                 (ids, lps)
             } else {
-                (generated.iter().map(|&t| t as u32).collect(), logprobs)
+                (generated.iter().map(|&t| t as TokenId).collect(), logprobs)
             };
 
         tracing::debug!(
@@ -538,7 +367,7 @@ impl<'a> Session<'a> {
 
     /// Compute the fixed prefix to feed back to the model.
     /// Returns None during the warm-up phase.
-    fn compute_prefix(&self) -> Option<Vec<u32>> {
+    fn compute_prefix(&self) -> Option<Vec<TokenId>> {
         if self.chunk_count <= 2 || self.token_ids.is_empty() {
             return None;
         }
@@ -648,7 +477,7 @@ impl<'a> Session<'a> {
 
     /// Decode all tokens (committed + current session) as one sequence
     /// so the tokenizer preserves whitespace context across the boundary.
-    fn full_token_ids(&self) -> Vec<u32> {
+    fn full_token_ids(&self) -> Vec<TokenId> {
         let mut all = self.committed_tokens.clone();
         all.extend_from_slice(&self.token_ids);
         all
@@ -664,7 +493,7 @@ impl<'a> Session<'a> {
         let all_ids = self.full_token_ids();
 
         // Split at the <asr_text> token — metadata before, text after.
-        let asr_text_id = generate::TOK_ASR_TEXT as u32;
+        let asr_text_id = generate::TOK_ASR_TEXT;
         let (text, detected_lang) = if let Some(tag_pos) =
             all_ids.iter().position(|&id| id == asr_text_id)
         {
@@ -742,13 +571,13 @@ impl<'a> Session<'a> {
 /// accumulate text, and assign tokens to the next aligner word whose text
 /// they contribute to.
 fn word_logprob_stats(
-    tokenizer: &tokenizers::Tokenizer,
-    token_ids: &[u32],
+    tokenizer: &Tokenizer,
+    token_ids: &[TokenId],
     token_logprobs: &[TokenLogprob],
     word_count: usize,
-) -> Vec<(Option<f32>, Option<f32>, Option<f32>, Option<f32>)> {
+) -> Result<Vec<Confidence>, TranscribeError> {
     if token_logprobs.is_empty() || word_count == 0 {
-        return vec![(None, None, None, None); word_count];
+        return Ok(vec![]);
     }
 
     // Decode each token to find its text contribution
@@ -798,11 +627,17 @@ fn word_logprob_stats(
         }
     }
 
-    word_logprobs
+    let word_confidences = word_logprobs
         .iter()
-        .map(|lps| {
+        .enumerate()
+        .map(|(word_idx, lps)| {
             if lps.is_empty() {
-                return (None, None, None, None);
+                panic!(
+                    "word {word_idx}/{word_count} has no token logprobs (token_ids={}, logprobs={}, per_token_texts={:?})",
+                    token_ids.len(),
+                    token_logprobs.len(),
+                    per_token_texts,
+                );
             }
             let n = lps.len() as f32;
             let mean_lp = lps.iter().map(|lp| lp.logprob).sum::<f32>() / n;
@@ -812,9 +647,15 @@ fn word_logprob_stats(
                 .fold(f32::INFINITY, f32::min);
             let mean_m = lps.iter().map(|lp| lp.margin).sum::<f32>() / n;
             let min_m = lps.iter().map(|lp| lp.margin).fold(f32::INFINITY, f32::min);
-            (Some(mean_lp), Some(min_lp), Some(mean_m), Some(min_m))
+            Confidence {
+                mean_lp,
+                min_lp,
+                mean_m,
+                min_m,
+            }
         })
-        .collect()
+        .collect();
+    Ok(word_confidences)
 }
 
 fn compute_rms(samples: &[f32]) -> f32 {
@@ -823,63 +664,4 @@ fn compute_rms(samples: &[f32]) -> f32 {
     }
     let sum_sq: f32 = samples.iter().map(|&s| s * s).sum();
     (sum_sq / samples.len() as f32).sqrt()
-}
-
-/// Decode WAV bytes to 16kHz mono f32 samples.
-pub fn decode_wav(bytes: &[u8]) -> Result<Vec<f32>, mlx_rs::error::Exception> {
-    let cursor = Cursor::new(bytes);
-    let mut reader = hound::WavReader::new(cursor)
-        .map_err(|e| mlx_rs::error::Exception::custom(format!("invalid WAV: {e}")))?;
-    let spec = reader.spec();
-
-    if spec.sample_rate != 16_000 {
-        return Err(mlx_rs::error::Exception::custom(format!(
-            "expected 16kHz WAV, got {}Hz",
-            spec.sample_rate
-        )));
-    }
-
-    let channels = spec.channels.max(1) as usize;
-    let mut mono = Vec::new();
-
-    match spec.sample_format {
-        hound::SampleFormat::Float => {
-            let mut acc = 0.0f32;
-            let mut idx = 0usize;
-            for sample in reader.samples::<f32>() {
-                acc += sample.map_err(|e| mlx_rs::error::Exception::custom(format!("{e}")))?;
-                idx += 1;
-                if idx == channels {
-                    mono.push(acc / channels as f32);
-                    acc = 0.0;
-                    idx = 0;
-                }
-            }
-        }
-        hound::SampleFormat::Int => {
-            let scale = if spec.bits_per_sample <= 16 {
-                i16::MAX as f32
-            } else {
-                ((1_i64 << (spec.bits_per_sample - 1)) - 1) as f32
-            };
-            let mut acc = 0.0f32;
-            let mut idx = 0usize;
-            for sample in reader.samples::<i32>() {
-                acc += sample.map_err(|e| mlx_rs::error::Exception::custom(format!("{e}")))? as f32
-                    / scale;
-                idx += 1;
-                if idx == channels {
-                    mono.push(acc / channels as f32);
-                    acc = 0.0;
-                    idx = 0;
-                }
-            }
-        }
-    }
-
-    if mono.is_empty() {
-        return Err(mlx_rs::error::Exception::custom("WAV is empty"));
-    }
-
-    Ok(mono)
 }
