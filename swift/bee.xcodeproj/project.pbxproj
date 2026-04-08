@@ -14,7 +14,6 @@
 		1F38F60B80B1849641559C85 /* ImeIPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A8E30F5100CC6A2C440613A /* ImeIPC.swift */; };
 		267F48ED7025F3C068F6D04A /* DebugOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CCEE7C20F26099D82D42387 /* DebugOverlay.swift */; };
 		29ACCEA70218A641A96EBEF9 /* BeeVoxIMEClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11AEEB5B847C6933C564D6EC /* BeeVoxIMEClient.swift */; };
-		29E8A763B547C38705BA90F2 /* BeeBrokerProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3875771843FEF99CA889E51D /* BeeBrokerProtocol.swift */; };
 		2B3D2EBD517C91756FFCB8E6 /* BeeIPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = E050F7334240ECD9A852CADA /* BeeIPC.swift */; };
 		2B877E72AFA9A4D05B9FDC0B /* Session.swift in Sources */ = {isa = PBXBuildFile; fileRef = 676164F78A7A1315DBA4D712 /* Session.swift */; };
 		2BAE7612802B29D35EA976D7 /* bee-commit.wav in Resources */ = {isa = PBXBuildFile; fileRef = 562E4DCCA4CCA0B2CB287B0E /* bee-commit.wav */; };
@@ -35,7 +34,6 @@
 		61BD0331407809E8C17102E8 /* InputMethodKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 44D01D1FC50FBE993FD0716F /* InputMethodKit.framework */; };
 		638D545266F00C866046B177 /* BeeInputAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F54E5F987731158C437D997 /* BeeInputAppDelegate.swift */; };
 		66493E87798EF2D09BC1BC43 /* BeeInputClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AA018C194359C6E4CE7BA63 /* BeeInputClient.swift */; };
-		716B5A2C281272363E022D04 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8816A652794FA20AF7A8127 /* main.swift */; };
 		76B41682618EC520A6E76200 /* CorrectionTrackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03450AC04167153D40A53E3F /* CorrectionTrackView.swift */; };
 		8811BC0A824B6F88EECA270F /* BeeIMEBridgeState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42C5774A124F08F4B8474598 /* BeeIMEBridgeState.swift */; };
 		89ADF5F490B96085E99E510C /* SoundEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4E52C13C56D37363BA384EF /* SoundEffects.swift */; };
@@ -46,12 +44,10 @@
 		A89EB81687A6FFE36871EF8F /* bee-cancel.wav in Resources */ = {isa = PBXBuildFile; fileRef = 37F08633E13558AA02437706 /* bee-cancel.wav */; };
 		AB7C46C9D52C101086006E85 /* VoxRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = F0443A793174C93FF149DD12 /* VoxRuntime */; };
 		ADA9083DFC2A9EDCB6698240 /* AudioPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0BF06C76650D4E68E461F7C /* AudioPipeline.swift */; };
-		B60F390049F45E66073B89EB /* BeeBrokerProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3875771843FEF99CA889E51D /* BeeBrokerProtocol.swift */; };
 		C6A6931AC5A1DA12F122D2A2 /* ImeIPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A8E30F5100CC6A2C440613A /* ImeIPC.swift */; };
 		CBCFB60C6AD15C7139FA20EF /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 603105EA633577026CEE2CC0 /* README.md */; };
 		CE901A7F4A32D6657E0E625F /* CorrectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E5A6F63A58FCE8C3DE7926B /* CorrectionService.swift */; };
 		D70AC6C318840E971BF24ADB /* HotkeyMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 977266C3895F1E154E74F051 /* HotkeyMonitor.swift */; };
-		D7209C16253CC12AD94B8CED /* BeeBrokerProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3875771843FEF99CA889E51D /* BeeBrokerProtocol.swift */; };
 		D7CA0EA34211F7FFDFA26092 /* HFDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B7793101D0913676624CDA9 /* HFDownloader.swift */; };
 		DC35DFDBCF6C52FA6E0A690A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5A35BE9759CA9C8519D87363 /* Assets.xcassets */; };
 		E2A0D8D0832AC86EC326F654 /* bee-recording-started.wav in Resources */ = {isa = PBXBuildFile; fileRef = 1C71D5EE1E044D47FB362F47 /* bee-recording-started.wav */; };
@@ -102,11 +98,9 @@
 		328695B8DD9282F31F86CBE4 /* BeeEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeEngine.swift; sourceTree = "<group>"; };
 		3373155088BFE82A77DBEB84 /* bee-symbols.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "bee-symbols.ttf"; sourceTree = "<group>"; };
 		37F08633E13558AA02437706 /* bee-cancel.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "bee-cancel.wav"; sourceTree = "<group>"; };
-		3875771843FEF99CA889E51D /* BeeBrokerProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeBrokerProtocol.swift; sourceTree = "<group>"; };
 		3CCEE7C20F26099D82D42387 /* DebugOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugOverlay.swift; sourceTree = "<group>"; };
 		41126B678A8FDC75629B0B30 /* bee.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = bee.entitlements; sourceTree = "<group>"; };
 		42C5774A124F08F4B8474598 /* BeeIMEBridgeState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeIMEBridgeState.swift; sourceTree = "<group>"; };
-		4337136F79C38C42B8B2E91A /* beeBroker */ = {isa = PBXFileReference; includeInIndex = 0; path = beeBroker; sourceTree = BUILT_PRODUCTS_DIR; };
 		44D01D1FC50FBE993FD0716F /* InputMethodKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = InputMethodKit.framework; path = System/Library/Frameworks/InputMethodKit.framework; sourceTree = SDKROOT; };
 		474050E42EB9FF6AFCF33BDC /* AudioDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioDiagnostics.swift; sourceTree = "<group>"; };
 		562E4DCCA4CCA0B2CB287B0E /* bee-commit.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "bee-commit.wav"; sourceTree = "<group>"; };
@@ -128,7 +122,6 @@
 		BBB5FE976B1CF01CA031AF66 /* BeeInputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeInputController.swift; sourceTree = "<group>"; };
 		C26401964247ABA42B4ADCA3 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		C6ADFA5F8174FA06ABEE475C /* bee-start-failure.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "bee-start-failure.wav"; sourceTree = "<group>"; };
-		D8816A652794FA20AF7A8127 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		DCCA3D090BBD0D5701645658 /* bee.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = bee.tiff; sourceTree = "<group>"; };
 		DF3630E31F22F3AB02E54791 /* CorrectionPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CorrectionPanel.swift; sourceTree = "<group>"; };
 		E050F7334240ECD9A852CADA /* BeeIPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeeIPC.swift; sourceTree = "<group>"; };
@@ -231,30 +224,13 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
-		5F140DA35DA28E6DC02B219D /* bee-broker */ = {
-			isa = PBXGroup;
-			children = (
-				D8816A652794FA20AF7A8127 /* main.swift */,
-			);
-			path = "bee-broker";
-			sourceTree = "<group>";
-		};
 		697DD1AAABC63BCBFAE29FDB /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				ACC2C13E80A8EB858DA92EC7 /* bee.app */,
-				4337136F79C38C42B8B2E91A /* beeBroker */,
 				E27C82D82C5DDA273AC36889 /* beeInput.app */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		A29E6926A89DC7C05360F73E /* shared */ = {
-			isa = PBXGroup;
-			children = (
-				3875771843FEF99CA889E51D /* BeeBrokerProtocol.swift */,
-			);
-			path = shared;
 			sourceTree = "<group>";
 		};
 		AC2E63CD19B3E255DCD31E1C /* Frameworks */ = {
@@ -299,10 +275,8 @@
 			isa = PBXGroup;
 			children = (
 				B5B81CB48103AC5B7169DEE4 /* bee */,
-				5F140DA35DA28E6DC02B219D /* bee-broker */,
 				3C4755D7171C9A5834B9180D /* bee-input */,
 				375CBC6C8C7D824A670D0CD8 /* Packages */,
-				A29E6926A89DC7C05360F73E /* shared */,
 				33F39B0FB3877056B6DC99EB /* vox-shared */,
 				AC2E63CD19B3E255DCD31E1C /* Frameworks */,
 				697DD1AAABC63BCBFAE29FDB /* Products */,
@@ -368,23 +342,6 @@
 			productReference = E27C82D82C5DDA273AC36889 /* beeInput.app */;
 			productType = "com.apple.product-type.application";
 		};
-		C2999C136F5CC0483B62F45B /* beeBroker */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = F22325494C7401AC3BF4AE13 /* Build configuration list for PBXNativeTarget "beeBroker" */;
-			buildPhases = (
-				D2655F88C500EE6726575245 /* Sources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = beeBroker;
-			packageProductDependencies = (
-			);
-			productName = beeBroker;
-			productReference = 4337136F79C38C42B8B2E91A /* beeBroker */;
-			productType = "com.apple.product-type.tool";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -398,9 +355,6 @@
 						DevelopmentTeam = B2N6FSRTPV;
 					};
 					891B7C31943E46D3967A432C = {
-						DevelopmentTeam = B2N6FSRTPV;
-					};
-					C2999C136F5CC0483B62F45B = {
 						DevelopmentTeam = B2N6FSRTPV;
 					};
 				};
@@ -423,7 +377,6 @@
 			projectRoot = "";
 			targets = (
 				01CB3F093F86D1C0EA056F5D /* bee */,
-				C2999C136F5CC0483B62F45B /* beeBroker */,
 				891B7C31943E46D3967A432C /* beeInput */,
 			);
 		};
@@ -468,7 +421,6 @@
 				599EE6A4E7B1CA2D6CE47107 /* AudioEngine.swift in Sources */,
 				ADA9083DFC2A9EDCB6698240 /* AudioPipeline.swift in Sources */,
 				EAD815EAA627296BFA0C4EA3 /* BeeApp.swift in Sources */,
-				D7209C16253CC12AD94B8CED /* BeeBrokerProtocol.swift in Sources */,
 				9C1BE5C87EF9D320ABAD3456 /* BeeEngine.swift in Sources */,
 				2B3D2EBD517C91756FFCB8E6 /* BeeIPC.swift in Sources */,
 				35DC10440BE4DBE469EAC11B /* BeeIPCServer.swift in Sources */,
@@ -496,7 +448,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				399C961D05BC240181C7E5F0 /* AppIPC.swift in Sources */,
-				B60F390049F45E66073B89EB /* BeeBrokerProtocol.swift in Sources */,
 				8811BC0A824B6F88EECA270F /* BeeIMEBridgeState.swift in Sources */,
 				0C77B9C8733FF8E72AFB7687 /* BeeIPC.swift in Sources */,
 				638D545266F00C866046B177 /* BeeInputAppDelegate.swift in Sources */,
@@ -504,15 +455,6 @@
 				29ACCEA70218A641A96EBEF9 /* BeeVoxIMEClient.swift in Sources */,
 				1F38F60B80B1849641559C85 /* ImeIPC.swift in Sources */,
 				16DED771E26A5CA7CBBDC636 /* main.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		D2655F88C500EE6726575245 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				29E8A763B547C38705BA90F2 /* BeeBrokerProtocol.swift in Sources */,
-				716B5A2C281272363E022D04 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -557,23 +499,6 @@
 				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
-		};
-		4762D1F3F5F90ADC0FC7937A /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				COMBINE_HIDPI_IMAGES = YES;
-				ENABLE_APP_SANDBOX = NO;
-				ENABLE_HARDENED_RUNTIME = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = fasterthanlime.bee.broker;
-				PRODUCT_NAME = beeBroker;
-				SDKROOT = macosx;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Release;
 		};
 		5A3D880FA52A67238446C5FB /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -755,23 +680,6 @@
 			};
 			name = Release;
 		};
-		C266DA1B127857BB08EE37B9 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				COMBINE_HIDPI_IMAGES = YES;
-				ENABLE_APP_SANDBOX = NO;
-				ENABLE_HARDENED_RUNTIME = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = fasterthanlime.bee.broker;
-				PRODUCT_NAME = beeBroker;
-				SDKROOT = macosx;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Debug;
-		};
 		D11356ACAD335322EA52A9A1 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -815,15 +723,6 @@
 			buildConfigurations = (
 				D11356ACAD335322EA52A9A1 /* Debug */,
 				A306788A4227294407C4D5D2 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		F22325494C7401AC3BF4AE13 /* Build configuration list for PBXNativeTarget "beeBroker" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				C266DA1B127857BB08EE37B9 /* Debug */,
-				4762D1F3F5F90ADC0FC7937A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

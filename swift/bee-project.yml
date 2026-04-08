@@ -25,7 +25,6 @@ targets:
       - path: bee
         excludes:
           - bee-Bridging-Header.h
-      - path: shared
       - path: vox-shared
     settings:
       base:
@@ -67,7 +66,6 @@ targets:
     platform: macOS
     sources:
       - path: bee-input
-      - path: shared
       - path: vox-shared
     settings:
       base:
