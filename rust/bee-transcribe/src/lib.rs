@@ -1,7 +1,9 @@
 //! High-level streaming transcription built on `bee-qwen3-asr`.
 
 mod aligner;
+pub mod audio_buffer;
 mod asr;
+pub mod text_buffer;
 pub mod correct;
 pub mod corrector;
 mod generator;
@@ -263,6 +265,8 @@ impl<'a> Session<'a> {
             output.text_logprobs,
         )? {
             self.run_correction(&chunk);
+            // Rotate generator so make_update doesn't double-count committed tokens
+            self.generator.rotate(chunk.rotate.raw_tokens_to_drop);
         }
 
         let update = self.make_update();
