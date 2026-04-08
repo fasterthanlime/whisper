@@ -381,6 +381,8 @@ pub struct Stage1EncoderPrefix {
     pub downsample: Downsample2,
     pub encoder_pos: CompactRelPositionalEncoding,
     pub layer0: ZipformerEncoderLayer,
+    pub layer1: ZipformerEncoderLayer,
+    pub out_combiner: BypassModule,
 }
 
 impl Stage0Encoder {
@@ -406,14 +408,20 @@ impl Stage1EncoderPrefix {
             downsample: Downsample2::new(config.encoder_dim[1] as i32)?,
             encoder_pos: CompactRelPositionalEncoding::new(config.pos_dim as i32, 1.0),
             layer0: ZipformerEncoderLayer::new_for_stage(config, 1)?,
+            layer1: ZipformerEncoderLayer::new_for_stage(config, 1)?,
+            out_combiner: BypassModule::new(config.encoder_dim[1] as i32)?,
         })
     }
 
     pub fn forward(&self, src: &Array) -> Result<Array, Exception> {
+        let src_padded = pad_channels(src, self.out_combiner.bypass_scale.shape()[0])?;
         let src = self.downsample.forward(src)?;
         let seq_len = src.shape()[0];
         let pos_emb = self.encoder_pos.forward(seq_len, 0)?;
-        self.layer0.forward(&src, &pos_emb)
+        let src = self.layer0.forward(&src, &pos_emb)?;
+        let src = self.layer1.forward(&src, &pos_emb)?;
+        let src = upsample_by_repeat(&src, src_padded.shape()[0])?;
+        self.out_combiner.forward(&src_padded, &src)
     }
 }
 
@@ -494,12 +502,36 @@ fn relative_to_absolute(pos_scores: &Array, seq_len: i32) -> Result<Array, Excep
     mlx_rs::ops::concatenate_axis(&rows, 2)
 }
 
+fn pad_channels(x: &Array, output_dim: i32) -> Result<Array, Exception> {
+    let shape = x.shape();
+    let seq_len = shape[0];
+    let batch = shape[1];
+    let channels = shape[2];
+    if channels == output_dim {
+        return Ok(x.clone());
+    }
+    let pad_channels = output_dim - channels;
+    let pad = zeros::<f32>(&[seq_len, batch, pad_channels])?;
+    mlx_rs::ops::concatenate_axis(&[x.clone(), pad], 2)
+}
+
+fn upsample_by_repeat(x: &Array, target_seq_len: i32) -> Result<Array, Exception> {
+    let shape = x.shape();
+    let seq_len = shape[0];
+    let batch = shape[1];
+    let channels = shape[2];
+    let expanded = x.expand_dims_axes(&[1])?;
+    let repeated = mlx_rs::ops::broadcast_to(&expanded, &[seq_len, 2, batch, channels])?;
+    let reshaped = repeated.reshape(&[seq_len * 2, batch, channels])?;
+    Ok(reshaped.index((0..target_seq_len, .., ..)))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::config::{ZipaModelConfig, ZipaVariant};
     use crate::load::{
-        load_downsample_weights_from_map, load_stage0_layer_weights_from_map,
-        load_stage_layer_weights_from_map,
+        load_bypass_scale_from_map, load_downsample_weights_from_map,
+        load_stage0_layer_weights_from_map, load_stage_layer_weights_from_map,
     };
 
     use super::{
@@ -880,6 +912,45 @@ mod tests {
     }
 
     #[test]
+    fn stage1_layer1_matches_onnx_reference_when_local_artifacts_exist() {
+        let home = match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home),
+            None => return,
+        };
+        let weights = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/frontend_ctc.safetensors",
+        );
+        let reference = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/authored_282_take_1_layer0_ref.safetensors",
+        );
+        if !(weights.exists() && reference.exists()) {
+            return;
+        }
+
+        let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
+        let mut layer = ZipformerEncoderLayer::new_for_stage(&config, 1).unwrap();
+        let params = Array::load_safetensors(&weights).unwrap();
+        let stats = load_stage_layer_weights_from_map(&mut layer, "encoder.stage1.layer1", &params)
+            .unwrap();
+        assert!(stats.missing.is_empty(), "missing: {:?}", stats.missing);
+
+        let tensors = Array::load_safetensors(&reference).unwrap();
+        let layer_input = tensors.get("stage1_layer0_out").unwrap();
+        let pos_emb = tensors.get("stage1_pos_emb").unwrap();
+        let expected_attn = tensors.get("stage1_layer1_attn_weights").unwrap();
+        let expected = tensors.get("stage1_layer1_out").unwrap();
+
+        let actual_attn = layer
+            .self_attn_weights
+            .forward_with_position(layer_input, pos_emb)
+            .unwrap();
+        assert_close("stage1_layer1_attn_weights", &actual_attn, expected_attn);
+
+        let actual = layer.forward(layer_input, pos_emb).unwrap();
+        assert_close("stage1_layer1_out", &actual, expected);
+    }
+
+    #[test]
     fn stage1_prefix_matches_onnx_reference_when_local_artifacts_exist() {
         let home = match std::env::var_os("HOME") {
             Some(home) => PathBuf::from(home),
@@ -917,10 +988,29 @@ mod tests {
             "missing: {:?}",
             layer_stats.missing
         );
+        let layer1_stats =
+            load_stage_layer_weights_from_map(&mut stage1.layer1, "encoder.stage1.layer1", &params)
+                .unwrap();
+        assert!(
+            layer1_stats.missing.is_empty(),
+            "missing: {:?}",
+            layer1_stats.missing
+        );
+        let out_combiner_stats = load_bypass_scale_from_map(
+            &mut stage1.out_combiner,
+            "encoder.stage1.out_combiner.bypass_scale",
+            &params,
+        )
+        .unwrap();
+        assert!(
+            out_combiner_stats.missing.is_empty(),
+            "missing: {:?}",
+            out_combiner_stats.missing
+        );
 
         let tensors = Array::load_safetensors(&reference).unwrap();
         let stage0_out = tensors.get("stage0_out").unwrap();
-        let expected = tensors.get("stage1_layer0_out").unwrap();
+        let expected = tensors.get("stage1_out").unwrap();
 
         let actual = stage1.forward(stage0_out).unwrap();
         assert_close("stage1_prefix", &actual, expected);

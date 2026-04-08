@@ -93,6 +93,27 @@ STAGE1_LAYER0_MATMULS = {
     "feed_forward3.out_proj.weight": "onnx::MatMul_11351",
 }
 
+STAGE1_LAYER1_MATMULS = {
+    "self_attn_weights.in_proj.weight": "onnx::MatMul_11352",
+    "self_attn_weights.linear_pos.weight": "onnx::MatMul_11371",
+    "feed_forward1.in_proj.weight": "onnx::MatMul_11378",
+    "feed_forward1.out_proj.weight": "onnx::MatMul_11379",
+    "nonlin_attention.in_proj.weight": "onnx::MatMul_11384",
+    "nonlin_attention.out_proj.weight": "onnx::MatMul_11388",
+    "self_attn1.in_proj.weight": "onnx::MatMul_11389",
+    "self_attn1.out_proj.weight": "onnx::MatMul_11391",
+    "conv_module1.in_proj.weight": "onnx::MatMul_11392",
+    "conv_module1.out_proj.weight": "onnx::MatMul_11393",
+    "feed_forward2.in_proj.weight": "onnx::MatMul_11394",
+    "feed_forward2.out_proj.weight": "onnx::MatMul_11395",
+    "self_attn2.in_proj.weight": "onnx::MatMul_11396",
+    "self_attn2.out_proj.weight": "onnx::MatMul_11398",
+    "conv_module2.in_proj.weight": "onnx::MatMul_11399",
+    "conv_module2.out_proj.weight": "onnx::MatMul_11400",
+    "feed_forward3.in_proj.weight": "onnx::MatMul_11401",
+    "feed_forward3.out_proj.weight": "onnx::MatMul_11402",
+}
+
 
 def add_stage0_layer(layer_index: int) -> None:
     prefix = f"encoder.stage0.layer{layer_index}"
@@ -171,6 +192,42 @@ for suffix in [
     NAME_MAP[f"encoder.encoders.1.encoder.layers.0.{suffix}"] = (
         f"encoder.stage1.layer0.{suffix}"
     )
+
+for dst_suffix, src_name in STAGE1_LAYER1_MATMULS.items():
+    NAME_MAP[src_name] = f"encoder.stage1.layer1.{dst_suffix}"
+
+for suffix in [
+    "self_attn_weights.in_proj.bias",
+    "feed_forward1.in_proj.bias",
+    "feed_forward1.out_proj.bias",
+    "nonlin_attention.in_proj.bias",
+    "nonlin_attention.out_proj.bias",
+    "self_attn1.in_proj.bias",
+    "self_attn1.out_proj.bias",
+    "conv_module1.in_proj.bias",
+    "conv_module1.depthwise_conv.weight",
+    "conv_module1.depthwise_conv.bias",
+    "conv_module1.out_proj.bias",
+    "feed_forward2.in_proj.bias",
+    "feed_forward2.out_proj.bias",
+    "bypass_mid.bypass_scale",
+    "self_attn2.in_proj.bias",
+    "self_attn2.out_proj.bias",
+    "conv_module2.in_proj.bias",
+    "conv_module2.depthwise_conv.weight",
+    "conv_module2.depthwise_conv.bias",
+    "conv_module2.out_proj.bias",
+    "feed_forward3.in_proj.bias",
+    "feed_forward3.out_proj.bias",
+    "norm.log_scale",
+    "norm.bias",
+    "bypass.bypass_scale",
+]:
+    NAME_MAP[f"encoder.encoders.1.encoder.layers.1.{suffix}"] = (
+        f"encoder.stage1.layer1.{suffix}"
+    )
+
+NAME_MAP["encoder.encoders.1.out_combiner.bypass_scale"] = "encoder.stage1.out_combiner.bypass_scale"
 
 
 def main() -> None:

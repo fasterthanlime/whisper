@@ -33,6 +33,9 @@ STAGE1_DOWNSAMPLE_OUT = "/encoder/1/downsample/ReduceSum_output_0"
 STAGE1_POS_EMB = "/encoder/1/encoder/encoder_pos/Unsqueeze_35_output_0"
 STAGE1_LAYER0_ATTN_WEIGHTS = "/encoder/1/encoder/0/self_attn_weights/Softmax_output_0"
 STAGE1_LAYER0_OUTPUT = "/encoder/1/encoder/0/bypass/Add_output_0"
+STAGE1_LAYER1_ATTN_WEIGHTS = "/encoder/1/encoder/1/self_attn_weights/Softmax_output_0"
+STAGE1_LAYER1_OUTPUT = "/encoder/1/encoder/1/bypass/Add_output_0"
+STAGE1_OUT = "/encoder/1/out_combiner/Add_output_0"
 
 
 def ensure_outputs(model_path: Path, output_path: Path) -> Path:
@@ -60,6 +63,9 @@ def ensure_outputs(model_path: Path, output_path: Path) -> Path:
         STAGE1_POS_EMB,
         STAGE1_LAYER0_ATTN_WEIGHTS,
         STAGE1_LAYER0_OUTPUT,
+        STAGE1_LAYER1_ATTN_WEIGHTS,
+        STAGE1_LAYER1_OUTPUT,
+        STAGE1_OUT,
     ]:
         if name not in existing:
             model.graph.output.append(
@@ -117,6 +123,9 @@ def main() -> None:
             STAGE1_POS_EMB,
             STAGE1_LAYER0_ATTN_WEIGHTS,
             STAGE1_LAYER0_OUTPUT,
+            STAGE1_LAYER1_ATTN_WEIGHTS,
+            STAGE1_LAYER1_OUTPUT,
+            STAGE1_OUT,
         ],
         {"x": features, "x_lens": feat_lens},
     )
@@ -141,6 +150,9 @@ def main() -> None:
         stage1_pos_emb,
         stage1_layer0_attn_weights,
         stage1_layer0_out,
+        stage1_layer1_attn_weights,
+        stage1_layer1_out,
+        stage1_out,
     ) = outputs
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -167,6 +179,9 @@ def main() -> None:
             "stage1_pos_emb": stage1_pos_emb.astype(np.float32),
             "stage1_layer0_attn_weights": stage1_layer0_attn_weights.astype(np.float32),
             "stage1_layer0_out": stage1_layer0_out.astype(np.float32),
+            "stage1_layer1_attn_weights": stage1_layer1_attn_weights.astype(np.float32),
+            "stage1_layer1_out": stage1_layer1_out.astype(np.float32),
+            "stage1_out": stage1_out.astype(np.float32),
         },
         str(args.output),
     )
