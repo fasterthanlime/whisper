@@ -4,6 +4,8 @@ mod aligner;
 pub mod audio_buffer;
 pub mod audio_filter;
 mod asr;
+pub mod decode_session;
+pub mod session_v2;
 pub mod text_buffer;
 pub mod correct;
 pub mod corrector;
