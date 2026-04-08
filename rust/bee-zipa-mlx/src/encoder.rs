@@ -443,33 +443,42 @@ pub struct ZipformerEncoderLayer {
     pub bypass: BypassModule,
 }
 
-#[derive(Debug, Clone, Quantizable)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct Stage0Encoder {
     pub encoder_pos: CompactRelPositionalEncoding,
+    #[param]
     #[quantizable]
     pub layer0: ZipformerEncoderLayer,
+    #[param]
     #[quantizable]
     pub layer1: ZipformerEncoderLayer,
 }
 
-#[derive(Debug, Clone, Quantizable)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct Stage1EncoderPrefix {
+    #[param]
     pub downsample: Downsample2,
     pub encoder_pos: CompactRelPositionalEncoding,
+    #[param]
     #[quantizable]
     pub layer0: ZipformerEncoderLayer,
+    #[param]
     #[quantizable]
     pub layer1: ZipformerEncoderLayer,
+    #[param]
     pub out_combiner: BypassModule,
 }
 
-#[derive(Debug, Clone, Quantizable)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct StageEncoder {
     pub stage: usize,
+    #[param]
     pub downsample: Downsample2,
     pub encoder_pos: CompactRelPositionalEncoding,
+    #[param]
     #[quantizable]
     pub layers: Vec<ZipformerEncoderLayer>,
+    #[param]
     pub out_combiner: BypassModule,
 }
 

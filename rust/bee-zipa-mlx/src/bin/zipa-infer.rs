@@ -9,6 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _program = args.next();
     let mut bits = None;
     let mut group_size = None;
+    let mut quantized_checkpoint = None;
     let mut wav = None;
 
     while let Some(arg) = args.next() {
@@ -21,9 +22,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let value = args.next().ok_or("--group-size requires a value")?;
                 group_size = Some(value.to_string_lossy().parse::<i32>()?);
             }
+            "--quantized-checkpoint" => {
+                let value = args.next().ok_or("--quantized-checkpoint requires a value")?;
+                quantized_checkpoint = Some(PathBuf::from(value));
+            }
             _ if wav.is_none() => wav = Some(PathBuf::from(arg)),
             _ => {
-                eprintln!("usage: zipa-infer [--bits N] [--group-size N] <wav-path>");
+                eprintln!(
+                    "usage: zipa-infer [--bits N] [--group-size N] [--quantized-checkpoint PATH] <wav-path>"
+                );
                 std::process::exit(2);
             }
         }
@@ -32,17 +39,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wav = match wav {
         Some(path) => path,
         None => {
-            eprintln!("usage: zipa-infer [--bits N] [--group-size N] <wav-path>");
+            eprintln!(
+                "usage: zipa-infer [--bits N] [--group-size N] [--quantized-checkpoint PATH] <wav-path>"
+            );
             std::process::exit(2);
         }
     };
 
     let load_start = Instant::now();
-    let mut inference = ZipaInference::load_reference_small_no_diacritics()?;
+    let mut inference = match &quantized_checkpoint {
+        Some(path) => ZipaInference::load_quantized_safetensors(path)?,
+        None => ZipaInference::load_reference_small_no_diacritics()?,
+    };
     let load_elapsed = load_start.elapsed();
 
-    if let Some(bits) = bits {
-        inference.quantize_linears(group_size.unwrap_or(64), bits)?;
+    if quantized_checkpoint.is_none() {
+        if let Some(bits) = bits {
+            inference.quantize_linears(group_size.unwrap_or(64), bits)?;
+        }
+    } else if bits.is_some() || group_size.is_some() {
+        eprintln!("--bits/--group-size cannot be used with --quantized-checkpoint");
+        std::process::exit(2);
     }
 
     let infer_start = Instant::now();
@@ -50,6 +67,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let infer_elapsed = infer_start.elapsed();
 
     println!("wav: {}", wav.display());
+    if let Some(path) = quantized_checkpoint {
+        println!("quantized_checkpoint: {}", path.display());
+    }
     println!("load_ms: {:.3}", load_elapsed.as_secs_f64() * 1_000.0);
     if let Some(bits) = bits {
         println!("quantized_bits: {bits}");

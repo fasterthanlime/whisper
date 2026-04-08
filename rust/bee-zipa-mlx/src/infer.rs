@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use mlx_rs::module::ModuleParameters;
 use mlx_rs::ops::indexing::{argmax_axis, IndexOp};
 use mlx_rs::Array;
 
@@ -35,6 +36,8 @@ pub struct InferenceOutput {
     pub tokens: Vec<String>,
 }
 
+const QUANTIZED_CHECKPOINT_FORMAT: &str = "zipa-mlx-quantized-v1";
+
 impl ZipaInference {
     pub fn load_reference_small_no_diacritics() -> Result<Self> {
         let variant = ZipaVariant::SmallCrCtcNsNoDiacritics700k;
@@ -42,6 +45,61 @@ impl ZipaInference {
             ReferenceArtifacts::from_dir(ReferenceArtifacts::default_reference_dir(variant))?;
         let weights = artifacts.root.join("frontend_ctc.safetensors");
         Self::load_from_reference_dir(&artifacts, &weights)
+    }
+
+    pub fn load_quantized_safetensors(path: impl AsRef<Path>) -> Result<Self> {
+        let (tensors, metadata) = Array::load_safetensors_with_metadata(path)
+            .map_err(|e| mlx_rs::error::Exception::custom(format!("load safetensors: {e}")))?;
+        let format = metadata
+            .get("format")
+            .ok_or_else(|| ZipaError::Other(anyhow::anyhow!("missing quantized checkpoint format")))?;
+        if format != QUANTIZED_CHECKPOINT_FORMAT {
+            return Err(ZipaError::Other(anyhow::anyhow!(
+                "unsupported quantized checkpoint format: {format}"
+            )));
+        }
+        let bits = metadata
+            .get("bits")
+            .ok_or_else(|| ZipaError::Other(anyhow::anyhow!("missing quantized checkpoint bits")))?
+            .parse::<i32>()
+            .map_err(|e| ZipaError::Other(anyhow::Error::new(e)))?;
+        let group_size = metadata
+            .get("group_size")
+            .ok_or_else(|| {
+                ZipaError::Other(anyhow::anyhow!(
+                    "missing quantized checkpoint group_size"
+                ))
+            })?
+            .parse::<i32>()
+            .map_err(|e| ZipaError::Other(anyhow::Error::new(e)))?;
+
+        let variant = ZipaVariant::SmallCrCtcNsNoDiacritics700k;
+        let artifacts =
+            ReferenceArtifacts::from_dir(ReferenceArtifacts::default_reference_dir(variant))?;
+        let config = ZipaModelConfig::for_variant(variant);
+        let tokens = TokenTable::from_file(&artifacts.tokens_txt)?;
+        let features = FbankExtractor::new(FbankParams::default());
+
+        let model = ZipaModel::new(&config)?;
+        let stage0 = Stage0Encoder::new(&config)?;
+        let stage1 = Stage1EncoderPrefix::new(&config)?;
+        let mut stages_2_to_5 = Vec::new();
+        for stage in 2..=5 {
+            stages_2_to_5.push(StageEncoder::new(&config, stage)?);
+        }
+
+        let mut inference = Self {
+            config,
+            tokens,
+            features,
+            model,
+            stage0,
+            stage1,
+            stages_2_to_5,
+        };
+        inference.quantize_linears(group_size, bits)?;
+        inference.load_flattened_quantized_tensors(&tensors)?;
+        Ok(inference)
     }
 
     pub fn load_from_reference_dir(
@@ -141,6 +199,67 @@ impl ZipaInference {
         }
         Ok(())
     }
+
+    pub fn save_quantized_safetensors(
+        &self,
+        path: impl AsRef<Path>,
+        group_size: i32,
+        bits: i32,
+    ) -> Result<()> {
+        let mut tensors = HashMap::new();
+        collect_prefixed_parameters("model", &self.model, &mut tensors);
+        collect_prefixed_parameters("stage0", &self.stage0, &mut tensors);
+        collect_prefixed_parameters("stage1", &self.stage1, &mut tensors);
+        for (index, stage) in self.stages_2_to_5.iter().enumerate() {
+            collect_prefixed_parameters(&format!("stage{}", index + 2), stage, &mut tensors);
+        }
+
+        let mut metadata = HashMap::new();
+        metadata.insert("format".to_owned(), QUANTIZED_CHECKPOINT_FORMAT.to_owned());
+        metadata.insert("variant".to_owned(), "small-crctc-ns-no-diacritics-700k".to_owned());
+        metadata.insert("group_size".to_owned(), group_size.to_string());
+        metadata.insert("bits".to_owned(), bits.to_string());
+
+        Array::save_safetensors(&tensors, Some(&metadata), path)
+            .map_err(|e| ZipaError::Other(anyhow::Error::new(e)))?;
+        Ok(())
+    }
+
+    fn load_flattened_quantized_tensors(&mut self, tensors: &HashMap<String, Array>) -> Result<()> {
+        load_prefixed_parameters("model", &mut self.model, tensors)?;
+        load_prefixed_parameters("stage0", &mut self.stage0, tensors)?;
+        load_prefixed_parameters("stage1", &mut self.stage1, tensors)?;
+        for (index, stage) in self.stages_2_to_5.iter_mut().enumerate() {
+            load_prefixed_parameters(&format!("stage{}", index + 2), stage, tensors)?;
+        }
+        Ok(())
+    }
+}
+
+fn collect_prefixed_parameters<M: ModuleParameters>(
+    prefix: &str,
+    module: &M,
+    out: &mut HashMap<String, Array>,
+) {
+    for (name, value) in module.parameters().flatten() {
+        out.insert(format!("{prefix}.{name}"), value.clone());
+    }
+}
+
+fn load_prefixed_parameters<M: ModuleParameters>(
+    prefix: &str,
+    module: &mut M,
+    tensors: &HashMap<String, Array>,
+) -> Result<()> {
+    let mut params = module.parameters_mut().flatten();
+    for (name, param) in &mut params {
+        let key = format!("{prefix}.{name}");
+        let value = tensors.get(&key).ok_or_else(|| {
+            ZipaError::Other(anyhow::anyhow!("missing quantized tensor: {key}"))
+        })?;
+        **param = value.clone();
+    }
+    Ok(())
 }
 
 fn load_stage0(
@@ -249,6 +368,8 @@ fn get_full_dim_output(outputs: &[Array], encoder_dims: &[usize]) -> Result<Arra
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use std::path::PathBuf;
 
     use mlx_rs::ops::indexing::IndexOp;
@@ -304,5 +425,44 @@ mod tests {
         let actual = inference.infer_wav(&wav).unwrap();
         assert!(!actual.tokens.is_empty());
         assert_eq!(actual.tokens[0], "▁");
+    }
+
+    #[test]
+    fn quantized_checkpoint_roundtrips_for_reference_sample_when_local_artifacts_exist() {
+        let home = match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home),
+            None => return,
+        };
+        let wav = home.join("bearcove/bee/data/phonetic-seed/audio-wav/authored_282_take_1.wav");
+        if !wav.exists() {
+            return;
+        }
+
+        let mut inference = ZipaInference::load_reference_small_no_diacritics().unwrap();
+        inference.quantize_linears(64, 8).unwrap();
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("zipa-q8-roundtrip-{unique}.safetensors"));
+        inference.save_quantized_safetensors(&path, 64, 8).unwrap();
+
+        let reloaded = ZipaInference::load_quantized_safetensors(&path).unwrap();
+        let original = inference.infer_wav(&wav).unwrap();
+        let loaded = reloaded.infer_wav(&wav).unwrap();
+
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(original.tokens, loaded.tokens);
+        assert_eq!(original.log_probs_len, loaded.log_probs_len);
+        assert!(
+            original
+                .log_probs
+                .all_close(&loaded.log_probs, 1e-5, 1e-5, None)
+                .unwrap()
+                .item::<bool>(),
+            "reloaded quantized checkpoint diverged from saved inference"
+        );
     }
 }
