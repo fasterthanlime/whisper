@@ -166,12 +166,48 @@ impl AudioFilter for VadFilter {
     }
 }
 
-/// Build the default audio filter chain: DC removal → clipping guard → VAD.
+// ── Post-VAD normalization ─────────────────────────────────────────────
+
+/// RMS normalization: scales audio so its RMS energy matches a target level.
+/// Runs after VAD so silence chunks (already gated) don't dilute the estimate.
+/// Uses a per-chunk approach — each chunk is independently normalized.
+pub struct RmsNormalizer {
+    /// Target RMS level. Speech in [-1, 1] typically sits around 0.05–0.1.
+    target_rms: f32,
+}
+
+impl RmsNormalizer {
+    pub fn new(target_rms: f32) -> Self {
+        Self { target_rms }
+    }
+}
+
+impl AudioFilter for RmsNormalizer {
+    fn process(&mut self, chunk: AudioBuffer) -> Option<AudioBuffer> {
+        let samples = chunk.samples();
+        let rms = (samples.iter().map(|&s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+        if rms < 1e-8 {
+            // Near-silence, don't amplify noise
+            return Some(chunk);
+        }
+        let gain = self.target_rms / rms;
+        // Cap gain to avoid blowing up quiet chunks
+        let gain = gain.min(10.0);
+        let rate = chunk.sample_rate();
+        let normalized: Vec<f32> = samples.iter().map(|&s| (s * gain).clamp(-1.0, 1.0)).collect();
+        tracing::trace!(rms, gain, target = self.target_rms, "rms_normalizer");
+        Some(AudioBuffer::new(normalized, rate))
+    }
+}
+
+/// Build the default audio filter chain:
+/// DC removal → clipping guard → VAD → RMS normalization.
 pub fn default_filter_chain(vad: bee_vad::SileroVad, vad_threshold: f32) -> AudioFilterChain {
     let mut chain = AudioFilterChain::new();
     chain.push(DcOffsetFilter::new());
     chain.push(ClippingGuard::new());
     chain.push(VadFilter::new(vad, vad_threshold));
+    chain.push(RmsNormalizer::new(0.08));
     chain
 }
 
