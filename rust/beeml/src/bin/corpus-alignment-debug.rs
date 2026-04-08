@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use bee_phonetic::SeedDataset;
+use bee_phonetic::{SeedDataset, top_right_anchor_windows};
 use bee_transcribe::{Engine, EngineConfig};
 use bee_zipa_mlx::infer::ZipaInference;
 use beeml::g2p::CachedEspeakG2p;
@@ -75,6 +75,29 @@ fn main() -> Result<()> {
             );
             if let Some(span) = worst_span(trace) {
                 println!("worst span: {:?}", span.span_text);
+                let top_windows = top_right_anchor_windows(
+                    &span.transcript_normalized,
+                    &trace.utterance_zipa_normalized,
+                    3,
+                );
+                if !top_windows.is_empty() {
+                    println!("top coarse windows:");
+                    for window in top_windows {
+                        let slice = trace
+                            .utterance_zipa_normalized
+                            .get(window.right_start as usize..window.right_end as usize)
+                            .unwrap_or(&[]);
+                        println!(
+                            "  ZIPA {}..{} score={:.4} mean={:.4} Δlen={}: {}",
+                            window.right_start,
+                            window.right_end,
+                            window.score,
+                            window.mean_similarity,
+                            window.length_delta,
+                            slice.join(" ")
+                        );
+                    }
+                }
                 println!(
                     "utterance window around ZIPA {}..{}:",
                     span.zipa_norm_start, span.zipa_norm_end

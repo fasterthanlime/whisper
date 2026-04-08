@@ -9,6 +9,7 @@ use bee_phonetic::{
     TranscriptAlignmentToken, align_token_sequences, enumerate_transcript_spans_with,
     feature_similarity, normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans,
     phoneme_similarity, query_index, reduce_ipa_tokens, score_shortlist, sentence_word_tokens,
+    top_right_anchor_windows,
 };
 use bee_transcribe::{AlignedWord, Engine};
 use bee_zipa_mlx::audio::AudioBuffer;
@@ -155,22 +156,20 @@ impl BeeMlService {
             if transcript_normalized.is_empty() {
                 continue;
             }
-            let Some(zipa_norm_range) =
-                utterance_alignment.project_left_range(transcript_token_range_for_span(
-                    &transcript_word_normalized_ranges,
-                    span.token_start,
-                    span.token_end,
-                ))
+            let transcript_norm_range = transcript_token_range_for_span(
+                &transcript_word_normalized_ranges,
+                span.token_start,
+                span.token_end,
+            );
+            let Some((zipa_norm_range, span_alignment, zipa_normalized)) =
+                select_span_alignment_range(
+                    &transcript_normalized,
+                    &utterance_zipa_normalized,
+                    utterance_alignment.project_left_range(transcript_norm_range),
+                )
             else {
                 continue;
             };
-            let zipa_normalized = utterance_zipa_normalized
-                .get(zipa_norm_range.clone())
-                .unwrap_or(&[])
-                .to_vec();
-            if zipa_normalized.is_empty() {
-                continue;
-            }
             let zipa_raw = raw_slice_for_normalized_range(
                 &utterance_zipa_raw,
                 &utterance_zipa_normalized_with_spans,
@@ -180,7 +179,6 @@ impl BeeMlService {
                 phoneme_similarity(&zipa_normalized, &transcript_normalized);
             let transcript_feature_similarity =
                 feature_similarity(&zipa_normalized, &transcript_normalized);
-            let span_alignment = align_token_sequences(&transcript_normalized, &zipa_normalized);
 
             let shortlist = query_index(
                 &self.inner.index,
@@ -1412,6 +1410,71 @@ fn raw_slice_for_normalized_range(
         .get(first.source_start..last.source_end)
         .unwrap_or(&[])
         .to_vec()
+}
+
+fn select_span_alignment_range(
+    transcript_normalized: &[String],
+    utterance_zipa_normalized: &[String],
+    projected_range: Option<std::ops::Range<usize>>,
+) -> Option<(
+    std::ops::Range<usize>,
+    bee_phonetic::TokenAlignment,
+    Vec<String>,
+)> {
+    let mut candidate_ranges = Vec::<std::ops::Range<usize>>::new();
+    if let Some(range) = projected_range {
+        candidate_ranges.push(range);
+    }
+    candidate_ranges.extend(
+        top_right_anchor_windows(transcript_normalized, utterance_zipa_normalized, 3)
+            .into_iter()
+            .map(|window| window.right_start as usize..window.right_end as usize),
+    );
+    normalize_candidate_ranges(&mut candidate_ranges, utterance_zipa_normalized.len());
+
+    let mut best = None;
+    for range in candidate_ranges {
+        let zipa_normalized = utterance_zipa_normalized
+            .get(range.clone())
+            .unwrap_or(&[])
+            .to_vec();
+        if zipa_normalized.is_empty() {
+            continue;
+        }
+        let alignment = align_token_sequences(transcript_normalized, &zipa_normalized);
+        let score = alignment_quality_score(
+            &alignment.ops,
+            transcript_normalized.len(),
+            zipa_normalized.len(),
+        );
+        let replace = match &best {
+            Some((_, best_score, _, _)) => score > *best_score,
+            None => true,
+        };
+        if replace {
+            best = Some((range, score, alignment, zipa_normalized));
+        }
+    }
+
+    best.map(|(range, _score, alignment, zipa_normalized)| (range, alignment, zipa_normalized))
+}
+
+fn normalize_candidate_ranges(ranges: &mut Vec<std::ops::Range<usize>>, utterance_len: usize) {
+    for range in ranges.iter_mut() {
+        let start = range.start.saturating_sub(1);
+        let end = (range.end + 1).min(utterance_len);
+        *range = start..end;
+    }
+    ranges.sort_by(|a, b| a.start.cmp(&b.start).then_with(|| a.end.cmp(&b.end)));
+    ranges.dedup_by(|a, b| a.start == b.start && a.end == b.end);
+}
+
+fn alignment_quality_score(ops: &[AlignmentOp], left_len: usize, right_len: usize) -> f32 {
+    let denom = left_len.max(right_len).max(1) as f32;
+    let total_cost = ops.iter().map(|op| op.cost).sum::<f32>();
+    let compression_penalty =
+        (left_len.saturating_sub(right_len) as f32 / left_len.max(1) as f32).max(0.0) * 0.35;
+    (1.0 - (total_cost / denom) - compression_penalty).clamp(0.0, 1.0)
 }
 
 fn best_delta(candidates: &[TranscribePhoneticCandidate]) -> f32 {

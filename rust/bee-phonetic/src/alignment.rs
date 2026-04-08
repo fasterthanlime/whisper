@@ -35,6 +35,15 @@ pub struct TokenAlignment {
     pub ops: Vec<AlignmentOp>,
 }
 
+#[derive(Debug, Clone, Facet, PartialEq)]
+pub struct AlignmentWindowCandidate {
+    pub right_start: u32,
+    pub right_end: u32,
+    pub score: f32,
+    pub mean_similarity: f32,
+    pub length_delta: i32,
+}
+
 impl TokenAlignment {
     pub fn project_left_range(&self, left_range: Range<usize>) -> Option<Range<usize>> {
         if left_range.start >= left_range.end {
@@ -209,6 +218,80 @@ pub fn align_token_sequences(left: &[String], right: &[String]) -> TokenAlignmen
     TokenAlignment { ops }
 }
 
+pub fn top_right_anchor_windows(
+    left: &[String],
+    right: &[String],
+    max_results: usize,
+) -> Vec<AlignmentWindowCandidate> {
+    if left.is_empty() || right.is_empty() || max_results == 0 {
+        return Vec::new();
+    }
+
+    let min_window = left.len().saturating_sub(2).max(1);
+    let max_window = (left.len() + 2).min(right.len());
+    let mut candidates = Vec::new();
+
+    for window_len in min_window..=max_window {
+        for start in 0..=right.len().saturating_sub(window_len) {
+            let window = &right[start..start + window_len];
+            let overlap = left.len().min(window.len());
+            if overlap == 0 {
+                continue;
+            }
+
+            let mut similarity_sum = 0.0f32;
+            let mut exact_matches = 0usize;
+            for index in 0..overlap {
+                let similarity = token_similarity(&left[index], &window[index]);
+                if similarity >= 0.999 {
+                    exact_matches += 1;
+                }
+                similarity_sum += similarity;
+            }
+
+            let mean_similarity = similarity_sum / overlap as f32;
+            let coverage = overlap as f32 / left.len() as f32;
+            let length_delta = window_len as i32 - left.len() as i32;
+            let score = mean_similarity * coverage + (exact_matches as f32 / overlap as f32) * 0.15
+                - (length_delta.abs() as f32) * 0.05;
+
+            candidates.push(AlignmentWindowCandidate {
+                right_start: start as u32,
+                right_end: (start + window_len) as u32,
+                score,
+                mean_similarity,
+                length_delta,
+            });
+        }
+    }
+
+    candidates.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| b.mean_similarity.total_cmp(&a.mean_similarity))
+            .then_with(|| a.length_delta.abs().cmp(&b.length_delta.abs()))
+            .then_with(|| a.right_start.cmp(&b.right_start))
+    });
+
+    let mut selected = Vec::new();
+    for candidate in candidates {
+        let overlaps_existing = selected.iter().any(|existing: &AlignmentWindowCandidate| {
+            ranges_overlap(
+                candidate.right_start as usize..candidate.right_end as usize,
+                existing.right_start as usize..existing.right_end as usize,
+            )
+        });
+        if overlaps_existing {
+            continue;
+        }
+        selected.push(candidate);
+        if selected.len() >= max_results {
+            break;
+        }
+    }
+    selected
+}
+
 fn substitution_cost(left: &str, right: &str) -> f32 {
     if left == right {
         return 0.0;
@@ -218,10 +301,19 @@ fn substitution_cost(left: &str, right: &str) -> f32 {
         .unwrap_or(1.0)
 }
 
+fn token_similarity(left: &str, right: &str) -> f32 {
+    1.0 - substitution_cost(left, right)
+}
+
+fn ranges_overlap(left: Range<usize>, right: Range<usize>) -> bool {
+    left.start < right.end && right.start < left.end
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AlignmentOp, AlignmentOpKind, ComparisonToken, TokenAlignment, align_token_sequences,
+        top_right_anchor_windows,
     };
 
     #[test]
@@ -344,5 +436,38 @@ mod tests {
         };
 
         assert_eq!(alignment.project_left_range(1..5), Some(1..5));
+    }
+
+    #[test]
+    fn top_anchor_windows_prefers_exact_repeated_occurrence() {
+        let left = vec!["m", "ɪ", "ɹ", "i"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let right = vec!["x", "m", "ɪ", "ɹ", "i", "m", "ɛ", "ɹ", "ɪ"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+
+        let windows = top_right_anchor_windows(&left, &right, 2);
+        assert_eq!(windows[0].right_start, 1);
+        assert_eq!(windows[0].right_end, 5);
+    }
+
+    #[test]
+    fn top_anchor_windows_keeps_multiple_repeated_candidates() {
+        let left = vec!["m", "a", "k"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let right = vec!["m", "a", "k", "x", "m", "a", "k"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+
+        let windows = top_right_anchor_windows(&left, &right, 2);
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].right_start, 0);
+        assert_eq!(windows[1].right_start, 4);
     }
 }
