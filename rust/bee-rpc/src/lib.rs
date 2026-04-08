@@ -98,9 +98,6 @@ pub trait Bee {
         ranker_threshold: f32,
     ) -> Result<bool, BeeError>;
 
-    /// Run correction on text with per-word ASR confidence data.
-    async fn correct_process(&self, text: String, app_id: String, words: Vec<AlignedWord>) -> CorrectionOutput;
-
     /// Teach the correction engine from user resolutions.
     async fn correct_teach(
         &self,
@@ -177,6 +174,11 @@ pub struct FeedResult {
     pub is_final: bool,
     /// Language detected by the model (empty if language was forced).
     pub detected_language: String,
+    /// Correction edits applied inline during transcription.
+    /// Non-empty when a correction engine was loaded.
+    pub correction_edits: Vec<CorrectionEdit>,
+    /// Session ID for the correction engine (used for teach/save).
+    pub correction_session_id: String,
 }
 
 /// Engine resource usage stats.
@@ -189,14 +191,6 @@ pub struct EngineStats {
 }
 
 // ── Correction types ───────────────────────────────────────────────────
-
-/// Output from the correction engine.
-#[derive(Debug, Clone, Facet)]
-pub struct CorrectionOutput {
-    pub session_id: String,
-    pub best_text: String,
-    pub edits: Vec<CorrectionEdit>,
-}
 
 /// A single correction edit.
 #[derive(Debug, Clone, Facet)]

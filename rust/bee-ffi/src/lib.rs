@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use bee_rpc::{
-    BeeDispatcher, BeeError, CorrectionOutput, EditResolution, EngineStats,
+    BeeDispatcher, BeeError, EditResolution, EngineStats,
     FeedResult, RepoDownload,
 };
 use bee_transcribe::correct::{CorrectionConfig, CorrectionEngine, load_correction_engine};
@@ -300,6 +300,8 @@ impl bee_rpc::Bee for BeeService {
             alignments: update.alignments,
             is_final: false,
             detected_language: update.detected_language,
+            correction_edits: vec![],
+            correction_session_id: String::new(),
         }))
     }
 
@@ -334,6 +336,17 @@ impl bee_rpc::Bee for BeeService {
             }
         })?;
 
+        // Extract correction data before stashing
+        let (correction_edits, correction_session_id) =
+            if let Some((ref _engine, ref corrector)) = finish.correction {
+                (
+                    corrector.committed_edits().to_vec(),
+                    corrector.session_id().to_string(),
+                )
+            } else {
+                (vec![], String::new())
+            };
+
         // Stash correction state for teach/save
         if let Some((engine, corrector)) = finish.correction {
             *self.inner.correction.lock().await = Some((engine, corrector));
@@ -349,6 +362,8 @@ impl bee_rpc::Bee for BeeService {
             alignments: update.alignments,
             is_final: true,
             detected_language: update.detected_language,
+            correction_edits,
+            correction_session_id,
         })
     }
 
@@ -443,29 +458,6 @@ impl bee_rpc::Bee for BeeService {
         // Store engine with a fresh corrector — will be moved into sessions
         *self.inner.correction.lock().await = Some((engine, Corrector::new()));
         Ok(true)
-    }
-
-    async fn correct_process(
-        &self,
-        _text: String,
-        _app_id: String,
-        _words: Vec<bee_types::AlignedWord>,
-    ) -> CorrectionOutput {
-        // Corrections now run inline during feed/finish.
-        // Return the accumulated results from the corrector.
-        let guard = self.inner.correction.lock().await;
-        match guard.as_ref() {
-            Some((_engine, corrector)) => CorrectionOutput {
-                session_id: corrector.session_id().to_string(),
-                best_text: corrector.committed_text().to_string(),
-                edits: corrector.committed_edits().to_vec(),
-            },
-            None => CorrectionOutput {
-                session_id: String::new(),
-                best_text: _text,
-                edits: vec![],
-            },
-        }
     }
 
     async fn correct_teach(

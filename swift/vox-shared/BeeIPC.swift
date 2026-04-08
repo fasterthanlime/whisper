@@ -17,7 +17,6 @@ public enum BeeMethodId {
     public static let transcribeSamples: UInt64 = 0xbb649049c66f9f90
     public static let getStats: UInt64 = 0xac27f8b9cda1c89f
     public static let correctLoad: UInt64 = 0xc6ef90e080c66309
-    public static let correctProcess: UInt64 = 0xd383d61a2c875e84
     public static let correctTeach: UInt64 = 0x2163f1014480c2db
     public static let correctSave: UInt64 = 0xa5b4730fb9dbaa99
 }
@@ -99,36 +98,6 @@ public struct AlignedWord: Codable, Sendable {
     }
 }
 
-public struct FeedResult: Codable, Sendable {
-    public var text: String
-    public var committedUtf16Len: UInt32
-    public var alignments: [AlignedWord]
-    public var isFinal: Bool
-    public var detectedLanguage: String
-
-    nonisolated public init(text: String, committedUtf16Len: UInt32, alignments: [AlignedWord], isFinal: Bool, detectedLanguage: String) {
-        self.text = text
-        self.committedUtf16Len = committedUtf16Len
-        self.alignments = alignments
-        self.isFinal = isFinal
-        self.detectedLanguage = detectedLanguage
-    }
-}
-
-public struct EngineStats: Codable, Sendable {
-    public var cpuPercent: Float
-    public var gpuPercent: Float
-    public var vramUsedMb: Float
-    public var ramUsedMb: Float
-
-    nonisolated public init(cpuPercent: Float, gpuPercent: Float, vramUsedMb: Float, ramUsedMb: Float) {
-        self.cpuPercent = cpuPercent
-        self.gpuPercent = gpuPercent
-        self.vramUsedMb = vramUsedMb
-        self.ramUsedMb = ramUsedMb
-    }
-}
-
 public struct CorrectionEdit: Codable, Sendable {
     public var editId: String
     public var spanStart: UInt32
@@ -153,15 +122,37 @@ public struct CorrectionEdit: Codable, Sendable {
     }
 }
 
-public struct CorrectionOutput: Codable, Sendable {
-    public var sessionId: String
-    public var bestText: String
-    public var edits: [CorrectionEdit]
+public struct FeedResult: Codable, Sendable {
+    public var text: String
+    public var committedUtf16Len: UInt32
+    public var alignments: [AlignedWord]
+    public var isFinal: Bool
+    public var detectedLanguage: String
+    public var correctionEdits: [CorrectionEdit]
+    public var correctionSessionId: String
 
-    nonisolated public init(sessionId: String, bestText: String, edits: [CorrectionEdit]) {
-        self.sessionId = sessionId
-        self.bestText = bestText
-        self.edits = edits
+    nonisolated public init(text: String, committedUtf16Len: UInt32, alignments: [AlignedWord], isFinal: Bool, detectedLanguage: String, correctionEdits: [CorrectionEdit], correctionSessionId: String) {
+        self.text = text
+        self.committedUtf16Len = committedUtf16Len
+        self.alignments = alignments
+        self.isFinal = isFinal
+        self.detectedLanguage = detectedLanguage
+        self.correctionEdits = correctionEdits
+        self.correctionSessionId = correctionSessionId
+    }
+}
+
+public struct EngineStats: Codable, Sendable {
+    public var cpuPercent: Float
+    public var gpuPercent: Float
+    public var vramUsedMb: Float
+    public var ramUsedMb: Float
+
+    nonisolated public init(cpuPercent: Float, gpuPercent: Float, vramUsedMb: Float, ramUsedMb: Float) {
+        self.cpuPercent = cpuPercent
+        self.gpuPercent = gpuPercent
+        self.vramUsedMb = vramUsedMb
+        self.ramUsedMb = ramUsedMb
     }
 }
 
@@ -231,21 +222,6 @@ nonisolated internal func encodeAlignedWord(_ value: AlignedWord, into buffer: i
     encodeConfidence(value.confidence, into: &buffer)
 }
 
-nonisolated internal func encodeFeedResult(_ value: FeedResult, into buffer: inout ByteBuffer) {
-    encodeString(value.text, into: &buffer)
-    encodeU32(value.committedUtf16Len, into: &buffer)
-    encodeVec(value.alignments, into: &buffer, encoder: { val, buf in encodeAlignedWord(val, into: &buf) })
-    encodeBool(value.isFinal, into: &buffer)
-    encodeString(value.detectedLanguage, into: &buffer)
-}
-
-nonisolated internal func encodeEngineStats(_ value: EngineStats, into buffer: inout ByteBuffer) {
-    encodeF32(value.cpuPercent, into: &buffer)
-    encodeF32(value.gpuPercent, into: &buffer)
-    encodeF32(value.vramUsedMb, into: &buffer)
-    encodeF32(value.ramUsedMb, into: &buffer)
-}
-
 nonisolated internal func encodeCorrectionEdit(_ value: CorrectionEdit, into buffer: inout ByteBuffer) {
     encodeString(value.editId, into: &buffer)
     encodeU32(value.spanStart, into: &buffer)
@@ -258,10 +234,21 @@ nonisolated internal func encodeCorrectionEdit(_ value: CorrectionEdit, into buf
     encodeF64(value.gateProb, into: &buffer)
 }
 
-nonisolated internal func encodeCorrectionOutput(_ value: CorrectionOutput, into buffer: inout ByteBuffer) {
-    encodeString(value.sessionId, into: &buffer)
-    encodeString(value.bestText, into: &buffer)
-    encodeVec(value.edits, into: &buffer, encoder: { val, buf in encodeCorrectionEdit(val, into: &buf) })
+nonisolated internal func encodeFeedResult(_ value: FeedResult, into buffer: inout ByteBuffer) {
+    encodeString(value.text, into: &buffer)
+    encodeU32(value.committedUtf16Len, into: &buffer)
+    encodeVec(value.alignments, into: &buffer, encoder: { val, buf in encodeAlignedWord(val, into: &buf) })
+    encodeBool(value.isFinal, into: &buffer)
+    encodeString(value.detectedLanguage, into: &buffer)
+    encodeVec(value.correctionEdits, into: &buffer, encoder: { val, buf in encodeCorrectionEdit(val, into: &buf) })
+    encodeString(value.correctionSessionId, into: &buffer)
+}
+
+nonisolated internal func encodeEngineStats(_ value: EngineStats, into buffer: inout ByteBuffer) {
+    encodeF32(value.cpuPercent, into: &buffer)
+    encodeF32(value.gpuPercent, into: &buffer)
+    encodeF32(value.vramUsedMb, into: &buffer)
+    encodeF32(value.ramUsedMb, into: &buffer)
 }
 
 nonisolated internal func encodeEditResolution(_ value: EditResolution, into buffer: inout ByteBuffer) {
@@ -291,8 +278,6 @@ public protocol BeeCaller {
     func getStats() async throws -> EngineStats
     ///  Load the correction engine.
     func correctLoad(datasetDir: String, eventsPath: String, gateThreshold: Float, rankerThreshold: Float) async throws -> Result<Bool, BeeError>
-    ///  Run correction on text with per-word ASR confidence data.
-    func correctProcess(text: String, appId: String, words: [AlignedWord]) async throws -> CorrectionOutput
     ///  Teach the correction engine from user resolutions.
     func correctTeach(sessionId: String, resolutions: [EditResolution]) async throws -> Result<Bool, BeeError>
     ///  Save correction engine state to disk.
@@ -430,7 +415,20 @@ public final class BeeClient: BeeCaller, Sendable {
                 }) })(&buf)
                     let _isFinal = try ({ buf in try decodeBool(from: &buf) })(&buf)
                     let _detectedLanguage = try ({ buf in try decodeString(from: &buf) })(&buf)
-                    return FeedResult(text: _text, committedUtf16Len: _committedUtf16Len, alignments: _alignments, isFinal: _isFinal, detectedLanguage: _detectedLanguage)
+                    let _correctionEdits = try ({ buf in try decodeVec(from: &buf, decoder: { buf in
+                    let _editId = try ({ buf in try decodeString(from: &buf) })(&buf)
+                    let _spanStart = try ({ buf in try decodeU32(from: &buf) })(&buf)
+                    let _spanEnd = try ({ buf in try decodeU32(from: &buf) })(&buf)
+                    let _original = try ({ buf in try decodeString(from: &buf) })(&buf)
+                    let _replacement = try ({ buf in try decodeString(from: &buf) })(&buf)
+                    let _term = try ({ buf in try decodeString(from: &buf) })(&buf)
+                    let _aliasId = try ({ buf in try decodeI32(from: &buf) })(&buf)
+                    let _rankerProb = try ({ buf in try decodeF64(from: &buf) })(&buf)
+                    let _gateProb = try ({ buf in try decodeF64(from: &buf) })(&buf)
+                    return CorrectionEdit(editId: _editId, spanStart: _spanStart, spanEnd: _spanEnd, original: _original, replacement: _replacement, term: _term, aliasId: _aliasId, rankerProb: _rankerProb, gateProb: _gateProb)
+                }) })(&buf)
+                    let _correctionSessionId = try ({ buf in try decodeString(from: &buf) })(&buf)
+                    return FeedResult(text: _text, committedUtf16Len: _committedUtf16Len, alignments: _alignments, isFinal: _isFinal, detectedLanguage: _detectedLanguage, correctionEdits: _correctionEdits, correctionSessionId: _correctionSessionId)
                 })
                 return value
             },
@@ -486,7 +484,20 @@ public final class BeeClient: BeeCaller, Sendable {
                 })
                 let _value_isFinal = try decodeBool(from: &buf)
                 let _value_detectedLanguage = try decodeString(from: &buf)
-                let value = FeedResult(text: _value_text, committedUtf16Len: _value_committedUtf16Len, alignments: _value_alignments, isFinal: _value_isFinal, detectedLanguage: _value_detectedLanguage)
+                let _value_correctionEdits = try decodeVec(from: &buf, decoder: { buf in
+                    let _editId = try ({ buf in try decodeString(from: &buf) })(&buf)
+                    let _spanStart = try ({ buf in try decodeU32(from: &buf) })(&buf)
+                    let _spanEnd = try ({ buf in try decodeU32(from: &buf) })(&buf)
+                    let _original = try ({ buf in try decodeString(from: &buf) })(&buf)
+                    let _replacement = try ({ buf in try decodeString(from: &buf) })(&buf)
+                    let _term = try ({ buf in try decodeString(from: &buf) })(&buf)
+                    let _aliasId = try ({ buf in try decodeI32(from: &buf) })(&buf)
+                    let _rankerProb = try ({ buf in try decodeF64(from: &buf) })(&buf)
+                    let _gateProb = try ({ buf in try decodeF64(from: &buf) })(&buf)
+                    return CorrectionEdit(editId: _editId, spanStart: _spanStart, spanEnd: _spanEnd, original: _original, replacement: _replacement, term: _term, aliasId: _aliasId, rankerProb: _rankerProb, gateProb: _gateProb)
+                })
+                let _value_correctionSessionId = try decodeString(from: &buf)
+                let value = FeedResult(text: _value_text, committedUtf16Len: _value_committedUtf16Len, alignments: _value_alignments, isFinal: _value_isFinal, detectedLanguage: _value_detectedLanguage, correctionEdits: _value_correctionEdits, correctionSessionId: _value_correctionSessionId)
                 return value
             },
             decodeErr: { buf in
@@ -648,34 +659,6 @@ public final class BeeClient: BeeCaller, Sendable {
             })
     }
 
-    public func correctProcess(text: String, appId: String, words: [AlignedWord]) async throws -> CorrectionOutput {
-        var buffer = ByteBufferAllocator().buffer(capacity: 64)
-        encodeString(text, into: &buffer)
-        encodeString(appId, into: &buffer)
-        encodeVec(words, into: &buffer, encoder: { val, buf in encodeAlignedWord(val, into: &buf) })
-        let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
-        let schemaInfo = ClientSchemaInfo(methodInfo: bee_method_schemas[0xd383d61a2c875e84]!, schemaRegistry: bee_schema_registry)
-        let response = try await connection.call(methodId: 0xd383d61a2c875e84, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
-        return try decodeInfallibleResponse(response) { buf in
-            let _result_sessionId = try decodeString(from: &buf)
-            let _result_bestText = try decodeString(from: &buf)
-            let _result_edits = try decodeVec(from: &buf, decoder: { buf in
-                let _editId = try ({ buf in try decodeString(from: &buf) })(&buf)
-                let _spanStart = try ({ buf in try decodeU32(from: &buf) })(&buf)
-                let _spanEnd = try ({ buf in try decodeU32(from: &buf) })(&buf)
-                let _original = try ({ buf in try decodeString(from: &buf) })(&buf)
-                let _replacement = try ({ buf in try decodeString(from: &buf) })(&buf)
-                let _term = try ({ buf in try decodeString(from: &buf) })(&buf)
-                let _aliasId = try ({ buf in try decodeI32(from: &buf) })(&buf)
-                let _rankerProb = try ({ buf in try decodeF64(from: &buf) })(&buf)
-                let _gateProb = try ({ buf in try decodeF64(from: &buf) })(&buf)
-                return CorrectionEdit(editId: _editId, spanStart: _spanStart, spanEnd: _spanEnd, original: _original, replacement: _replacement, term: _term, aliasId: _aliasId, rankerProb: _rankerProb, gateProb: _gateProb)
-            })
-            let result = CorrectionOutput(sessionId: _result_sessionId, bestText: _result_bestText, edits: _result_edits)
-            return result
-        }
-    }
-
     public func correctTeach(sessionId: String, resolutions: [EditResolution]) async throws -> Result<Bool, BeeError> {
         var buffer = ByteBufferAllocator().buffer(capacity: 64)
         encodeString(sessionId, into: &buffer)
@@ -775,8 +758,6 @@ public protocol BeeHandler: Sendable {
     func getStats() async throws -> EngineStats
     ///  Load the correction engine.
     func correctLoad(datasetDir: String, eventsPath: String, gateThreshold: Float, rankerThreshold: Float) async throws -> Result<Bool, BeeError>
-    ///  Run correction on text with per-word ASR confidence data.
-    func correctProcess(text: String, appId: String, words: [AlignedWord]) async throws -> CorrectionOutput
     ///  Teach the correction engine from user resolutions.
     func correctTeach(sessionId: String, resolutions: [EditResolution]) async throws -> Result<Bool, BeeError>
     ///  Save correction engine state to disk.
@@ -817,8 +798,6 @@ public final class BeeDispatcher: ServiceDispatcher {
             await dispatch_getStats(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0xc6ef90e080c66309:
             await dispatch_correctLoad(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
-        case 0xd383d61a2c875e84:
-            await dispatch_correctProcess(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0x2163f1014480c2db:
             await dispatch_correctTeach(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0xa5b4730fb9dbaa99:
@@ -847,8 +826,6 @@ public final class BeeDispatcher: ServiceDispatcher {
         case 0xac27f8b9cda1c89f:
             return .volatile
         case 0xc6ef90e080c66309:
-            return .volatile
-        case 0xd383d61a2c875e84:
             return .volatile
         case 0x2163f1014480c2db:
             return .volatile
@@ -1143,40 +1120,6 @@ public final class BeeDispatcher: ServiceDispatcher {
         }
     }
 
-    private func dispatch_correctProcess(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
-        guard let methodInfo = methodSchemas[methodId] else {
-            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
-            return
-        }
-        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-        do {
-            let text = try decodeString(from: &buffer)
-            let appId = try decodeString(from: &buffer)
-            let words = try decodeVec(from: &buffer, decoder: { buf in
-                let _word = try ({ buf in try decodeString(from: &buf) })(&buf)
-                let _start = try ({ buf in try decodeF64(from: &buf) })(&buf)
-                let _end = try ({ buf in try decodeF64(from: &buf) })(&buf)
-                let _confidence = try ({ buf in
-                let _meanLp = try ({ buf in try decodeF32(from: &buf) })(&buf)
-                let _minLp = try ({ buf in try decodeF32(from: &buf) })(&buf)
-                let _meanM = try ({ buf in try decodeF32(from: &buf) })(&buf)
-                let _minM = try ({ buf in try decodeF32(from: &buf) })(&buf)
-                return Confidence(meanLp: _meanLp, minLp: _minLp, meanM: _meanM, minM: _minM)
-            })(&buf)
-                return AlignedWord(word: _word, start: _start, end: _end, confidence: _confidence)
-            })
-            do {
-                let result = try await handler.correctProcess(text: text, appId: appId, words: words)
-                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeCorrectionOutput(val, into: &buf) })
-                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
-            } catch {
-                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
-            }
-        } catch {
-            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
-        }
-    }
-
     private func dispatch_correctTeach(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
         guard let methodInfo = methodSchemas[methodId] else {
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
@@ -1259,7 +1202,6 @@ public let bee_schemas: [String: MethodBindingSchema] = [
     "transcribeSamples": MethodBindingSchema(args: [.vec(element: .f32)]),
     "getStats": MethodBindingSchema(args: []),
     "correctLoad": MethodBindingSchema(args: [.string, .string, .f32, .f32]),
-    "correctProcess": MethodBindingSchema(args: [.string, .string, .vec(element: .struct(fields: [("word", .string), ("start", .f64), ("end", .f64), ("confidence", .struct(fields: [("mean_lp", .f32), ("min_lp", .f32), ("mean_m", .f32), ("min_m", .f32)]))]))]),
     "correctTeach": MethodBindingSchema(args: [.string, .vec(element: .struct(fields: [("edit_id", .string), ("accepted", .bool)]))]),
     "correctSave": MethodBindingSchema(args: []),
 ]
@@ -1268,6 +1210,7 @@ public let bee_schemas: [String: MethodBindingSchema] = [
 nonisolated(unsafe) public let bee_schema_registry: [UInt64: Schema] = [
     0x082890bfae12d841: Schema(id: 0x082890bfae12d841, typeParams: [], kind: .struct(name: "RepoDownload", fields: [FieldSchema(name: "repo_id", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "local_dir", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "files", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0x3c1d05e5924fa784)]), required: true)])),
     0x0a96b404b4d79d67: Schema(id: 0x0a96b404b4d79d67, typeParams: ["T"], kind: .list(element: .var(name: "T"))),
+    0x113dff23ecc7a9ba: Schema(id: 0x113dff23ecc7a9ba, typeParams: [], kind: .struct(name: "FeedResult", fields: [FieldSchema(name: "text", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "committed_utf16_len", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "alignments", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0xb3b757451de582d3)]), required: true), FieldSchema(name: "is_final", typeRef: .concrete(0x178367a87f66fb46), required: true), FieldSchema(name: "detected_language", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "correction_edits", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0x5c000f00fa144db4)]), required: true), FieldSchema(name: "correction_session_id", typeRef: .concrete(0x6d7dce914ee150e8), required: true)])),
     0x178367a87f66fb46: Schema(id: 0x178367a87f66fb46, typeParams: [], kind: .primitive(.bool)),
     0x281c5be4f2ee63b4: Schema(id: 0x281c5be4f2ee63b4, typeParams: [], kind: .primitive(.u32)),
     0x285872d3b3eded20: Schema(id: 0x285872d3b3eded20, typeParams: [], kind: .enum(name: "BeeError", variants: [VariantSchema(name: "EngineNotLoaded", index: 0, payload: .unit), VariantSchema(name: "SessionNotFound", index: 1, payload: .struct(fields: [FieldSchema(name: "session_id", typeRef: .concrete(0x6d7dce914ee150e8), required: true)])), VariantSchema(name: "LoadFailed", index: 2, payload: .struct(fields: [FieldSchema(name: "message", typeRef: .concrete(0x6d7dce914ee150e8), required: true)])), VariantSchema(name: "TranscriptionError", index: 3, payload: .struct(fields: [FieldSchema(name: "message", typeRef: .concrete(0x6d7dce914ee150e8), required: true)])), VariantSchema(name: "CorrectionError", index: 4, payload: .struct(fields: [FieldSchema(name: "message", typeRef: .concrete(0x6d7dce914ee150e8), required: true)])), VariantSchema(name: "NotImplemented", index: 5, payload: .unit)])),
@@ -1279,14 +1222,11 @@ nonisolated(unsafe) public let bee_schema_registry: [UInt64: Schema] = [
     0x5c000f00fa144db4: Schema(id: 0x5c000f00fa144db4, typeParams: [], kind: .struct(name: "CorrectionEdit", fields: [FieldSchema(name: "edit_id", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "span_start", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "span_end", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "original", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "replacement", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "term", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "alias_id", typeRef: .concrete(0x361f4536eee9f991), required: true), FieldSchema(name: "ranker_prob", typeRef: .concrete(0x3f2e589db81e95bf), required: true), FieldSchema(name: "gate_prob", typeRef: .concrete(0x3f2e589db81e95bf), required: true)])),
     0x5db70a394660f3e6: Schema(id: 0x5db70a394660f3e6, typeParams: [], kind: .primitive(.never)),
     0x6847ab90feda71c1: Schema(id: 0x6847ab90feda71c1, typeParams: ["T0"], kind: .tuple(elements: [.var(name: "T0")])),
-    0x6a31d1dd6bec4d20: Schema(id: 0x6a31d1dd6bec4d20, typeParams: [], kind: .struct(name: "CorrectionOutput", fields: [FieldSchema(name: "session_id", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "best_text", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "edits", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0x5c000f00fa144db4)]), required: true)])),
     0x6d7dce914ee150e8: Schema(id: 0x6d7dce914ee150e8, typeParams: [], kind: .primitive(.string)),
     0x6ec4adf14402f13d: Schema(id: 0x6ec4adf14402f13d, typeParams: [], kind: .struct(name: "EngineStats", fields: [FieldSchema(name: "cpu_percent", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "gpu_percent", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "vram_used_mb", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "ram_used_mb", typeRef: .concrete(0x8e02f623d1b2310c), required: true)])),
     0x715e96e611ad7d16: Schema(id: 0x715e96e611ad7d16, typeParams: [], kind: .struct(name: "SessionConfig", fields: [FieldSchema(name: "language", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "chunk_duration", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "vad_threshold", typeRef: .concrete(0x8e02f623d1b2310c), required: true), FieldSchema(name: "rollback_tokens", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "commit_token_count", typeRef: .concrete(0x281c5be4f2ee63b4), required: true)])),
     0x8e02f623d1b2310c: Schema(id: 0x8e02f623d1b2310c, typeParams: [], kind: .primitive(.f32)),
     0x915c6fb5b64f270b: Schema(id: 0x915c6fb5b64f270b, typeParams: ["T0", "T1", "T2", "T3"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2"), .var(name: "T3")])),
-    0x95b1914ad6380338: Schema(id: 0x95b1914ad6380338, typeParams: [], kind: .struct(name: "FeedResult", fields: [FieldSchema(name: "text", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "committed_utf16_len", typeRef: .concrete(0x281c5be4f2ee63b4), required: true), FieldSchema(name: "alignments", typeRef: .generic(0x0a96b404b4d79d67, args: [.concrete(0xb3b757451de582d3)]), required: true), FieldSchema(name: "is_final", typeRef: .concrete(0x178367a87f66fb46), required: true), FieldSchema(name: "detected_language", typeRef: .concrete(0x6d7dce914ee150e8), required: true)])),
-    0xaa510ab07d34f141: Schema(id: 0xaa510ab07d34f141, typeParams: ["T0", "T1", "T2"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2")])),
     0xb3b757451de582d3: Schema(id: 0xb3b757451de582d3, typeParams: [], kind: .struct(name: "AlignedWord", fields: [FieldSchema(name: "word", typeRef: .concrete(0x6d7dce914ee150e8), required: true), FieldSchema(name: "start", typeRef: .concrete(0x3f2e589db81e95bf), required: true), FieldSchema(name: "end", typeRef: .concrete(0x3f2e589db81e95bf), required: true), FieldSchema(name: "confidence", typeRef: .concrete(0xcd77762ab5898969), required: true)])),
     0xba0496aa8cee7a4c: Schema(id: 0xba0496aa8cee7a4c, typeParams: ["T0", "T1"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1")])),
     0xbc5c33249a2dc720: Schema(id: 0xbc5c33249a2dc720, typeParams: [], kind: .primitive(.unit)),
@@ -1318,14 +1258,14 @@ nonisolated(unsafe) public let bee_method_schemas: [UInt64: MethodSchemaInfo] = 
     0xc7e28a8816c1bc83: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0x8e02f623d1b2310c, 0x0a96b404b4d79d67, 0xba0496aa8cee7a4c],
         argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .generic(0x0a96b404b4d79d67, args: [.concrete(0x8e02f623d1b2310c)])]),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xcd77762ab5898969, 0xb3b757451de582d3, 0x0a96b404b4d79d67, 0x95b1914ad6380338, 0xdcafd4de6b7969bb, 0x285872d3b3eded20],
-        responseRoot: .generic(0x42046de663beeef0, args: [.generic(0xdcafd4de6b7969bb, args: [.concrete(0x95b1914ad6380338)]), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xcd77762ab5898969, 0xb3b757451de582d3, 0x0a96b404b4d79d67, 0x361f4536eee9f991, 0x5c000f00fa144db4, 0x113dff23ecc7a9ba, 0xdcafd4de6b7969bb, 0x285872d3b3eded20],
+        responseRoot: .generic(0x42046de663beeef0, args: [.generic(0xdcafd4de6b7969bb, args: [.concrete(0x113dff23ecc7a9ba)]), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
     ),
     0x416a48f228b25310: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0x6847ab90feda71c1],
         argsRoot: .generic(0x6847ab90feda71c1, args: [.concrete(0x6d7dce914ee150e8)]),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xcd77762ab5898969, 0xb3b757451de582d3, 0x0a96b404b4d79d67, 0x95b1914ad6380338, 0x285872d3b3eded20],
-        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x95b1914ad6380338), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xcd77762ab5898969, 0xb3b757451de582d3, 0x0a96b404b4d79d67, 0x361f4536eee9f991, 0x5c000f00fa144db4, 0x113dff23ecc7a9ba, 0x285872d3b3eded20],
+        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x113dff23ecc7a9ba), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
     ),
     0xefb09d27037e41ed: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0xba0496aa8cee7a4c],
@@ -1350,12 +1290,6 @@ nonisolated(unsafe) public let bee_method_schemas: [UInt64: MethodSchemaInfo] = 
         argsRoot: .generic(0x915c6fb5b64f270b, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8), .concrete(0x8e02f623d1b2310c), .concrete(0x8e02f623d1b2310c)]),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x285872d3b3eded20],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x285872d3b3eded20)])])
-    ),
-    0xd383d61a2c875e84: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0x3f2e589db81e95bf, 0x8e02f623d1b2310c, 0xcd77762ab5898969, 0xb3b757451de582d3, 0x0a96b404b4d79d67, 0xaa510ab07d34f141],
-        argsRoot: .generic(0xaa510ab07d34f141, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8), .generic(0x0a96b404b4d79d67, args: [.concrete(0xb3b757451de582d3)])]),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939, 0x361f4536eee9f991, 0x3f2e589db81e95bf, 0x5c000f00fa144db4, 0x0a96b404b4d79d67, 0x6a31d1dd6bec4d20],
-        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6a31d1dd6bec4d20), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),
     0x2163f1014480c2db: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0x178367a87f66fb46, 0xf92331d26d0aabc4, 0x0a96b404b4d79d67, 0xba0496aa8cee7a4c],

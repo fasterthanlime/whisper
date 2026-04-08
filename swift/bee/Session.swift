@@ -350,23 +350,28 @@ actor Session {
                     }
                     let finalizeUs = Int((ProcessInfo.processInfo.systemUptime - t0) * 1_000_000)
 
-                    let rawText = result?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    let words = result?.alignments ?? []
+                    // Corrections are applied inline during transcription.
+                    // The FeedResult already contains corrected text and edits.
+                    let finalText = result?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let edits = result?.correctionEdits ?? []
 
-                    // Apply corrections if engine is available
-                    let corrOutput = await cs?.process(text: rawText, words: words, appId: appBundleId)
-                    corrOutRef.set(corrOutput)
-                    let finalText = corrOutput?.bestText ?? rawText
+                    if !edits.isEmpty {
+                        let corrOutput = CorrectionService.Output(
+                            sessionId: result?.correctionSessionId ?? "",
+                            originalText: finalText,
+                            bestText: finalText,
+                            edits: edits
+                        )
+                        corrOutRef.set(corrOutput)
+                        logger.info("[\(sessionID)] Corrected \(edits.count) span(s): \"\(finalText.prefix(80))\"")
+                    }
 
                     diagRef.update {
                         $0.finalizeUs = finalizeUs
                         $0.finalText = finalText
                     }
 
-                    logger.info("[\(sessionID)] Finalized: \"\(rawText.prefix(80))\"")
-                    if let corrOutput {
-                        logger.info("[\(sessionID)] Corrected \(corrOutput.edits.count) span(s): \"\(finalText.prefix(80))\"")
-                    }
+                    logger.info("[\(sessionID)] Finalized: \"\(finalText.prefix(80))\"")
                     ch2.send(.done(text: finalText, mode: endMode))
                     ch2.finish()
                     return

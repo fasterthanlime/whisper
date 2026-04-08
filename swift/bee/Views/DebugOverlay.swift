@@ -389,17 +389,20 @@ struct CorrectionTestView: View {
         }
 
         corrTestLogger.info("Transcript: \(transcript)")
-        statusText = "correcting: \"\(transcript.prefix(60))\"..."
 
-        // Run correction
-        let cs = appState.correctionService
-        let corrOutput = await cs.process(text: transcript, words: words, appId: "")
+        // Corrections are applied inline — check the FeedResult
+        let edits = finishResult?.correctionEdits ?? []
+        if !edits.isEmpty {
+            let corrOutput = CorrectionService.Output(
+                sessionId: finishResult?.correctionSessionId ?? "",
+                originalText: transcript,
+                bestText: transcript,
+                edits: edits
+            )
+            statusText = "\(randomFile)\n\"\(transcript.prefix(60))\"\n\(edits.count) correction(s)"
+            corrTestLogger.info("Found \(edits.count) correction(s)")
 
-        if let corrOutput, !corrOutput.edits.isEmpty {
-            statusText = "\(randomFile)\n\"\(transcript.prefix(60))\"\n\(corrOutput.edits.count) correction(s)"
-            corrTestLogger.info("Found \(corrOutput.edits.count) correction(s)")
-
-            // Show the correction panel
+            let cs = appState.correctionService
             CorrectionPanel.shared.show(
                 output: corrOutput,
                 correctionService: cs,

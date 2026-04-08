@@ -47,30 +47,6 @@ final class CorrectionService: @unchecked Sendable {
         lock.withLock { loaded = false }
     }
 
-    // MARK: - Processing
-
-    func process(text: String, words: [AlignedWord], appId: String?) async -> Output? {
-        do {
-            let client = try await client()
-            let result = try await client.correctProcess(text: text, appId: appId ?? "", words: words)
-            if result.edits.isEmpty {
-                return nil
-            }
-
-            logger.info("Corrected \(result.edits.count) span(s): \"\(text.prefix(40))\" → \"\(result.bestText.prefix(40))\"")
-
-            return Output(
-                sessionId: result.sessionId,
-                originalText: text,
-                bestText: result.bestText,
-                edits: result.edits
-            )
-        } catch {
-            logger.error("process error: \(error)")
-            return nil
-        }
-    }
-
     // MARK: - Teaching
 
     func teach(sessionId: String, resolutions: [(editId: String, accepted: Bool)]) async {
