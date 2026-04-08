@@ -603,6 +603,45 @@ export interface PhoneticComparisonResult {
   rows: PhoneticComparisonRow[];
 }
 
+export interface CorpusCapturePrompt {
+  prompt_id: string;
+  ordinal: number;
+  term: string;
+  text: string;
+}
+
+export interface CorpusCaptureRecording {
+  prompt_id: string;
+  ordinal: number;
+  term: string;
+  text: string;
+  take: number;
+  wav_path: string;
+  created_at_unix_ms: bigint;
+  num_bytes: number;
+  notes: string | null;
+}
+
+export interface CorpusCapturePlanResult {
+  corpus_dir: string;
+  prompts: CorpusCapturePrompt[];
+  recordings: CorpusCaptureRecording[];
+}
+
+export interface SaveCorpusRecordingRequest {
+  prompt_id: string;
+  ordinal: number;
+  term: string;
+  text: string;
+  wav_bytes: Uint8Array;
+  notes: string | null;
+}
+
+export interface SaveCorpusRecordingResult {
+  recording: CorpusCaptureRecording;
+  total_recordings: number;
+}
+
 // Request/Response type aliases
 export type TranscribeWavRequest = [Uint8Array];
 export type TranscribeWavResponse = { ok: true; value: TranscribeWavResult } | { ok: false; error: string };
@@ -642,6 +681,11 @@ export type RunOfflineJudgeEvalResponse = { ok: true; value: OfflineJudgeEvalRes
 export type RunPhoneticComparisonRequest = [PhoneticComparisonRequest];
 export type RunPhoneticComparisonResponse = { ok: true; value: PhoneticComparisonResult } | { ok: false; error: string };
 
+export type GetCorpusCapturePlanRequest = [];
+export type GetCorpusCapturePlanResponse = { ok: true; value: CorpusCapturePlanResult } | { ok: false; error: string };
+
+export type SaveCorpusRecordingResponse = { ok: true; value: SaveCorpusRecordingResult } | { ok: false; error: string };
+
 // Caller interface for BeeMl
 export interface BeeMlCaller {
   transcribeWav(wavBytes: Uint8Array): Promise<{ ok: true; value: TranscribeWavResult } | { ok: false; error: string }>;
@@ -656,6 +700,8 @@ export interface BeeMlCaller {
   runRetrievalPrototypeEval(request: RetrievalPrototypeEvalRequest, progress: Tx<RetrievalPrototypeEvalProgress>): Promise<{ ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string }>;
   runOfflineJudgeEval(request: OfflineJudgeEvalRequest): Promise<{ ok: true; value: OfflineJudgeEvalResult } | { ok: false; error: string }>;
   runPhoneticComparison(request: PhoneticComparisonRequest): Promise<{ ok: true; value: PhoneticComparisonResult } | { ok: false; error: string }>;
+  getCorpusCapturePlan(): Promise<{ ok: true; value: CorpusCapturePlanResult } | { ok: false; error: string }>;
+  saveCorpusRecording(request: SaveCorpusRecordingRequest): Promise<{ ok: true; value: SaveCorpusRecordingResult } | { ok: false; error: string }>;
 }
 
 // Client implementation for BeeMl
@@ -908,6 +954,44 @@ export class BeeMlClient implements BeeMlCaller {
       }
   }
 
+  async getCorpusCapturePlan(): Promise<{ ok: true; value: CorpusCapturePlanResult } | { ok: false; error: string }> {
+    const descriptor = beeMl_getCorpusCapturePlan_method;
+    const sendSchemas = beeMl_descriptor.send_schemas;
+      try {
+        const value = await this.caller.call({
+          method: "BeeMl.getCorpusCapturePlan",
+          args: {},
+          descriptor,
+          sendSchemas,
+        });
+        return { ok: true, value } as { ok: true; value: CorpusCapturePlanResult } | { ok: false; error: string };
+      } catch (e: any) {
+        if (e instanceof RpcError && e.isUserError()) {
+          return { ok: false, error: e.userError } as { ok: true; value: CorpusCapturePlanResult } | { ok: false; error: string };
+        }
+        throw e;
+      }
+  }
+
+  async saveCorpusRecording(request: SaveCorpusRecordingRequest): Promise<{ ok: true; value: SaveCorpusRecordingResult } | { ok: false; error: string }> {
+    const descriptor = beeMl_saveCorpusRecording_method;
+    const sendSchemas = beeMl_descriptor.send_schemas;
+      try {
+        const value = await this.caller.call({
+          method: "BeeMl.saveCorpusRecording",
+          args: { request },
+          descriptor,
+          sendSchemas,
+        });
+        return { ok: true, value } as { ok: true; value: SaveCorpusRecordingResult } | { ok: false; error: string };
+      } catch (e: any) {
+        if (e instanceof RpcError && e.isUserError()) {
+          return { ok: false, error: e.userError } as { ok: true; value: SaveCorpusRecordingResult } | { ok: false; error: string };
+        }
+        throw e;
+      }
+  }
+
 }
 
 /**
@@ -936,6 +1020,8 @@ export interface BeeMlHandler {
   runRetrievalPrototypeEval(request: RetrievalPrototypeEvalRequest, progress: Tx<RetrievalPrototypeEvalProgress>): Promise<{ ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string }> | { ok: true; value: RetrievalPrototypeEvalResult } | { ok: false; error: string };
   runOfflineJudgeEval(request: OfflineJudgeEvalRequest): Promise<{ ok: true; value: OfflineJudgeEvalResult } | { ok: false; error: string }> | { ok: true; value: OfflineJudgeEvalResult } | { ok: false; error: string };
   runPhoneticComparison(request: PhoneticComparisonRequest): Promise<{ ok: true; value: PhoneticComparisonResult } | { ok: false; error: string }> | { ok: true; value: PhoneticComparisonResult } | { ok: false; error: string };
+  getCorpusCapturePlan(): Promise<{ ok: true; value: CorpusCapturePlanResult } | { ok: false; error: string }> | { ok: true; value: CorpusCapturePlanResult } | { ok: false; error: string };
+  saveCorpusRecording(request: SaveCorpusRecordingRequest): Promise<{ ok: true; value: SaveCorpusRecordingResult } | { ok: false; error: string }> | { ok: true; value: SaveCorpusRecordingResult } | { ok: false; error: string };
 }
 
 // Dispatcher for BeeMl
@@ -1030,6 +1116,20 @@ export class BeeMlDispatcher implements Dispatcher {
       } catch (error) {
         call.replyInternalError(error instanceof Error ? error.message : String(error));
       }
+    } else if (method.id === 0x2ece244c6508d813n) {
+      try {
+        const result = await this.handler.getCorpusCapturePlan();
+        if (result.ok) call.reply(result.value); else call.replyErr(result.error);
+      } catch (error) {
+        call.replyInternalError(error instanceof Error ? error.message : String(error));
+      }
+    } else if (method.id === 0x060d562ca924dcaan) {
+      try {
+        const result = await this.handler.saveCorpusRecording(args[0] as SaveCorpusRecordingRequest);
+        if (result.ok) call.reply(result.value); else call.replyErr(result.error);
+      } catch (error) {
+        call.replyInternalError(error instanceof Error ? error.message : String(error));
+      }
     }
   }
 }
@@ -1118,6 +1218,12 @@ export const beeMl_send_schemas: import("@bearcove/vox-core").ServiceSendSchemas
     [0x49ab4de685b8e111n, { id: 0x49ab4de685b8e111n, type_params: [], kind: { tag: 'struct', name: 'PhoneticComparisonSummary', fields: [{ name: 'rows', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'reduced_exact', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'normalized_exact', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'raw_similarity_mean', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'reduced_similarity_mean', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'normalized_similarity_mean', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'feature_similarity_mean', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'normalized_feature_similarity_mean', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }] } }],
     [0xeb9bf14e62ec06c4n, { id: 0xeb9bf14e62ec06c4n, type_params: [], kind: { tag: 'struct', name: 'PhoneticComparisonRow', fields: [{ name: 'term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'wav_path', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'zipa_raw', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'espeak_raw', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'zipa_reduced', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'espeak_reduced', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'zipa_normalized', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'espeak_normalized', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'raw_similarity', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'reduced_similarity', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'normalized_similarity', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'feature_similarity', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'normalized_feature_similarity', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'reduced_exact', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }, { name: 'normalized_exact', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }] } }],
     [0xa2572a71dad61320n, { id: 0xa2572a71dad61320n, type_params: [], kind: { tag: 'struct', name: 'PhoneticComparisonResult', fields: [{ name: 'summary', type_ref: { tag: 'concrete', type_id: 0x49ab4de685b8e111n, args: [] }, required: true }, { name: 'rows', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0xeb9bf14e62ec06c4n, args: [] }] }, required: true }] } }],
+    [0x2cf8cdc4efa837f1n, { id: 0x2cf8cdc4efa837f1n, type_params: [], kind: { tag: 'struct', name: 'CorpusCapturePrompt', fields: [{ name: 'prompt_id', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'ordinal', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }] } }],
+    [0xd9356298b81639acn, { id: 0xd9356298b81639acn, type_params: [], kind: { tag: 'primitive', primitive_type: 'u64' } }],
+    [0xec50a09388362e78n, { id: 0xec50a09388362e78n, type_params: [], kind: { tag: 'struct', name: 'CorpusCaptureRecording', fields: [{ name: 'prompt_id', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'ordinal', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'take', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'wav_path', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'created_at_unix_ms', type_ref: { tag: 'concrete', type_id: 0xd9356298b81639acn, args: [] }, required: true }, { name: 'num_bytes', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'notes', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }] } }],
+    [0x66d89dc296e01e6cn, { id: 0x66d89dc296e01e6cn, type_params: [], kind: { tag: 'struct', name: 'CorpusCapturePlanResult', fields: [{ name: 'corpus_dir', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'prompts', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x2cf8cdc4efa837f1n, args: [] }] }, required: true }, { name: 'recordings', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0xec50a09388362e78n, args: [] }] }, required: true }] } }],
+    [0xabc3014ed1ccd523n, { id: 0xabc3014ed1ccd523n, type_params: [], kind: { tag: 'struct', name: 'SaveCorpusRecordingRequest', fields: [{ name: 'prompt_id', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'ordinal', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'wav_bytes', type_ref: { tag: 'concrete', type_id: 0xba8125876d6388b4n, args: [] }, required: true }, { name: 'notes', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }] } }],
+    [0x07bedad3b9bc8120n, { id: 0x07bedad3b9bc8120n, type_params: [], kind: { tag: 'struct', name: 'SaveCorpusRecordingResult', fields: [{ name: 'recording', type_ref: { tag: 'concrete', type_id: 0xec50a09388362e78n, args: [] }, required: true }, { name: 'total_recordings', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }] } }],
   ]),
   methods: new Map<bigint, import("@bearcove/vox-core").MethodSendSchemas>([
     [0x5769301e350ea60bn, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xba8125876d6388b4n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x289e96529e9d36d6n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
@@ -1131,6 +1237,8 @@ export const beeMl_send_schemas: import("@bearcove/vox-core").ServiceSendSchemas
     [0x7c4338a1cfc670d5n, { argsRootRef: { tag: 'concrete', type_id: 0xba0496aa8cee7a4cn, args: [{ tag: 'concrete', type_id: 0x0499f4e57d8267ecn, args: [] }, { tag: 'concrete', type_id: 0xc886545a493d06ebn, args: [{ tag: 'concrete', type_id: 0x1086c03fce9d4f24n, args: [] }] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x92a4c59f7d9286b0n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
     [0xa73afa861228e1c7n, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0x3bcaceec38f64464n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x67ffde61e81fc12an, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
     [0xbb6fa7532870ccd9n, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xc7351ce67e9a5ce5n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xa2572a71dad61320n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
+    [0x2ece244c6508d813n, { argsRootRef: { tag: 'concrete', type_id: 0xbc5c33249a2dc720n, args: [] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x66d89dc296e01e6cn, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
+    [0x060d562ca924dcaan, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xabc3014ed1ccd523n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x07bedad3b9bc8120n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
   ]),
 };
 
@@ -1200,6 +1308,18 @@ export const beeMl_runPhoneticComparison_method: MethodDescriptor = {
   retry: { persist: false, idem: false },
 };
 
+export const beeMl_getCorpusCapturePlan_method: MethodDescriptor = {
+  name: 'getCorpusCapturePlan',
+  id: 0x2ece244c6508d813n,
+  retry: { persist: false, idem: false },
+};
+
+export const beeMl_saveCorpusRecording_method: MethodDescriptor = {
+  name: 'saveCorpusRecording',
+  id: 0x060d562ca924dcaan,
+  retry: { persist: false, idem: false },
+};
+
 // Service descriptor for runtime dispatch metadata
 export const beeMl_descriptor: ServiceDescriptor = {
   service_name: 'BeeMl',
@@ -1216,6 +1336,8 @@ export const beeMl_descriptor: ServiceDescriptor = {
     [beeMl_runRetrievalPrototypeEval_method.id, beeMl_runRetrievalPrototypeEval_method],
     [beeMl_runOfflineJudgeEval_method.id, beeMl_runOfflineJudgeEval_method],
     [beeMl_runPhoneticComparison_method.id, beeMl_runPhoneticComparison_method],
+    [beeMl_getCorpusCapturePlan_method.id, beeMl_getCorpusCapturePlan_method],
+    [beeMl_saveCorpusRecording_method.id, beeMl_saveCorpusRecording_method],
   ]),
 };
 

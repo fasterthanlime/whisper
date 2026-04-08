@@ -672,6 +672,50 @@ pub struct PhoneticComparisonResult {
     pub rows: Vec<PhoneticComparisonRow>,
 }
 
+#[derive(Clone, Debug, Facet)]
+pub struct CorpusCapturePrompt {
+    pub prompt_id: String,
+    pub ordinal: u32,
+    pub term: String,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct CorpusCaptureRecording {
+    pub prompt_id: String,
+    pub ordinal: u32,
+    pub term: String,
+    pub text: String,
+    pub take: u32,
+    pub wav_path: String,
+    pub created_at_unix_ms: u64,
+    pub num_bytes: u32,
+    pub notes: Option<String>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct CorpusCapturePlanResult {
+    pub corpus_dir: String,
+    pub prompts: Vec<CorpusCapturePrompt>,
+    pub recordings: Vec<CorpusCaptureRecording>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct SaveCorpusRecordingRequest {
+    pub prompt_id: String,
+    pub ordinal: u32,
+    pub term: String,
+    pub text: String,
+    pub wav_bytes: Vec<u8>,
+    pub notes: Option<String>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct SaveCorpusRecordingResult {
+    pub recording: CorpusCaptureRecording,
+    pub total_recordings: u32,
+}
+
 #[vox::service]
 pub trait BeeMl {
     async fn transcribe_wav(&self, wav_bytes: Vec<u8>) -> Result<TranscribeWavResult, String>;
@@ -728,4 +772,11 @@ pub trait BeeMl {
         &self,
         request: PhoneticComparisonRequest,
     ) -> Result<PhoneticComparisonResult, String>;
+
+    async fn get_corpus_capture_plan(&self) -> Result<CorpusCapturePlanResult, String>;
+
+    async fn save_corpus_recording(
+        &self,
+        request: SaveCorpusRecordingRequest,
+    ) -> Result<SaveCorpusRecordingResult, String>;
 }

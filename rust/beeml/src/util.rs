@@ -1,8 +1,12 @@
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use beeml::rpc::{AliasSource, CandidateFeatureDebug, IdentifierFlags, RetrievalIndexView};
+use beeml::rpc::{
+    AliasSource, CandidateFeatureDebug, CorpusCaptureRecording, IdentifierFlags,
+    RetrievalIndexView, SaveCorpusRecordingRequest,
+};
 
 use crate::service::{CounterexampleRecordingRow, EvalCase};
 
@@ -158,4 +162,79 @@ pub(crate) fn load_counterexample_recordings() -> Result<Vec<CounterexampleRecor
         rows.push(row);
     }
     Ok(rows)
+}
+
+pub(crate) fn load_corpus_recordings(
+    corpus_dir: &std::path::Path,
+) -> Result<Vec<CorpusCaptureRecording>> {
+    let path = corpus_dir.join("recordings.jsonl");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let mut rows = Vec::new();
+    for (line_idx, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let row = facet_json::from_str::<CorpusCaptureRecording>(line)
+            .map_err(|e| anyhow::anyhow!("{e:?}"))
+            .with_context(|| format!("parsing {} line {}", path.display(), line_idx + 1))?;
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+pub(crate) fn save_corpus_recording(
+    corpus_dir: &std::path::Path,
+    request: &SaveCorpusRecordingRequest,
+) -> Result<CorpusCaptureRecording> {
+    std::fs::create_dir_all(corpus_dir.join("audio"))
+        .with_context(|| format!("creating {}", corpus_dir.display()))?;
+
+    let existing = load_corpus_recordings(corpus_dir)?;
+    let next_take = existing
+        .iter()
+        .filter(|row| row.prompt_id == request.prompt_id)
+        .map(|row| row.take)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let created_at_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let wav_name = format!("{}_take_{next_take}.wav", request.prompt_id);
+    let wav_path = corpus_dir.join("audio").join(wav_name);
+    std::fs::write(&wav_path, &request.wav_bytes)
+        .with_context(|| format!("writing {}", wav_path.display()))?;
+
+    let row = CorpusCaptureRecording {
+        prompt_id: request.prompt_id.clone(),
+        ordinal: request.ordinal,
+        term: request.term.clone(),
+        text: request.text.clone(),
+        take: next_take,
+        wav_path: wav_path.display().to_string(),
+        created_at_unix_ms,
+        num_bytes: request.wav_bytes.len().min(u32::MAX as usize) as u32,
+        notes: request
+            .notes
+            .clone()
+            .filter(|notes| !notes.trim().is_empty()),
+    };
+
+    let json = facet_json::to_string(&row).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    let index_path = corpus_dir.join("recordings.jsonl");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&index_path)
+        .with_context(|| format!("opening {}", index_path.display()))?;
+    use std::io::Write;
+    writeln!(file, "{json}")?;
+
+    Ok(row)
 }

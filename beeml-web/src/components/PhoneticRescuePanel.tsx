@@ -36,10 +36,12 @@ function AlignmentLane({
   label,
   values,
   color,
+  columnCount,
 }: {
   label: string;
   values: { text: string; kind: PhoneticAlignmentOp["kind"]; cost: number }[];
   color: string;
+  columnCount: number;
 }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "78px minmax(0, 1fr)", gap: "0.65rem" }}>
@@ -47,11 +49,11 @@ function AlignmentLane({
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: `repeat(${Math.max(values.length, 1)}, minmax(2.25rem, max-content))`,
+          gridTemplateColumns: `repeat(${columnCount}, minmax(2.25rem, max-content))`,
           gap: "0.25rem",
           alignItems: "center",
-          overflowX: "auto",
           paddingBottom: "0.1rem",
+          width: "max-content",
         }}
       >
         {values.map((value, index) => (
@@ -99,6 +101,7 @@ function AlignmentView({
     kind: op.kind,
     cost: op.cost,
   }));
+  const columnCount = Math.max(ops.length, 1);
 
   return (
     <div
@@ -108,12 +111,22 @@ function AlignmentView({
         marginTop: "0.5rem",
       }}
     >
-      <AlignmentLane
-        label={transcriptLabel}
-        values={transcript}
-        color="var(--lane-espeak)"
-      />
-      <AlignmentLane label={zipaLabel} values={zipa} color="var(--lane-zipa)" />
+      <div style={{ overflowX: "auto", paddingBottom: "0.15rem" }}>
+        <div style={{ width: "max-content", minWidth: "100%" }}>
+          <AlignmentLane
+            label={transcriptLabel}
+            values={transcript}
+            color="var(--lane-espeak)"
+            columnCount={columnCount}
+          />
+          <AlignmentLane
+            label={zipaLabel}
+            values={zipa}
+            color="var(--lane-zipa)"
+            columnCount={columnCount}
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -182,7 +195,7 @@ export function PhoneticRescuePanel({ trace }: { trace: PhoneticRescueTrace }) {
       />
 
       {spans.length > 0 ? (
-        <div className="failure-grid" style={{ marginTop: "0.75rem" }}>
+        <div style={{ display: "grid", gap: "0.75rem", marginTop: "0.75rem" }}>
           {spans.slice(0, 12).map((span) => (
             <SpanCard key={`${span.tokenStart}:${span.tokenEnd}:${span.spanText}`} span={span} />
           ))}

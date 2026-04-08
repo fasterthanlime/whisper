@@ -41,6 +41,7 @@ pub(crate) struct BeemlServiceInner {
     pub(crate) g2p: Mutex<CachedEspeakG2p>,
     pub(crate) zipa: Mutex<ZipaInference>,
     pub(crate) zipa_wav_dir: PathBuf,
+    pub(crate) corpus_dir: PathBuf,
     pub(crate) judge: Mutex<OnlineJudge>,
     pub(crate) event_log_path: PathBuf,
 }
@@ -62,6 +63,28 @@ pub(crate) struct EvalCase {
 }
 
 impl BeeMlService {
+    pub(crate) fn corpus_capture_prompts(&self) -> Vec<beeml::rpc::CorpusCapturePrompt> {
+        let mut seen = std::collections::HashSet::new();
+        let mut prompts = Vec::new();
+        for row in &self.inner.dataset.recording_examples {
+            let normalized = row.text.trim().to_string();
+            if !seen.insert(normalized.clone()) {
+                continue;
+            }
+            let ordinal = prompts.len() as u32 + 1;
+            prompts.push(beeml::rpc::CorpusCapturePrompt {
+                prompt_id: format!("corpus-{ordinal:03}"),
+                ordinal,
+                term: row.term.clone(),
+                text: normalized,
+            });
+            if prompts.len() >= 100 {
+                break;
+            }
+        }
+        prompts
+    }
+
     pub(crate) fn build_transcribe_phonetic_trace(
         &self,
         audio: &AudioBuffer,
