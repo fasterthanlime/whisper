@@ -774,6 +774,28 @@ pub struct CorpusAlignmentEvalResult {
     pub bucket_summaries: Vec<CorpusAlignmentBucketSummary>,
 }
 
+#[derive(Clone, Debug, Facet)]
+#[repr(u8)]
+pub enum CorpusAlignmentEvalJobStatus {
+    Running,
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct CorpusAlignmentEvalJob {
+    pub job_id: u64,
+    pub status: CorpusAlignmentEvalJobStatus,
+    pub limit: u32,
+    pub bucket: Option<String>,
+    pub completed_rows: u32,
+    pub total_rows: u32,
+    pub started_at_unix_ms: u64,
+    pub finished_at_unix_ms: Option<u64>,
+    pub result: Option<CorpusAlignmentEvalResult>,
+    pub error: Option<String>,
+}
+
 #[vox::service]
 pub trait BeeMl {
     async fn transcribe_wav(&self, wav_bytes: Vec<u8>) -> Result<TranscribeWavResult, String>;
@@ -847,4 +869,14 @@ pub trait BeeMl {
         &self,
         request: CorpusAlignmentEvalRequest,
     ) -> Result<CorpusAlignmentEvalResult, String>;
+
+    async fn start_corpus_alignment_eval_job(
+        &self,
+        request: CorpusAlignmentEvalRequest,
+    ) -> Result<CorpusAlignmentEvalJob, String>;
+
+    async fn get_corpus_alignment_eval_job(
+        &self,
+        job_id: u64,
+    ) -> Result<CorpusAlignmentEvalJob, String>;
 }

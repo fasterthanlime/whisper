@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,10 +16,10 @@ use bee_zipa_mlx::infer::ZipaInference;
 use beeml::g2p::CachedEspeakG2p;
 use beeml::judge::{OnlineJudge, extract_span_context};
 use beeml::rpc::{
-    CorpusAlignmentBucketSummary, CorpusAlignmentEvalResult, CorpusAlignmentEvalRow,
-    CorpusCapturePrompt, FilterDecision, JudgeOptionDebug, JudgeStateDebug,
-    PhoneticComparisonRequest, PhoneticComparisonResult, PhoneticComparisonRow,
-    PhoneticComparisonSummary, RapidFireChoice, RetrievalCandidateDebug,
+    CorpusAlignmentBucketSummary, CorpusAlignmentEvalJob, CorpusAlignmentEvalJobStatus,
+    CorpusAlignmentEvalResult, CorpusAlignmentEvalRow, CorpusCapturePrompt, FilterDecision,
+    JudgeOptionDebug, JudgeStateDebug, PhoneticComparisonRequest, PhoneticComparisonResult,
+    PhoneticComparisonRow, PhoneticComparisonSummary, RapidFireChoice, RetrievalCandidateDebug,
     RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
     SpanDebugTrace, SpanDebugView, TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
     TranscribePhoneticAlignmentKind, TranscribePhoneticAlignmentOp, TranscribePhoneticCandidate,
@@ -43,6 +44,8 @@ pub(crate) struct BeemlServiceInner {
     pub(crate) zipa: Mutex<ZipaInference>,
     pub(crate) zipa_wav_dir: PathBuf,
     pub(crate) corpus_dir: PathBuf,
+    pub(crate) corpus_eval_jobs: Mutex<HashMap<u64, CorpusAlignmentEvalJob>>,
+    pub(crate) next_corpus_eval_job_id: AtomicU64,
     pub(crate) judge: Mutex<OnlineJudge>,
     pub(crate) event_log_path: PathBuf,
 }
@@ -448,6 +451,100 @@ impl BeeMlService {
             rows,
             bucket_summaries,
         })
+    }
+
+    pub(crate) fn create_corpus_eval_job(
+        &self,
+        limit: u32,
+        bucket: Option<String>,
+    ) -> Result<CorpusAlignmentEvalJob, String> {
+        let total_rows = self
+            .latest_corpus_recordings(bucket.as_deref())?
+            .len()
+            .min(limit as usize)
+            .min(u32::MAX as usize) as u32;
+        let job_id = self
+            .inner
+            .next_corpus_eval_job_id
+            .fetch_add(1, Ordering::Relaxed);
+        let job = CorpusAlignmentEvalJob {
+            job_id,
+            status: CorpusAlignmentEvalJobStatus::Running,
+            limit,
+            bucket,
+            completed_rows: 0,
+            total_rows,
+            started_at_unix_ms: unix_time_ms(),
+            finished_at_unix_ms: None,
+            result: None,
+            error: None,
+        };
+        self.inner
+            .corpus_eval_jobs
+            .lock()
+            .map_err(|_| "corpus eval job mutex poisoned".to_string())?
+            .insert(job_id, job.clone());
+        Ok(job)
+    }
+
+    pub(crate) fn get_corpus_eval_job(
+        &self,
+        job_id: u64,
+    ) -> Result<CorpusAlignmentEvalJob, String> {
+        self.inner
+            .corpus_eval_jobs
+            .lock()
+            .map_err(|_| "corpus eval job mutex poisoned".to_string())?
+            .get(&job_id)
+            .cloned()
+            .ok_or_else(|| format!("unknown corpus eval job {job_id}"))
+    }
+
+    pub(crate) fn update_corpus_eval_job_progress(
+        &self,
+        job_id: u64,
+        completed_rows: u32,
+    ) -> Result<(), String> {
+        let mut jobs = self
+            .inner
+            .corpus_eval_jobs
+            .lock()
+            .map_err(|_| "corpus eval job mutex poisoned".to_string())?;
+        let job = jobs
+            .get_mut(&job_id)
+            .ok_or_else(|| format!("unknown corpus eval job {job_id}"))?;
+        job.completed_rows = completed_rows.min(job.total_rows);
+        Ok(())
+    }
+
+    pub(crate) fn finish_corpus_eval_job(
+        &self,
+        job_id: u64,
+        result: Result<CorpusAlignmentEvalResult, String>,
+    ) -> Result<(), String> {
+        let mut jobs = self
+            .inner
+            .corpus_eval_jobs
+            .lock()
+            .map_err(|_| "corpus eval job mutex poisoned".to_string())?;
+        let job = jobs
+            .get_mut(&job_id)
+            .ok_or_else(|| format!("unknown corpus eval job {job_id}"))?;
+        job.finished_at_unix_ms = Some(unix_time_ms());
+        match result {
+            Ok(result) => {
+                job.completed_rows = job.total_rows;
+                job.status = CorpusAlignmentEvalJobStatus::Completed;
+                job.result = Some(result);
+                job.error = None;
+            }
+            Err(error) => {
+                job.status = CorpusAlignmentEvalJobStatus::Failed;
+                job.error = Some(error);
+                job.result = None;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn run_phonetic_comparison(
@@ -1245,6 +1342,13 @@ fn mean_option(values: impl Iterator<Item = Option<f32>>) -> Option<f32> {
         count += 1;
     }
     (count > 0).then_some(total / count as f32)
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn transcript_word_normalized_ranges(
