@@ -4,16 +4,18 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bee_phonetic::{
-    PhoneticIndex,
+    enumerate_transcript_spans_with, query_index, score_shortlist,
+    PhoneticIndex, RetrievalQuery,
     SeedDataset, TranscriptAlignmentToken,
 };
 use bee_transcribe::{AlignedWord, Engine};
 use beeml::g2p::CachedEspeakG2p;
-use beeml::judge::OnlineJudge;
+use beeml::judge::{extract_span_context, OnlineJudge};
 use beeml::rpc::{
-    JudgeOptionDebug,
-    JudgeStateDebug, RapidFireChoice,
+    FilterDecision, JudgeOptionDebug,
+    JudgeStateDebug, RapidFireChoice, RetrievalCandidateDebug,
     RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
+    SpanDebugTrace, SpanDebugView,
     TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
 };
 
