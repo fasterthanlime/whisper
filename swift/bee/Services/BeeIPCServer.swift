@@ -82,6 +82,9 @@ final class BeeIPCServer {
                         acceptor, dispatcher: dispatcher, resumable: false)
                     beeLog("VOXIPC: IME connected")
                     self.imeClient = ImeClient(connection: session.connection)
+                    let waiters = imeReadyWaiters
+                    imeReadyWaiters.removeAll()
+                    for w in waiters { w.resume(returning: true) }
                     try await session.run()
                 } catch {
                     beeLog("VOXIPC: session error: \(error)")
@@ -96,9 +99,6 @@ final class BeeIPCServer {
 
     func onImeHello() -> String {
         beeLog("VOXIPC: imeHello")
-        let waiters = imeReadyWaiters
-        imeReadyWaiters.removeAll()
-        for w in waiters { w.resume(returning: true) }
         return "bee-app-\(ProcessInfo.processInfo.processIdentifier)"
     }
 
