@@ -145,12 +145,14 @@ pub struct CtcHead {
 
 impl CtcHead {
     pub fn new(config: &ZipaModelConfig) -> Result<Self, Exception> {
+        let encoder_dim = config
+            .encoder_dim
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(config.encoder_dim[0]) as i32;
         Ok(Self {
-            linear: nn::LinearBuilder::new(
-                *config.encoder_dim.last().unwrap_or(&config.encoder_dim[0]) as i32,
-                config.vocab_size as i32,
-            )
-            .build()?,
+            linear: nn::LinearBuilder::new(encoder_dim, config.vocab_size as i32).build()?,
         })
     }
 
@@ -203,9 +205,11 @@ fn swoosh_r(x: &Array) -> Result<Array, Exception> {
 mod tests {
     use super::{EncoderEmbed, ZipaModel};
     use crate::config::{ZipaModelConfig, ZipaVariant};
+    use crate::load::load_frontend_and_ctc_weights;
     use mlx_rs::array;
     use mlx_rs::module::ModuleParameters;
     use mlx_rs::Array;
+    use std::path::PathBuf;
 
     #[test]
     fn encoder_embed_matches_reference_frontend_shapes() {
@@ -229,7 +233,7 @@ mod tests {
             vec![128, 1, 1, 384]
         );
         assert_eq!(model.encoder_embed.out.weight.shape(), vec![192, 2432]);
-        assert_eq!(model.ctc_head.linear.weight.shape(), vec![127, 256]);
+        assert_eq!(model.ctc_head.linear.weight.shape(), vec![127, 512]);
     }
 
     #[test]
@@ -263,5 +267,40 @@ mod tests {
         let x = array!([[[1.0f32, 2.0, 3.0], [4.0, 5.0, 6.0]]]);
         let y = norm.forward(&x).unwrap();
         assert_eq!(y.shape(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn frontend_matches_onnx_reference_when_local_artifacts_exist() {
+        let home = match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home),
+            None => return,
+        };
+        let weights = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/frontend_ctc.safetensors",
+        );
+        let reference = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/authored_282_take_1_frontend_ref.safetensors",
+        );
+        if !(weights.exists() && reference.exists()) {
+            return;
+        }
+
+        let mut model = ZipaModel::small_no_diacritics().unwrap();
+        let stats = load_frontend_and_ctc_weights(&mut model, &weights).unwrap();
+        assert!(stats.missing.is_empty(), "missing: {:?}", stats.missing);
+
+        let tensors = Array::load_safetensors(&reference).unwrap();
+        let features = tensors.get("features").unwrap();
+        let expected = tensors.get("frontend_out").unwrap();
+
+        let actual = model.forward_frontend(features).unwrap();
+        assert_eq!(actual.shape(), expected.shape());
+        assert!(
+            actual
+                .all_close(expected, 1e-4, 1e-4, None)
+                .unwrap()
+                .item::<bool>(),
+            "frontend output diverged from ONNX reference"
+        );
     }
 }

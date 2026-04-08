@@ -23,11 +23,9 @@ const DIRECT_KEYS: &[(&str, &str)] = &[
         "encoder_embed.convnext.pointwise_conv2.bias",
         "encoder_embed.convnext.pointwise_conv2.bias",
     ),
-    ("encoder_embed.out.weight", "encoder_embed.out.weight"),
     ("encoder_embed.out.bias", "encoder_embed.out.bias"),
     ("encoder_embed.out_norm.log_scale", "encoder_embed.out_norm.log_scale"),
     ("encoder_embed.out_norm.bias", "encoder_embed.out_norm.bias"),
-    ("ctc_output.linear.weight", "ctc_head.linear.weight"),
     ("ctc_output.linear.bias", "ctc_head.linear.bias"),
 ];
 
@@ -47,6 +45,11 @@ const CONV2D_KEYS: &[(&str, &str)] = &[
         "encoder_embed.convnext.pointwise_conv2.weight",
         "encoder_embed.convnext.pointwise_conv2.weight",
     ),
+];
+
+const LINEAR_KEYS: &[(&str, &str)] = &[
+    ("encoder_embed.out.weight", "encoder_embed.out.weight"),
+    ("ctc_output.linear.weight", "ctc_head.linear.weight"),
 ];
 
 /// Load the ZIPA frontend + CTC head weights from a safetensors file produced by
@@ -84,6 +87,19 @@ pub fn load_frontend_and_ctc_weights_from_map(
         match tensors.get(*src) {
             Some(value) => {
                 let transposed = value.transpose_axes(&[0, 2, 3, 1])?;
+                if let Some(param) = params.get_mut(*dst) {
+                    **param = transposed;
+                    loaded_count += 1;
+                }
+            }
+            None => missing.push((*src).to_owned()),
+        }
+    }
+
+    for (src, dst) in LINEAR_KEYS {
+        match tensors.get(*src) {
+            Some(value) => {
+                let transposed = value.transpose_axes(&[1, 0])?;
                 if let Some(param) = params.get_mut(*dst) {
                     **param = transposed;
                     loaded_count += 1;
@@ -172,7 +188,7 @@ mod tests {
         );
         tensors.insert(
             "encoder_embed.out.weight".to_string(),
-            Array::zeros::<f32>(&[192, 2432]).unwrap(),
+            Array::zeros::<f32>(&[2432, 192]).unwrap(),
         );
         tensors.insert(
             "encoder_embed.out.bias".to_string(),
@@ -188,7 +204,7 @@ mod tests {
         );
         tensors.insert(
             "ctc_output.linear.weight".to_string(),
-            Array::zeros::<f32>(&[127, 256]).unwrap(),
+            Array::zeros::<f32>(&[512, 127]).unwrap(),
         );
         tensors.insert(
             "ctc_output.linear.bias".to_string(),
@@ -204,6 +220,7 @@ mod tests {
             flat["encoder_embed.convnext.depthwise_conv.weight"].shape(),
             vec![128, 7, 7, 1]
         );
-        assert_eq!(flat["ctc_head.linear.weight"].shape(), vec![127, 256]);
+        assert_eq!(flat["encoder_embed.out.weight"].shape(), vec![192, 2432]);
+        assert_eq!(flat["ctc_head.linear.weight"].shape(), vec![127, 512]);
     }
 }

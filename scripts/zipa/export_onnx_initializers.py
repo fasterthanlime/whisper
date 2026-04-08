@@ -21,11 +21,11 @@ NAME_MAP = {
     "encoder_embed.convnext.pointwise_conv1.bias": "encoder_embed.convnext.pointwise_conv1.bias",
     "encoder_embed.convnext.pointwise_conv2.weight": "encoder_embed.convnext.pointwise_conv2.weight",
     "encoder_embed.convnext.pointwise_conv2.bias": "encoder_embed.convnext.pointwise_conv2.bias",
-    "encoder_embed.out.weight": "encoder_embed.out.weight",
+    "onnx::MatMul_11174": "encoder_embed.out.weight",
     "encoder_embed.out.bias": "encoder_embed.out.bias",
     "encoder_embed.out_norm.log_scale": "encoder_embed.out_norm.log_scale",
     "encoder_embed.out_norm.bias": "encoder_embed.out_norm.bias",
-    "ctc_output.1.weight": "ctc_output.linear.weight",
+    "onnx::MatMul_12110": "ctc_output.linear.weight",
     "ctc_output.1.bias": "ctc_output.linear.bias",
 }
 
