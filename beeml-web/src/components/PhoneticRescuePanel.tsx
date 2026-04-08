@@ -8,6 +8,10 @@ function formatMetric(value: number | null | undefined) {
   return value == null ? "n/a" : value.toFixed(4);
 }
 
+function formatTokens(tokens: string[]) {
+  return tokens.length > 0 ? tokens.join(" ") : "∅";
+}
+
 function opBorder(kind: PhoneticAlignmentOp["kind"]) {
   switch (kind) {
     case "Match":
@@ -186,6 +190,18 @@ export function PhoneticRescuePanel({ trace }: { trace: PhoneticRescueTrace }) {
       <div className="prototype-summary">
         <span>utterance norm {formatMetric(trace.utteranceFeatureSimilarity)}</span>
         <span>utterance raw {formatMetric(trace.utteranceSimilarity)}</span>
+      </div>
+
+      <div className="prototype-stack" style={{ gap: "0.35rem" }}>
+        <div className="token-row muted" style={{ userSelect: "text" }}>
+          transcript norm: {formatTokens(trace.utteranceTranscriptNormalized)}
+        </div>
+        <div className="token-row muted" style={{ userSelect: "text" }}>
+          ZIPA raw: {formatTokens(trace.utteranceZipaRaw)}
+        </div>
+        <div className="token-row muted" style={{ userSelect: "text" }}>
+          ZIPA norm: {formatTokens(trace.utteranceZipaNormalized)}
+        </div>
       </div>
 
       <AlignmentView

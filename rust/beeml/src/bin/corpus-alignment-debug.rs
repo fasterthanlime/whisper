@@ -64,6 +64,15 @@ fn main() -> Result<()> {
             println!("notes: {}", notes);
         }
         if let Some(trace) = &row.trace {
+            println!(
+                "utterance transcript norm: {}",
+                trace.utterance_transcript_normalized.join(" ")
+            );
+            println!("utterance ZIPA raw: {}", trace.utterance_zipa_raw.join(" "));
+            println!(
+                "utterance ZIPA norm: {}",
+                trace.utterance_zipa_normalized.join(" ")
+            );
             if let Some(span) = worst_span(trace) {
                 println!("worst span: {:?}", span.span_text);
                 println!(

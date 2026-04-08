@@ -14,6 +14,10 @@ function formatMetric(value: number | null | undefined) {
   return value == null ? "n/a" : value.toFixed(4);
 }
 
+function formatTokens(tokens: string[]) {
+  return tokens.length > 0 ? tokens.join(" ") : "∅";
+}
+
 function toPhoneticTrace(trace: RpcTranscribePhoneticTrace): PhoneticRescueTrace {
   return {
     utteranceZipaRaw: trace.utterance_zipa_raw,
@@ -111,6 +115,14 @@ function RowCard({
         <span className="failure-pill">best Δ {formatMetric(row.best_span_delta)}</span>
       </div>
       <div className="token-row muted">ASR: {row.asr_transcript}</div>
+      {trace ? (
+        <>
+          <div className="token-row muted">ZIPA raw: {formatTokens(trace.utteranceZipaRaw)}</div>
+          <div className="token-row muted">
+            ZIPA norm: {formatTokens(trace.utteranceZipaNormalized)}
+          </div>
+        </>
+      ) : null}
       {previewOps.length > 0 ? (
         <div style={{ marginTop: "0.15rem" }}>
           <AlignmentView ops={previewOps} transcriptLabel="Transcript" zipaLabel="ZIPA" />
