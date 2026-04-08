@@ -8,5 +8,6 @@ bee-types = { path = "../bee-types" }
 rspanphon = { path = "../vendor/rspanphon" }
 facet = "0.44.3"
 facet-json = "0.44"
+serde_json.workspace = true
 
 [dev-dependencies]

@@ -183,12 +183,22 @@ mod tests {
             TranscriptAlignmentToken {
                 start_time: 0.2,
                 end_time: 0.4,
-                ..Default::default()
+                confidence: bee_types::Confidence {
+                    mean_lp: 0.0,
+                    min_lp: 0.0,
+                    mean_m: 0.0,
+                    min_m: 0.0,
+                },
             },
             TranscriptAlignmentToken {
                 start_time: 0.4,
                 end_time: 0.6,
-                ..Default::default()
+                confidence: bee_types::Confidence {
+                    mean_lp: 0.0,
+                    min_lp: 0.0,
+                    mean_m: 0.0,
+                    min_m: 0.0,
+                },
             },
         ];
         let spans =

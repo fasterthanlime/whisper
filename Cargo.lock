@@ -194,6 +194,7 @@ dependencies = [
  "facet",
  "facet-json",
  "rspanphon",
+ "serde_json",
 ]
 
 [[package]]
