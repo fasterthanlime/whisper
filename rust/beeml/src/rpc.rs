@@ -676,16 +676,20 @@ pub struct PhoneticComparisonResult {
 pub struct CorpusCapturePrompt {
     pub prompt_id: String,
     pub ordinal: u32,
+    pub bucket: String,
     pub term: String,
     pub text: String,
+    pub prompt_notes: Option<String>,
 }
 
 #[derive(Clone, Debug, Facet)]
 pub struct CorpusCaptureRecording {
     pub prompt_id: String,
     pub ordinal: u32,
+    pub bucket: String,
     pub term: String,
     pub text: String,
+    pub prompt_notes: Option<String>,
     pub take: u32,
     pub wav_path: String,
     pub created_at_unix_ms: u64,
@@ -704,8 +708,10 @@ pub struct CorpusCapturePlanResult {
 pub struct SaveCorpusRecordingRequest {
     pub prompt_id: String,
     pub ordinal: u32,
+    pub bucket: String,
     pub term: String,
     pub text: String,
+    pub prompt_notes: Option<String>,
     pub wav_bytes: Vec<u8>,
     pub notes: Option<String>,
 }
