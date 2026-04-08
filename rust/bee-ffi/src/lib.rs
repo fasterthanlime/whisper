@@ -36,7 +36,7 @@ declare_link_endpoint!(pub mod bee_ffi_endpoint { export = bee_ffi_v1_vtable; })
 #[ctor::ctor]
 fn on_load() {
     struct BeeLogWriter {
-        file: Option<std::sync::Mutex<std::fs::File>>,
+        file: Option<std::sync::Mutex<strip_ansi_escapes::Writer<std::fs::File>>>,
     }
 
     impl std::io::Write for BeeLogWriter {
@@ -44,6 +44,7 @@ fn on_load() {
             use std::io::Write as _;
 
             let mut stderr = std::io::stderr().lock();
+
             stderr.write_all(buf)?;
 
             if let Some(file) = &self.file {
@@ -83,11 +84,13 @@ fn on_load() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .with_writer(move || BeeLogWriter {
-            file: file
-                .as_ref()
-                .map(|f| std::sync::Mutex::new(f.lock().unwrap().try_clone().unwrap())),
+            file: file.as_ref().map(|f| {
+                std::sync::Mutex::new(strip_ansi_escapes::Writer::new(
+                    f.lock().unwrap().try_clone().unwrap(),
+                ))
+            }),
         })
-        .with_ansi(false)
+        .with_ansi(true)
         .finish();
     let _ = tracing::subscriber::set_global_default(subscriber);
     info!("bee-ffi: dylib loaded, spawning runtime thread");
