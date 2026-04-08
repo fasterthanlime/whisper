@@ -716,6 +716,18 @@ pub struct SaveCorpusRecordingResult {
     pub total_recordings: u32,
 }
 
+#[derive(Clone, Debug, Facet)]
+pub struct DeleteCorpusRecordingRequest {
+    pub prompt_id: String,
+    pub take: u32,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct DeleteCorpusRecordingResult {
+    pub deleted: bool,
+    pub total_recordings: u32,
+}
+
 #[vox::service]
 pub trait BeeMl {
     async fn transcribe_wav(&self, wav_bytes: Vec<u8>) -> Result<TranscribeWavResult, String>;
@@ -779,4 +791,9 @@ pub trait BeeMl {
         &self,
         request: SaveCorpusRecordingRequest,
     ) -> Result<SaveCorpusRecordingResult, String>;
+
+    async fn delete_corpus_recording(
+        &self,
+        request: DeleteCorpusRecordingRequest,
+    ) -> Result<DeleteCorpusRecordingResult, String>;
 }

@@ -642,6 +642,16 @@ export interface SaveCorpusRecordingResult {
   total_recordings: number;
 }
 
+export interface DeleteCorpusRecordingRequest {
+  prompt_id: string;
+  take: number;
+}
+
+export interface DeleteCorpusRecordingResult {
+  deleted: boolean;
+  total_recordings: number;
+}
+
 // Request/Response type aliases
 export type TranscribeWavRequest = [Uint8Array];
 export type TranscribeWavResponse = { ok: true; value: TranscribeWavResult } | { ok: false; error: string };
@@ -686,6 +696,8 @@ export type GetCorpusCapturePlanResponse = { ok: true; value: CorpusCapturePlanR
 
 export type SaveCorpusRecordingResponse = { ok: true; value: SaveCorpusRecordingResult } | { ok: false; error: string };
 
+export type DeleteCorpusRecordingResponse = { ok: true; value: DeleteCorpusRecordingResult } | { ok: false; error: string };
+
 // Caller interface for BeeMl
 export interface BeeMlCaller {
   transcribeWav(wavBytes: Uint8Array): Promise<{ ok: true; value: TranscribeWavResult } | { ok: false; error: string }>;
@@ -702,6 +714,7 @@ export interface BeeMlCaller {
   runPhoneticComparison(request: PhoneticComparisonRequest): Promise<{ ok: true; value: PhoneticComparisonResult } | { ok: false; error: string }>;
   getCorpusCapturePlan(): Promise<{ ok: true; value: CorpusCapturePlanResult } | { ok: false; error: string }>;
   saveCorpusRecording(request: SaveCorpusRecordingRequest): Promise<{ ok: true; value: SaveCorpusRecordingResult } | { ok: false; error: string }>;
+  deleteCorpusRecording(request: DeleteCorpusRecordingRequest): Promise<{ ok: true; value: DeleteCorpusRecordingResult } | { ok: false; error: string }>;
 }
 
 // Client implementation for BeeMl
@@ -992,6 +1005,25 @@ export class BeeMlClient implements BeeMlCaller {
       }
   }
 
+  async deleteCorpusRecording(request: DeleteCorpusRecordingRequest): Promise<{ ok: true; value: DeleteCorpusRecordingResult } | { ok: false; error: string }> {
+    const descriptor = beeMl_deleteCorpusRecording_method;
+    const sendSchemas = beeMl_descriptor.send_schemas;
+      try {
+        const value = await this.caller.call({
+          method: "BeeMl.deleteCorpusRecording",
+          args: { request },
+          descriptor,
+          sendSchemas,
+        });
+        return { ok: true, value } as { ok: true; value: DeleteCorpusRecordingResult } | { ok: false; error: string };
+      } catch (e: any) {
+        if (e instanceof RpcError && e.isUserError()) {
+          return { ok: false, error: e.userError } as { ok: true; value: DeleteCorpusRecordingResult } | { ok: false; error: string };
+        }
+        throw e;
+      }
+  }
+
 }
 
 /**
@@ -1022,6 +1054,7 @@ export interface BeeMlHandler {
   runPhoneticComparison(request: PhoneticComparisonRequest): Promise<{ ok: true; value: PhoneticComparisonResult } | { ok: false; error: string }> | { ok: true; value: PhoneticComparisonResult } | { ok: false; error: string };
   getCorpusCapturePlan(): Promise<{ ok: true; value: CorpusCapturePlanResult } | { ok: false; error: string }> | { ok: true; value: CorpusCapturePlanResult } | { ok: false; error: string };
   saveCorpusRecording(request: SaveCorpusRecordingRequest): Promise<{ ok: true; value: SaveCorpusRecordingResult } | { ok: false; error: string }> | { ok: true; value: SaveCorpusRecordingResult } | { ok: false; error: string };
+  deleteCorpusRecording(request: DeleteCorpusRecordingRequest): Promise<{ ok: true; value: DeleteCorpusRecordingResult } | { ok: false; error: string }> | { ok: true; value: DeleteCorpusRecordingResult } | { ok: false; error: string };
 }
 
 // Dispatcher for BeeMl
@@ -1130,6 +1163,13 @@ export class BeeMlDispatcher implements Dispatcher {
       } catch (error) {
         call.replyInternalError(error instanceof Error ? error.message : String(error));
       }
+    } else if (method.id === 0xfbf5689e5946633fn) {
+      try {
+        const result = await this.handler.deleteCorpusRecording(args[0] as DeleteCorpusRecordingRequest);
+        if (result.ok) call.reply(result.value); else call.replyErr(result.error);
+      } catch (error) {
+        call.replyInternalError(error instanceof Error ? error.message : String(error));
+      }
     }
   }
 }
@@ -1224,6 +1264,8 @@ export const beeMl_send_schemas: import("@bearcove/vox-core").ServiceSendSchemas
     [0x66d89dc296e01e6cn, { id: 0x66d89dc296e01e6cn, type_params: [], kind: { tag: 'struct', name: 'CorpusCapturePlanResult', fields: [{ name: 'corpus_dir', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'prompts', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x2cf8cdc4efa837f1n, args: [] }] }, required: true }, { name: 'recordings', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0xec50a09388362e78n, args: [] }] }, required: true }] } }],
     [0xabc3014ed1ccd523n, { id: 0xabc3014ed1ccd523n, type_params: [], kind: { tag: 'struct', name: 'SaveCorpusRecordingRequest', fields: [{ name: 'prompt_id', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'ordinal', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'term', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'wav_bytes', type_ref: { tag: 'concrete', type_id: 0xba8125876d6388b4n, args: [] }, required: true }, { name: 'notes', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }] } }],
     [0x07bedad3b9bc8120n, { id: 0x07bedad3b9bc8120n, type_params: [], kind: { tag: 'struct', name: 'SaveCorpusRecordingResult', fields: [{ name: 'recording', type_ref: { tag: 'concrete', type_id: 0xec50a09388362e78n, args: [] }, required: true }, { name: 'total_recordings', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }] } }],
+    [0x71b10668e555a562n, { id: 0x71b10668e555a562n, type_params: [], kind: { tag: 'struct', name: 'DeleteCorpusRecordingRequest', fields: [{ name: 'prompt_id', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'take', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }] } }],
+    [0x1555daee5166d540n, { id: 0x1555daee5166d540n, type_params: [], kind: { tag: 'struct', name: 'DeleteCorpusRecordingResult', fields: [{ name: 'deleted', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }, { name: 'total_recordings', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }] } }],
   ]),
   methods: new Map<bigint, import("@bearcove/vox-core").MethodSendSchemas>([
     [0x5769301e350ea60bn, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xba8125876d6388b4n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x289e96529e9d36d6n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
@@ -1239,6 +1281,7 @@ export const beeMl_send_schemas: import("@bearcove/vox-core").ServiceSendSchemas
     [0xbb6fa7532870ccd9n, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xc7351ce67e9a5ce5n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xa2572a71dad61320n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
     [0x2ece244c6508d813n, { argsRootRef: { tag: 'concrete', type_id: 0xbc5c33249a2dc720n, args: [] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x66d89dc296e01e6cn, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
     [0x060d562ca924dcaan, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xabc3014ed1ccd523n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x07bedad3b9bc8120n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
+    [0xfbf5689e5946633fn, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0x71b10668e555a562n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0x1555daee5166d540n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
   ]),
 };
 
@@ -1320,6 +1363,12 @@ export const beeMl_saveCorpusRecording_method: MethodDescriptor = {
   retry: { persist: false, idem: false },
 };
 
+export const beeMl_deleteCorpusRecording_method: MethodDescriptor = {
+  name: 'deleteCorpusRecording',
+  id: 0xfbf5689e5946633fn,
+  retry: { persist: false, idem: false },
+};
+
 // Service descriptor for runtime dispatch metadata
 export const beeMl_descriptor: ServiceDescriptor = {
   service_name: 'BeeMl',
@@ -1338,6 +1387,7 @@ export const beeMl_descriptor: ServiceDescriptor = {
     [beeMl_runPhoneticComparison_method.id, beeMl_runPhoneticComparison_method],
     [beeMl_getCorpusCapturePlan_method.id, beeMl_getCorpusCapturePlan_method],
     [beeMl_saveCorpusRecording_method.id, beeMl_saveCorpusRecording_method],
+    [beeMl_deleteCorpusRecording_method.id, beeMl_deleteCorpusRecording_method],
   ]),
 };
 
