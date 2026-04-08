@@ -171,11 +171,11 @@ impl BeeService {
         Ok(entry.value().clone())
     }
 
-    /// Create a new ASR session with VAD, returning the raw Session.
+    /// Create a new ASR session with VAD, returning a SessionV2.
     fn make_session(
         &self,
         config: &bee_rpc::SessionConfig,
-    ) -> Result<bee_transcribe::Session<'static>, BeeError> {
+    ) -> Result<bee_transcribe::session_v2::SessionV2<'static>, BeeError> {
         let engine = self.engine()?;
         let defaults = SessionOptions::default();
         let lang = if config.language.is_empty() {
@@ -213,7 +213,7 @@ impl BeeService {
         );
         let session = engine
             .inner
-            .session(opts)
+            .session_v2(opts)
             .map_err(|e| BeeError::TranscriptionError {
                 message: format!("{e}"),
             })?;
@@ -388,15 +388,23 @@ impl bee_rpc::Bee for BeeService {
             rollback_tokens: 0,
             commit_token_count: 0,
         };
-        let mut session = self.make_session(&default_config)?;
+        let session = self.make_session(&default_config)?;
+        let wrapper = SessionInner {
+            session: Some(session),
+            config: default_config,
+        };
 
         // feed + finish are CPU/GPU intensive
         let result = tokio::task::spawn_blocking(move || {
+            // SessionInner is Send (unsafe impl) — same MLX safety as other paths.
+            let mut wrapper = wrapper;
+            let session = wrapper.session.as_mut().unwrap();
             session
                 .feed(&samples)
                 .map_err(|e| BeeError::TranscriptionError {
                     message: format!("feed: {e}"),
                 })?;
+            let session = wrapper.session.take().unwrap();
             session.finish().map_err(|e| BeeError::TranscriptionError {
                 message: format!("finish: {e}"),
             })

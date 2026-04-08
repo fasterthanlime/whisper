@@ -1,8 +1,8 @@
 use bee_rpc::SessionConfig;
-use bee_transcribe::Session;
+use bee_transcribe::session_v2::SessionV2;
 
 pub(crate) struct SessionInner {
-    pub(crate) session: Option<Session<'static>>,
+    pub(crate) session: Option<SessionV2<'static>>,
     pub(crate) config: SessionConfig,
 }
 
