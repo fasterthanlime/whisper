@@ -1367,10 +1367,41 @@ impl BeeMl for BeeMlService {
                     })
                 });
                 if !gold_verified {
+                    // Find the gold candidate to show WHY it failed verification
+                    let gold_c = pc.spans.iter()
+                        .filter_map(|ps| {
+                            ps.gold_alias_id.and_then(|gid| {
+                                ps.candidates.iter().find(|(c, _)| c.alias_id == gid).map(|(c, _)| c)
+                            })
+                        })
+                        .next();
+                    let diag = if let Some(c) = gold_c {
+                        let mut reasons = Vec::new();
+                        if c.short_guard_applied && !c.short_guard_passed {
+                            reasons.push(format!("SHORT_GUARD(onset={}, feat={:.2}, tok={:.2})",
+                                c.short_guard_onset_match, c.feature_score, c.token_score));
+                        }
+                        if c.low_content_guard_applied && !c.low_content_guard_passed {
+                            reasons.push(format!("LOW_CONTENT(tok={:.2}, feat={:.2})",
+                                c.token_score, c.feature_score));
+                        }
+                        if !c.acceptance_floor_passed {
+                            reasons.push(format!("ACCEPT_FLOOR(phon={:.2}, accept={:.2}, coarse={:.2})",
+                                c.phonetic_score, c.acceptance_score, c.coarse_score));
+                        }
+                        if reasons.is_empty() {
+                            format!("alias={:<20} phon={:.2} accept={:.2} (unknown reason)", c.alias_text, c.phonetic_score, c.acceptance_score)
+                        } else {
+                            format!("alias={:<20} {}", c.alias_text, reasons.join(" + "))
+                        }
+                    } else {
+                        "gold candidate not found in shortlist".to_string()
+                    };
                     not_verified.push(format!(
-                        "  [{:>3}] term={:<30} transcript={}",
+                        "  [{:>3}] term={:<20} {}\n        transcript={}",
                         pc.case.case_id,
                         pc.case.target_term,
+                        diag,
                         trunc(&pc.case.transcript, 60),
                     ));
                     continue;
