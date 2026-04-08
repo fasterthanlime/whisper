@@ -54,19 +54,32 @@ fn main() -> Result<()> {
 
     for row in result.rows.iter().take(show as usize) {
         println!(
-            "#{:03} [{}] {}  uf={} raw={} spans={} worst={} bestΔ={}",
+            "#{:03} [{}] {}  uf={} raw={} spans={} contentful={} eligible={} volatile={} ready={} worst={} bestΔ={}",
             row.ordinal,
             row.bucket,
             row.prompt_text,
             fmt(row.utterance_feature_similarity),
             fmt(row.utterance_similarity),
             row.positive_span_count,
+            row.contentful_span_count,
+            row.rescue_eligible_span_count,
+            row.tail_volatile_token_count,
+            row.row_rescue_ready,
             fmt(row.worst_span_feature_similarity),
             fmt(row.best_span_delta),
         );
         println!("term: {}", row.term);
         println!("wav: {}", row.wav_path);
         println!("asr: {}", row.asr_transcript);
+        if let Some(role) = &row.selected_span_role {
+            println!(
+                "selected span: {} {:?} base={} bestΔ={}",
+                format_selected_span_role(role),
+                row.selected_span_text,
+                fmt(row.selected_span_feature_similarity),
+                fmt(row.selected_span_best_delta),
+            );
+        }
         if let Some(notes) = &row.prompt_notes {
             println!("notes: {}", notes);
         }
@@ -212,6 +225,14 @@ fn format_span_class(value: &beeml::rpc::TranscribePhoneticSpanClass) -> &'stati
     }
 }
 
+fn format_selected_span_role(value: &beeml::rpc::CorpusAlignmentSelectedSpanRole) -> &'static str {
+    match value {
+        beeml::rpc::CorpusAlignmentSelectedSpanRole::BestRescue => "best_rescue",
+        beeml::rpc::CorpusAlignmentSelectedSpanRole::WorstContentful => "worst_contentful",
+        beeml::rpc::CorpusAlignmentSelectedSpanRole::WorstRaw => "worst_raw",
+    }
+}
+
 #[derive(facet::Facet)]
 struct SnapshotRow {
     ordinal: u32,
@@ -221,7 +242,15 @@ struct SnapshotRow {
     prompt_text: String,
     utterance_feature_similarity: Option<f32>,
     utterance_similarity: Option<f32>,
+    tail_volatile_token_count: u32,
+    row_rescue_ready: bool,
     positive_span_count: u32,
+    contentful_span_count: u32,
+    rescue_eligible_span_count: u32,
+    selected_span_role: Option<String>,
+    selected_span_text: Option<String>,
+    selected_span_feature_similarity: Option<f32>,
+    selected_span_best_delta: Option<f32>,
     worst_span_text: Option<String>,
     alignment_source: Option<String>,
     anchor_confidence: Option<String>,
@@ -249,7 +278,18 @@ fn write_snapshot_jsonl(path: &str, rows: &[beeml::rpc::CorpusAlignmentEvalRow])
             prompt_text: row.prompt_text.clone(),
             utterance_feature_similarity: row.utterance_feature_similarity,
             utterance_similarity: row.utterance_similarity,
+            tail_volatile_token_count: row.tail_volatile_token_count,
+            row_rescue_ready: row.row_rescue_ready,
             positive_span_count: row.positive_span_count,
+            contentful_span_count: row.contentful_span_count,
+            rescue_eligible_span_count: row.rescue_eligible_span_count,
+            selected_span_role: row
+                .selected_span_role
+                .as_ref()
+                .map(|role| format_selected_span_role(role).to_string()),
+            selected_span_text: row.selected_span_text.clone(),
+            selected_span_feature_similarity: row.selected_span_feature_similarity,
+            selected_span_best_delta: row.selected_span_best_delta,
             worst_span_text: worst_span.map(|span| span.span_text.clone()),
             alignment_source: worst_span.map(|span| span.alignment_source.clone()),
             anchor_confidence: worst_span
