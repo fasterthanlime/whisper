@@ -457,7 +457,7 @@ impl StageEncoder {
 
     pub fn forward(&self, src: &Array) -> Result<Array, Exception> {
         let src_padded = pad_channels(src, self.out_combiner.bypass_scale.shape()[0])?;
-        let mut src = self.downsample.forward(src)?;
+        let mut src = self.downsample.forward(&src_padded)?;
         let seq_len = src.shape()[0];
         let pos_emb = self.encoder_pos.forward(seq_len, 0)?;
         for layer in &self.layers {
@@ -552,6 +552,9 @@ fn pad_channels(x: &Array, output_dim: i32) -> Result<Array, Exception> {
     let channels = shape[2];
     if channels == output_dim {
         return Ok(x.clone());
+    }
+    if channels > output_dim {
+        return Ok(x.index((.., .., 0..output_dim)));
     }
     let pad_channels = output_dim - channels;
     let pad = zeros::<f32>(&[seq_len, batch, pad_channels])?;
@@ -1147,61 +1150,130 @@ mod tests {
 
     #[test]
     fn stage2_wrapper_matches_onnx_reference_when_local_artifacts_exist() {
-        let home = match std::env::var_os("HOME") {
-            Some(home) => PathBuf::from(home),
-            None => return,
-        };
-        let weights = home.join(
-            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/frontend_ctc.safetensors",
-        );
-        let reference = home.join(
-            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/authored_282_take_1_layer0_ref.safetensors",
-        );
-        if !(weights.exists() && reference.exists()) {
-            return;
-        }
+        assert_stage_wrapper_matches_reference(2, "stage1_out", "stage2_out");
+    }
 
-        let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
-        let mut stage2 = StageEncoder::new(&config, 2).unwrap();
-        let params = Array::load_safetensors(&weights).unwrap();
-        let downsample_stats = load_downsample_weights_from_map(
-            &mut stage2.downsample,
-            "encoder.stage2.downsample.weights",
-            &params,
-        )
-        .unwrap();
-        assert!(
-            downsample_stats.missing.is_empty(),
-            "missing: {:?}",
-            downsample_stats.missing
+    #[test]
+    fn stage3_layer0_matches_onnx_reference_when_local_artifacts_exist() {
+        assert_stage_layer_matches_reference(
+            "encoder.stage3.layer0",
+            3,
+            "stage3_downsample_out",
+            "stage3_pos_emb",
+            "stage3_layer0_attn_weights",
+            "stage3_layer0_out",
         );
-        for (layer_index, layer) in stage2.layers.iter_mut().enumerate() {
-            let prefix = format!("encoder.stage2.layer{layer_index}");
-            let layer_stats = load_stage_layer_weights_from_map(layer, &prefix, &params).unwrap();
-            assert!(
-                layer_stats.missing.is_empty(),
-                "missing: {:?}",
-                layer_stats.missing
-            );
-        }
-        let out_combiner_stats = load_bypass_scale_from_map(
-            &mut stage2.out_combiner,
-            "encoder.stage2.out_combiner.bypass_scale",
-            &params,
-        )
-        .unwrap();
-        assert!(
-            out_combiner_stats.missing.is_empty(),
-            "missing: {:?}",
-            out_combiner_stats.missing
+    }
+
+    #[test]
+    fn stage3_layer1_matches_onnx_reference_when_local_artifacts_exist() {
+        assert_stage_layer_matches_reference(
+            "encoder.stage3.layer1",
+            3,
+            "stage3_layer0_out",
+            "stage3_pos_emb",
+            "stage3_layer1_attn_weights",
+            "stage3_layer1_out",
         );
+    }
 
-        let tensors = Array::load_safetensors(&reference).unwrap();
-        let stage1_out = tensors.get("stage1_out").unwrap();
-        let expected = tensors.get("stage2_out").unwrap();
+    #[test]
+    fn stage3_layer2_matches_onnx_reference_when_local_artifacts_exist() {
+        assert_stage_layer_matches_reference(
+            "encoder.stage3.layer2",
+            3,
+            "stage3_layer1_out",
+            "stage3_pos_emb",
+            "stage3_layer2_attn_weights",
+            "stage3_layer2_out",
+        );
+    }
 
-        let actual = stage2.forward(stage1_out).unwrap();
-        assert_close("stage2_wrapper", &actual, expected);
+    #[test]
+    fn stage3_layer3_matches_onnx_reference_when_local_artifacts_exist() {
+        assert_stage_layer_matches_reference(
+            "encoder.stage3.layer3",
+            3,
+            "stage3_layer2_out",
+            "stage3_pos_emb",
+            "stage3_layer3_attn_weights",
+            "stage3_layer3_out",
+        );
+    }
+
+    #[test]
+    fn stage3_wrapper_matches_onnx_reference_when_local_artifacts_exist() {
+        assert_stage_wrapper_matches_reference(3, "stage2_out", "stage3_out");
+    }
+
+    #[test]
+    fn stage4_layer0_matches_onnx_reference_when_local_artifacts_exist() {
+        assert_stage_layer_matches_reference(
+            "encoder.stage4.layer0",
+            4,
+            "stage4_downsample_out",
+            "stage4_pos_emb",
+            "stage4_layer0_attn_weights",
+            "stage4_layer0_out",
+        );
+    }
+
+    #[test]
+    fn stage4_layer1_matches_onnx_reference_when_local_artifacts_exist() {
+        assert_stage_layer_matches_reference(
+            "encoder.stage4.layer1",
+            4,
+            "stage4_layer0_out",
+            "stage4_pos_emb",
+            "stage4_layer1_attn_weights",
+            "stage4_layer1_out",
+        );
+    }
+
+    #[test]
+    fn stage4_layer2_matches_onnx_reference_when_local_artifacts_exist() {
+        assert_stage_layer_matches_reference(
+            "encoder.stage4.layer2",
+            4,
+            "stage4_layer1_out",
+            "stage4_pos_emb",
+            "stage4_layer2_attn_weights",
+            "stage4_layer2_out",
+        );
+    }
+
+    #[test]
+    fn stage4_wrapper_matches_onnx_reference_when_local_artifacts_exist() {
+        assert_stage_wrapper_matches_reference(4, "stage3_out", "stage4_out");
+    }
+
+    #[test]
+    fn stage5_layer0_matches_onnx_reference_when_local_artifacts_exist() {
+        assert_stage_layer_matches_reference(
+            "encoder.stage5.layer0",
+            5,
+            "stage5_downsample_out",
+            "stage5_pos_emb",
+            "stage5_layer0_attn_weights",
+            "stage5_layer0_out",
+        );
+    }
+
+    #[test]
+    fn stage5_layer1_matches_onnx_reference_when_local_artifacts_exist() {
+        assert_stage_layer_matches_reference(
+            "encoder.stage5.layer1",
+            5,
+            "stage5_layer0_out",
+            "stage5_pos_emb",
+            "stage5_layer1_attn_weights",
+            "stage5_layer1_out",
+        );
+    }
+
+    #[test]
+    fn stage5_wrapper_matches_onnx_reference_when_local_artifacts_exist() {
+        assert_stage_wrapper_matches_reference(5, "stage4_out", "stage5_out");
     }
 
     fn assert_stage_layer_matches_reference(
@@ -1245,6 +1317,68 @@ mod tests {
         assert_close(attn_key, &actual_attn, expected_attn);
 
         let actual = layer.forward(layer_input, pos_emb).unwrap();
+        assert_close(output_key, &actual, expected);
+    }
+
+    fn assert_stage_wrapper_matches_reference(
+        stage_index: usize,
+        input_key: &str,
+        output_key: &str,
+    ) {
+        let home = match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home),
+            None => return,
+        };
+        let weights = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/frontend_ctc.safetensors",
+        );
+        let reference = home.join(
+            "bearcove/zipa/checkpoints/zipa-cr-ns-small-nodiacritics-700k/exp/authored_282_take_1_layer0_ref.safetensors",
+        );
+        if !(weights.exists() && reference.exists()) {
+            return;
+        }
+
+        let config = ZipaModelConfig::for_variant(ZipaVariant::SmallCrCtcNsNoDiacritics700k);
+        let mut stage = StageEncoder::new(&config, stage_index).unwrap();
+        let params = Array::load_safetensors(&weights).unwrap();
+        let downsample_stats = load_downsample_weights_from_map(
+            &mut stage.downsample,
+            &format!("encoder.stage{stage_index}.downsample.weights"),
+            &params,
+        )
+        .unwrap();
+        assert!(
+            downsample_stats.missing.is_empty(),
+            "missing: {:?}",
+            downsample_stats.missing
+        );
+        for (layer_index, layer) in stage.layers.iter_mut().enumerate() {
+            let prefix = format!("encoder.stage{stage_index}.layer{layer_index}");
+            let layer_stats = load_stage_layer_weights_from_map(layer, &prefix, &params).unwrap();
+            assert!(
+                layer_stats.missing.is_empty(),
+                "missing: {:?}",
+                layer_stats.missing
+            );
+        }
+        let out_combiner_stats = load_bypass_scale_from_map(
+            &mut stage.out_combiner,
+            &format!("encoder.stage{stage_index}.out_combiner.bypass_scale"),
+            &params,
+        )
+        .unwrap();
+        assert!(
+            out_combiner_stats.missing.is_empty(),
+            "missing: {:?}",
+            out_combiner_stats.missing
+        );
+
+        let tensors = Array::load_safetensors(&reference).unwrap();
+        let input = tensors.get(input_key).unwrap();
+        let expected = tensors.get(output_key).unwrap();
+
+        let actual = stage.forward(input).unwrap();
         assert_close(output_key, &actual, expected);
     }
 

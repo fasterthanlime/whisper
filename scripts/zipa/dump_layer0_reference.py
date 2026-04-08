@@ -45,13 +45,31 @@ STAGE2_LAYER1_OUTPUT = "/encoder/2/encoder/1/bypass/Add_output_0"
 STAGE2_LAYER2_ATTN_WEIGHTS = "/encoder/2/encoder/2/self_attn_weights/Softmax_output_0"
 STAGE2_LAYER2_OUTPUT = "/encoder/2/encoder/2/bypass/Add_output_0"
 STAGE2_OUT = "/encoder/2/out_combiner/Add_output_0"
+STAGE_LAYER_COUNTS = {1: 2, 2: 3, 3: 4, 4: 3, 5: 2}
 
 
-def ensure_outputs(model_path: Path, output_path: Path) -> Path:
-    model = onnx.load(model_path)
-    existing = {o.name for o in model.graph.output}
-    for name in [
-        FRONTEND_OUTPUT,
+def stage_downsample_name(stage: int) -> str:
+    return f"/encoder/{stage}/downsample/ReduceSum_output_0"
+
+
+def stage_pos_name(stage: int) -> str:
+    return f"/encoder/{stage}/encoder/encoder_pos/Unsqueeze_35_output_0"
+
+
+def stage_layer_attn_name(stage: int, layer: int) -> str:
+    return f"/encoder/{stage}/encoder/{layer}/self_attn_weights/Softmax_output_0"
+
+
+def stage_layer_output_name(stage: int, layer: int) -> str:
+    return f"/encoder/{stage}/encoder/{layer}/bypass/Add_output_0"
+
+
+def stage_out_name(stage: int) -> str:
+    return f"/encoder/{stage}/out_combiner/Add_output_0"
+
+
+def requested_outputs() -> list[str]:
+    names = [
         LAYER0_INPUT,
         POS_EMB,
         ATTN_WEIGHTS,
@@ -68,23 +86,21 @@ def ensure_outputs(model_path: Path, output_path: Path) -> Path:
         LAYER0_OUTPUT,
         LAYER1_ATTN_WEIGHTS,
         LAYER1_OUTPUT,
-        STAGE1_DOWNSAMPLE_OUT,
-        STAGE1_POS_EMB,
-        STAGE1_LAYER0_ATTN_WEIGHTS,
-        STAGE1_LAYER0_OUTPUT,
-        STAGE1_LAYER1_ATTN_WEIGHTS,
-        STAGE1_LAYER1_OUTPUT,
-        STAGE1_OUT,
-        STAGE2_DOWNSAMPLE_OUT,
-        STAGE2_POS_EMB,
-        STAGE2_LAYER0_ATTN_WEIGHTS,
-        STAGE2_LAYER0_OUTPUT,
-        STAGE2_LAYER1_ATTN_WEIGHTS,
-        STAGE2_LAYER1_OUTPUT,
-        STAGE2_LAYER2_ATTN_WEIGHTS,
-        STAGE2_LAYER2_OUTPUT,
-        STAGE2_OUT,
-    ]:
+    ]
+    for stage, layer_count in STAGE_LAYER_COUNTS.items():
+        names.extend([stage_downsample_name(stage), stage_pos_name(stage)])
+        for layer in range(layer_count):
+            names.extend(
+                [stage_layer_attn_name(stage, layer), stage_layer_output_name(stage, layer)]
+            )
+        names.append(stage_out_name(stage))
+    return names
+
+
+def ensure_outputs(model_path: Path, output_path: Path) -> Path:
+    model = onnx.load(model_path)
+    existing = {o.name for o in model.graph.output}
+    for name in requested_outputs():
         if name not in existing:
             model.graph.output.append(
                 helper.make_tensor_value_info(name, TensorProto.FLOAT, None)
@@ -119,117 +135,45 @@ def main() -> None:
     feat_lens = np.array([features.shape[1]], dtype=np.int64)
 
     session = ort.InferenceSession(str(model_for_run))
-    outputs = session.run(
-        [
-            LAYER0_INPUT,
-            POS_EMB,
-            ATTN_WEIGHTS,
-            ADD0,
-            ADD1,
-            ADD2,
-            ADD3,
-            ADD4,
-            MID,
-            ADD5,
-            ADD6,
-            ADD7,
-            NORM,
-            LAYER0_OUTPUT,
-            LAYER1_ATTN_WEIGHTS,
-            LAYER1_OUTPUT,
-            STAGE1_DOWNSAMPLE_OUT,
-            STAGE1_POS_EMB,
-            STAGE1_LAYER0_ATTN_WEIGHTS,
-            STAGE1_LAYER0_OUTPUT,
-            STAGE1_LAYER1_ATTN_WEIGHTS,
-            STAGE1_LAYER1_OUTPUT,
-            STAGE1_OUT,
-            STAGE2_DOWNSAMPLE_OUT,
-            STAGE2_POS_EMB,
-            STAGE2_LAYER0_ATTN_WEIGHTS,
-            STAGE2_LAYER0_OUTPUT,
-            STAGE2_LAYER1_ATTN_WEIGHTS,
-            STAGE2_LAYER1_OUTPUT,
-            STAGE2_LAYER2_ATTN_WEIGHTS,
-            STAGE2_LAYER2_OUTPUT,
-            STAGE2_OUT,
-        ],
-        {"x": features, "x_lens": feat_lens},
-    )
-    (
-        layer0_in,
-        pos_emb,
-        attn_weights,
-        add0,
-        add1,
-        add2,
-        add3,
-        add4,
-        mid,
-        add5,
-        add6,
-        add7,
-        norm,
-        layer0_out,
-        layer1_attn_weights,
-        layer1_out,
-        stage1_downsample_out,
-        stage1_pos_emb,
-        stage1_layer0_attn_weights,
-        stage1_layer0_out,
-        stage1_layer1_attn_weights,
-        stage1_layer1_out,
-        stage1_out,
-        stage2_downsample_out,
-        stage2_pos_emb,
-        stage2_layer0_attn_weights,
-        stage2_layer0_out,
-        stage2_layer1_attn_weights,
-        stage2_layer1_out,
-        stage2_layer2_attn_weights,
-        stage2_layer2_out,
-        stage2_out,
-    ) = outputs
+    requested = requested_outputs()
+    outputs = session.run(requested, {"x": features, "x_lens": feat_lens})
+    by_name = dict(zip(requested, outputs, strict=True))
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    save_file(
-        {
-            "layer0_in": layer0_in.astype(np.float32),
-            "pos_emb": pos_emb.astype(np.float32),
-            "attn_weights": attn_weights.astype(np.float32),
-            "add0": add0.astype(np.float32),
-            "add1": add1.astype(np.float32),
-            "add2": add2.astype(np.float32),
-            "add3": add3.astype(np.float32),
-            "add4": add4.astype(np.float32),
-            "mid": mid.astype(np.float32),
-            "add5": add5.astype(np.float32),
-            "add6": add6.astype(np.float32),
-            "add7": add7.astype(np.float32),
-            "norm": norm.astype(np.float32),
-            "layer0_out": layer0_out.astype(np.float32),
-            "layer1_attn_weights": layer1_attn_weights.astype(np.float32),
-            "layer1_out": layer1_out.astype(np.float32),
-            "stage0_out": layer1_out.astype(np.float32),
-            "stage1_downsample_out": stage1_downsample_out.astype(np.float32),
-            "stage1_pos_emb": stage1_pos_emb.astype(np.float32),
-            "stage1_layer0_attn_weights": stage1_layer0_attn_weights.astype(np.float32),
-            "stage1_layer0_out": stage1_layer0_out.astype(np.float32),
-            "stage1_layer1_attn_weights": stage1_layer1_attn_weights.astype(np.float32),
-            "stage1_layer1_out": stage1_layer1_out.astype(np.float32),
-            "stage1_out": stage1_out.astype(np.float32),
-            "stage2_downsample_out": stage2_downsample_out.astype(np.float32),
-            "stage2_pos_emb": stage2_pos_emb.astype(np.float32),
-            "stage2_layer0_attn_weights": stage2_layer0_attn_weights.astype(np.float32),
-            "stage2_layer0_out": stage2_layer0_out.astype(np.float32),
-            "stage2_layer1_attn_weights": stage2_layer1_attn_weights.astype(np.float32),
-            "stage2_layer1_out": stage2_layer1_out.astype(np.float32),
-            "stage2_layer2_attn_weights": stage2_layer2_attn_weights.astype(np.float32),
-            "stage2_layer2_out": stage2_layer2_out.astype(np.float32),
-            "stage2_out": stage2_out.astype(np.float32),
-        },
-        str(args.output),
-    )
+    tensors = {
+        "layer0_in": by_name[LAYER0_INPUT].astype(np.float32),
+        "pos_emb": by_name[POS_EMB].astype(np.float32),
+        "attn_weights": by_name[ATTN_WEIGHTS].astype(np.float32),
+        "add0": by_name[ADD0].astype(np.float32),
+        "add1": by_name[ADD1].astype(np.float32),
+        "add2": by_name[ADD2].astype(np.float32),
+        "add3": by_name[ADD3].astype(np.float32),
+        "add4": by_name[ADD4].astype(np.float32),
+        "mid": by_name[MID].astype(np.float32),
+        "add5": by_name[ADD5].astype(np.float32),
+        "add6": by_name[ADD6].astype(np.float32),
+        "add7": by_name[ADD7].astype(np.float32),
+        "norm": by_name[NORM].astype(np.float32),
+        "layer0_out": by_name[LAYER0_OUTPUT].astype(np.float32),
+        "layer1_attn_weights": by_name[LAYER1_ATTN_WEIGHTS].astype(np.float32),
+        "layer1_out": by_name[LAYER1_OUTPUT].astype(np.float32),
+        "stage0_out": by_name[LAYER1_OUTPUT].astype(np.float32),
+    }
+    for stage, layer_count in STAGE_LAYER_COUNTS.items():
+        tensors[f"stage{stage}_downsample_out"] = by_name[stage_downsample_name(stage)].astype(
+            np.float32
+        )
+        tensors[f"stage{stage}_pos_emb"] = by_name[stage_pos_name(stage)].astype(np.float32)
+        for layer in range(layer_count):
+            tensors[f"stage{stage}_layer{layer}_attn_weights"] = by_name[
+                stage_layer_attn_name(stage, layer)
+            ].astype(np.float32)
+            tensors[f"stage{stage}_layer{layer}_out"] = by_name[
+                stage_layer_output_name(stage, layer)
+            ].astype(np.float32)
+        tensors[f"stage{stage}_out"] = by_name[stage_out_name(stage)].astype(np.float32)
+
+    save_file(tensors, str(args.output))
     print(f"wrote stage0 reference tensors to {args.output}")
 
 
