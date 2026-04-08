@@ -135,8 +135,22 @@ impl Engine {
         })
     }
 
-    /// Create a new transcription session.
-    ///
+    /// Create a new v2 transcription session (foundation types).
+    pub fn session_v2(
+        &self,
+        options: SessionOptions,
+    ) -> Result<session_v2::SessionV2<'_>, Exception> {
+        let vad = SileroVad::from_tensors(&self.vad_tensors)
+            .map_err(|e| Exception::custom(format!("vad creation failed: {e}")))?;
+        Ok(session_v2::SessionV2::new(
+            &self.model,
+            &self.tokenizer,
+            &self.aligner,
+            vad,
+            options,
+        ))
+    }
+
     /// Create a new transcription session.
     pub fn session(&self, options: SessionOptions) -> Result<Session<'_>, Exception> {
         let chunk_size_samples = (options.chunk_duration * 16000.0) as usize;
