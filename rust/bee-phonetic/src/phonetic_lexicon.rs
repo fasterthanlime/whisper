@@ -335,7 +335,17 @@ pub fn reduce_ipa_tokens(tokens: &[String]) -> Vec<String> {
 
 pub fn normalize_ipa_for_comparison(tokens: &[String]) -> Vec<String> {
     let mut out = Vec::new();
-    for token in reduce_ipa_tokens(tokens) {
+    let reduced = reduce_ipa_tokens(tokens);
+    let mut index = 0usize;
+    while index < reduced.len() {
+        let token = &reduced[index];
+        let next = reduced.get(index + 1).map(String::as_str);
+        if next == Some("ɹ") && is_vowel_like(token) {
+            out.push(normalize_vowel_family(token));
+            index += 2;
+            continue;
+        }
+
         match token.as_str() {
             "t͡ʃ" | "tʃ" => {
                 out.push("t".to_string());
@@ -346,7 +356,7 @@ pub fn normalize_ipa_for_comparison(tokens: &[String]) -> Vec<String> {
                 out.push("ʒ".to_string());
             }
             "eɪ" => {
-                out.push("e".to_string());
+                out.push("ɛ".to_string());
                 out.push("ɪ".to_string());
             }
             "aɪ" => {
@@ -370,17 +380,58 @@ pub fn normalize_ipa_for_comparison(tokens: &[String]) -> Vec<String> {
                 out.push("ə".to_string());
             }
             "eə" => {
-                out.push("e".to_string());
+                out.push("ɛ".to_string());
                 out.push("ə".to_string());
             }
             "ʊə" => {
                 out.push("ʊ".to_string());
                 out.push("ə".to_string());
             }
-            _ => out.push(token),
+            _ => out.push(normalize_vowel_family(token)),
         }
+        index += 1;
     }
     out
+}
+
+fn is_vowel_like(token: &str) -> bool {
+    matches!(
+        token,
+        "a"
+            | "æ"
+            | "ɑ"
+            | "ɒ"
+            | "ɔ"
+            | "e"
+            | "ɛ"
+            | "ɜ"
+            | "ɐ"
+            | "ə"
+            | "ʌ"
+            | "ɘ"
+            | "ɞ"
+            | "i"
+            | "ɪ"
+            | "o"
+            | "ɵ"
+            | "ɤ"
+            | "u"
+            | "ʊ"
+            | "ɯ"
+            | "ʉ"
+    )
+}
+
+fn normalize_vowel_family(token: &str) -> String {
+    match token {
+        "ɐ" | "ə" | "ʌ" | "ɜ" | "ɘ" | "ɞ" | "ᵻ" => "ə".to_string(),
+        "ɑ" | "ɒ" => "ɑ".to_string(),
+        "æ" | "ɛ" | "e" => "ɛ".to_string(),
+        "ɔ" | "o" | "ɵ" | "ɤ" => "ɔ".to_string(),
+        "i" | "ɪ" | "y" | "ʏ" => "ɪ".to_string(),
+        "u" | "ʊ" | "ɯ" | "ʉ" => "ʊ".to_string(),
+        _ => token.to_string(),
+    }
 }
 
 pub fn derive_identifier_flags(text: &str) -> IdentifierFlags {
@@ -600,7 +651,7 @@ mod tests {
                 "oʊ".to_string(),
                 "əʊ".to_string(),
             ]),
-            vec!["t", "ʃ", "d", "ʒ", "a", "ɪ", "e", "ɪ", "ə", "ʊ", "ə", "ʊ"]
+            vec!["t", "ʃ", "d", "ʒ", "a", "ɪ", "ɛ", "ɪ", "ə", "ʊ", "ə", "ʊ"]
         );
     }
 
@@ -615,6 +666,39 @@ mod tests {
                 "ʃ".to_string(),
                 "ə".to_string(),
             ])
+        );
+    }
+
+    #[test]
+    fn normalize_ipa_for_comparison_collapses_vowel_families() {
+        assert_eq!(
+            normalize_ipa_for_comparison(&[
+                "ɐ".to_string(),
+                "ʌ".to_string(),
+                "ɒ".to_string(),
+                "e".to_string(),
+                "i".to_string(),
+                "u".to_string(),
+            ]),
+            vec!["ə", "ə", "ɑ", "ɛ", "ɪ", "ʊ"]
+        );
+    }
+
+    #[test]
+    fn normalize_ipa_for_comparison_treats_postvocalic_r_as_rhoticity() {
+        assert_eq!(
+            normalize_ipa_for_comparison(&[
+                "ə".to_string(),
+                "ɹ".to_string(),
+                "ɑ".to_string(),
+                "ɹ".to_string(),
+                "k".to_string(),
+            ]),
+            vec!["ə", "ɑ", "k"]
+        );
+        assert_eq!(
+            normalize_ipa_for_comparison(&["ɚ".to_string(), "ɑ".to_string()]),
+            vec!["ə", "ɑ"]
         );
     }
 }
