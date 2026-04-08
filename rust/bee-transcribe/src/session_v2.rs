@@ -166,15 +166,30 @@ impl<'a> SessionV2<'a> {
     }
 
     fn make_update(&self) -> Update {
-        let mut all_ids = self.committed.token_ids();
-        all_ids.extend(self.pending.token_ids());
-        let text = self.tokenizer.decode(&all_ids, true).unwrap_or_default();
+        // Decode committed words individually to avoid cross-boundary
+        // tokenizer artifacts (leading-space tokens get misinterpreted
+        // when concatenated token IDs span rotation boundaries).
+        let mut text = String::new();
+        let mut alignments = Vec::new();
+        for entries in self.committed.words() {
+            if let Some(aligned) = Self::word_to_aligned(self.tokenizer, entries) {
+                if !text.is_empty() && !aligned.word.starts_with(' ') {
+                    text.push(' ');
+                }
+                text.push_str(&aligned.word);
+                alignments.push(aligned);
+            }
+        }
 
-        let alignments = self
-            .committed
-            .words()
-            .filter_map(|entries| Self::word_to_aligned(self.tokenizer, entries))
-            .collect();
+        // Decode pending tokens as one block
+        let pending_ids = self.pending.token_ids();
+        if !pending_ids.is_empty() {
+            let pending_text = self.tokenizer.decode(&pending_ids, true).unwrap_or_default();
+            if !text.is_empty() && !pending_text.starts_with(' ') {
+                text.push(' ');
+            }
+            text.push_str(&pending_text);
+        }
 
         Update {
             text,

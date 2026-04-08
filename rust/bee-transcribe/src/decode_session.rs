@@ -263,17 +263,24 @@ impl DecodeSession {
             .collect();
         let aligned = text_buffer::align(to_commit, &alignment_items, &self.audio, self.start_time);
 
-        // Split ourselves: trim audio, reset for next decode cycle
+        // Rotate: trim audio and drop committed tokens, keep the rest
+        // (like v1's Generator::rotate — remaining tokens provide context
+        // so the model doesn't think it's starting a new utterance).
         let last_end = Seconds(items.last().unwrap().end_time as f64);
         let new_start = self.start_time + last_end;
         let (_, remaining) = self.audio.split_at(last_end);
         self.audio = remaining;
         self.start_time = new_start;
-        self.tokens.clear();
-        self.metadata_end = 0;
+
+        // Drop the committed text tokens, keep metadata + remaining text
+        let drop_start = self.metadata_end;
+        let drop_end = self.metadata_end + safe_n.0;
+        self.tokens.drain(drop_start..drop_end);
+        // metadata_end stays the same (metadata tokens unchanged)
+
         self.encoder_cache = EncoderCache::new();
         self.mel_extractor = MelExtractor::new(400, 160, 128, 16000);
-        self.chunk_count = 0;
+        // Don't reset chunk_count — remaining tokens need prefix rollback to work
 
         Ok(Some(aligned))
     }
