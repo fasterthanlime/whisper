@@ -52,15 +52,23 @@ This directory contains an MLX-native Q8 checkpoint bundle for the ZIPA small CR
 - Small incompatible projections remain dense inside the checkpoint
 - Non-linear modules such as norms, bypass scales, conv weights, and downsample weights remain dense
 
-## Intended loader
+## Intended consumer
 
-This bundle is intended to be loaded by `bee-zipa-mlx`, for example:
+This bundle is intended to be used from the Bee repository.
+
+The reference loader and inference implementation currently live in-tree in:
+
+- `rust/bee-zipa-mlx`
+
+Example from a Bee checkout:
 
 ```bash
 cargo run -q -p bee-zipa-mlx --bin zipa-infer -- \\
   --quantized-checkpoint model-q8.safetensors \\
   /path/to/audio.wav
 ```
+
+This artifact format is currently project-specific and should be treated as a Bee model bundle, not a general-purpose standalone MLX package.
 """
 
 
@@ -123,6 +131,8 @@ def main() -> None:
         "checkpoint": "model-q8.safetensors",
     }
     config["source_model_id"] = "anyspeech/zipa-small-crctc-ns-no-diacritics-700k"
+    config["consumer_repo"] = "fasterthanlime/bee"
+    config["consumer_crate"] = "bee-zipa-mlx"
 
     (output_dir / "config.json").write_text(json.dumps(config, indent=2) + "\n")
     (output_dir / "README.md").write_text(README)
