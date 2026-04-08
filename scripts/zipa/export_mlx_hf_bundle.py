@@ -34,6 +34,7 @@ CONFIG = {
 README = """---
 library_name: mlx
 license: mit
+license_name: mit
 base_model:
   - anyspeech/zipa-small-crctc-ns-no-diacritics-700k
 tags:
@@ -54,6 +55,7 @@ This repository contains an MLX-native Q8 checkpoint bundle for the ZIPA small C
 ## What This Is
 
 - Base model family: `anyspeech/zipa-small-crctc-ns-no-diacritics-700k`
+- Published repo target: `bearcove/zipa-small-crctc-ns-no-diacritics-700k-mlx-q8`
 - Quantization target: MLX Q8
 - Intended consumer: the Bee repository
 - Reference implementation: `rust/bee-zipa-mlx` inside Bee
@@ -87,6 +89,7 @@ cargo run -q -p bee-zipa-mlx --bin zipa-infer -- \\
 
 - This bundle was generated from local dense ZIPA reference artifacts and quantized with `bee-zipa-mlx`
 - The artifact layout is currently project-specific to Bee
+- The bundle is currently marked `MIT` based on the upstream ZIPA repository license and the upstream release statement that code and pretrained models would be released under permissive licenses. This should still be confirmed directly with upstream model authors.
 """
 
 
@@ -149,8 +152,14 @@ def main() -> None:
         "checkpoint": "model.safetensors",
     }
     config["source_model_id"] = "anyspeech/zipa-small-crctc-ns-no-diacritics-700k"
+    config["target_hf_repo"] = "bearcove/zipa-small-crctc-ns-no-diacritics-700k-mlx-q8"
     config["consumer_repo"] = "fasterthanlime/bee"
     config["consumer_crate"] = "bee-zipa-mlx"
+    config["license"] = "mit"
+    config["license_note"] = (
+        "Marked MIT based on the upstream ZIPA repository license and upstream release statement; "
+        "confirm with upstream model authors."
+    )
 
     (output_dir / "config.json").write_text(json.dumps(config, indent=2) + "\n")
     (output_dir / "README.md").write_text(README)
