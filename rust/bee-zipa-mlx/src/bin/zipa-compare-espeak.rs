@@ -50,7 +50,7 @@ fn main() -> Result<()> {
     };
 
     let recordings = load_recording_examples(&recording_examples_path())?;
-    let mut g2p = CachedEspeakG2p::english(Path::new(env!("CARGO_MANIFEST_DIR")))?;
+    let mut g2p = CachedEspeakG2p::english(&g2p_base_dir())?;
 
     let mut rows = Vec::new();
     for row in &recordings {
@@ -262,6 +262,10 @@ fn wav_path_for(wav_dir: &Path, audio_path: &str) -> PathBuf {
 fn recording_examples_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../data/phonetic-seed/recording_examples.jsonl")
+}
+
+fn g2p_base_dir() -> PathBuf {
+    std::env::temp_dir().join("bee-zipa-mlx-espeak")
 }
 
 fn load_recording_examples(path: &Path) -> Result<Vec<RecordingExample>> {

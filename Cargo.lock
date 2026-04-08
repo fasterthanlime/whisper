@@ -275,9 +275,12 @@ name = "bee-zipa-mlx"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bee-correct",
+ "bee-phonetic",
  "hound",
  "mlx-rs",
  "rustfft",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 
