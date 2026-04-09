@@ -172,7 +172,6 @@ final class BeeIPCServer {
             do {
                 _ = try await client.prepareSession(sessionId: sessionId, targetPid: targetPid)
                 beeLog("VOXIPC: prepareSession pushed to IME session=\(sessionId.prefix(8))")
-                pendingSessionId = nil
             } catch {
                 beeLog("VOXIPC: prepareSession to IME failed: \(error)")
             }
