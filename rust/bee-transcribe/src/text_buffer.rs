@@ -19,6 +19,7 @@ pub struct AsrToken {
     pub id: TokenId,
     pub concentration: f32,
     pub margin: f32,
+    pub alternative_count: u8,
     /// Top-k alternative token IDs (sorted by descending logit).
     pub top_ids: [TokenId; TOP_K],
     /// Top-k raw logits (sorted descending).
@@ -257,6 +258,7 @@ mod tests {
                 id,
                 concentration: -0.5,
                 margin: 0.3,
+                alternative_count: TOP_K as u8,
                 top_ids: [id, 0, 0, 0],
                 top_logits: [0.0; TOP_K],
             },

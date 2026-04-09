@@ -14,6 +14,13 @@ pub type TokenId = i32;
 
 /// Number of top-k alternatives stored per token.
 pub const TOP_K: usize = 4;
+pub const STREAMING_TOP_K: usize = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfidenceMode {
+    Streaming,
+    Full,
+}
 
 /// Per-token confidence information extracted during decoding.
 ///
@@ -23,6 +30,9 @@ pub const TOP_K: usize = 4;
 pub struct TokenConfidence {
     /// The chosen (top-1) token ID.
     pub token_id: TokenId,
+
+    /// Number of populated entries in `top_ids` / `top_logits`.
+    pub alternative_count: u8,
 
     /// Top-k token IDs, sorted by descending logit.
     pub top_ids: [TokenId; TOP_K],
@@ -186,6 +196,7 @@ pub fn prefill_and_decode(
     cache: &mut Option<KVCache>,
     start_position: usize,
     max_new_tokens: usize,
+    confidence_mode: ConfidenceMode,
 ) -> Result<(Vec<TokenId>, Vec<TokenConfidence>, usize), Exception> {
     let seq_len = prompt_tokens.len();
     let input_ids = Array::from_slice(prompt_tokens, &[1, seq_len as i32]);
@@ -204,7 +215,7 @@ pub fn prefill_and_decode(
     // Position after prefill: prompt tokens are in the cache
     let mut position = start_position + seq_len;
 
-    let tlp = topk_confidence(&logits)?;
+    let tlp = confidence_for_logits(&logits, confidence_mode)?;
     let mut token = tlp.token_id;
     let mut generated = Vec::new();
     let mut confidences = Vec::new();
@@ -239,7 +250,7 @@ pub fn prefill_and_decode(
         let logits = model.step(&next_ids, &pos_arr, cache)?;
         position += 1; // token was fed into cache
 
-        let tlp = topk_confidence(&logits)?;
+        let tlp = confidence_for_logits(&logits, confidence_mode)?;
         token = tlp.token_id;
 
         if is_eos(token) {
@@ -261,10 +272,124 @@ pub fn prefill_and_decode(
     Ok((generated, confidences, position))
 }
 
+/// Score an existing generated continuation against a prompt.
+///
+/// This is used to cheaply stream with reduced confidence metadata, then
+/// refresh the same token sequence with full top-k confidence right before
+/// commit/finalization when the correction pipeline needs richer metadata.
+pub fn score_continuation(
+    model: &Qwen3ASRModel,
+    prompt_tokens: &[TokenId],
+    audio_features: &Array,
+    continuation_tokens: &[TokenId],
+    confidence_mode: ConfidenceMode,
+) -> Result<Vec<TokenConfidence>, Exception> {
+    if continuation_tokens.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let seq_len = prompt_tokens.len();
+    let input_ids = Array::from_slice(prompt_tokens, &[1, seq_len as i32]);
+    let positions: Vec<i32> = (0..seq_len as i32).collect();
+    let pos_arr = Array::from_slice(&positions, &[1, 1, seq_len as i32]);
+    let position_ids = ops::broadcast_to(&pos_arr, &[1, 3, seq_len as i32])?;
+
+    let mut cache = Some(model.create_cache());
+    let logits = model.prefill(&input_ids, audio_features, &position_ids, &mut cache)?;
+
+    let mut scored = Vec::with_capacity(continuation_tokens.len());
+    scored.push(confidence_for_logits_forced(
+        &logits,
+        continuation_tokens[0],
+        confidence_mode,
+    )?);
+
+    let mut position = seq_len;
+    for window in continuation_tokens.windows(2) {
+        let prev = window[0];
+        let expected = window[1];
+        let next_ids = Array::from_slice(&[prev], &[1, 1]);
+        let pos_arr = Array::from_slice(
+            &[position as i32, position as i32, position as i32],
+            &[1, 3, 1],
+        );
+        let logits = model.step(&next_ids, &pos_arr, &mut cache)?;
+        position += 1;
+        scored.push(confidence_for_logits_forced(
+            &logits,
+            expected,
+            confidence_mode,
+        )?);
+    }
+
+    Ok(scored)
+}
+
 fn argmax(logits: &Array) -> Result<i32, Exception> {
     let flat = logits.reshape(&[-1])?;
     let idx = indexing::argmax(&flat, None)?;
     Ok(idx.item::<i32>())
+}
+
+fn confidence_for_logits(
+    logits: &Array,
+    confidence_mode: ConfidenceMode,
+) -> Result<TokenConfidence, Exception> {
+    match confidence_mode {
+        ConfidenceMode::Streaming => top2_confidence(logits),
+        ConfidenceMode::Full => topk_confidence(logits),
+    }
+}
+
+fn confidence_for_logits_forced(
+    logits: &Array,
+    token_id: TokenId,
+    confidence_mode: ConfidenceMode,
+) -> Result<TokenConfidence, Exception> {
+    let mut confidence = confidence_for_logits(logits, confidence_mode)?;
+    confidence.token_id = token_id;
+    Ok(confidence)
+}
+
+fn top2_confidence(logits: &Array) -> Result<TokenConfidence, Exception> {
+    let flat = logits.reshape(&[-1])?;
+
+    let neg = ops::negative(&flat)?;
+    let partitioned_indices = ops::argpartition(&neg, 1)?;
+    let top2_indices = partitioned_indices.index(..STREAMING_TOP_K as i32);
+    let top2_values = flat.index(&top2_indices);
+
+    top2_indices.eval()?;
+    top2_values.eval()?;
+
+    let idx0 = top2_indices.index(0).item::<i32>();
+    let idx1 = top2_indices.index(1).item::<i32>();
+    let val0 = top2_values.index(0).item::<f32>();
+    let val1 = top2_values.index(1).item::<f32>();
+
+    let (winner_id, winner_logit, runner_id, runner_logit) = if val0 >= val1 {
+        (idx0, val0, idx1, val1)
+    } else {
+        (idx1, val1, idx0, val0)
+    };
+
+    let mut top_ids = [0i32; TOP_K];
+    let mut top_logits = [0.0f32; TOP_K];
+    top_ids[0] = winner_id;
+    top_ids[1] = runner_id;
+    top_logits[0] = winner_logit;
+    top_logits[1] = runner_logit;
+
+    let margin = winner_logit - runner_logit;
+
+    Ok(TokenConfidence {
+        token_id: winner_id,
+        alternative_count: STREAMING_TOP_K as u8,
+        top_ids,
+        top_logits,
+        concentration: margin,
+        margin,
+    })
 }
 
 /// Extract top-k tokens and their raw logits efficiently.
@@ -312,6 +437,7 @@ fn topk_confidence(logits: &Array) -> Result<TokenConfidence, Exception> {
 
     Ok(TokenConfidence {
         token_id: top_ids[0],
+        alternative_count: TOP_K as u8,
         top_ids,
         top_logits,
         concentration,

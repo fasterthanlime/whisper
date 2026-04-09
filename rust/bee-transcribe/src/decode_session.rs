@@ -4,7 +4,7 @@
 //! The start_time tracks where this sub-session begins in the timeline.
 
 use bee_qwen3_asr::encoder::EncoderCache;
-use bee_qwen3_asr::generate::{self, TOP_K, TokenConfidence};
+use bee_qwen3_asr::generate::{self, ConfidenceMode, TOP_K, TokenConfidence};
 use bee_qwen3_asr::mel::MelExtractor;
 use bee_qwen3_asr::model::Qwen3ASRModel;
 use mlx_rs::Array;
@@ -38,6 +38,8 @@ pub struct DecodeSession {
     rollback_tokens: TokenCount,
     /// How many chunks have been decoded in this sub-session.
     chunk_count: usize,
+    /// First index in `tokens` that came from model generation rather than prompt prefix.
+    generated_start: usize,
 }
 
 impl DecodeSession {
@@ -52,6 +54,7 @@ impl DecodeSession {
             metadata_end: 0,
             rollback_tokens,
             chunk_count: 0,
+            generated_start: 0,
         }
     }
 
@@ -131,6 +134,7 @@ impl DecodeSession {
         tokenizer: &Tokenizer,
         language: &str,
         max_tokens: usize,
+        confidence_mode: ConfidenceMode,
     ) -> Result<(), Exception> {
         self.chunk_count += 1;
 
@@ -167,6 +171,7 @@ impl DecodeSession {
             &mut cache,
             0,
             max_tokens,
+            confidence_mode,
         )?;
 
         // Merge prefix + generated into a single Vec<AsrToken>
@@ -187,11 +192,72 @@ impl DecodeSession {
             );
         } else if !merged.is_empty() {
             self.tokens = merged;
+            self.generated_start = prefix_len;
             self.recompute_metadata_boundary();
         }
 
         drop(cache);
         clear_mlx_cache();
+        Ok(())
+    }
+
+    /// Refresh confidence metadata for the most recent generated suffix.
+    ///
+    /// This is used right before commit/finalize so committed chunks carry
+    /// full top-k alternatives for the correction pipeline, while live
+    /// streaming revisions stay on a cheaper top-2 path.
+    pub fn refresh_confidence(
+        &mut self,
+        model: &Qwen3ASRModel,
+        tokenizer: &Tokenizer,
+        language: &str,
+        confidence_mode: ConfidenceMode,
+    ) -> Result<(), Exception> {
+        if self.tokens.is_empty() || self.generated_start >= self.tokens.len() {
+            return Ok(());
+        }
+
+        let (mel_data, n_mels, n_frames) = self
+            .mel_extractor
+            .extract(self.audio.samples())
+            .map_err(|e| Exception::custom(format!("mel: {e}")))?;
+        let mel = Array::from_slice(&mel_data, &[n_mels as i32, n_frames as i32]);
+        let audio_features = model.encode_incremental(&mel, &mut self.encoder_cache)?;
+        let audio_features = mlx_rs::ops::expand_dims(&audio_features, 0)?;
+        audio_features.eval()?;
+
+        let prefix = &self.tokens[..self.generated_start];
+        let mut prompt = generate::build_initial_prompt(
+            audio_features.shape()[1] as usize,
+            language,
+            "",
+            tokenizer,
+        );
+        prompt.extend(prefix.iter().map(|t| t.id as i32));
+
+        let continuation: Vec<i32> = self.tokens[self.generated_start..]
+            .iter()
+            .map(|t| t.id as i32)
+            .collect();
+        let confidences = generate::score_continuation(
+            model,
+            &prompt,
+            &audio_features,
+            &continuation,
+            confidence_mode,
+        )?;
+
+        for (token, confidence) in self.tokens[self.generated_start..]
+            .iter_mut()
+            .zip(confidences.into_iter())
+        {
+            token.concentration = confidence.concentration;
+            token.margin = confidence.margin;
+            token.alternative_count = confidence.alternative_count;
+            token.top_ids = confidence.top_ids.map(|id| id as TokenId);
+            token.top_logits = confidence.top_logits;
+        }
+
         Ok(())
     }
 
@@ -326,6 +392,7 @@ impl DecodeSession {
 
         self.encoder_cache = EncoderCache::new();
         self.mel_extractor = MelExtractor::new(400, 160, 128, 16000);
+        self.generated_start = 0;
         // Don't reset chunk_count — remaining tokens need prefix rollback to work
 
         Ok(Some(aligned))
@@ -347,6 +414,7 @@ impl DecodeSession {
         self.metadata_end = 0;
         self.encoder_cache = EncoderCache::new();
         self.chunk_count = 0;
+        self.generated_start = 0;
     }
 
     // ── Internal ────────────────────────────────────────────────────
@@ -384,6 +452,7 @@ impl DecodeSession {
                 id: token_id as TokenId,
                 concentration: lp.map_or(0.0, |l| l.concentration),
                 margin: lp.map_or(0.0, |l| l.margin),
+                alternative_count: lp.map_or(0, |l| l.alternative_count),
                 top_ids: lp.map_or([0; TOP_K], |l| l.top_ids.map(|id| id as TokenId)),
                 top_logits: lp.map_or([0.0; TOP_K], |l| l.top_logits),
             });

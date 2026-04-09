@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use bee_qwen3_asr::generate::TOP_K;
 use bee_transcribe::text_buffer::TokenEntry;
 use bee_transcribe::{EngineConfig, SessionOptions, SessionSnapshot};
 use tokenizers::Tokenizer;
@@ -211,9 +210,14 @@ fn print_alternatives(tokenizer: &Tokenizer, entries: &[TokenEntry]) {
         let avg_margin: f32 = word_entries.iter().map(|e| e.token.margin).sum::<f32>() / n;
 
         // Collect alternatives for each token position
-        let mut alt_columns: Vec<Vec<String>> = vec![Vec::new(); TOP_K];
+        let alt_count = word_entries
+            .iter()
+            .map(|entry| entry.token.alternative_count as usize)
+            .min()
+            .unwrap_or(0);
+        let mut alt_columns: Vec<Vec<String>> = vec![Vec::new(); alt_count.max(1)];
         for entry in *word_entries {
-            for k in 0..TOP_K {
+            for k in 0..alt_count {
                 let alt_text = tokenizer
                     .decode(&[entry.token.top_ids[k]], true)
                     .unwrap_or_default();
@@ -222,7 +226,7 @@ fn print_alternatives(tokenizer: &Tokenizer, entries: &[TokenEntry]) {
         }
 
         // Format: chosen word, then alternatives
-        let alts: Vec<String> = (1..TOP_K)
+        let alts: Vec<String> = (1..alt_count)
             .map(|k| {
                 let alt_word: String = alt_columns[k].join("");
                 let alt_word = alt_word.trim();

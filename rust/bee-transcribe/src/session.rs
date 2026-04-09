@@ -5,6 +5,7 @@
 //! Two TextBuffers: committed (aligned, stable) and pending (volatile).
 
 use bee_qwen3_asr::forced_aligner::ForcedAligner;
+use bee_qwen3_asr::generate::ConfidenceMode;
 use bee_qwen3_asr::model::Qwen3ASRModel;
 use bee_types::AlignedWord;
 use bee_vad::SileroVad;
@@ -121,7 +122,10 @@ impl<'a> Session<'a> {
                     "feed: speech chunk passed filters"
                 );
                 self.decode.append_audio(&chunk);
-                self.decode_and_maybe_commit(self.options.max_tokens_streaming)?;
+                self.decode_and_maybe_commit(
+                    self.options.max_tokens_streaming,
+                    ConfidenceMode::Streaming,
+                )?;
                 did_decode = true;
             } else {
                 tracing::trace!("feed: chunk filtered out (silence/VAD)");
@@ -156,7 +160,7 @@ impl<'a> Session<'a> {
                 max_tokens = self.options.max_tokens_final,
                 "finish: final decode"
             );
-            self.decode_and_maybe_commit(self.options.max_tokens_final)?;
+            self.decode_and_maybe_commit(self.options.max_tokens_final, ConfidenceMode::Full)?;
         }
 
         // Commit everything remaining
@@ -166,6 +170,13 @@ impl<'a> Session<'a> {
                 "finish: committing remaining pending tokens"
             );
             if self.decode.has_audio() {
+                let language = self.effective_language().to_owned();
+                self.decode.refresh_confidence(
+                    self.model,
+                    self.tokenizer,
+                    &language,
+                    ConfidenceMode::Full,
+                )?;
                 if let Some(aligned) = self
                     .decode
                     .commit_all(self.forced_aligner, self.tokenizer)?
@@ -263,14 +274,23 @@ impl<'a> Session<'a> {
             || !self.committed.is_empty()
     }
 
-    fn decode_and_maybe_commit(&mut self, max_tokens: usize) -> Result<(), Exception> {
+    fn decode_and_maybe_commit(
+        &mut self,
+        max_tokens: usize,
+        confidence_mode: ConfidenceMode,
+    ) -> Result<(), Exception> {
         // Update rollback window before decode so compute_prefix uses the adaptive value
         let rollback = self.effective_rollback();
         self.decode.set_rollback(text_buffer::TokenCount(rollback));
 
         let language = self.effective_language().to_owned();
-        self.decode
-            .decode_step(self.model, self.tokenizer, &language, max_tokens)?;
+        self.decode.decode_step(
+            self.model,
+            self.tokenizer,
+            &language,
+            max_tokens,
+            confidence_mode,
+        )?;
 
         if let Some(lang) = self.decode.detected_language(self.tokenizer) {
             tracing::debug!(language = %lang, "detected language");
@@ -301,6 +321,12 @@ impl<'a> Session<'a> {
                 threshold = commit_threshold,
                 "rotating: committing tokens and starting fresh decode"
             );
+            self.decode.refresh_confidence(
+                self.model,
+                self.tokenizer,
+                &language,
+                ConfidenceMode::Full,
+            )?;
             if let Some(aligned) = self.decode.commit(
                 TokenCount(self.options.commit_token_count),
                 self.forced_aligner,
@@ -489,6 +515,7 @@ impl<'a> Session<'a> {
                     .top_ids
                     .iter()
                     .zip(entry.token.top_logits.iter())
+                    .take(entry.token.alternative_count as usize)
                     .map(|(&token_id, &logit)| TokenAlternative {
                         token_id,
                         text: self.tokenizer.decode(&[token_id], true).unwrap_or_default(),

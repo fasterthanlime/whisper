@@ -40,6 +40,18 @@ partial.
   - `argpartition`
   - gather/sort-related MLX activity
 
+## Current status
+
+- Implemented split confidence modes:
+  - streaming decode uses top-2-only confidence
+  - commit/final refresh rescoring uses full top-k
+- The correction pipeline keeps full alternatives on committed chunks by
+  rescoring the generated suffix immediately before `commit()` /
+  `commit_all()`.
+- Corpus spot-check on the clean correction-free baseline:
+  - final transcripts remained clean
+  - two previously bad first partials improved in that run
+
 ## Depends on
 
 - 000 baseline
