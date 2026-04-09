@@ -163,32 +163,39 @@ final class BeeIMEBridgeState: NSObject {
 
         if hasMarked {
             beeInputLog(
-                "discardMarkedText[\(reason)]: via insertText client=\(String(describing: type(of: client))) markedRange(before)=\(NSStringFromRange(markedRange)) selectedRange(before)=\(NSStringFromRange(client.selectedRange()))"
+                "discardMarkedText[\(reason)]: cancel-style clear (no insertText) client=\(String(describing: type(of: client))) markedRange(before)=\(NSStringFromRange(markedRange)) selectedRange(before)=\(NSStringFromRange(client.selectedRange()))"
             )
-            // Force-delete any pending composition text so clients can't commit it on focus change.
-            client.insertText(
-                "",
-                replacementRange: markedRange
-            )
-            // As a safety net, also ensure composition state is cleared.
+            // IMPORTANT: Do not call insertText here — many hosts treat it as a commit.
+            // Previous attempt (via insertText) caused marked text to be finalized on focus change.
+            // Keep this note for future reference:
+            //   // client.insertText("", replacementRange: markedRange)
+
+            // Clear composition by setting an empty marked string and then unmarking.
             client.setMarkedText(
                 "",
                 selectionRange: NSRange(location: 0, length: 0),
                 replacementRange: NSRange(location: NSNotFound, length: 0)
             )
+            // Some hosts require an explicit unmark to drop composition state without committing.
+            if client.responds(to: Selector(("unmarkText"))) {
+                (client as AnyObject).perform(Selector(("unmarkText")))
+            }
             beeInputLog(
                 "discardMarkedText[\(reason)]: markedRange(after)=\(NSStringFromRange(client.markedRange())) selectedRange(after)=\(NSStringFromRange(client.selectedRange()))"
             )
         } else {
             // No marked range; ensure the composition state is cleared anyway at the caret.
             beeInputLog(
-                "discardMarkedText[\(reason)]: no marked range; ensuring clear via empty setMarkedText at caret"
+                "discardMarkedText[\(reason)]: no marked range; clear via empty setMarkedText at caret (no insertText)"
             )
             client.setMarkedText(
                 "",
                 selectionRange: NSRange(location: 0, length: 0),
                 replacementRange: NSRange(location: NSNotFound, length: 0)
             )
+            if client.responds(to: Selector(("unmarkText"))) {
+                (client as AnyObject).perform(Selector(("unmarkText")))
+            }
         }
     }
 
