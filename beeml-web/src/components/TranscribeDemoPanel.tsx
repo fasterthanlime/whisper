@@ -208,7 +208,6 @@ export function TranscribeDemoPanel({
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inspectorData, setInspectorData] = useState<EvalInspectorData | null>(null);
-  const [audioUrl, setAudioUrl] = useState<string | undefined>(undefined);
 
   // Streaming state
   const [streaming, setStreaming] = useState(false);
@@ -220,10 +219,6 @@ export function TranscribeDemoPanel({
     if (recorder.state === "recording") {
       setStatus("Stopping recording...");
       const blob = await recorder.stop();
-
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
-      const nextAudioUrl = URL.createObjectURL(blob);
-      setAudioUrl(nextAudioUrl);
 
       try {
         setStatus("Connecting to BeeML...");
@@ -252,11 +247,9 @@ export function TranscribeDemoPanel({
     } else {
       setError(null);
       setInspectorData(null);
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
-      setAudioUrl(undefined);
       await recorder.start();
     }
-  }, [audioUrl, recorder, wsUrl]);
+  }, [recorder, wsUrl]);
 
   const handleStream = useCallback(async () => {
     if (streaming) {
@@ -381,7 +374,7 @@ export function TranscribeDemoPanel({
           {streaming && <span className="cursor" />}
         </div>
       ) : inspectorData ? (
-        <EvalInspector data={inspectorData} audioUrl={audioUrl} wsUrl={wsUrl} />
+        <EvalInspector data={inspectorData} wsUrl={wsUrl} />
       ) : (
         <div className="demo-empty">
           {recorder.state === "recording"

@@ -7,11 +7,9 @@ import { TranscriptComparison } from "./TranscriptComparison";
 
 export function EvalInspector({
   data,
-  audioUrl,
   wsUrl,
 }: {
   data: EvalInspectorData;
-  audioUrl?: string;
   wsUrl?: string;
 }) {
   const ctxRef = useRef<AudioContext | null>(null);
@@ -29,24 +27,14 @@ export function EvalInspector({
   useEffect(() => {
     const traceAudio = sessionAudio?.sessionAudioF32;
     const traceRate = sessionAudio?.sessionAudioSampleRateHz;
-    if ((!audioUrl && !traceAudio?.length) || !traceRate && !audioUrl) return;
+    if (!traceAudio?.length || !traceRate) return;
     const ctx = new AudioContext();
     ctxRef.current = ctx;
-    if (traceAudio?.length && traceRate) {
-      const channel = new Float32Array(traceAudio);
-      const buf = ctx.createBuffer(1, channel.length, traceRate);
-      buf.copyToChannel(channel, 0);
-      bufferRef.current = buf;
-      setDuration(buf.duration);
-    } else if (audioUrl) {
-      fetch(audioUrl)
-        .then((r) => r.arrayBuffer())
-        .then((ab) => ctx.decodeAudioData(ab))
-        .then((buf) => {
-          bufferRef.current = buf;
-          setDuration(buf.duration);
-        });
-    }
+    const channel = new Float32Array(traceAudio);
+    const buf = ctx.createBuffer(1, channel.length, traceRate);
+    buf.copyToChannel(channel, 0);
+    bufferRef.current = buf;
+    setDuration(buf.duration);
 
     return () => {
       sourceRef.current?.stop();
@@ -55,7 +43,7 @@ export function EvalInspector({
       ctxRef.current = null;
       bufferRef.current = null;
     };
-  }, [audioUrl]);
+  }, [sessionAudio?.sessionAudioF32, sessionAudio?.sessionAudioSampleRateHz]);
 
   const stopSource = useCallback(() => {
     if (sourceRef.current) {
@@ -138,7 +126,7 @@ export function EvalInspector({
 
   return (
     <div className="eval-inspector">
-      {(audioUrl || sessionAudio?.sessionAudioF32.length) && (
+      {sessionAudio?.sessionAudioF32.length ? (
         <EvalPlaybackBar
           playing={playing}
           currentTime={currentTime}
@@ -149,7 +137,7 @@ export function EvalInspector({
           onSeek={handleSeek}
           onZoomChange={setZoom}
         />
-      )}
+      ) : null}
 
       <EvalTimeline
         alignments={data.alignments}
