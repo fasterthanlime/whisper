@@ -500,7 +500,7 @@ actor Session {
     // MARK: - Endings
 
     func park() async {
-        guard ime == .active else { return }
+        guard ime == .inactive || ime == .activating || ime == .active else { return }
         ime = .parked
         beeLog("SESSION: park id=\(id.uuidString.prefix(8))")
         await MainActor.run { inputClient.deactivate() }

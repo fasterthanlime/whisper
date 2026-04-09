@@ -78,7 +78,12 @@ final class HotkeyMonitor: @unchecked Sendable {
             case .flagsChanged:
                 return handleFlagsChanged(keyCode: keyCode, flags: flags, appState: appState)
             case .keyDown:
-                return handleKeyDown(keyCode: keyCode, isRepeat: isRepeat, appState: appState)
+                return handleKeyDown(
+                    keyCode: keyCode,
+                    flags: flags,
+                    isRepeat: isRepeat,
+                    appState: appState
+                )
             default:
                 return false
             }
@@ -113,12 +118,15 @@ final class HotkeyMonitor: @unchecked Sendable {
     }
 
     @MainActor
-    private func handleKeyDown(keyCode: UInt16, isRepeat: Bool, appState: AppState) -> Bool {
+    private func handleKeyDown(keyCode: UInt16, flags: UInt64, isRepeat: Bool, appState: AppState)
+        -> Bool
+    {
         if isRepeat { return false }
+        let optionHeld = (flags & CGEventFlags.maskAlternate.rawValue) != 0
 
         switch Int(keyCode) {
         case kVK_Escape:
-            return appState.handleEscape()
+            return appState.handleEscape(optionHeld: optionHeld)
         case kVK_Return, kVK_ANSI_KeypadEnter:
             return appState.handleEnter()
         default:

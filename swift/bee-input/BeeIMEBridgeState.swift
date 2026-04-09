@@ -23,6 +23,31 @@ final class BeeIMESession {
 
     // MARK: - Text handling
 
+    private func clearComposition(on client: AnyObject, reason: String) {
+        let markedRange = client.markedRange()
+        if markedRange.location != NSNotFound {
+            beeInputLog("clearComposition[\(reason)]: removing markedRange=\(markedRange)")
+            client.insertText("", replacementRange: markedRange)
+            return
+        }
+
+        let fallbackLength = currentMarkedText.utf16.count
+        let selection = client.selectedRange()
+        if fallbackLength > 0, selection.location != NSNotFound, selection.location >= fallbackLength {
+            let fallbackRange = NSRange(location: selection.location - fallbackLength, length: fallbackLength)
+            beeInputLog("clearComposition[\(reason)]: removing fallbackRange=\(fallbackRange)")
+            client.insertText("", replacementRange: fallbackRange)
+            return
+        }
+
+        beeInputLog("clearComposition[\(reason)]: no marked range, resetting marked text")
+        client.setMarkedText(
+            "",
+            selectionRange: NSRange(location: 0, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+    }
+
     func handleSetMarkedText(_ text: String) {
         guard let client = controller?.client() else {
             beeInputLog("handleSetMarkedText: no client, dropping")
@@ -84,12 +109,9 @@ final class BeeIMESession {
     func handleCancelInput() {
         beeInputLog("cancelInput")
         guard let client = controller?.client() else { return }
+        clearComposition(on: client as AnyObject, reason: "cancel")
         currentMarkedText = ""
-        client.setMarkedText(
-            "",
-            selectionRange: NSRange(location: 0, length: 0),
-            replacementRange: NSRange(location: NSNotFound, length: 0)
-        )
+        autoCommittedPrefix = ""
     }
 
     func handleReplaceText(oldText: String, newText: String) {
@@ -117,12 +139,9 @@ final class BeeIMESession {
     func clearOrphanedMarkedText() {
         guard !currentMarkedText.isEmpty, let client = controller?.client() else { return }
         beeInputLog("deactivateServer: clearing orphaned marked text")
-        client.setMarkedText(
-            "",
-            selectionRange: NSRange(location: 0, length: 0),
-            replacementRange: NSRange(location: NSNotFound, length: 0)
-        )
+        clearComposition(on: client as AnyObject, reason: "deactivate")
         currentMarkedText = ""
+        autoCommittedPrefix = ""
     }
 }
 
