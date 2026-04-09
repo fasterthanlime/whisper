@@ -42,14 +42,19 @@ class BeeInputController: IMKInputController {
             let isDictating = bridge.isDictating
             let sessionID = bridge.activeSessionID
 
+            let clientObj = self.client()
+            let clientMarkedRange = clientObj?.markedRange() ?? NSRange(location: NSNotFound, length: 0)
+            let clientHasMarked = clientMarkedRange.location != NSNotFound && clientMarkedRange.length > 0
+
             let hadMarkedText = !(session?.currentMarkedText.isEmpty ?? true)
             beeInputLog(
                 "deactivateServer: session=\(sessionID?.uuidString.prefix(8) ?? "none") hadMarkedText=\(hadMarkedText) clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) client=\(describeClient())"
             )
 
-            if hadMarkedText {
+            if hadMarkedText || clientHasMarked {
                 beeInputLog("deactivateServer: discarding marked text before detach")
                 bridge.discardMarkedText(on: self.client() as AnyObject, reason: "deactivate")
+                bridge.didCancelComposition(on: self)
             }
 
             bridge.deactivate(self)
