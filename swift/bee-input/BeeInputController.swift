@@ -17,10 +17,12 @@ class BeeInputController: IMKInputController {
     nonisolated override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
         MainActor.assumeIsolated {
-            beeInputLog("activateServer: entry")
-            let bridge = BeeIMEBridgeState.shared
             let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
             let clientIdentity = currentClientIdentity()
+            let bridge = BeeIMEBridgeState.shared
+            beeInputLog(
+                "activateServer: entry frontmostPID=\(frontmostPID.map(String.init) ?? "nil") clientID=\(clientIdentity ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) client=\(describeClient())"
+            )
             bridge.activate(self, pid: frontmostPID, clientID: clientIdentity)
         }
     }
@@ -40,8 +42,13 @@ class BeeInputController: IMKInputController {
 
             let hadMarkedText = !(session?.currentMarkedText.isEmpty ?? true)
             beeInputLog(
-                "deactivateServer: session=\(sessionID?.uuidString.prefix(8) ?? "none") hadMarkedText=\(hadMarkedText)"
+                "deactivateServer: session=\(sessionID?.uuidString.prefix(8) ?? "none") hadMarkedText=\(hadMarkedText) clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) client=\(describeClient())"
             )
+
+            if hadMarkedText {
+                beeInputLog("deactivateServer: discarding marked text before detach")
+                bridge.discardMarkedText(on: self.client() as AnyObject, reason: "deactivate")
+            }
 
             bridge.deactivate(self)
 
@@ -54,7 +61,9 @@ class BeeInputController: IMKInputController {
 
     nonisolated override func cancelComposition() {
         MainActor.assumeIsolated {
-            beeInputLog("cancelComposition: entry")
+            beeInputLog(
+                "cancelComposition: entry clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription())"
+            )
         }
         super.cancelComposition()
         MainActor.assumeIsolated {
@@ -64,7 +73,9 @@ class BeeInputController: IMKInputController {
 
     nonisolated override func commitComposition(_ sender: Any!) {
         MainActor.assumeIsolated {
-            beeInputLog("commitComposition: entry -> cancel")
+            beeInputLog(
+                "commitComposition: entry clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) -> cancel"
+            )
         }
         cancelComposition()
     }
@@ -139,18 +150,23 @@ class BeeInputController: IMKInputController {
                 BeeVoxIMEClient.shared.imeKeyEvent(
                     sessionId: sessionIdStr, eventType: "submit",
                     keyCode: UInt32(keyCode), characters: "")
+                beeInputLog("handle(keyDown): submit session=\(sessionIdStr.prefix(8))")
                 return true
 
             case kVK_Escape:
                 BeeVoxIMEClient.shared.imeKeyEvent(
                     sessionId: sessionIdStr, eventType: "cancel",
                     keyCode: UInt32(keyCode), characters: "")
+                beeInputLog("handle(keyDown): cancel session=\(sessionIdStr.prefix(8))")
                 return true
 
             default:
                 BeeVoxIMEClient.shared.imeKeyEvent(
                     sessionId: sessionIdStr, eventType: "typed",
                     keyCode: UInt32(keyCode), characters: characters ?? "")
+                beeInputLog(
+                    "handle(keyDown): typed session=\(sessionIdStr.prefix(8)) keyCode=\(keyCode) chars=\((characters ?? "").debugDescription)"
+                )
                 return false
             }
         }
@@ -159,8 +175,24 @@ class BeeInputController: IMKInputController {
     // MARK: - Utilities
 
     private func currentClientIdentity() -> String? {
-        guard let client = self.client() else { return nil }
-        let opaque = Unmanaged.passUnretained(client as AnyObject).toOpaque()
-        return String(UInt(bitPattern: opaque), radix: 16, uppercase: true)
+        guard let client = self.client() as? NSObject else { return nil }
+        let selector = NSSelectorFromString("uniqueClientIdentifierString")
+        guard client.responds(to: selector) else { return nil }
+        return client.perform(selector)?.takeUnretainedValue() as? String
+    }
+
+    private func currentMarkedRangeDescription() -> String {
+        guard let client = self.client() else { return "nil" }
+        return NSStringFromRange(client.markedRange())
+    }
+
+    private func currentSelectedRangeDescription() -> String {
+        guard let client = self.client() else { return "nil" }
+        return NSStringFromRange(client.selectedRange())
+    }
+
+    private func describeClient() -> String {
+        guard let client = self.client() else { return "nil" }
+        return String(describing: type(of: client))
     }
 }

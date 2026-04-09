@@ -499,41 +499,22 @@ actor Session {
 
     // MARK: - Endings
 
-    func park() async {
-        guard ime == .inactive || ime == .activating || ime == .active else { return }
-        ime = .parked
-        beeLog("SESSION: park id=\(id.uuidString.prefix(8))")
-        await inputClient.cancelComposition(sessionID: id)
-        await MainActor.run { inputClient.deactivate() }
-    }
-
-    @discardableResult
-    func requestResumeActivation() async -> Bool {
-        guard ime == .parked else { return true }
-        let activated = await inputClient.activate(sessionID: id, targetPID: targetApp.pid)
-        if !activated {
-            beeLog("SESSION: resume activation failed id=\(id.uuidString.prefix(8))")
-        } else {
-            beeLog("SESSION: resume activation requested id=\(id.uuidString.prefix(8))")
-        }
-        return activated
-    }
-
     func routeDidBecomeActive() {
-        guard ime == .inactive || ime == .activating || ime == .parked else { return }
+        guard ime == .inactive || ime == .activating else { return }
         let prevState = ime
         ime = .active
         let snapshot = textSnapshot.get()
+        beeLog(
+            "SESSION: routeDidBecomeActive \(prevState)→active id=\(id.uuidString.prefix(8)) snapshotLen=\(snapshot.utf16.count) targetPID=\(targetApp.pid.map(String.init) ?? "nil")"
+        )
         inputClient.setMarkedText(Self.addCursor(snapshot), sessionID: id)
-        beeLog("SESSION: routeDidBecomeActive \(prevState)→active id=\(id.uuidString.prefix(8))")
     }
 
-    @discardableResult
-    func resume() async -> Bool {
-        let activated = await requestResumeActivation()
-        guard activated else { return false }
-        routeDidBecomeActive()
-        return true
+    func routeDidBecomeInactive(reason: String) {
+        guard ime == .active || ime == .activating else { return }
+        let prevState = ime
+        ime = .inactive
+        beeLog("SESSION: routeDidBecomeInactive \(prevState)→inactive id=\(id.uuidString.prefix(8)) reason=\(reason)")
     }
 
     func liveText() -> String {
@@ -704,7 +685,15 @@ actor Session {
     private func renderMarkedTextIfActive(
         _ text: String, inputClient: BeeInputClient, sessionID: UUID
     ) async {
-        guard ime == .active else { return }
+        guard ime == .active else {
+            beeLog(
+                "SESSION: render skipped id=\(sessionID.uuidString.prefix(8)) ime=\(ime) len=\(text.utf16.count)"
+            )
+            return
+        }
+        beeLog(
+            "SESSION: render id=\(sessionID.uuidString.prefix(8)) ime=\(ime) len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)"
+        )
         inputClient.setMarkedText(text, sessionID: sessionID)
     }
 
@@ -792,6 +781,14 @@ actor Session {
     }
 
     private func finishIME(text: String, mode: EndMode) async {
+        let modeLabel: String
+        switch mode {
+        case .commit(let submit): modeLabel = submit ? "commit+submit" : "commit"
+        case .cancel: modeLabel = "cancel"
+        }
+        beeLog(
+            "SESSION: finishIME start id=\(id.uuidString.prefix(8)) mode=\(modeLabel) len=\(text.utf16.count) ime=\(ime)"
+        )
         switch mode {
         case .commit(let submit):
             if !text.isEmpty {
@@ -818,6 +815,7 @@ actor Session {
             ime = .cleared
             emitCompletion(.cancelled(id: id, text: text))
         }
+        beeLog("SESSION: finishIME done id=\(id.uuidString.prefix(8)) ime=\(ime)")
     }
 
     private func emitCompletion(_ result: SessionResult) {
@@ -859,7 +857,6 @@ extension Session {
         case inactive  // not yet activated
         case activating  // activate() called, waiting for confirmation
         case active  // confirmed, text can flow
-        case parked  // target app lost focus, waiting for return
         case committed  // final text inserted
         case cleared  // marked text cleared (cancel)
         case tornDown  // abort, no cleanup
@@ -869,7 +866,6 @@ extension Session {
             case .inactive: "inactive"
             case .activating: "activating"
             case .active: "active"
-            case .parked: "parked"
             case .committed: "committed"
             case .cleared: "cleared"
             case .tornDown: "torn down"

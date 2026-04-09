@@ -458,7 +458,6 @@ final class AppState {
         case inactive
         case activating  // prepareSession done, waiting for IME confirmation
         case active  // IME confirmed, text can be routed
-        case parked  // target app lost focus, session paused
     }
 
     // MARK: - Event Handlers
@@ -656,7 +655,7 @@ final class AppState {
         let sessionID = session.id
         let abortWork = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            guard self.imeSessionState != .active, self.imeSessionState != .parked else {
+            guard self.imeSessionState != .active else {
                 self.pendingIMEAckWorkItem = nil
                 return
             }
@@ -664,17 +663,20 @@ final class AppState {
                 self.pendingIMEAckWorkItem = nil
                 return
             }
-            beeLog("SESSION: IME confirm timeout id=\(sessionID.uuidString.prefix(8)) imeState=\(self.imeSessionState), parking")
+            beeLog("SESSION: IME confirm timeout id=\(sessionID.uuidString.prefix(8)) imeState=\(self.imeSessionState), showing overlay")
             self.pendingTimer?.cancel()
             switch self.hotkeyState {
             case .held(let current) where current.id == sessionID:
                 self.hotkeyState = .pushToTalk(current)
+                Task { await current.routeDidBecomeInactive(reason: "imeConfirmTimeout") }
             case .released(let current) where current.id == sessionID:
                 self.hotkeyState = .locked(current)
+                Task { await current.routeDidBecomeInactive(reason: "imeConfirmTimeout") }
             default:
                 break
             }
-            self.parkSession(session, reason: "imeConfirmTimeout")
+            self.imeSessionState = .inactive
+            self.showParkedOverlay(for: session)
             self.pendingIMEAckWorkItem = nil
         }
         pendingIMEAckWorkItem = abortWork
@@ -1034,25 +1036,6 @@ final class AppState {
         )
         workspaceObservers.append(
             nc.addObserver(
-                forName: NSWorkspace.didActivateApplicationNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] notification in
-                let app =
-                    notification.userInfo?[NSWorkspace.applicationUserInfoKey]
-                    as? NSRunningApplication
-                let activatedPID = app?.processIdentifier
-                let activatedBundleID = app?.bundleIdentifier
-                Task { @MainActor in
-                    self?.handleDidActivateApplication(
-                        processIdentifier: activatedPID,
-                        bundleIdentifier: activatedBundleID
-                    )
-                }
-            }
-        )
-        workspaceObservers.append(
-            nc.addObserver(
                 forName: NSWorkspace.didTerminateApplicationNotification,
                 object: nil,
                 queue: .main
@@ -1115,117 +1098,40 @@ final class AppState {
 
     private func handleIMEContextLost(sessionID: UUID?, hadMarkedText: Bool?) {
         guard isNotificationForActiveSession(sessionID) else { return }
-        if imeSessionState == .parked {
-            return
-        }
-        if imeSessionState == .activating {
-            // IME deferred claim handles this — ignore during activation
-            return
-        }
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         beeLog(
-            "SESSION: imeContextLost id=\(hotkeyState.session?.id.uuidString.prefix(8) ?? "nil") targetPID=\(activeSessionTarget?.pid.map(String.init) ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil") hadMarkedText=\(hadMarkedText.map(String.init) ?? "nil")"
+            "SESSION: imeContextLost id=\(hotkeyState.session?.id.uuidString.prefix(8) ?? "nil") hotkey=\(String(describing: hotkeyState)) imeState=\(imeSessionState) targetPID=\(activeSessionTarget?.pid.map(String.init) ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil") hadMarkedText=\(hadMarkedText.map(String.init) ?? "nil")"
         )
 
-        switch hotkeyState {
-        case .held(let session), .released(let session):
-            pendingTimer?.cancel()
-            transitionToIdle()
-            Task { await session.abort() }
-        case .pushToTalk(let session):
-            transitionToIdle()
-            Task { await session.cancel() }
-        case .locked(let session), .lockedOptionHeld(let session):
-            parkSession(session, reason: "imeContextLost")
-        case .idle:
-            break
-        }
+        guard let session = hotkeyState.session else { return }
+        imeSessionState = .inactive
+        showParkedOverlay(for: session)
+        Task { await session.routeDidBecomeInactive(reason: "imeContextLost") }
     }
 
     private func handleIMESessionStarted(sessionID: UUID?) {
         guard isNotificationForActiveSession(sessionID) else { return }
-
-        // Parked → active (resume after focus return)
-        if imeSessionState == .parked, let session = hotkeyState.session {
-            beeLog("SESSION: IME route restored id=\(session.id.uuidString.prefix(8))")
-            imeSessionState = .active
-            hideParkedOverlay()
-            Task { await session.routeDidBecomeActive() }
-            return
-        }
-
-        // Only process if we're still activating (ignore duplicate confirmations)
-        guard imeSessionState == .activating else { return }
+        guard imeSessionState != .active else { return }
+        beeLog(
+            "SESSION: handleIMESessionStarted session=\(sessionID?.uuidString.prefix(8) ?? "nil") hotkey=\(String(describing: hotkeyState)) imeState(before)=\(imeSessionState)"
+        )
 
         switch hotkeyState {
         case .held(let session), .pushToTalk(let session), .locked(let session),
             .lockedOptionHeld(let session):
-            beeLog("SESSION: IME confirmed id=\(session.id.uuidString.prefix(8))")
+            beeLog("SESSION: IME attached id=\(session.id.uuidString.prefix(8))")
             imeSessionState = .active
+            hideParkedOverlay()
             Task { await session.routeDidBecomeActive() }
 
         case .released(let session):
-            beeLog("SESSION: IME confirmed id=\(session.id.uuidString.prefix(8)), locking")
+            beeLog("SESSION: IME attached id=\(session.id.uuidString.prefix(8)), locking")
             imeSessionState = .active
             pendingTimer?.cancel()
             hotkeyState = .locked(session)
+            hideParkedOverlay()
             Task { await session.routeDidBecomeActive() }
 
-        default:
-            break
-        }
-    }
-
-    private func handleDidActivateApplication(processIdentifier: pid_t?, bundleIdentifier: String?)
-    {
-        guard let session = hotkeyState.session else { return }
-        guard let targetPID = activeSessionTarget?.pid else { return }
-        guard let processIdentifier else { return }
-
-        // Ignore Bee + beeInput activations; they're implementation detail
-        // churn and should not affect dictation lifecycle.
-        if bundleIdentifier == "fasterthanlime.bee"
-            || bundleIdentifier == "fasterthanlime.inputmethod.bee"
-        {
-            return
-        }
-
-        // During IME activation (including focus cycle fallback),
-        // app switches are expected and should not abort the session.
-        if imeSessionState == .activating {
-            return
-        }
-
-        if processIdentifier == targetPID {
-            if imeSessionState == .parked {
-                beeLog("SESSION: resume requested targetPID=\(targetPID)")
-                Task {
-                    let resumed = await session.requestResumeActivation()
-                    if !resumed {
-                        await MainActor.run {
-                            guard self.hotkeyState.session?.id == session.id else { return }
-                            beeLog(
-                                "SESSION: resume activation failed id=\(session.id.uuidString.prefix(8))"
-                            )
-                            self.transitionToIdle()
-                        }
-                        await session.cancel()
-                    }
-                }
-            }
-            return
-        }
-
-        switch hotkeyState {
-        case .held(let session), .released(let session):
-            pendingTimer?.cancel()
-            transitionToIdle()
-            Task { await session.abort() }
-        case .pushToTalk(let session):
-            transitionToIdle()
-            Task { await session.cancel() }
-        case .locked, .lockedOptionHeld:
-            parkSession(session, reason: "appActivated:\(processIdentifier)")
         case .idle:
             break
         }
@@ -1239,14 +1145,6 @@ final class AppState {
         beeLog("SESSION: target terminated pid=\(processIdentifier)")
         transitionToIdle()
         Task { await session.cancel() }
-    }
-
-    private func parkSession(_ session: Session, reason: String) {
-        guard imeSessionState != .parked else { return }
-        imeSessionState = .parked
-        beeLog("SESSION: parked id=\(session.id.uuidString.prefix(8)) reason=\(reason)")
-        showParkedOverlay(for: session)
-        Task { await session.park() }
     }
 
     private func isNotificationForActiveSession(_ sessionID: UUID?) -> Bool {
@@ -1268,6 +1166,7 @@ final class AppState {
     }
 
     private func transitionToIdle() {
+        beeLog("SESSION: transitionToIdle hotkey=\(String(describing: hotkeyState)) imeState=\(imeSessionState)")
         hotkeyState = .idle
         pendingTimer?.cancel()
         pendingIMEAckWorkItem?.cancel()
@@ -1353,6 +1252,7 @@ final class AppState {
     }
 
     private func showParkedOverlay(for session: Session) {
+        beeLog("OVERLAY: show session=\(session.id.uuidString.prefix(8)) imeState=\(imeSessionState)")
         if parkedOverlayPanel == nil {
             let panel = NSPanel(
                 contentRect: NSRect(x: 0, y: 0, width: 420, height: 118),
@@ -1380,7 +1280,7 @@ final class AppState {
         parkedOverlayPollTask = Task { @MainActor [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
-                guard self.imeSessionState == .parked,
+                guard self.imeSessionState != .active,
                     self.hotkeyState.session?.id == session.id
                 else { return }
                 self.parkedOverlayText = await session.liveText()
@@ -1390,6 +1290,7 @@ final class AppState {
     }
 
     private func hideParkedOverlay() {
+        beeLog("OVERLAY: hide")
         parkedOverlayPollTask?.cancel()
         parkedOverlayPollTask = nil
         parkedOverlayPanel?.close()
