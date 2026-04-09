@@ -35,6 +35,18 @@ judged on correctness, latency, and memory instead of profile vibes.
 - A repeatable CLI + app profiling recipe
 - A before/after table for every optimization item
 
+## Current status
+
+- Candidate snapshot:
+  - `/Users/amos/bearcove/bee/notes/gpu-hotline/000-corpus-candidates.tsv`
+- Clean baseline corpus:
+  - `/Users/amos/bearcove/bee/notes/gpu-hotline/000-corpus-clean.tsv`
+- Pinned baseline settings:
+  - `/Users/amos/bearcove/bee/notes/gpu-hotline/000-baseline-settings.env`
+- Repeatable runner:
+  - `/Users/amos/bearcove/bee/scripts/run_gpu_hotline_baseline.sh`
+- Correction is disabled for GPU-hotline baseline runs so raw ASR quality is measured separately from the correction pipeline.
+
 ## Validation
 
 - Baseline numbers are captured before any optimization lands

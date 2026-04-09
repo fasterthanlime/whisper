@@ -1,0 +1,11 @@
+id	wav_path	source	category	goal	status
+0B620916	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/0B620916.wav	debug-folder	long-clean	rotation	selected
+1DCE2F4B	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/1DCE2F4B.wav	debug-folder	medium-clean	correctness	selected
+3CAA19C5	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/3CAA19C5.wav	debug-folder	medium-clean	correctness	selected
+842D9661	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/842D9661.wav	debug-folder	long-clean-bad-first-partial	rotation	selected
+8453579B	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/8453579B.wav	debug-folder	short-clean	correctness	selected
+ADE533B5	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/ADE533B5.wav	debug-folder	long-clean	rotation	selected
+B2CFEB6E	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/B2CFEB6E.wav	debug-folder	medium-clean	correctness	selected
+BC5F39E1	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/BC5F39E1.wav	debug-folder	long-clean	rotation	selected
+F19C367D	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/F19C367D.wav	debug-folder	short-clean-bad-first-partial	early-partial	selected
+5503D8CF	/Users/amos/bearcove/bee/.artifacts/repros/frozen/5503D8CF.wav	frozen	medium-long-clean	correctness	selected

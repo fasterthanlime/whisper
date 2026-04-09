@@ -34,11 +34,17 @@ fn main() -> anyhow::Result<()> {
         std::env::var("BEE_VAD_DIR").map_err(|_| anyhow::anyhow!("BEE_VAD_DIR not set"))?;
 
     // Correction engine: look in group container (same as install-bee.sh)
+    let disable_correction = std::env::var("BEE_DISABLE_CORRECTION")
+        .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
     let group_container: PathBuf = dirs::home_dir()
         .unwrap()
         .join("Library/Group Containers/B2N6FSRTPV.group.fasterthanlime.bee");
     let correction_dir_path = group_container.join("phonetic-seed");
-    let correction_dir: Option<&Path> = if correction_dir_path.exists() {
+    let correction_dir: Option<&Path> = if disable_correction {
+        println!("Correction disabled via BEE_DISABLE_CORRECTION");
+        None
+    } else if correction_dir_path.exists() {
         println!("Correction dataset: {}", correction_dir_path.display());
         Some(&correction_dir_path)
     } else {

@@ -1,0 +1,11 @@
+id	wav_path	source	category	goal	status
+0B620916	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/0B620916.wav	debug-folder	long-dictation	rotation	candidate
+1DCE2F4B	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/1DCE2F4B.wav	debug-folder	dictation	correctness	candidate
+3CAA19C5	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/3CAA19C5.wav	debug-folder	dictation	correctness	candidate
+842D9661	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/842D9661.wav	debug-folder	long-dictation	rotation	candidate
+8453579B	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/8453579B.wav	debug-folder	short-dictation	correctness	candidate
+97FF4DBD	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/97FF4DBD.wav	debug-folder	dictation	correctness	candidate
+ADE533B5	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/ADE533B5.wav	debug-folder	long-dictation	rotation	candidate
+B2CFEB6E	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/B2CFEB6E.wav	debug-folder	dictation	correctness	candidate
+BC5F39E1	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/BC5F39E1.wav	debug-folder	long-dictation	rotation	candidate
+F19C367D	/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/F19C367D.wav	debug-folder	short-dictation	correctness	candidate
