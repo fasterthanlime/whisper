@@ -589,6 +589,11 @@ final class AppState {
     func handleEnter() -> Bool {
         switch hotkeyState {
         case .locked(let session):
+            let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            let targetPID = activeSessionTarget?.pid
+            guard imeSessionState == .active, targetPID != nil, frontmostPID == targetPID else {
+                return false
+            }
             transitionToIdle()
             Task { await session.commit(submit: true) }
             return true  // swallowed
