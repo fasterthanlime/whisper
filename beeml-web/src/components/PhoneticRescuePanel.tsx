@@ -2,8 +2,8 @@ import { useMemo, useState } from "react";
 
 import type {
   PhoneticAlignmentOp,
-  PhoneticRescueSpan,
   PhoneticRescueTrace,
+  PhoneticWordAlignment,
 } from "../types";
 
 function formatMetric(value: number | null | undefined) {
@@ -137,56 +137,55 @@ export function AlignmentView({
   );
 }
 
-function WordInspector({ span }: { span: PhoneticRescueSpan }) {
+function WordInspector({ word }: { word: PhoneticWordAlignment }) {
   return (
     <article
-      key={`${span.tokenStart}:${span.tokenEnd}:${span.spanText}`}
+      key={`${word.tokenStart}:${word.tokenEnd}:${word.wordText}`}
       className="failure-card"
       style={{ gap: "0.55rem" }}
     >
       <div className="failure-topline">
         <span className="mini-badge">
-          {span.tokenStart}:{span.tokenEnd}
+          {word.tokenStart}:{word.tokenEnd}
         </span>
         <span className="mini-badge">
-          ZIPA {span.zipaNormStart}:{span.zipaNormEnd}
+          ZIPA {word.zipaNormStart}:{word.zipaNormEnd}
         </span>
-        <span className="mini-badge">{span.alignmentSource}</span>
-        <span className="failure-score">base {formatMetric(span.transcriptFeatureSimilarity)}</span>
       </div>
-      <div className="failure-transcript">{span.spanText}</div>
+      <div className="failure-transcript">{word.wordText}</div>
       <div className="failure-pills">
-        <span className="failure-pill">phones {span.transcriptPhoneCount}{"->"}{span.chosenZipaPhoneCount}</span>
+        <span className="failure-pill">
+          phones {word.transcriptNormalized.length}{"->"}{word.zipaNormalized.length}
+        </span>
       </div>
       <div className="prototype-stack" style={{ gap: "0.35rem" }}>
         <div className="token-row muted" style={{ userSelect: "text" }}>
-          transcript IPA: {formatTokens(span.transcriptNormalized)}
+          transcript IPA: {formatTokens(word.transcriptNormalized)}
         </div>
         <div className="token-row muted" style={{ userSelect: "text" }}>
-          ZIPA raw: {formatTokens(span.zipaRaw)}
+          ZIPA raw: {formatTokens(word.zipaRaw)}
         </div>
         <div className="token-row muted" style={{ userSelect: "text" }}>
-          ZIPA norm: {formatTokens(span.zipaNormalized)}
+          ZIPA norm: {formatTokens(word.zipaNormalized)}
         </div>
       </div>
-      <AlignmentView ops={span.alignment} transcriptLabel="Transcript" zipaLabel="ZIPA" />
+      <AlignmentView ops={word.alignment} transcriptLabel="Transcript" zipaLabel="ZIPA" />
     </article>
   );
 }
 
 export function PhoneticRescuePanel({ trace }: { trace: PhoneticRescueTrace }) {
-  const wordSpans = useMemo(
-    () =>
-      trace.spans
-        .filter((span) => span.tokenEnd === span.tokenStart + 1)
-        .sort((a, b) => a.tokenStart - b.tokenStart),
-    [trace.spans],
+  const wordAlignments = useMemo(
+    () => [...trace.wordAlignments].sort((a, b) => a.tokenStart - b.tokenStart),
+    [trace.wordAlignments],
   );
   const [selectedWordTokenStart, setSelectedWordTokenStart] = useState<number | null>(
-    wordSpans[0]?.tokenStart ?? null,
+    wordAlignments[0]?.tokenStart ?? null,
   );
   const selectedWord =
-    wordSpans.find((span) => span.tokenStart === selectedWordTokenStart) ?? wordSpans[0] ?? null;
+    wordAlignments.find((word) => word.tokenStart === selectedWordTokenStart) ??
+    wordAlignments[0] ??
+    null;
 
   return (
     <section className="prototype-card" style={{ marginTop: "0.75rem" }}>
@@ -195,7 +194,7 @@ export function PhoneticRescuePanel({ trace }: { trace: PhoneticRescueTrace }) {
           <strong>ZIPA Rescue</strong>
           <span>Utterance alignment between transcript IPA and ZIPA, with word-level inspection.</span>
         </div>
-        <span className="badge">{wordSpans.length} words</span>
+        <span className="badge">{wordAlignments.length} words</span>
       </header>
 
       <div className="prototype-summary">
@@ -231,34 +230,34 @@ export function PhoneticRescuePanel({ trace }: { trace: PhoneticRescueTrace }) {
         zipaLabel="ZIPA"
       />
 
-      {wordSpans.length > 0 ? (
+      {wordAlignments.length > 0 ? (
         <div style={{ display: "grid", gap: "0.75rem", marginTop: "0.75rem" }}>
           <div className="prototype-stack" style={{ gap: "0.45rem" }}>
             <div className="token-row muted">Click a word to inspect its grouped IPA and corresponding ZIPA slice.</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
-              {wordSpans.map((span) => {
-                const selected = selectedWord?.tokenStart === span.tokenStart;
+              {wordAlignments.map((word) => {
+                const selected = selectedWord?.tokenStart === word.tokenStart;
                 return (
                   <button
-                    key={`${span.tokenStart}:${span.tokenEnd}:${span.spanText}`}
+                    key={`${word.tokenStart}:${word.tokenEnd}:${word.wordText}`}
                     type="button"
                     className="mini-badge"
-                    onClick={() => setSelectedWordTokenStart(span.tokenStart)}
+                    onClick={() => setSelectedWordTokenStart(word.tokenStart)}
                     style={{
                       cursor: "pointer",
                       userSelect: "text",
                       border: selected ? "1px solid var(--accent)" : "1px solid var(--border)",
                       background: selected ? "var(--bg-subtle)" : "var(--bg-elevated)",
                     }}
-                    title={`${span.tokenStart}:${span.tokenEnd}`}
+                    title={`${word.tokenStart}:${word.tokenEnd}`}
                   >
-                    {span.spanText}
+                    {word.wordText}
                   </button>
                 );
               })}
             </div>
           </div>
-          {selectedWord ? <WordInspector span={selectedWord} /> : null}
+          {selectedWord ? <WordInspector word={selectedWord} /> : null}
         </div>
       ) : (
         <div className="prototype-empty" style={{ marginTop: "0.75rem" }}>

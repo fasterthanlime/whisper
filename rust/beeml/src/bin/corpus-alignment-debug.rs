@@ -107,6 +107,21 @@ fn main() -> Result<()> {
                 "utterance ZIPA norm: {}",
                 trace.utterance_zipa_normalized.join(" ")
             );
+            if !trace.word_alignments.is_empty() {
+                println!("word alignments:");
+                for word in &trace.word_alignments {
+                    println!(
+                        "  toks {}:{} {:?} -> ZIPA {}:{} | transcript={} | zipa={}",
+                        word.token_start,
+                        word.token_end,
+                        word.word_text,
+                        word.zipa_norm_start,
+                        word.zipa_norm_end,
+                        word.transcript_normalized.join(" "),
+                        word.zipa_normalized.join(" "),
+                    );
+                }
+            }
             if let Some(span) = selected_span(trace) {
                 println!("worst span: {:?}", span.span_text);
                 println!(
