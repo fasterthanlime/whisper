@@ -1,5 +1,7 @@
 //! Autoregressive text generation for Qwen3-ASR.
 
+use std::time::Instant;
+
 use mlx_rs::Array;
 use mlx_rs::error::Exception;
 use mlx_rs::ops;
@@ -11,6 +13,16 @@ use crate::model::{EOS_TOKEN_IDS, Qwen3ASRModel};
 
 /// TokenID type used by qwen3-asr generation
 pub type TokenId = i32;
+
+fn log_phase(phase: &'static str, start: Instant) {
+    tracing::info!(
+        target: "bee_phase",
+        component = "score_continuation",
+        phase,
+        ms = start.elapsed().as_secs_f64() * 1000.0,
+        "phase timing"
+    );
+}
 
 /// Number of top-k alternatives stored per token.
 pub const TOP_K: usize = 4;
@@ -288,6 +300,7 @@ pub fn score_continuation(
         return Ok(Vec::new());
     }
 
+    let total_start = Instant::now();
     let seq_len = prompt_tokens.len();
     let input_ids = Array::from_slice(prompt_tokens, &[1, seq_len as i32]);
     let positions: Vec<i32> = (0..seq_len as i32).collect();
@@ -295,7 +308,9 @@ pub fn score_continuation(
     let position_ids = ops::broadcast_to(&pos_arr, &[1, 3, seq_len as i32])?;
 
     let mut cache = Some(model.create_cache());
+    let prefill_start = Instant::now();
     let logits = model.prefill(&input_ids, audio_features, &position_ids, &mut cache)?;
+    log_phase("prefill", prefill_start);
 
     let mut scored = Vec::with_capacity(continuation_tokens.len());
     scored.push(confidence_for_logits_forced(
@@ -305,6 +320,7 @@ pub fn score_continuation(
     )?);
 
     let mut position = seq_len;
+    let step_start = Instant::now();
     for window in continuation_tokens.windows(2) {
         let prev = window[0];
         let expected = window[1];
@@ -321,6 +337,8 @@ pub fn score_continuation(
             confidence_mode,
         )?);
     }
+    log_phase("step_tokens", step_start);
+    log_phase("total", total_start);
 
     Ok(scored)
 }

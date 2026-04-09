@@ -17,6 +17,7 @@ use crate::audio_filter::{self, AudioFilterChain};
 use crate::corrector::Corrector;
 use crate::decode_session::DecodeSession;
 use crate::text_buffer::{self, TextBuffer, TokenCount, TokenEntry, TokenId};
+use crate::timing::{log_phase, log_phase_chunk, phase_start};
 use crate::types::{
     PendingToken, SessionAmbiguitySummary, SessionOptions, SessionSnapshot, TokenAlternative,
 };
@@ -104,6 +105,7 @@ impl<'a> Session<'a> {
     }
 
     pub fn feed(&mut self, samples: &[f32]) -> Result<Option<SessionSnapshot>, Exception> {
+        let feed_total_start = phase_start();
         self.incoming.extend_from_slice(samples);
         tracing::trace!(
             incoming_len = self.incoming.len(),
@@ -116,30 +118,42 @@ impl<'a> Session<'a> {
             let chunk_samples: Vec<f32> = self.incoming.drain(..self.chunk_size_samples).collect();
             let chunk = AudioBuffer::new(chunk_samples, SampleRate::HZ_16000);
 
+            let filter_start = phase_start();
+            let chunk_index = self.decode.chunk_count() + 1;
             if let Some(chunk) = self.filters.process(chunk) {
+                log_phase_chunk("feed", "filter_vad", chunk_index, filter_start);
                 tracing::debug!(
                     audio_samples = chunk.len(),
                     "feed: speech chunk passed filters"
                 );
                 self.decode.append_audio(&chunk);
+                let decode_start = phase_start();
                 self.decode_and_maybe_commit(
                     self.options.max_tokens_streaming,
                     ConfidenceMode::Streaming,
                 )?;
+                log_phase_chunk("feed", "decode_and_maybe_commit", chunk_index, decode_start);
                 did_decode = true;
             } else {
+                log_phase_chunk("feed", "filter_vad", chunk_index, filter_start);
                 tracing::trace!("feed: chunk filtered out (silence/VAD)");
             }
         }
 
         if did_decode {
-            Ok(Some(self.make_snapshot()))
+            let snapshot_start = phase_start();
+            let snapshot = self.make_snapshot();
+            log_phase("feed", "make_snapshot", snapshot_start);
+            log_phase("feed", "total", feed_total_start);
+            Ok(Some(snapshot))
         } else {
+            log_phase("feed", "total", feed_total_start);
             Ok(None)
         }
     }
 
     pub fn finish(mut self) -> Result<FinishResult, Exception> {
+        let finish_total_start = phase_start();
         tracing::info!(
             incoming = self.incoming.len(),
             committed_tokens = self.committed.len().0,
@@ -150,8 +164,12 @@ impl<'a> Session<'a> {
         if !self.incoming.is_empty() {
             let remaining = std::mem::take(&mut self.incoming);
             let chunk = AudioBuffer::new(remaining, SampleRate::HZ_16000);
+            let filter_start = phase_start();
             if let Some(chunk) = self.filters.process(chunk) {
+                log_phase("finish", "filter_vad", filter_start);
                 self.decode.append_audio(&chunk);
+            } else {
+                log_phase("finish", "filter_vad", filter_start);
             }
         }
 
@@ -160,7 +178,9 @@ impl<'a> Session<'a> {
                 max_tokens = self.options.max_tokens_final,
                 "finish: final decode"
             );
+            let final_decode_start = phase_start();
             self.decode_and_maybe_commit(self.options.max_tokens_final, ConfidenceMode::Full)?;
+            log_phase("finish", "final_decode", final_decode_start);
         }
 
         // Commit everything remaining
@@ -170,10 +190,12 @@ impl<'a> Session<'a> {
                 "finish: committing remaining pending tokens"
             );
             if self.decode.has_audio() {
+                let commit_all_start = phase_start();
                 if let Some(aligned) = self
                     .decode
                     .commit_all(self.forced_aligner, self.tokenizer)?
                 {
+                    log_phase("finish", "commit_all", commit_all_start);
                     let final_words: Vec<AlignedWord> = aligned
                         .words()
                         .filter_map(|entries| Self::word_to_aligned(self.tokenizer, entries))
@@ -204,6 +226,8 @@ impl<'a> Session<'a> {
                     self.committed.append(aligned);
                     self.pending
                         .replace(self.decode.pending_entries(self.tokenizer));
+                } else {
+                    log_phase("finish", "commit_all", commit_all_start);
                 }
             } else {
                 tracing::warn!(
@@ -217,13 +241,16 @@ impl<'a> Session<'a> {
             self.flush_buffered_commit(&[]);
         }
 
+        let snapshot_start = phase_start();
         let snapshot = self.make_snapshot();
+        log_phase("finish", "make_snapshot", snapshot_start);
         tracing::info!(
             committed_tokens = self.committed.len().0,
             text_len = snapshot.full_text.len(),
             alignments = snapshot.committed_words.len(),
             "finish: done"
         );
+        log_phase("finish", "total", finish_total_start);
         let corrector = self.correction.take().map(|(_, c)| c);
         Ok(FinishResult {
             snapshot,
@@ -272,11 +299,14 @@ impl<'a> Session<'a> {
         max_tokens: usize,
         confidence_mode: ConfidenceMode,
     ) -> Result<(), Exception> {
+        let total_start = phase_start();
+        let chunk_index = self.decode.chunk_count() + 1;
         // Update rollback window before decode so compute_prefix uses the adaptive value
         let rollback = self.effective_rollback();
         self.decode.set_rollback(text_buffer::TokenCount(rollback));
 
         let language = self.effective_language().to_owned();
+        let decode_step_start = phase_start();
         self.decode.decode_step(
             self.model,
             self.tokenizer,
@@ -284,6 +314,12 @@ impl<'a> Session<'a> {
             max_tokens,
             confidence_mode,
         )?;
+        log_phase_chunk(
+            "decode_and_maybe_commit",
+            "decode_step",
+            chunk_index,
+            decode_step_start,
+        );
 
         if let Some(lang) = self.decode.detected_language(self.tokenizer) {
             tracing::debug!(language = %lang, "detected language");
@@ -291,8 +327,15 @@ impl<'a> Session<'a> {
         }
 
         // Refresh pending from decode session's current text tokens
+        let pending_start = phase_start();
         self.pending
             .replace(self.decode.pending_entries(self.tokenizer));
+        log_phase_chunk(
+            "decode_and_maybe_commit",
+            "refresh_pending",
+            chunk_index,
+            pending_start,
+        );
 
         // Check if enough fixed tokens to try committing (use adaptive rollback)
         let text_count = self.decode.text_tokens().len();
@@ -319,6 +362,7 @@ impl<'a> Session<'a> {
                 TokenCount(self.options.commit_token_count),
             );
             if commit_n.0 > 0 {
+                let refresh_start = phase_start();
                 self.decode.refresh_text_confidence(
                     self.model,
                     self.tokenizer,
@@ -327,12 +371,25 @@ impl<'a> Session<'a> {
                     0,
                     commit_n.0,
                 )?;
+                log_phase_chunk(
+                    "decode_and_maybe_commit",
+                    "refresh_text_confidence",
+                    chunk_index,
+                    refresh_start,
+                );
             }
+            let commit_start = phase_start();
             if let Some(aligned) = self.decode.commit(
                 TokenCount(self.options.commit_token_count),
                 self.forced_aligner,
                 self.tokenizer,
             )? {
+                log_phase_chunk(
+                    "decode_and_maybe_commit",
+                    "commit",
+                    chunk_index,
+                    commit_start,
+                );
                 let new_words: Vec<AlignedWord> = aligned
                     .words()
                     .filter_map(|entries| Self::word_to_aligned(self.tokenizer, entries))
@@ -380,9 +437,17 @@ impl<'a> Session<'a> {
                 // Refresh pending after rotation
                 self.pending
                     .replace(self.decode.pending_entries(self.tokenizer));
+            } else {
+                log_phase_chunk(
+                    "decode_and_maybe_commit",
+                    "commit",
+                    chunk_index,
+                    commit_start,
+                );
             }
         }
 
+        log_phase_chunk("decode_and_maybe_commit", "total", chunk_index, total_start);
         Ok(())
     }
 
@@ -426,6 +491,7 @@ impl<'a> Session<'a> {
     }
 
     fn make_snapshot(&mut self) -> SessionSnapshot {
+        let snapshot_total_start = phase_start();
         const LOW_CONCENTRATION: f32 = 3.0;
         const LOW_MARGIN: f32 = 2.0;
 
@@ -450,6 +516,7 @@ impl<'a> Session<'a> {
 
         // Decode committed words for alignments (always needed) and for
         // text when no corrector is active.
+        let committed_start = phase_start();
         for entries in self.committed.words() {
             if let Some(aligned) = Self::word_to_aligned(self.tokenizer, entries) {
                 if correction_text.is_empty() {
@@ -462,6 +529,7 @@ impl<'a> Session<'a> {
                 committed_words.push(aligned);
             }
         }
+        log_phase("make_snapshot", "committed_words", committed_start);
 
         // Add buffered commit text (not yet corrected, waiting for right context)
         if let Some(ref buffered) = self.buffered_commit {
@@ -473,6 +541,7 @@ impl<'a> Session<'a> {
 
         // Decode pending tokens, trimming trailing low-confidence ones.
         // This prevents uncertain tokens from flickering in the UI.
+        let pending_entries_start = phase_start();
         let pending_entries = self.pending.entries();
         if !pending_entries.is_empty() {
             const CONFIDENCE_GATE: f32 = 3.0; // concentration threshold (top1 - mean(rest))
@@ -498,7 +567,9 @@ impl<'a> Session<'a> {
                 }
             }
         }
+        log_phase("make_snapshot", "pending_text", pending_entries_start);
 
+        let pending_tokens_start = phase_start();
         let full_text = format!("{committed_text}{pending_text}");
         let pending_tokens: Vec<_> = self
             .pending_entries()
@@ -525,8 +596,10 @@ impl<'a> Session<'a> {
                     .collect(),
             })
             .collect();
+        log_phase("make_snapshot", "pending_tokens", pending_tokens_start);
 
         let pending_token_count = pending_tokens.len() as u32;
+        let ambiguity_start = phase_start();
         let ambiguity = if pending_tokens.is_empty() {
             SessionAmbiguitySummary {
                 pending_token_count: 0,
@@ -576,6 +649,8 @@ impl<'a> Session<'a> {
                     .fold(f32::INFINITY, f32::min),
             }
         };
+        log_phase("make_snapshot", "ambiguity", ambiguity_start);
+        log_phase("make_snapshot", "total", snapshot_total_start);
 
         SessionSnapshot {
             revision: self.revision,

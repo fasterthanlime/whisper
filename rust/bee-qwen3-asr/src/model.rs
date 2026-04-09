@@ -1,5 +1,6 @@
 //! Top-level Qwen3-ASR model: audio encoder + text decoder + LM head.
 
+use mlx_rs::Array;
 use mlx_rs::builder::Builder;
 use mlx_rs::error::Exception;
 use mlx_rs::macros::{ModuleParameters, Quantizable};
@@ -8,7 +9,6 @@ use mlx_rs::nn;
 use mlx_rs::ops;
 use mlx_rs::ops::indexing::IndexOp;
 use mlx_rs::quantization::MaybeQuantized;
-use mlx_rs::Array;
 
 use crate::config::ThinkerConfig;
 use crate::decoder::{KVCache, TextDecoder};
@@ -123,6 +123,20 @@ fn inject_audio_features(
     audio_mask: &Array,
 ) -> Result<Array, Exception> {
     let b = embeds.shape()[0];
+    if b == 1 {
+        let cum_idx = audio_mask
+            .as_dtype(mlx_rs::Dtype::Int32)?
+            .cumsum(1, None, None)?
+            .subtract(Array::from_int(1))?;
+        let cum_idx = ops::maximum(&cum_idx, Array::from_int(0))?;
+
+        let idx = cum_idx.index((0, ..));
+        let audio_b = audio_features.index((0, ..));
+        let gathered = audio_b.index(idx);
+        let audio_expanded = ops::expand_dims(&gathered, 0)?;
+        let mask_3d = ops::expand_dims(audio_mask, -1)?;
+        return mlx_rs::ops::r#where(&mask_3d, &audio_expanded, embeds);
+    }
 
     // cumulative index: map each placeholder to its audio feature index
     let cum_idx = audio_mask
@@ -136,7 +150,7 @@ fn inject_audio_features(
     for bi in 0..b {
         let idx = cum_idx.index((bi, ..)); // (L,)
         let audio_b = audio_features.index((bi, ..)); // (N_audio, D)
-                                                      // audio_b[idx] → (L, D)
+        // audio_b[idx] → (L, D)
         let expanded = audio_b.index(idx);
         parts.push(expanded);
     }
@@ -151,4 +165,31 @@ fn inject_audio_features(
     // Select: audio where mask, text embeds elsewhere
     let mask_3d = ops::expand_dims(audio_mask, -1)?; // (B, L, 1)
     mlx_rs::ops::r#where(&mask_3d, &audio_expanded, embeds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inject_audio_features;
+    use mlx_rs::Array;
+
+    #[test]
+    fn inject_audio_features_batch_one_replaces_placeholders_in_order() {
+        let embeds = Array::from_slice(
+            &[
+                10.0f32, 11.0, 20.0, 21.0, 30.0, 31.0, 40.0, 41.0, 50.0, 51.0,
+            ],
+            &[1, 5, 2],
+        );
+        let audio_features = Array::from_slice(&[100.0f32, 101.0, 200.0, 201.0], &[1, 2, 2]);
+        let audio_mask = Array::from_slice(&[false, true, false, true, false], &[1, 5]);
+
+        let out = inject_audio_features(&embeds, &audio_features, &audio_mask).unwrap();
+        let values = out.as_slice::<f32>();
+        assert_eq!(
+            values,
+            &[
+                10.0, 11.0, 100.0, 101.0, 30.0, 31.0, 200.0, 201.0, 50.0, 51.0,
+            ]
+        );
+    }
 }

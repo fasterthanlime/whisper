@@ -18,6 +18,7 @@ use crate::mlx_stuff::clear_mlx_cache;
 use crate::text_buffer::{
     self, AlignmentItem, AsrToken, TextBuffer, TokenCount, TokenEntry, TokenId, WordStart,
 };
+use crate::timing::{log_phase, log_phase_chunk, phase_start};
 
 /// A decode sub-session. Replaced wholesale on rotation.
 pub struct DecodeSession {
@@ -40,6 +41,15 @@ pub struct DecodeSession {
     chunk_count: usize,
     /// First index in `tokens` that came from model generation rather than prompt prefix.
     generated_start: usize,
+    /// Decode checkpoints used to estimate a rotation cut without re-discovering
+    /// the full boundary from scratch at commit time.
+    checkpoints: Vec<DecodeCheckpoint>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DecodeCheckpoint {
+    audio_len_samples: usize,
+    word_count: usize,
 }
 
 impl DecodeSession {
@@ -55,6 +65,7 @@ impl DecodeSession {
             rollback_tokens,
             chunk_count: 0,
             generated_start: 0,
+            checkpoints: Vec::new(),
         }
     }
 
@@ -149,20 +160,31 @@ impl DecodeSession {
         confidence_mode: ConfidenceMode,
     ) -> Result<(), Exception> {
         self.chunk_count += 1;
+        let decode_total_start = phase_start();
 
         // Mel extraction
+        let mel_start = phase_start();
         let (mel_data, n_mels, n_frames) = self
             .mel_extractor
             .extract(self.audio.samples())
             .map_err(|e| Exception::custom(format!("mel: {e}")))?;
+        log_phase_chunk("decode_step", "mel_extract", self.chunk_count, mel_start);
         let mel = Array::from_slice(&mel_data, &[n_mels as i32, n_frames as i32]);
 
         // Encode audio (incremental)
+        let encode_start = phase_start();
         let audio_features = model.encode_incremental(&mel, &mut self.encoder_cache)?;
         let audio_features = mlx_rs::ops::expand_dims(&audio_features, 0)?;
         audio_features.eval()?;
+        log_phase_chunk(
+            "decode_step",
+            "encode_incremental",
+            self.chunk_count,
+            encode_start,
+        );
 
         // Build prompt with prefix rollback
+        let prompt_start = phase_start();
         let prefix = self.compute_prefix();
         let mut prompt = generate::build_initial_prompt(
             audio_features.shape()[1] as usize,
@@ -173,8 +195,15 @@ impl DecodeSession {
         if let Some(ref prefix_tokens) = prefix {
             prompt.extend(prefix_tokens.iter().map(|t| t.id as i32));
         }
+        log_phase_chunk(
+            "decode_step",
+            "build_prompt",
+            self.chunk_count,
+            prompt_start,
+        );
 
         // Generate
+        let generate_start = phase_start();
         let mut cache = None;
         let (generated, logprobs, _) = generate::prefill_and_decode(
             model,
@@ -185,10 +214,18 @@ impl DecodeSession {
             max_tokens,
             confidence_mode,
         )?;
+        log_phase_chunk(
+            "decode_step",
+            "prefill_and_decode",
+            self.chunk_count,
+            generate_start,
+        );
 
         // Merge prefix + generated into a single Vec<AsrToken>
+        let merge_start = phase_start();
         let prefix_len = prefix.as_ref().map_or(0, |p| p.len());
         let merged = Self::merge_tokens(prefix, &generated, &logprobs);
+        log_phase_chunk("decode_step", "merge_tokens", self.chunk_count, merge_start);
 
         tracing::debug!(
             "decode_session: chunk={} generated={} prefix={prefix_len} total={}",
@@ -206,10 +243,27 @@ impl DecodeSession {
             self.tokens = merged;
             self.generated_start = prefix_len;
             self.recompute_metadata_boundary();
+            let word_count = self
+                .pending_entries(tokenizer)
+                .iter()
+                .filter(|entry| entry.word.is_some())
+                .count();
+            self.checkpoints.push(DecodeCheckpoint {
+                audio_len_samples: self.audio.len(),
+                word_count,
+            });
         }
 
         drop(cache);
+        let clear_start = phase_start();
         clear_mlx_cache();
+        log_phase_chunk(
+            "decode_step",
+            "clear_mlx_cache",
+            self.chunk_count,
+            clear_start,
+        );
+        log_phase_chunk("decode_step", "total", self.chunk_count, decode_total_start);
         Ok(())
     }
 
@@ -234,15 +288,21 @@ impl DecodeSession {
             return Ok(());
         }
 
+        let refresh_total_start = phase_start();
+        let mel_start = phase_start();
         let (mel_data, n_mels, n_frames) = self
             .mel_extractor
             .extract(self.audio.samples())
             .map_err(|e| Exception::custom(format!("mel: {e}")))?;
+        log_phase("refresh_confidence", "mel_extract", mel_start);
         let mel = Array::from_slice(&mel_data, &[n_mels as i32, n_frames as i32]);
+        let encode_start = phase_start();
         let audio_features = model.encode_incremental(&mel, &mut self.encoder_cache)?;
         let audio_features = mlx_rs::ops::expand_dims(&audio_features, 0)?;
         audio_features.eval()?;
+        log_phase("refresh_confidence", "encode_incremental", encode_start);
 
+        let prompt_start = phase_start();
         let mut prompt = generate::build_initial_prompt(
             audio_features.shape()[1] as usize,
             language,
@@ -250,11 +310,13 @@ impl DecodeSession {
             tokenizer,
         );
         prompt.extend(self.text_tokens()[..text_start].iter().map(|t| t.id as i32));
+        log_phase("refresh_confidence", "build_prompt", prompt_start);
 
         let continuation: Vec<i32> = self.text_tokens()[text_start..text_end]
             .iter()
             .map(|t| t.id as i32)
             .collect();
+        let score_start = phase_start();
         let confidences = generate::score_continuation(
             model,
             &prompt,
@@ -262,7 +324,9 @@ impl DecodeSession {
             &continuation,
             confidence_mode,
         )?;
+        log_phase("refresh_confidence", "score_continuation", score_start);
 
+        let apply_start = phase_start();
         let token_start = self.metadata_end + text_start;
         let token_end = token_start + continuation.len();
         for (token, confidence) in self.tokens[token_start..token_end]
@@ -275,6 +339,8 @@ impl DecodeSession {
             token.top_ids = confidence.top_ids.map(|id| id as TokenId);
             token.top_logits = confidence.top_logits;
         }
+        log_phase("refresh_confidence", "apply_confidence", apply_start);
+        log_phase("refresh_confidence", "total", refresh_total_start);
 
         Ok(())
     }
@@ -326,9 +392,18 @@ impl DecodeSession {
         forced_aligner: &ForcedAligner,
         tokenizer: &Tokenizer,
     ) -> Result<Option<TextBuffer>, Exception> {
+        let commit_total_start = phase_start();
+        let chunk_index = self.chunk_count;
         // Build entries from text tokens, snap to word boundary
+        let boundary_start = phase_start();
         let mut entries = TextBuffer::from_entries(self.pending_entries(tokenizer));
         let safe_n = entries.snap_to_word_boundary(n);
+        log_phase_chunk(
+            "commit",
+            "snap_to_word_boundary",
+            chunk_index,
+            boundary_start,
+        );
         tracing::debug!(
             requested = n.0,
             snapped = safe_n.0,
@@ -340,9 +415,12 @@ impl DecodeSession {
             return Ok(None);
         }
 
+        let split_start = phase_start();
         let to_commit = entries.split_off_front(safe_n);
         let commit_ids = to_commit.token_ids();
         let commit_text = tokenizer.decode(&commit_ids, true).unwrap_or_default();
+        let committed_word_count = to_commit.words().count();
+        log_phase_chunk("commit", "extract_commit_text", chunk_index, split_start);
         if commit_text.trim().is_empty() {
             tracing::debug!("commit: empty text after decode, skipping");
             return Ok(None);
@@ -360,16 +438,27 @@ impl DecodeSession {
             return Ok(None);
         }
 
+        let align_prefix_end = self
+            .estimated_commit_audio_cutoff(committed_word_count)
+            .unwrap_or_else(|| self.audio.duration());
+        let align_audio = self.audio.slice(crate::audio_buffer::TimeRange::new(
+            Seconds::ZERO,
+            align_prefix_end,
+        ));
+
         // Run forced alignment against our audio
+        let align_start = phase_start();
         let items = forced_aligner
-            .align(self.audio.samples(), &commit_text)
+            .align(align_audio.samples(), &commit_text)
             .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
+        log_phase_chunk("commit", "forced_align", chunk_index, align_start);
         if items.is_empty() {
             tracing::warn!("commit: forced aligner returned no items");
             return Ok(None);
         }
 
         // Build AlignmentItems and align the buffer (pure function)
+        let align_buffer_start = phase_start();
         let alignment_items: Vec<AlignmentItem> = items
             .iter()
             .map(|item| AlignmentItem {
@@ -378,21 +467,39 @@ impl DecodeSession {
                 end: Seconds(item.end_time as f64),
             })
             .collect();
-        let aligned = text_buffer::align(to_commit, &alignment_items, &self.audio, self.start_time);
+        let aligned =
+            text_buffer::align(to_commit, &alignment_items, &align_audio, self.start_time);
+        log_phase_chunk(
+            "commit",
+            "build_aligned_buffer",
+            chunk_index,
+            align_buffer_start,
+        );
 
         // Rotate: trim audio and drop committed tokens, keep the rest
         // (like v1's Generator::rotate — remaining tokens provide context
         // so the model doesn't think it's starting a new utterance).
+        let rotate_start = phase_start();
         let last_end = Seconds(items.last().unwrap().end_time as f64);
-        let new_start = self.start_time + last_end;
-        let (_, remaining) = self.audio.split_at(last_end);
+        let trim_at = if align_prefix_end < last_end {
+            align_prefix_end
+        } else {
+            last_end
+        };
+        let new_start = self.start_time + trim_at;
+        let (_, remaining) = self.audio.split_at(trim_at);
 
         let remaining_text_tokens = self.text_tokens().len() - safe_n.0;
         tracing::info!(
+            committed_word_count,
+            checkpoints = self.checkpoints.len(),
             committed_tokens = safe_n.0,
             remaining_text_tokens,
             old_start = %format!("{:.3}s", self.start_time.0),
             new_start = %format!("{:.3}s", new_start.0),
+            align_prefix_end = %format!("{:.3}s", align_prefix_end.0),
+            aligned_end = %format!("{:.3}s", last_end.0),
+            trim_at = %format!("{:.3}s", trim_at.0),
             audio_before = self.audio.len(),
             audio_after = remaining.len(),
             aligned_words = items.len(),
@@ -411,7 +518,10 @@ impl DecodeSession {
         self.encoder_cache = EncoderCache::new();
         self.mel_extractor = MelExtractor::new(400, 160, 128, 16000);
         self.generated_start = 0;
+        self.checkpoints.clear();
         // Don't reset chunk_count — remaining tokens need prefix rollback to work
+        log_phase_chunk("commit", "rotate_reset", chunk_index, rotate_start);
+        log_phase_chunk("commit", "total", chunk_index, commit_total_start);
 
         Ok(Some(aligned))
     }
@@ -433,6 +543,7 @@ impl DecodeSession {
         self.encoder_cache = EncoderCache::new();
         self.chunk_count = 0;
         self.generated_start = 0;
+        self.checkpoints.clear();
     }
 
     // ── Internal ────────────────────────────────────────────────────
@@ -487,5 +598,20 @@ impl DecodeSession {
             .position(|t| t.id == asr_text_id)
             .map(|pos| pos + 1) // +1 to skip the tag itself
             .unwrap_or(0);
+    }
+
+    fn estimated_commit_audio_cutoff(&self, committed_word_count: usize) -> Option<Seconds> {
+        const ROTATION_CHECKPOINT_REWIND: usize = 1;
+
+        let cutoff_index = self
+            .checkpoints
+            .iter()
+            .position(|checkpoint| checkpoint.word_count >= committed_word_count)?;
+        let chosen_index = cutoff_index.saturating_sub(ROTATION_CHECKPOINT_REWIND);
+        let checkpoint = self.checkpoints.get(chosen_index)?;
+        Some(Seconds::from_samples(
+            checkpoint.audio_len_samples,
+            self.audio.sample_rate(),
+        ))
     }
 }

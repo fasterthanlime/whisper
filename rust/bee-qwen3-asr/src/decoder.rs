@@ -2,15 +2,15 @@
 //!
 //! Uses RMSNorm (NOT LayerNorm), GQA with QK-norm, interleaved MRoPE, SwiGLU MLP.
 
+use mlx_rs::Array;
 use mlx_rs::builder::Builder;
 use mlx_rs::error::Exception;
 use mlx_rs::macros::{ModuleParameters, Quantizable};
 use mlx_rs::module::Module;
 use mlx_rs::nn;
 use mlx_rs::ops;
-use mlx_rs::ops::indexing::IndexOp;
+use mlx_rs::ops::indexing::{IndexMutOp, IndexOp};
 use mlx_rs::quantization::MaybeQuantized;
-use mlx_rs::Array;
 
 use crate::config::TextDecoderConfig;
 use crate::mrope::{self, InterleavedMRoPE};
@@ -21,6 +21,7 @@ use crate::mrope::{self, InterleavedMRoPE};
 pub struct KVCache {
     keys: Vec<Option<Array>>,
     values: Vec<Option<Array>>,
+    lengths: Vec<usize>,
     pub offset: usize,
 }
 
@@ -29,6 +30,7 @@ impl KVCache {
         Self {
             keys: vec![None; num_layers],
             values: vec![None; num_layers],
+            lengths: vec![0; num_layers],
             offset: 0,
         }
     }
@@ -40,42 +42,141 @@ impl KVCache {
         value: Array,
         layer_idx: usize,
     ) -> Result<(Array, Array), Exception> {
-        if let Some(prev_k) = &self.keys[layer_idx] {
-            let prev_v = self.values[layer_idx].as_ref().unwrap();
-            self.keys[layer_idx] = Some(ops::concatenate_axis(&[prev_k, &key], 2)?);
-            self.values[layer_idx] = Some(ops::concatenate_axis(&[prev_v, &value], 2)?);
-        } else {
-            self.keys[layer_idx] = Some(key);
-            self.values[layer_idx] = Some(value);
-        }
+        let current_len = self.lengths[layer_idx];
+        let append_len = key.shape()[2] as usize;
+        let needed_len = current_len + append_len;
 
-        let full_k = self.keys[layer_idx].as_ref().unwrap().clone();
-        let full_v = self.values[layer_idx].as_ref().unwrap().clone();
+        self.ensure_capacity(layer_idx, &key, &value, needed_len)?;
+
+        {
+            let key_cache = self.keys[layer_idx].as_mut().unwrap();
+            key_cache.index_mut((.., .., current_len as i32..needed_len as i32, ..), key);
+        }
+        {
+            let value_cache = self.values[layer_idx].as_mut().unwrap();
+            value_cache.index_mut((.., .., current_len as i32..needed_len as i32, ..), value);
+        }
+        self.lengths[layer_idx] = needed_len;
+
+        let full_k =
+            self.keys[layer_idx]
+                .as_ref()
+                .unwrap()
+                .index((.., .., ..needed_len as i32, ..));
+        let full_v =
+            self.values[layer_idx]
+                .as_ref()
+                .unwrap()
+                .index((.., .., ..needed_len as i32, ..));
 
         // Update offset after last layer
         if layer_idx == self.keys.len() - 1 {
-            self.offset += full_k.shape()[2] as usize - (self.offset);
+            self.offset = needed_len;
         }
 
         Ok((full_k, full_v))
     }
 
+    fn ensure_capacity(
+        &mut self,
+        layer_idx: usize,
+        key: &Array,
+        value: &Array,
+        needed_len: usize,
+    ) -> Result<(), Exception> {
+        let current_capacity = self.keys[layer_idx]
+            .as_ref()
+            .map(|array| array.shape()[2] as usize)
+            .unwrap_or(0);
+        if current_capacity >= needed_len {
+            return Ok(());
+        }
+
+        let key_shape = key.shape();
+        let value_shape = value.shape();
+        let mut new_capacity = current_capacity.max(key_shape[2] as usize).max(16);
+        while new_capacity < needed_len {
+            new_capacity *= 2;
+        }
+
+        let mut new_keys = ops::zeros_dtype(
+            &[
+                key_shape[0],
+                key_shape[1],
+                new_capacity as i32,
+                key_shape[3],
+            ],
+            key.dtype(),
+        )?;
+        let mut new_values = ops::zeros_dtype(
+            &[
+                value_shape[0],
+                value_shape[1],
+                new_capacity as i32,
+                value_shape[3],
+            ],
+            value.dtype(),
+        )?;
+
+        let current_len = self.lengths[layer_idx];
+        if current_len > 0 {
+            if let Some(old_keys) = &self.keys[layer_idx] {
+                let prefix = old_keys.index((.., .., ..current_len as i32, ..));
+                new_keys.index_mut((.., .., ..current_len as i32, ..), prefix);
+            }
+            if let Some(old_values) = &self.values[layer_idx] {
+                let prefix = old_values.index((.., .., ..current_len as i32, ..));
+                new_values.index_mut((.., .., ..current_len as i32, ..), prefix);
+            }
+        }
+
+        self.keys[layer_idx] = Some(new_keys);
+        self.values[layer_idx] = Some(new_values);
+        Ok(())
+    }
+
     /// Truncate the cache to keep only the first `seq_len` positions.
     /// Keys/values have shape (B, num_heads, seq_len, head_dim).
     pub fn truncate(&mut self, seq_len: usize) {
-        for layer_k in self.keys.iter_mut().flatten() {
-            let current = layer_k.shape()[2] as usize;
-            if seq_len < current {
-                *layer_k = layer_k.index((.., .., ..seq_len as i32, ..));
-            }
-        }
-        for layer_v in self.values.iter_mut().flatten() {
-            let current = layer_v.shape()[2] as usize;
-            if seq_len < current {
-                *layer_v = layer_v.index((.., .., ..seq_len as i32, ..));
-            }
+        for len in &mut self.lengths {
+            *len = (*len).min(seq_len);
         }
         self.offset = seq_len;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KVCache;
+    use mlx_rs::Array;
+
+    #[test]
+    fn kv_cache_appends_without_changing_visible_values() {
+        let mut cache = KVCache::new(1);
+        let key1 = Array::from_slice(&[1.0f32, 2.0], &[1, 1, 1, 2]);
+        let value1 = Array::from_slice(&[3.0f32, 4.0], &[1, 1, 1, 2]);
+        let (full_k1, full_v1) = cache.update(key1, value1, 0).unwrap();
+        assert_eq!(full_k1.shape(), &[1, 1, 1, 2]);
+        assert_eq!(full_v1.shape(), &[1, 1, 1, 2]);
+        assert_eq!(cache.offset, 1);
+
+        let key2 = Array::from_slice(&[5.0f32, 6.0], &[1, 1, 1, 2]);
+        let value2 = Array::from_slice(&[7.0f32, 8.0], &[1, 1, 1, 2]);
+        let (full_k2, full_v2) = cache.update(key2, value2, 0).unwrap();
+        assert_eq!(full_k2.shape(), &[1, 1, 2, 2]);
+        assert_eq!(full_v2.shape(), &[1, 1, 2, 2]);
+        assert_eq!(cache.offset, 2);
+        assert_eq!(full_k2.as_slice::<f32>(), &[1.0, 2.0, 5.0, 6.0]);
+        assert_eq!(full_v2.as_slice::<f32>(), &[3.0, 4.0, 7.0, 8.0]);
+
+        cache.truncate(1);
+        let key3 = Array::from_slice(&[9.0f32, 10.0], &[1, 1, 1, 2]);
+        let value3 = Array::from_slice(&[11.0f32, 12.0], &[1, 1, 1, 2]);
+        let (full_k3, full_v3) = cache.update(key3, value3, 0).unwrap();
+        assert_eq!(full_k3.shape(), &[1, 1, 2, 2]);
+        assert_eq!(full_v3.shape(), &[1, 1, 2, 2]);
+        assert_eq!(full_k3.as_slice::<f32>(), &[1.0, 2.0, 9.0, 10.0]);
+        assert_eq!(full_v3.as_slice::<f32>(), &[3.0, 4.0, 11.0, 12.0]);
     }
 }
 

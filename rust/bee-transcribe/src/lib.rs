@@ -9,6 +9,7 @@ pub mod decode_session;
 mod mlx_stuff;
 pub mod session;
 pub mod text_buffer;
+mod timing;
 mod types;
 mod wav_util;
 
