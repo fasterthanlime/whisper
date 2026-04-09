@@ -11,12 +11,12 @@ class BeeInputController: IMKInputController {
     private weak var activeInputContext: NSTextInputContext?
 
     nonisolated override init!(server: IMKServer!, delegate: Any!, client: Any!) {
-        beeInputLog("init! with a server, delegate, client")
+        MainActor.assumeIsolated { beeInputLog("init! with a server, delegate, client") }
         super.init(server: server, delegate: delegate, client: client)
     }
 
     nonisolated override init() {
-        beeInputLog("init! without anything")
+        MainActor.assumeIsolated { beeInputLog("init! without anything") }
         super.init()
     }
 
@@ -102,9 +102,8 @@ class BeeInputController: IMKInputController {
     }
 
     nonisolated override func updateComposition() {
-        beeInputLog("updateComposition!")
-
         MainActor.assumeIsolated {
+            beeInputLog("updateComposition!")
             let composed =
                 (self.composedString(nil) as? String)
                 ?? String(describing: self.composedString(nil) ?? "nil")
@@ -121,9 +120,9 @@ class BeeInputController: IMKInputController {
     }
 
     nonisolated override func recognizedEvents(_ sender: Any!) -> Int {
-        beeInputLog("recognizedEvents")
+        MainActor.assumeIsolated { beeInputLog("recognizedEvents") }
 
-        Int(
+        return Int(
             NSEvent.EventTypeMask([
                 .keyDown,
                 .leftMouseDown,
@@ -140,7 +139,7 @@ class BeeInputController: IMKInputController {
         continueTracking keepTracking: UnsafeMutablePointer<ObjCBool>!,
         client sender: Any!
     ) -> Bool {
-        beeInputLog("mouseDown")
+        MainActor.assumeIsolated { beeInputLog("mouseDown") }
 
         keepTracking?.pointee = false
         return MainActor.assumeIsolated {
@@ -166,11 +165,10 @@ class BeeInputController: IMKInputController {
     }
 
     nonisolated override func composedString(_ sender: Any!) -> Any! {
-        beeInputLog("composedString!")
-
         let text =
             MainActor.assumeIsolated {
-                BeeIMEBridgeState.shared.currentSession?.currentMarkedText
+                beeInputLog("composedString!")
+                return BeeIMEBridgeState.shared.currentSession?.currentMarkedText
             } ?? ""
         MainActor.assumeIsolated {
             beeInputLog(
@@ -181,7 +179,7 @@ class BeeInputController: IMKInputController {
     }
 
     nonisolated override func originalString(_ sender: Any!) -> NSAttributedString! {
-        beeInputLog("originalString!")
+        MainActor.assumeIsolated { beeInputLog("originalString!") }
 
         let attr = NSAttributedString(string: "")
         MainActor.assumeIsolated {
@@ -193,7 +191,9 @@ class BeeInputController: IMKInputController {
     }
 
     nonisolated override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
-        beeInputLog("handleEvent! event=\(String(describing: event))")
+        MainActor.assumeIsolated {
+            beeInputLog("handleEvent! event=\(String(describing: event))")
+        }
 
         guard let event, event.type == .keyDown else {
             return false
@@ -252,6 +252,122 @@ class BeeInputController: IMKInputController {
         beeInputLog(
             "discardMarkedText[\(reason)]: markedRange(after)=\(currentMarkedRangeDescription()) selectedRange(after)=\(currentSelectedRangeDescription())"
         )
+    }
+
+    // MARK: - IMKInputController overrides (logging)
+
+    nonisolated override func compositionAttributes(at range: NSRange) -> NSMutableDictionary! {
+        MainActor.assumeIsolated {
+            beeInputLog("compositionAttributes(at: \(NSStringFromRange(range)))")
+        }
+        return super.compositionAttributes(at: range)
+    }
+
+    nonisolated override func selectionRange() -> NSRange {
+        let range = super.selectionRange()
+        MainActor.assumeIsolated {
+            beeInputLog("selectionRange: \(NSStringFromRange(range))")
+        }
+        return range
+    }
+
+    nonisolated override func replacementRange() -> NSRange {
+        let range = super.replacementRange()
+        MainActor.assumeIsolated {
+            beeInputLog("replacementRange: \(NSStringFromRange(range))")
+        }
+        return range
+    }
+
+    nonisolated override func mark(forStyle style: Int, at range: NSRange) -> [AnyHashable: Any]! {
+        MainActor.assumeIsolated {
+            beeInputLog("mark(forStyle: \(style), at: \(NSStringFromRange(range)))")
+        }
+        return super.mark(forStyle: style, at: range)
+    }
+
+    nonisolated override func doCommand(
+        by aSelector: Selector!, command infoDictionary: [AnyHashable: Any]!
+    ) {
+        MainActor.assumeIsolated {
+            beeInputLog(
+                "doCommand(by: \(String(describing: aSelector)), command: \(String(describing: infoDictionary)))"
+            )
+        }
+        super.doCommand(by: aSelector, command: infoDictionary)
+    }
+
+    nonisolated override func hidePalettes() {
+        MainActor.assumeIsolated {
+            beeInputLog("hidePalettes")
+        }
+        super.hidePalettes()
+    }
+
+    nonisolated override func menu() -> NSMenu! {
+        MainActor.assumeIsolated {
+            beeInputLog("menu")
+        }
+        return super.menu()
+    }
+
+    nonisolated override func delegate() -> Any! {
+        MainActor.assumeIsolated {
+            beeInputLog("delegate")
+        }
+        return super.delegate()
+    }
+
+    nonisolated override func setDelegate(_ newDelegate: Any!) {
+        MainActor.assumeIsolated {
+            beeInputLog("setDelegate: \(String(describing: newDelegate))")
+        }
+        super.setDelegate(newDelegate)
+    }
+
+    nonisolated override func server() -> IMKServer! {
+        MainActor.assumeIsolated {
+            beeInputLog("server")
+        }
+        return super.server()
+    }
+
+    nonisolated override func client() -> (any IMKTextInput & NSObjectProtocol)! {
+        // Not logging to avoid infinite recursion (many other methods call client())
+        return super.client()
+    }
+
+    @available(macOS 10.7, *)
+    nonisolated override func inputControllerWillClose() {
+        MainActor.assumeIsolated {
+            beeInputLog("inputControllerWillClose")
+        }
+        super.inputControllerWillClose()
+    }
+
+    nonisolated override func annotationSelected(
+        _ annotationString: NSAttributedString!, forCandidate candidateString: NSAttributedString!
+    ) {
+        MainActor.assumeIsolated {
+            beeInputLog(
+                "annotationSelected: \(String(describing: annotationString)) forCandidate: \(String(describing: candidateString))"
+            )
+        }
+        super.annotationSelected(annotationString, forCandidate: candidateString)
+    }
+
+    nonisolated override func candidateSelectionChanged(_ candidateString: NSAttributedString!) {
+        MainActor.assumeIsolated {
+            beeInputLog("candidateSelectionChanged: \(String(describing: candidateString))")
+        }
+        super.candidateSelectionChanged(candidateString)
+    }
+
+    nonisolated override func candidateSelected(_ candidateString: NSAttributedString!) {
+        MainActor.assumeIsolated {
+            beeInputLog("candidateSelected: \(String(describing: candidateString))")
+        }
+        super.candidateSelected(candidateString)
     }
 
     // MARK: - Utilities
