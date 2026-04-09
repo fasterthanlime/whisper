@@ -70,6 +70,18 @@ function toPhoneticTrace(trace: RpcTranscribePhoneticTrace): PhoneticRescueTrace
       zipaToken: op.zipa_token,
       cost: op.cost,
     })),
+    asrAlternatives: trace.asr_alternatives.map((token) => ({
+      tokenIndex: token.token_index,
+      chosenText: token.chosen_text,
+      concentration: token.concentration,
+      margin: token.margin,
+      revision: BigInt(token.revision.toString()),
+      alternatives: token.alternatives.map((alternative) => ({
+        tokenId: alternative.token_id,
+        text: alternative.text,
+        logit: alternative.logit,
+      })),
+    })),
     wordAlignments: trace.word_alignments.map((word) => ({
       wordText: word.word_text,
       tokenStart: word.token_start,
@@ -176,6 +188,7 @@ function RowCard({
 export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
   const [limit, setLimit] = useState(100);
   const [bucket, setBucket] = useState("");
+  const [promptId, setPromptId] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CorpusAlignmentEvalResult | null>(null);
@@ -184,7 +197,7 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
   const [showRunComposer, setShowRunComposer] = useState(false);
   const autoStartedRef = useRef(false);
 
-  const runEval = useCallback(async (options?: { limit?: number; bucket?: string; randomize?: boolean }) => {
+  const runEval = useCallback(async (options?: { limit?: number; bucket?: string; randomize?: boolean; promptId?: string }) => {
     try {
       setStatus("Starting corpus alignment eval...");
       setError(null);
@@ -193,10 +206,12 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
       const client = await connectBeeMl(wsUrl);
       const nextLimit = options?.limit ?? limit;
       const nextBucket = options?.bucket ?? bucket;
+      const nextPromptId = options?.promptId ?? promptId;
       const response = await client.startCorpusAlignmentEvalJob({
         limit: nextLimit,
         bucket: nextBucket.trim() ? nextBucket.trim() : null,
         randomize: options?.randomize ?? false,
+        prompt_id: nextPromptId.trim() ? nextPromptId.trim() : null,
       });
       if (!response.ok) throw new Error(response.error);
       setJob(response.value);
@@ -205,7 +220,7 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
       setError(e instanceof Error ? e.message : String(e));
       setStatus(null);
     }
-  }, [bucket, limit, wsUrl]);
+  }, [bucket, limit, promptId, wsUrl]);
 
   useEffect(() => {
     if (autoStartedRef.current) return;
@@ -270,6 +285,7 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
 
   const startRandomFiveRun = useCallback(() => {
     setBucket("");
+    setPromptId("");
     setLimit(5);
     setShowRunComposer(false);
     void runEval({ limit: 5, bucket: "", randomize: true });
@@ -277,8 +293,17 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
 
   const startConfiguredRun = useCallback(() => {
     setShowRunComposer(false);
-    void runEval({ limit, bucket, randomize: false });
-  }, [bucket, limit, runEval]);
+    void runEval({ limit, bucket, randomize: false, promptId });
+  }, [bucket, limit, promptId, runEval]);
+
+  const startPromptRun = useCallback(() => {
+    const trimmed = promptId.trim();
+    if (!trimmed) return;
+    setBucket("");
+    setLimit(1);
+    setShowRunComposer(false);
+    void runEval({ limit: 1, bucket: "", randomize: false, promptId: trimmed });
+  }, [promptId, runEval]);
 
   return (
     <div
@@ -344,6 +369,23 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
                   {error ? <span className="error-pill">{error}</span> : null}
                 </div>
               )}
+              <div
+                className="prototype-card prototype-card-tight"
+                style={{ gap: "0.45rem", padding: "0.6rem 0.7rem" }}
+              >
+                <div className="eyebrow">Jump to prompt</div>
+                <div className="control-actions" style={{ gap: "0.4rem", alignItems: "center" }}>
+                  <input
+                    value={promptId}
+                    onChange={(e) => setPromptId(e.target.value)}
+                    placeholder="zipa-targeted-v1-023"
+                    style={{ flex: "1 1 180px", minWidth: 0 }}
+                  />
+                  <button type="button" className="mini-badge" style={{ cursor: "pointer" }} onClick={startPromptRun}>
+                    Run
+                  </button>
+                </div>
+              </div>
               {showRunComposer ? (
                 <div
                   className="prototype-card prototype-card-tight"
@@ -370,6 +412,14 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
                       <input
                         value={bucket}
                         onChange={(e) => setBucket(e.target.value)}
+                        placeholder="optional"
+                      />
+                    </label>
+                    <label>
+                      <span>prompt id</span>
+                      <input
+                        value={promptId}
+                        onChange={(e) => setPromptId(e.target.value)}
                         placeholder="optional"
                       />
                     </label>

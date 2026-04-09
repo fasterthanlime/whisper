@@ -165,6 +165,21 @@ export type PhoneticWordAlignment = {
   alignment: PhoneticAlignmentOp[];
 };
 
+export type PhoneticAsrTokenAlternative = {
+  tokenId: number;
+  text: string;
+  logit: number;
+};
+
+export type PhoneticAsrObservedToken = {
+  tokenIndex: number;
+  chosenText: string;
+  concentration: number;
+  margin: number;
+  revision: bigint;
+  alternatives: PhoneticAsrTokenAlternative[];
+};
+
 export type PhoneticRescueTrace = {
   snapshotRevision: bigint;
   alignedTranscript: string;
@@ -189,6 +204,7 @@ export type PhoneticRescueTrace = {
   utteranceSimilarity?: number | null;
   utteranceFeatureSimilarity?: number | null;
   utteranceAlignment: PhoneticAlignmentOp[];
+  asrAlternatives: PhoneticAsrObservedToken[];
   wordAlignments: PhoneticWordAlignment[];
   spans: PhoneticRescueSpan[];
 };

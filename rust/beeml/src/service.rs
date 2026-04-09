@@ -27,10 +27,11 @@ use beeml::rpc::{
     PhoneticComparisonSummary, RapidFireChoice, RetrievalCandidateDebug,
     RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
     SpanDebugTrace, SpanDebugView, SynthesizePhonemesRequest, SynthesizePhonemesResult,
-    TeachRetrievalPrototypeJudgeRequest, TimingBreakdown, TranscribePhoneticAlignmentKind,
-    TranscribePhoneticAlignmentOp, TranscribePhoneticAnchorConfidence, TranscribePhoneticCandidate,
-    TranscribePhoneticSpan, TranscribePhoneticSpanClass, TranscribePhoneticSpanUsefulness,
-    TranscribePhoneticTrace, TranscribePhoneticWordAlignment,
+    TeachRetrievalPrototypeJudgeRequest, TimingBreakdown, TranscribeAsrObservedToken,
+    TranscribeAsrTokenAlternative, TranscribePhoneticAlignmentKind, TranscribePhoneticAlignmentOp,
+    TranscribePhoneticAnchorConfidence, TranscribePhoneticCandidate, TranscribePhoneticSpan,
+    TranscribePhoneticSpanClass, TranscribePhoneticSpanUsefulness, TranscribePhoneticTrace,
+    TranscribePhoneticWordAlignment,
 };
 use rand::seq::SliceRandom;
 
@@ -117,23 +118,43 @@ impl BeeMlService {
         samples: &[f32],
         options: bee_transcribe::SessionOptions,
     ) -> Result<bee_transcribe::FinishResult, String> {
+        let (result, _) = self.transcribe_samples_with_options_and_history(samples, options)?;
+        Ok(result)
+    }
+
+    pub(crate) fn transcribe_samples_with_options_and_history(
+        &self,
+        samples: &[f32],
+        options: bee_transcribe::SessionOptions,
+    ) -> Result<(bee_transcribe::FinishResult, Vec<SessionSnapshot>), String> {
         let chunk_samples = (options.chunk_duration * 16_000.0) as usize;
         let mut session = self
             .inner
             .engine
             .session(options)
             .map_err(|e| e.to_string())?;
+        let mut snapshots = Vec::new();
 
         let mut offset = 0;
         while offset < samples.len() {
             let end = (offset + chunk_samples).min(samples.len());
-            session
+            if let Some(snapshot) = session
                 .feed(&samples[offset..end])
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| e.to_string())?
+            {
+                snapshots.push(snapshot);
+            }
             offset = end;
         }
 
-        session.finish().map_err(|e| e.to_string())
+        let result = session.finish().map_err(|e| e.to_string())?;
+        if snapshots
+            .last()
+            .is_none_or(|snapshot| snapshot.revision != result.snapshot.revision)
+        {
+            snapshots.push(result.snapshot.clone());
+        }
+        Ok((result, snapshots))
     }
 
     pub(crate) fn transcribe_samples_chunked(
@@ -170,6 +191,7 @@ impl BeeMlService {
         &self,
         audio: &AudioBuffer,
         snapshot: &SessionSnapshot,
+        snapshots: &[SessionSnapshot],
     ) -> Result<TranscribePhoneticTrace, String> {
         let tail_blocks_rescue = !snapshot.pending_text.trim().is_empty()
             || snapshot.pending_token_count > 0
@@ -208,15 +230,15 @@ impl BeeMlService {
             .iter()
             .map(|token| token.token.clone())
             .collect::<Vec<_>>();
-        let utterance_transcript_raw = if transcript.is_empty() {
-            Vec::new()
-        } else {
-            g2p.ipa_tokens(transcript)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| format!("espeak produced no tokens for '{transcript}'"))?
-        };
-        let transcript_word_normalized_ranges =
-            transcript_word_normalized_ranges(&mut g2p, transcript)?;
+        let transcript_word_raw_ranges = transcript_word_raw_ranges(&mut g2p, transcript)?;
+        let utterance_transcript_raw = transcript_word_raw_ranges
+            .iter()
+            .flat_map(|(_, raw_tokens)| raw_tokens.iter().cloned())
+            .collect::<Vec<_>>();
+        let transcript_word_normalized_ranges = transcript_word_raw_ranges
+            .iter()
+            .map(|(range, raw_tokens)| (range.clone(), normalize_ipa_for_comparison(raw_tokens)))
+            .collect::<Vec<_>>();
         let utterance_transcript_normalized = transcript_word_normalized_ranges
             .iter()
             .flat_map(|(_, tokens)| tokens.iter().cloned())
@@ -224,17 +246,30 @@ impl BeeMlService {
         let utterance_alignment =
             align_token_sequences(&utterance_transcript_normalized, &utterance_zipa_normalized);
         let transcript_words = sentence_word_tokens(transcript);
+        let transcript_token_ranges = (0..transcript_word_normalized_ranges.len())
+            .map(|word_index| {
+                transcript_token_range_for_span(
+                    &transcript_word_normalized_ranges,
+                    word_index,
+                    word_index + 1,
+                )
+            })
+            .collect::<Vec<_>>();
+        let transcript_word_tokens = transcript_word_normalized_ranges
+            .iter()
+            .map(|(_, tokens)| tokens.clone())
+            .collect::<Vec<_>>();
+        let word_windows = partition_word_alignment_windows(
+            &utterance_alignment.ops,
+            &transcript_token_ranges,
+            &transcript_word_tokens,
+        );
         let word_alignments = transcript_word_normalized_ranges
             .iter()
             .enumerate()
             .filter_map(|(word_index, (_, transcript_normalized))| {
-                let transcript_norm_range = transcript_token_range_for_span(
-                    &transcript_word_normalized_ranges,
-                    word_index,
-                    word_index + 1,
-                );
-                let (zipa_norm_range, word_alignment_ops) =
-                    word_alignment_window(&utterance_alignment.ops, transcript_norm_range.clone())?;
+                let window = word_windows.get(word_index)?.as_ref()?;
+                let zipa_norm_range = window.zipa_norm_range.clone();
                 let zipa_normalized = utterance_zipa_normalized
                     .get(zipa_norm_range.clone())
                     .unwrap_or(&[])
@@ -260,7 +295,7 @@ impl BeeMlService {
                     zipa_norm_end: zipa_norm_range.end as u32,
                     zipa_raw,
                     zipa_normalized,
-                    alignment: map_alignment_ops(&word_alignment_ops),
+                    alignment: map_alignment_ops(&window.ops),
                 })
             })
             .collect::<Vec<_>>();
@@ -480,6 +515,7 @@ impl BeeMlService {
             utterance_zipa_normalized,
             utterance_transcript_normalized,
             utterance_alignment: map_alignment_ops(&utterance_alignment.ops),
+            asr_alternatives: collect_asr_alternatives(snapshots),
             word_alignments,
             spans: phonetic_spans,
         })
@@ -488,11 +524,13 @@ impl BeeMlService {
     pub(crate) fn latest_corpus_recordings(
         &self,
         bucket_filter: Option<&str>,
+        prompt_id_filter: Option<&str>,
     ) -> Result<Vec<(CorpusCapturePrompt, beeml::rpc::CorpusCaptureRecording)>, String> {
         let prompts = self.corpus_capture_prompts();
         let prompt_map = prompts
             .into_iter()
             .filter(|prompt| bucket_filter.is_none_or(|bucket| prompt.bucket == bucket))
+            .filter(|prompt| prompt_id_filter.is_none_or(|prompt_id| prompt.prompt_id == prompt_id))
             .map(|prompt| (prompt.prompt_id.clone(), prompt))
             .collect::<std::collections::HashMap<_, _>>();
 
@@ -537,8 +575,9 @@ impl BeeMlService {
         limit: usize,
         bucket_filter: Option<&str>,
         randomize: bool,
+        prompt_id_filter: Option<&str>,
     ) -> Result<CorpusAlignmentEvalResult, String> {
-        let mut recordings = self.latest_corpus_recordings(bucket_filter)?;
+        let mut recordings = self.latest_corpus_recordings(bucket_filter, prompt_id_filter)?;
         if randomize {
             let mut rng = rand::thread_rng();
             recordings.shuffle(&mut rng);
@@ -556,10 +595,11 @@ impl BeeMlService {
 
             let mut options = bee_transcribe::SessionOptions::default();
             options.language = bee_transcribe::Language("English".to_string());
-            let result = self.transcribe_samples_with_options(&samples, options)?;
+            let (result, snapshots) =
+                self.transcribe_samples_with_options_and_history(&samples, options)?;
             let snapshot = result.snapshot;
 
-            match self.build_transcribe_phonetic_trace(&audio, &snapshot) {
+            match self.build_transcribe_phonetic_trace(&audio, &snapshot, &snapshots) {
                 Ok(trace) => {
                     let tail_volatile_token_count = trace.tail_ambiguity.volatile_token_count;
                     let row_rescue_ready =
@@ -725,10 +765,11 @@ impl BeeMlService {
         &self,
         limit: u32,
         bucket: Option<String>,
+        prompt_id: Option<String>,
         _randomize: bool,
     ) -> Result<CorpusAlignmentEvalJob, String> {
         let total_rows = self
-            .latest_corpus_recordings(bucket.as_deref())?
+            .latest_corpus_recordings(bucket.as_deref(), prompt_id.as_deref())?
             .len()
             .min(limit as usize)
             .min(u32::MAX as usize) as u32;
@@ -1842,6 +1883,85 @@ fn mean_option(values: impl Iterator<Item = Option<f32>>) -> Option<f32> {
     (count > 0).then_some(total / count as f32)
 }
 
+fn collect_asr_alternatives(snapshots: &[SessionSnapshot]) -> Vec<TranscribeAsrObservedToken> {
+    #[derive(Clone)]
+    struct AggregatedToken {
+        chosen_text: String,
+        concentration: f32,
+        margin: f32,
+        revision: u64,
+        alternatives: HashMap<u32, (String, f32)>,
+    }
+
+    let mut by_index = std::collections::BTreeMap::<u32, AggregatedToken>::new();
+
+    for snapshot in snapshots {
+        for (offset, token) in snapshot.pending_tokens.iter().enumerate() {
+            let token_index = snapshot.committed_token_count + offset as u32;
+            let entry = by_index
+                .entry(token_index)
+                .or_insert_with(|| AggregatedToken {
+                    chosen_text: token.text.clone(),
+                    concentration: token.concentration,
+                    margin: token.margin,
+                    revision: snapshot.revision,
+                    alternatives: HashMap::new(),
+                });
+
+            if token.margin < entry.margin
+                || (token.margin == entry.margin && token.concentration < entry.concentration)
+                || snapshot.revision > entry.revision
+            {
+                entry.chosen_text = token.text.clone();
+                entry.concentration = token.concentration;
+                entry.margin = token.margin;
+                entry.revision = snapshot.revision;
+            }
+
+            for alternative in &token.alternatives {
+                entry
+                    .alternatives
+                    .entry(alternative.token_id)
+                    .and_modify(|(_, best_logit)| {
+                        if alternative.logit > *best_logit {
+                            *best_logit = alternative.logit;
+                        }
+                    })
+                    .or_insert((alternative.text.clone(), alternative.logit));
+            }
+        }
+    }
+
+    by_index
+        .into_iter()
+        .map(|(token_index, token)| {
+            let mut alternatives = token
+                .alternatives
+                .into_iter()
+                .map(|(token_id, (text, logit))| TranscribeAsrTokenAlternative {
+                    token_id,
+                    text,
+                    logit,
+                })
+                .collect::<Vec<_>>();
+            alternatives.sort_by(|a, b| {
+                b.logit
+                    .total_cmp(&a.logit)
+                    .then_with(|| a.token_id.cmp(&b.token_id))
+            });
+
+            TranscribeAsrObservedToken {
+                token_index,
+                chosen_text: token.chosen_text,
+                concentration: token.concentration,
+                margin: token.margin,
+                revision: token.revision,
+                alternatives,
+            }
+        })
+        .collect()
+}
+
 fn unix_time_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1849,22 +1969,29 @@ fn unix_time_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn transcript_word_normalized_ranges(
+fn transcript_word_raw_ranges(
     g2p: &mut CachedEspeakG2p,
     transcript: &str,
 ) -> Result<Vec<(std::ops::Range<usize>, Vec<String>)>, String> {
-    let mut out = Vec::new();
-    for word in sentence_word_tokens(transcript) {
-        let raw = g2p
-            .ipa_tokens(&word.text)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("espeak produced no tokens for '{}'", word.text))?;
-        out.push((
-            word.char_start..word.char_end,
-            normalize_ipa_for_comparison(&raw),
+    let words = sentence_word_tokens(transcript);
+    let raw_groups = g2p
+        .ipa_word_tokens_in_utterance(transcript)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("espeak produced no tokens for '{transcript}'"))?;
+
+    if raw_groups.len() != words.len() {
+        return Err(format!(
+            "espeak word-group count mismatch for '{transcript}': transcript has {} words, espeak produced {} groups",
+            words.len(),
+            raw_groups.len()
         ));
     }
-    Ok(out)
+
+    Ok(words
+        .into_iter()
+        .zip(raw_groups)
+        .map(|(word, raw_tokens)| (word.char_start..word.char_end, raw_tokens))
+        .collect())
 }
 
 fn transcript_token_range_for_span(
@@ -2047,65 +2174,155 @@ fn strict_project_left_range(
     }
 }
 
-fn word_alignment_window(
+struct WordAlignmentWindow {
+    zipa_norm_range: std::ops::Range<usize>,
+    ops: Vec<AlignmentOp>,
+}
+
+fn partition_word_alignment_windows(
     ops: &[AlignmentOp],
-    left_range: std::ops::Range<usize>,
-) -> Option<(std::ops::Range<usize>, Vec<AlignmentOp>)> {
-    if left_range.start >= left_range.end {
-        return None;
+    left_ranges: &[std::ops::Range<usize>],
+    transcript_word_tokens: &[Vec<String>],
+) -> Vec<Option<WordAlignmentWindow>> {
+    if left_ranges.is_empty() {
+        return Vec::new();
     }
 
-    let relevant_positions = ops
+    let anchors = left_ranges
         .iter()
-        .enumerate()
-        .filter_map(|(position, op)| {
-            let left_index = op.left_index.map(|index| index as usize)?;
-            left_range.contains(&left_index).then_some(position)
+        .map(|left_range| {
+            let positions = ops
+                .iter()
+                .enumerate()
+                .filter_map(|(position, op)| {
+                    let left_index = op.left_index.map(|index| index as usize)?;
+                    left_range.contains(&left_index).then_some(position)
+                })
+                .collect::<Vec<_>>();
+            positions
+                .first()
+                .zip(positions.last())
+                .map(|(first, last)| (*first, *last))
         })
         .collect::<Vec<_>>();
 
-    let Some(&first_position) = relevant_positions.first() else {
-        return None;
-    };
-    let Some(&last_position) = relevant_positions.last() else {
-        return None;
-    };
+    let mut op_ranges = Vec::with_capacity(left_ranges.len());
+    let mut cursor = 0usize;
+    for (word_index, anchor) in anchors.iter().enumerate() {
+        let Some((anchor_start, anchor_end)) = anchor else {
+            op_ranges.push(None);
+            continue;
+        };
 
-    let mut start_position = first_position;
-    while start_position > 0 {
-        let previous = &ops[start_position - 1];
-        if previous.left_index.is_none() && previous.right_index.is_some() {
-            start_position -= 1;
+        let start = cursor.min(*anchor_start);
+        let end = if let Some(Some((next_anchor_start, _))) = anchors.get(word_index + 1) {
+            choose_word_boundary(
+                ops,
+                *anchor_end,
+                *next_anchor_start,
+                transcript_word_tokens
+                    .get(word_index)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]),
+                transcript_word_tokens
+                    .get(word_index + 1)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]),
+            )
         } else {
-            break;
-        }
+            ops.len()
+        };
+        let end = end.max(start.saturating_add(1)).min(ops.len());
+        op_ranges.push(Some(start..end));
+        cursor = end;
     }
 
-    let mut end_position = last_position;
-    while end_position + 1 < ops.len() {
-        let next = &ops[end_position + 1];
-        if next.left_index.is_none() && next.right_index.is_some() {
-            end_position += 1;
-        } else {
-            break;
-        }
+    op_ranges
+        .into_iter()
+        .map(|op_range| {
+            let op_range = op_range?;
+            let word_ops = ops.get(op_range)?.to_vec();
+            let mut right_indices = word_ops
+                .iter()
+                .filter_map(|op| op.right_index.map(|index| index as usize))
+                .collect::<Vec<_>>();
+            if right_indices.is_empty() {
+                return None;
+            }
+            right_indices.sort_unstable();
+            let zipa_norm_range = right_indices[0]..(right_indices[right_indices.len() - 1] + 1);
+            Some(WordAlignmentWindow {
+                zipa_norm_range,
+                ops: word_ops,
+            })
+        })
+        .collect()
+}
+
+fn choose_word_boundary(
+    ops: &[AlignmentOp],
+    prev_anchor_end: usize,
+    next_anchor_start: usize,
+    prev_word_tokens: &[String],
+    next_word_tokens: &[String],
+) -> usize {
+    let segment_start = prev_anchor_end.saturating_add(1);
+    if segment_start >= next_anchor_start {
+        return next_anchor_start;
     }
 
-    let word_alignment_ops = ops[start_position..=end_position].to_vec();
-    let mut right_indices = word_alignment_ops
+    let segment = &ops[segment_start..next_anchor_start];
+    if segment
         .iter()
-        .filter_map(|op| op.right_index.map(|index| index as usize))
-        .collect::<Vec<_>>();
-
-    if right_indices.is_empty() {
-        let zipa_norm_range = strict_project_left_range(ops, left_range.clone())?;
-        let word_alignment_ops = slice_alignment_ops(ops, left_range, zipa_norm_range.clone());
-        return Some((zipa_norm_range, word_alignment_ops));
+        .all(|op| op.left_index.is_none() && op.right_index.is_some())
+    {
+        return segment_start;
     }
 
-    right_indices.sort_unstable();
-    let zipa_norm_range = right_indices[0]..(right_indices[right_indices.len() - 1] + 1);
-    Some((zipa_norm_range, word_alignment_ops))
+    let mut best_split = 0usize;
+    let mut best_score = f32::NEG_INFINITY;
+
+    for split in 0..=segment.len() {
+        let left_score = boundary_side_affinity(&segment[..split], prev_word_tokens, false);
+        let right_score = boundary_side_affinity(&segment[split..], next_word_tokens, true);
+        let score = left_score + right_score;
+        if score > best_score || (score == best_score && split < best_split) {
+            best_score = score;
+            best_split = split;
+        }
+    }
+
+    segment_start + best_split
+}
+
+fn boundary_side_affinity(
+    segment: &[AlignmentOp],
+    neighbor_tokens: &[String],
+    prefix: bool,
+) -> f32 {
+    let right_tokens = segment
+        .iter()
+        .filter_map(|op| op.right_token.clone())
+        .collect::<Vec<_>>();
+    if right_tokens.is_empty() || neighbor_tokens.is_empty() {
+        return 0.0;
+    }
+
+    let take = right_tokens.len().min(neighbor_tokens.len());
+    let neighbor_slice = if prefix {
+        &neighbor_tokens[..take]
+    } else {
+        &neighbor_tokens[neighbor_tokens.len() - take..]
+    };
+    let right_slice = if prefix {
+        &right_tokens[..take]
+    } else {
+        &right_tokens[right_tokens.len() - take..]
+    };
+
+    feature_similarity(right_slice, neighbor_slice)
+        .or_else(|| phoneme_similarity(right_slice, neighbor_slice))
+        .unwrap_or(0.0)
 }
 
 fn normalize_candidate_ranges(ranges: &mut Vec<std::ops::Range<usize>>, utterance_len: usize) {
@@ -2154,7 +2371,7 @@ fn anchor_confidence(
 
 #[cfg(test)]
 mod tests {
-    use super::word_alignment_window;
+    use super::partition_word_alignment_windows;
     use bee_phonetic::{AlignmentOp, AlignmentOpKind};
 
     fn op(
@@ -2175,7 +2392,7 @@ mod tests {
     }
 
     #[test]
-    fn word_alignment_window_keeps_adjacent_right_inserts() {
+    fn word_alignment_windows_partition_insertions_without_overlap() {
         let ops = vec![
             op(
                 AlignmentOpKind::Match,
@@ -2199,18 +2416,39 @@ mod tests {
                 Some("ɪ"),
                 Some("ɪ"),
             ),
+            op(AlignmentOpKind::Insert, None, Some(4), None, Some("n")),
+            op(
+                AlignmentOpKind::Match,
+                Some(3),
+                Some(5),
+                Some("t"),
+                Some("t"),
+            ),
         ];
 
-        let (range, word_ops) = word_alignment_window(&ops, 0..3).expect("word alignment window");
+        let windows = partition_word_alignment_windows(
+            &ops,
+            &[0..2, 2..4],
+            &[
+                vec!["m".to_string(), "ɹ".to_string()],
+                vec!["ɪ".to_string(), "t".to_string()],
+            ],
+        );
+        let first = windows[0].as_ref().expect("first word window");
+        let second = windows[1].as_ref().expect("second word window");
 
-        assert_eq!(range, 0..4);
-        assert_eq!(word_ops.len(), 4);
-        assert_eq!(word_ops[1].kind, AlignmentOpKind::Insert);
-        assert_eq!(word_ops[1].right_token.as_deref(), Some("ɪ"));
+        assert_eq!(first.zipa_norm_range, 0..3);
+        assert_eq!(second.zipa_norm_range, 3..6);
+        assert_eq!(first.ops.len(), 3);
+        assert_eq!(second.ops.len(), 3);
+        assert_eq!(first.ops[1].kind, AlignmentOpKind::Insert);
+        assert_eq!(first.ops[1].right_token.as_deref(), Some("ɪ"));
+        assert_eq!(second.ops[0].kind, AlignmentOpKind::Match);
+        assert_eq!(second.ops[0].right_token.as_deref(), Some("ɪ"));
     }
 
     #[test]
-    fn word_alignment_window_expands_to_edge_inserts() {
+    fn word_alignment_windows_assign_leading_and_trailing_inserts_once() {
         let ops = vec![
             op(AlignmentOpKind::Insert, None, Some(0), None, Some("d")),
             op(
@@ -2228,19 +2466,166 @@ mod tests {
                 Some("ɪ"),
             ),
             op(AlignmentOpKind::Insert, None, Some(3), None, Some("ə")),
+            op(
+                AlignmentOpKind::Match,
+                Some(2),
+                Some(4),
+                Some("ɹ"),
+                Some("ɹ"),
+            ),
         ];
 
-        let (range, word_ops) = word_alignment_window(&ops, 0..2).expect("word alignment window");
+        let windows = partition_word_alignment_windows(
+            &ops,
+            &[0..2, 2..3],
+            &[
+                vec!["m".to_string(), "ɪ".to_string()],
+                vec!["ɹ".to_string()],
+            ],
+        );
+        let first = windows[0].as_ref().expect("first word window");
+        let second = windows[1].as_ref().expect("second word window");
 
-        assert_eq!(range, 0..4);
-        assert_eq!(word_ops.len(), 4);
+        assert_eq!(first.zipa_norm_range, 0..3);
+        assert_eq!(second.zipa_norm_range, 3..5);
         assert_eq!(
-            word_ops.first().and_then(|op| op.right_token.as_deref()),
+            first.ops.first().and_then(|op| op.right_token.as_deref()),
             Some("d")
         );
         assert_eq!(
-            word_ops.last().and_then(|op| op.right_token.as_deref()),
+            second.ops.first().and_then(|op| op.right_token.as_deref()),
             Some("ə")
+        );
+        assert_eq!(second.ops.len(), 2);
+        assert_eq!(
+            second.ops.last().and_then(|op| op.right_token.as_deref()),
+            Some("ɹ")
+        );
+    }
+
+    #[test]
+    fn word_alignment_windows_assign_boundary_glide_to_following_word() {
+        let ops = vec![
+            op(
+                AlignmentOpKind::Match,
+                Some(0),
+                Some(0),
+                Some("a"),
+                Some("a"),
+            ),
+            op(
+                AlignmentOpKind::Match,
+                Some(1),
+                Some(1),
+                Some("ɪ"),
+                Some("ɪ"),
+            ),
+            op(AlignmentOpKind::Insert, None, Some(2), None, Some("j")),
+            op(
+                AlignmentOpKind::Match,
+                Some(2),
+                Some(3),
+                Some("ʊ"),
+                Some("ʊ"),
+            ),
+            op(
+                AlignmentOpKind::Match,
+                Some(3),
+                Some(4),
+                Some("z"),
+                Some("z"),
+            ),
+            op(
+                AlignmentOpKind::Match,
+                Some(4),
+                Some(5),
+                Some("d"),
+                Some("d"),
+            ),
+        ];
+
+        let windows = partition_word_alignment_windows(
+            &ops,
+            &[0..2, 2..5],
+            &[
+                vec!["a".to_string(), "ɪ".to_string()],
+                vec![
+                    "j".to_string(),
+                    "ʊ".to_string(),
+                    "z".to_string(),
+                    "d".to_string(),
+                ],
+            ],
+        );
+        let first = windows[0].as_ref().expect("first word window");
+        let second = windows[1].as_ref().expect("second word window");
+
+        assert_eq!(first.zipa_norm_range, 0..2);
+        assert_eq!(second.zipa_norm_range, 2..6);
+        assert_eq!(
+            second.ops.first().and_then(|op| op.right_token.as_deref()),
+            Some("j")
+        );
+    }
+
+    #[test]
+    fn word_alignment_windows_assign_pure_boundary_insert_to_following_word_even_without_onset_hint()
+     {
+        let ops = vec![
+            op(
+                AlignmentOpKind::Match,
+                Some(0),
+                Some(0),
+                Some("a"),
+                Some("a"),
+            ),
+            op(
+                AlignmentOpKind::Match,
+                Some(1),
+                Some(1),
+                Some("ɪ"),
+                Some("ɪ"),
+            ),
+            op(AlignmentOpKind::Insert, None, Some(2), None, Some("j")),
+            op(
+                AlignmentOpKind::Match,
+                Some(2),
+                Some(3),
+                Some("ʊ"),
+                Some("ʊ"),
+            ),
+            op(
+                AlignmentOpKind::Match,
+                Some(3),
+                Some(4),
+                Some("z"),
+                Some("z"),
+            ),
+            op(
+                AlignmentOpKind::Match,
+                Some(4),
+                Some(5),
+                Some("d"),
+                Some("d"),
+            ),
+        ];
+
+        let windows = partition_word_alignment_windows(
+            &ops,
+            &[0..2, 2..5],
+            &[
+                vec!["a".to_string(), "ɪ".to_string()],
+                vec!["ʊ".to_string(), "z".to_string(), "d".to_string()],
+            ],
+        );
+        let first = windows[0].as_ref().expect("first word window");
+        let second = windows[1].as_ref().expect("second word window");
+
+        assert_eq!(first.zipa_norm_range, 0..2);
+        assert_eq!(second.zipa_norm_range, 2..6);
+        assert_eq!(
+            second.ops.first().and_then(|op| op.right_token.as_deref()),
+            Some("j")
         );
     }
 }

@@ -54,6 +54,18 @@ function toPhoneticTrace(trace: RpcTranscribePhoneticTrace): PhoneticRescueTrace
       zipaToken: op.zipa_token,
       cost: op.cost,
     })),
+    asrAlternatives: trace.asr_alternatives.map((token) => ({
+      tokenIndex: token.token_index,
+      chosenText: token.chosen_text,
+      concentration: token.concentration,
+      margin: token.margin,
+      revision: BigInt(token.revision.toString()),
+      alternatives: token.alternatives.map((alternative) => ({
+        tokenId: alternative.token_id,
+        text: alternative.text,
+        logit: alternative.logit,
+      })),
+    })),
     wordAlignments: trace.word_alignments.map((word) => ({
       wordText: word.word_text,
       tokenStart: word.token_start,

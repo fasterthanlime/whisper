@@ -111,6 +111,23 @@ pub struct TranscribePhoneticWordAlignment {
 }
 
 #[derive(Clone, Debug, Facet)]
+pub struct TranscribeAsrTokenAlternative {
+    pub token_id: u32,
+    pub text: String,
+    pub logit: f32,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct TranscribeAsrObservedToken {
+    pub token_index: u32,
+    pub chosen_text: String,
+    pub concentration: f32,
+    pub margin: f32,
+    pub revision: u64,
+    pub alternatives: Vec<TranscribeAsrTokenAlternative>,
+}
+
+#[derive(Clone, Debug, Facet)]
 pub struct TranscribePhoneticTrace {
     pub snapshot_revision: u64,
     pub aligned_transcript: String,
@@ -126,6 +143,7 @@ pub struct TranscribePhoneticTrace {
     pub utterance_similarity: Option<f32>,
     pub utterance_feature_similarity: Option<f32>,
     pub utterance_alignment: Vec<TranscribePhoneticAlignmentOp>,
+    pub asr_alternatives: Vec<TranscribeAsrObservedToken>,
     pub word_alignments: Vec<TranscribePhoneticWordAlignment>,
     pub spans: Vec<TranscribePhoneticSpan>,
 }
@@ -825,6 +843,7 @@ pub struct CorpusAlignmentEvalRequest {
     pub limit: u32,
     pub bucket: Option<String>,
     pub randomize: bool,
+    pub prompt_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Facet)]

@@ -33,7 +33,7 @@ fn main() -> Result<()> {
 
     let service = load_service()?;
     let result = service
-        .eval_corpus_alignment(limit as usize, bucket.as_deref(), false)
+        .eval_corpus_alignment(limit as usize, bucket.as_deref(), false, None)
         .map_err(|error| anyhow::anyhow!("running corpus alignment eval: {error}"))?;
 
     if let Some(path) = snapshot_out.as_deref() {

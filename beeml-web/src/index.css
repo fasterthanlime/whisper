@@ -298,6 +298,80 @@ textarea:focus {
   width: min(100%, 44rem);
 }
 
+.asr-alt-section {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.asr-alt-observed-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.asr-alt-observed-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.asr-alt-observed-text {
+  font-size: 0.92rem;
+  color: var(--text);
+  user-select: text;
+}
+
+.asr-alt-sequence-scroll {
+  overflow-x: auto;
+  padding-bottom: 0.1rem;
+}
+
+.asr-alt-sequence {
+  display: flex;
+  gap: 0.4rem;
+  width: max-content;
+  min-width: 100%;
+}
+
+.asr-alt-token {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 4.8rem;
+  max-width: 7.2rem;
+  padding: 0.38rem 0.46rem;
+  border-radius: 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 82%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, white 12%);
+}
+
+.asr-alt-token-chosen {
+  font-weight: 700;
+  color: var(--text);
+  white-space: pre-wrap;
+  line-height: 1.05;
+}
+
+.asr-alt-token-alts {
+  display: grid;
+  gap: 0.1rem;
+  min-height: 1.8rem;
+}
+
+.asr-alt-token-alt {
+  font-size: 0.82rem;
+  line-height: 1;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+
+.asr-alt-token-metrics {
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
 .word-workbench {
   display: grid;
   gap: 0.45rem;

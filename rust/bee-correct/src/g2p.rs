@@ -3,8 +3,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
-use bee_phonetic::parse_reviewed_ipa;
+use anyhow::{Context, Result, anyhow};
+use bee_phonetic::{parse_reviewed_ipa, sentence_word_tokens};
 use espeak_ng::{EspeakNg, install_bundled_language};
 
 pub struct CachedEspeakG2p {
@@ -28,7 +28,6 @@ impl CachedEspeakG2p {
             Some(path) => load_cache_file(path)?,
             None => HashMap::new(),
         };
-
         Ok(Self {
             engine: EspeakNg::with_data_dir("en", &data_dir)
                 .context("initializing embedded espeak-ng engine")?,
@@ -66,6 +65,41 @@ impl CachedEspeakG2p {
 
         self.cache.insert(key.to_string(), tokens.clone());
         Ok(Some(tokens))
+    }
+
+    pub fn ipa_word_tokens_in_utterance(&mut self, text: &str) -> Result<Option<Vec<Vec<String>>>> {
+        let key = text.trim();
+        if key.is_empty() {
+            self.last_lookup_hit_cache = false;
+            return Ok(None);
+        }
+
+        let words = sentence_word_tokens(key);
+        if words.is_empty() {
+            return Ok(None);
+        }
+
+        let mut out = Vec::with_capacity(words.len());
+        let mut previous_prefix = Vec::<String>::new();
+        for word in words {
+            let prefix_text = &key[..word.char_end];
+            let prefix_tokens = self
+                .ipa_tokens(prefix_text)?
+                .ok_or_else(|| anyhow!("espeak produced no tokens for '{prefix_text}'"))?;
+            let common_prefix = previous_prefix
+                .iter()
+                .zip(prefix_tokens.iter())
+                .take_while(|(left, right)| left == right)
+                .count();
+            out.push(prefix_tokens[common_prefix..].to_vec());
+            previous_prefix = prefix_tokens;
+        }
+
+        if out.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(out))
     }
 
     pub fn last_lookup_hit_cache(&self) -> bool {
@@ -168,4 +202,25 @@ fn unescape_field(text: &str) -> Result<String> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utterance_word_groups_preserve_contextual_onset() {
+        let base_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crate should live under rust/");
+        let mut g2p = CachedEspeakG2p::english(base_dir).expect("init g2p");
+        let groups = g2p
+            .ipa_word_tokens_in_utterance("I used Thursday in the parser.")
+            .expect("phonemize utterance")
+            .expect("non-empty utterance");
+
+        assert_eq!(groups.len(), 6);
+        assert_eq!(groups[0], vec!["aɪ".to_string()]);
+        assert!(!groups[1].is_empty());
+    }
 }

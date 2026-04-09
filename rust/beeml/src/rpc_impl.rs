@@ -32,9 +32,14 @@ impl BeeMl for BeeMlService {
             sample_rate_hz: 16_000,
         };
 
-        let result = self.transcribe_samples_chunked(&samples)?;
+        let (result, snapshots) = self.transcribe_samples_with_options_and_history(
+            &samples,
+            bee_transcribe::SessionOptions::default(),
+        )?;
         let snapshot = result.snapshot;
-        let phonetic_trace = self.build_transcribe_phonetic_trace(&audio, &snapshot).ok();
+        let phonetic_trace = self
+            .build_transcribe_phonetic_trace(&audio, &snapshot, &snapshots)
+            .ok();
 
         Ok(TranscribeWavResult {
             transcript: snapshot.full_text,
@@ -1693,6 +1698,10 @@ impl BeeMl for BeeMlService {
                 .as_deref()
                 .filter(|bucket| !bucket.is_empty()),
             request.randomize,
+            request
+                .prompt_id
+                .as_deref()
+                .filter(|prompt_id| !prompt_id.is_empty()),
         )
     }
 
@@ -1702,13 +1711,19 @@ impl BeeMl for BeeMlService {
     ) -> Result<CorpusAlignmentEvalJob, String> {
         let limit = request.limit.max(1);
         let bucket = request.bucket.filter(|bucket| !bucket.is_empty());
+        let prompt_id = request.prompt_id.filter(|prompt_id| !prompt_id.is_empty());
         let randomize = request.randomize;
-        let job = self.create_corpus_eval_job(limit, bucket.clone(), randomize)?;
+        let job =
+            self.create_corpus_eval_job(limit, bucket.clone(), prompt_id.clone(), randomize)?;
         let service = self.clone();
         let job_id = job.job_id;
         tokio::task::spawn_blocking(move || {
-            let result =
-                service.eval_corpus_alignment(limit as usize, bucket.as_deref(), randomize);
+            let result = service.eval_corpus_alignment(
+                limit as usize,
+                bucket.as_deref(),
+                randomize,
+                prompt_id.as_deref(),
+            );
             let _ = service.finish_corpus_eval_job(job_id, result);
         });
         Ok(job)

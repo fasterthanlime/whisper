@@ -179,6 +179,66 @@ export function AlignmentView({
   );
 }
 
+function AsrAlternativesView({
+  tokens,
+}: {
+  tokens: PhoneticRescueTrace["asrAlternatives"];
+}) {
+  if (tokens.length === 0) {
+    return <div className="token-row muted">No token alternatives captured for this utterance.</div>;
+  }
+
+  const observedText = tokens.map((token) => token.chosenText).join("");
+
+  const displayTokenText = (text: string) => {
+    if (!text) return "∅";
+    return text.replaceAll(" ", "␠");
+  };
+
+  return (
+    <div className="asr-alt-section">
+      <div className="asr-alt-observed-line">
+        <span className="asr-alt-observed-label">Observed</span>
+        <span className="asr-alt-observed-text">{observedText || "∅"}</span>
+      </div>
+      <div className="asr-alt-sequence-scroll">
+        <div className="asr-alt-sequence">
+          {tokens.map((token) => {
+            const alternatives = token.alternatives.filter(
+              (alternative, index, all) =>
+                alternative.text !== token.chosenText &&
+                all.findIndex((candidate) => candidate.text === alternative.text) === index,
+            );
+
+            return (
+              <div
+                key={`asr-alt:${token.tokenIndex}`}
+                className="asr-alt-token"
+                title={`token ${token.tokenIndex} · margin ${token.margin.toFixed(3)} · concentration ${token.concentration.toFixed(3)} · rev ${token.revision.toString()}`}
+              >
+                <div className="asr-alt-token-chosen">{displayTokenText(token.chosenText)}</div>
+                <div className="asr-alt-token-alts">
+                  {alternatives.slice(0, 3).map((alternative) => (
+                    <span
+                      key={`${token.tokenIndex}:${alternative.tokenId}`}
+                      className="asr-alt-token-alt"
+                    >
+                      {displayTokenText(alternative.text)}
+                    </span>
+                  ))}
+                </div>
+                <div className="asr-alt-token-metrics muted">
+                  m {token.margin.toFixed(2)} · c {token.concentration.toFixed(2)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WordGroup({
   word,
   label,
@@ -637,6 +697,12 @@ export function PhoneticRescuePanel({
                 <span>utterance norm {formatMetric(trace.utteranceFeatureSimilarity)}</span>
                 <span>utterance raw {formatMetric(trace.utteranceSimilarity)}</span>
                 <span>tail volatile {trace.tailAmbiguity.volatileTokenCount}</span>
+              </div>
+              <div className="prototype-stack" style={{ gap: "0.45rem", marginTop: "0.55rem" }}>
+                <div className="token-row muted" style={{ userSelect: "text" }}>
+                  ASR token alternatives
+                </div>
+                <AsrAlternativesView tokens={trace.asrAlternatives} />
               </div>
               <div className="prototype-stack phonetic-debug-token-stack" style={{ gap: "0.35rem", marginTop: "0.55rem" }}>
                 <div className="token-row muted phonetic-debug-token-row" style={{ userSelect: "text" }}>
