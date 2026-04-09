@@ -102,6 +102,10 @@ pub struct TranscribePhoneticWordAlignment {
     pub token_end: u32,
     pub start_sec: f64,
     pub end_sec: f64,
+    pub zipa_raw_phone_start: Option<u32>,
+    pub zipa_raw_phone_end: Option<u32>,
+    pub zipa_start_sec: Option<f64>,
+    pub zipa_end_sec: Option<f64>,
     pub transcript_raw: Vec<String>,
     pub transcript_normalized: Vec<String>,
     pub zipa_norm_start: u32,
@@ -109,6 +113,16 @@ pub struct TranscribePhoneticWordAlignment {
     pub zipa_raw: Vec<String>,
     pub zipa_normalized: Vec<String>,
     pub alignment: Vec<TranscribePhoneticAlignmentOp>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct TranscribeZipaPhoneSpan {
+    pub token_id: u32,
+    pub token: String,
+    pub start_frame: u32,
+    pub end_frame: u32,
+    pub start_sec: f64,
+    pub end_sec: f64,
 }
 
 #[derive(Clone, Debug, Facet)]
@@ -139,6 +153,7 @@ pub struct TranscribePhoneticTrace {
     pub worst_contentful_span_index: Option<u32>,
     pub best_rescue_span_index: Option<u32>,
     pub utterance_zipa_raw: Vec<String>,
+    pub utterance_zipa_phone_spans: Vec<TranscribeZipaPhoneSpan>,
     pub utterance_zipa_normalized: Vec<String>,
     pub utterance_transcript_normalized: Vec<String>,
     pub utterance_similarity: Option<f32>,

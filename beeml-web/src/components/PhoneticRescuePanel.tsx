@@ -8,6 +8,13 @@ import type {
   PhoneticWordAlignment,
 } from "../types";
 
+type TimelineBar = {
+  label: string;
+  startSec: number;
+  endSec: number;
+  title: string;
+};
+
 function formatMetric(value: number | null | undefined) {
   return value == null ? "n/a" : value.toFixed(4);
 }
@@ -135,6 +142,121 @@ function alignmentRowValues(
     kind: op.kind,
     cost: op.cost,
   }));
+}
+
+function formatSeconds(value: number) {
+  return `${value.toFixed(2)}s`;
+}
+
+function timelineTicks(duration: number) {
+  const count = Math.max(2, Math.ceil(duration));
+  return Array.from({ length: count + 1 }, (_, index) => {
+    const sec = Math.min(duration, index);
+    return { sec, left: duration > 0 ? (sec / duration) * 100 : 0 };
+  });
+}
+
+function TimelineLane({
+  label,
+  bars,
+  duration,
+  tone,
+}: {
+  label: string;
+  bars: TimelineBar[];
+  duration: number;
+  tone: "qwen" | "zipa" | "phone";
+}) {
+  return (
+    <div className="phonetic-timeline-lane">
+      <div className="phonetic-timeline-lane-label">{label}</div>
+      <div className="phonetic-timeline-lane-track">
+        {bars.map((bar, index) => {
+          const left = duration > 0 ? (bar.startSec / duration) * 100 : 0;
+          const width = duration > 0 ? ((bar.endSec - bar.startSec) / duration) * 100 : 0;
+          return (
+            <div
+              key={`${label}:${index}:${bar.startSec}:${bar.endSec}`}
+              className={`phonetic-timeline-bar tone-${tone}`}
+              style={{ left: `${left}%`, width: `${Math.max(width, 0.6)}%` }}
+              title={bar.title}
+            >
+              <span>{bar.label}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PhoneticTimingTimeline({
+  wordAlignments,
+  phoneSpans,
+}: {
+  wordAlignments: PhoneticWordAlignment[];
+  phoneSpans: PhoneticRescueTrace["utteranceZipaPhoneSpans"];
+}) {
+  const qwenBars = wordAlignments.map<TimelineBar>((word) => ({
+    label: word.wordText,
+    startSec: word.startSec,
+    endSec: word.endSec,
+    title: `${word.wordText} · Qwen ${formatSeconds(word.startSec)}-${formatSeconds(word.endSec)}`,
+  }));
+  const zipaWordBars = wordAlignments
+    .filter((word) => word.zipaStartSec != null && word.zipaEndSec != null)
+    .map<TimelineBar>((word) => ({
+      label: word.wordText,
+      startSec: word.zipaStartSec!,
+      endSec: word.zipaEndSec!,
+      title: `${word.wordText} · ZIPA ${formatSeconds(word.zipaStartSec!)}-${formatSeconds(word.zipaEndSec!)} · raw phones ${word.zipaRawPhoneStart ?? "?"}..${word.zipaRawPhoneEnd ?? "?"}`,
+    }));
+  const phoneBars = phoneSpans.map<TimelineBar>((span) => ({
+    label: span.token,
+    startSec: span.startSec,
+    endSec: span.endSec,
+    title: `${span.token} · ${formatSeconds(span.startSec)}-${formatSeconds(span.endSec)} · frames ${span.startFrame}..${span.endFrame}`,
+  }));
+  const duration = Math.max(
+    0,
+    ...qwenBars.map((bar) => bar.endSec),
+    ...zipaWordBars.map((bar) => bar.endSec),
+    ...phoneBars.map((bar) => bar.endSec),
+  );
+
+  if (duration <= 0) {
+    return null;
+  }
+
+  return (
+    <div className="phonetic-timeline-card">
+      <div className="phonetic-timeline-header">
+        <strong>Timing</strong>
+        <span>Qwen word timings, ZIPA projected word windows, and raw ZIPA phone spans on one axis.</span>
+      </div>
+      <div className="phonetic-timeline-scroll">
+        <div className="phonetic-timeline-inner">
+          <div className="phonetic-timeline-ruler">
+            <div className="phonetic-timeline-lane-label">time</div>
+            <div className="phonetic-timeline-ruler-track">
+              {timelineTicks(duration).map((tick) => (
+                <div
+                  key={`tick:${tick.sec}`}
+                  className="phonetic-timeline-tick"
+                  style={{ left: `${tick.left}%` }}
+                >
+                  <span>{formatSeconds(tick.sec)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <TimelineLane label="Qwen" bars={qwenBars} duration={duration} tone="qwen" />
+          <TimelineLane label="ZIPA words" bars={zipaWordBars} duration={duration} tone="zipa" />
+          <TimelineLane label="ZIPA phones" bars={phoneBars} duration={duration} tone="phone" />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function AlignmentView({
@@ -738,6 +860,11 @@ export function PhoneticRescuePanel({
               onClick={() => void playLaneSequence("zipa")}
             />
           </div>
+
+          <PhoneticTimingTimeline
+            wordAlignments={wordAlignments}
+            phoneSpans={trace.utteranceZipaPhoneSpans}
+          />
 
           {controlError && (
             <div className="notice-row">

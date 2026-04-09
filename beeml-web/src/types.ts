@@ -157,6 +157,10 @@ export type PhoneticWordAlignment = {
   tokenEnd: number;
   startSec: number;
   endSec: number;
+  zipaRawPhoneStart?: number | null;
+  zipaRawPhoneEnd?: number | null;
+  zipaStartSec?: number | null;
+  zipaEndSec?: number | null;
   transcriptRaw: string[];
   transcriptNormalized: string[];
   zipaNormStart: number;
@@ -164,6 +168,15 @@ export type PhoneticWordAlignment = {
   zipaRaw: string[];
   zipaNormalized: string[];
   alignment: PhoneticAlignmentOp[];
+};
+
+export type PhoneticZipaPhoneSpan = {
+  tokenId: number;
+  token: string;
+  startFrame: number;
+  endFrame: number;
+  startSec: number;
+  endSec: number;
 };
 
 export type PhoneticAsrTokenAlternative = {
@@ -200,6 +213,7 @@ export type PhoneticRescueTrace = {
   worstContentfulSpanIndex?: number | null;
   bestRescueSpanIndex?: number | null;
   utteranceZipaRaw: string[];
+  utteranceZipaPhoneSpans: PhoneticZipaPhoneSpan[];
   utteranceZipaNormalized: string[];
   utteranceTranscriptNormalized: string[];
   utteranceSimilarity?: number | null;

@@ -15,6 +15,7 @@ use bee_phonetic::{
     phoneme_similarity, query_index, reduce_ipa_tokens, score_shortlist, sentence_word_tokens,
     top_right_anchor_windows,
 };
+use bee_transcribe::zipa_align::timed_range_for_normalized_range;
 use bee_transcribe::{AlignedWord, Engine, SessionSnapshot};
 use bee_zipa_mlx::audio::AudioBuffer;
 use bee_zipa_mlx::infer::ZipaInference;
@@ -33,7 +34,7 @@ use beeml::rpc::{
     TranscribeAsrTokenAlternative, TranscribePhoneticAlignmentKind, TranscribePhoneticAlignmentOp,
     TranscribePhoneticAnchorConfidence, TranscribePhoneticCandidate, TranscribePhoneticSpan,
     TranscribePhoneticSpanClass, TranscribePhoneticSpanUsefulness, TranscribePhoneticTrace,
-    TranscribePhoneticWordAlignment,
+    TranscribePhoneticWordAlignment, TranscribeZipaPhoneSpan,
 };
 use rand::seq::SliceRandom;
 
@@ -229,6 +230,23 @@ impl BeeMlService {
             .map_err(|_| "zipa mutex poisoned".to_string())?;
 
         let utterance = zipa.infer_audio(audio).map_err(|e| e.to_string())?;
+        let utterance_duration_secs = audio.samples.len() as f64 / audio.sample_rate_hz as f64;
+        let utterance_phone_spans = utterance
+            .derive_phone_spans(&zipa.tokens, utterance_duration_secs, 0)
+            .into_iter()
+            .filter(|span| span.token != "▁")
+            .collect::<Vec<_>>();
+        let utterance_zipa_phone_spans = utterance_phone_spans
+            .iter()
+            .map(|span| TranscribeZipaPhoneSpan {
+                token_id: span.token_id.min(u32::MAX as usize) as u32,
+                token: span.token.clone(),
+                start_frame: span.start_frame.min(u32::MAX as usize) as u32,
+                end_frame: span.end_frame.min(u32::MAX as usize) as u32,
+                start_sec: span.start_time_secs,
+                end_sec: span.end_time_secs,
+            })
+            .collect::<Vec<_>>();
         let utterance_zipa_raw = utterance
             .tokens
             .into_iter()
@@ -300,6 +318,11 @@ impl BeeMlService {
                     .get(word_index)
                     .map(|(_, raw_tokens)| raw_tokens.clone())
                     .unwrap_or_default();
+                let timed_zipa_range = timed_range_for_normalized_range(
+                    &utterance_zipa_normalized_with_spans,
+                    &utterance_phone_spans,
+                    zipa_norm_range.clone(),
+                );
                 let zipa_raw = raw_slice_for_normalized_range(
                     &utterance_zipa_raw,
                     &utterance_zipa_normalized_with_spans,
@@ -313,6 +336,14 @@ impl BeeMlService {
                     token_end: (word_index + 1) as u32,
                     start_sec: aligned_word.start,
                     end_sec: aligned_word.end,
+                    zipa_raw_phone_start: timed_zipa_range
+                        .as_ref()
+                        .map(|range| range.raw_phone_range.start.min(u32::MAX as usize) as u32),
+                    zipa_raw_phone_end: timed_zipa_range
+                        .as_ref()
+                        .map(|range| range.raw_phone_range.end.min(u32::MAX as usize) as u32),
+                    zipa_start_sec: timed_zipa_range.as_ref().map(|range| range.start_time_secs),
+                    zipa_end_sec: timed_zipa_range.as_ref().map(|range| range.end_time_secs),
                     transcript_raw,
                     transcript_normalized: transcript_normalized.clone(),
                     zipa_norm_start: zipa_norm_range.start as u32,
@@ -536,6 +567,7 @@ impl BeeMlService {
                 &utterance_transcript_normalized,
             ),
             utterance_zipa_raw,
+            utterance_zipa_phone_spans,
             utterance_zipa_normalized,
             utterance_transcript_normalized,
             utterance_alignment: map_alignment_ops(&utterance_alignment.ops),

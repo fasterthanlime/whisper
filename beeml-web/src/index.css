@@ -392,6 +392,116 @@ textarea:focus {
   padding: 0.05rem 0.05rem 0.1rem;
 }
 
+.phonetic-timeline-card {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.55rem 0.65rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  background: color-mix(in srgb, var(--bg-surface-alt) 80%, transparent);
+}
+
+.phonetic-timeline-header {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.phonetic-timeline-header strong {
+  font-size: 0.8rem;
+}
+
+.phonetic-timeline-header span {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+}
+
+.phonetic-timeline-scroll {
+  overflow-x: auto;
+  padding-bottom: 0.1rem;
+}
+
+.phonetic-timeline-inner {
+  min-width: 100%;
+  width: max(100%, 56rem);
+  display: grid;
+  gap: 0.28rem;
+}
+
+.phonetic-timeline-ruler,
+.phonetic-timeline-lane {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.phonetic-timeline-lane-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.phonetic-timeline-ruler-track,
+.phonetic-timeline-lane-track {
+  position: relative;
+  min-height: 1.9rem;
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 84%, transparent);
+}
+
+.phonetic-timeline-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.phonetic-timeline-tick span {
+  position: absolute;
+  top: 0.2rem;
+  left: 0.22rem;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.phonetic-timeline-bar {
+  position: absolute;
+  top: 0.24rem;
+  bottom: 0.24rem;
+  border-radius: 0.48rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 0 0.3rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+.phonetic-timeline-bar.tone-qwen {
+  background: color-mix(in srgb, var(--lane-qwen-bg) 72%, var(--lane-qwen) 28%);
+  border: 1px solid color-mix(in srgb, var(--lane-qwen) 42%, transparent);
+}
+
+.phonetic-timeline-bar.tone-zipa {
+  background: color-mix(in srgb, var(--lane-zipa-bg) 72%, var(--lane-zipa) 28%);
+  border: 1px solid color-mix(in srgb, var(--lane-zipa) 42%, transparent);
+}
+
+.phonetic-timeline-bar.tone-phone {
+  background: color-mix(in srgb, var(--lane-zipa-bg) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lane-zipa) 28%, transparent);
+  color: var(--lane-zipa);
+  font-weight: 600;
+}
+
 .word-group-card {
   min-width: 9.8rem;
   display: grid;
