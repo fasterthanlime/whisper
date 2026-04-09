@@ -47,9 +47,6 @@ class BeeInputController: IMKInputController {
             bridge.deactivate(self)
 
             if isDictating {
-                if let session {
-                    session.autoCommittedPrefix = session.currentMarkedText
-                }
                 BeeVoxIMEClient.shared.imeContextLost(hadMarkedText: hadMarkedText)
             }
         }
