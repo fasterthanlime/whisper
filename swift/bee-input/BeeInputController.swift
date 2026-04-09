@@ -43,7 +43,6 @@ class BeeInputController: IMKInputController {
                 "deactivateServer: session=\(sessionID?.uuidString.prefix(8) ?? "none") hadMarkedText=\(hadMarkedText)"
             )
 
-            session?.clearOrphanedMarkedText()
             bridge.deactivate(self)
 
             if isDictating {
@@ -51,6 +50,75 @@ class BeeInputController: IMKInputController {
             }
         }
         super.deactivateServer(sender)
+    }
+
+    nonisolated override func cancelComposition() {
+        MainActor.assumeIsolated {
+            beeInputLog("cancelComposition: entry")
+        }
+        super.cancelComposition()
+        MainActor.assumeIsolated {
+            BeeIMEBridgeState.shared.didCancelComposition(on: self)
+        }
+    }
+
+    nonisolated override func commitComposition(_ sender: Any!) {
+        MainActor.assumeIsolated {
+            beeInputLog("commitComposition: entry -> cancel")
+        }
+        cancelComposition()
+    }
+
+    nonisolated override func recognizedEvents(_ sender: Any!) -> Int {
+        Int(
+            NSEvent.EventTypeMask([
+                .keyDown,
+                .leftMouseDown,
+                .rightMouseDown,
+                .otherMouseDown,
+            ]).rawValue
+        )
+    }
+
+    nonisolated override func mouseDown(
+        onCharacterIndex index: Int,
+        coordinate point: NSPoint,
+        withModifier flags: Int,
+        continueTracking keepTracking: UnsafeMutablePointer<ObjCBool>!,
+        client sender: Any!
+    ) -> Bool {
+        keepTracking?.pointee = false
+        return MainActor.assumeIsolated {
+            let bridge = BeeIMEBridgeState.shared
+            guard bridge.activeController === self else { return false }
+            guard let session = bridge.currentSession else { return false }
+            guard let client = self.client() else { return false }
+
+            let markedRange = client.markedRange()
+            guard markedRange.location != NSNotFound else { return false }
+
+            let clickedInsideComposition = NSLocationInRange(index, markedRange)
+            beeInputLog(
+                "mouseDown: index=\(index) markedRange=\(markedRange) inside=\(clickedInsideComposition)"
+            )
+
+            if !clickedInsideComposition && !session.currentMarkedText.isEmpty {
+                beeInputLog("mouseDown: outside composition -> cancel")
+                cancelComposition()
+            }
+            return false
+        }
+    }
+
+    nonisolated override func composedString(_ sender: Any!) -> Any! {
+        let text = MainActor.assumeIsolated {
+            BeeIMEBridgeState.shared.currentSession?.currentMarkedText
+        } ?? ""
+        return text as NSString
+    }
+
+    nonisolated override func originalString(_ sender: Any!) -> NSAttributedString! {
+        NSAttributedString(string: "")
     }
 
     nonisolated override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {

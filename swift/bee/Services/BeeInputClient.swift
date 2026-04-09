@@ -93,6 +93,10 @@ final class BeeInputClient: Sendable {
         Task { await BeeIPCServer.shared.stopDictating(sessionId: sessionID.uuidString) }
     }
 
+    func cancelComposition(sessionID: UUID) async {
+        await BeeIPCServer.shared.stopDictating(sessionId: sessionID.uuidString)
+    }
+
     func replaceText(sessionId: String, oldText: String, newText: String) {
         Task { await BeeIPCServer.shared.replaceText(sessionId: sessionId, oldText: oldText, newText: newText) }
     }
