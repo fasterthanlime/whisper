@@ -554,6 +554,8 @@ impl BeeMlService {
             aligned_transcript: snapshot.committed_text.clone(),
             pending_text: snapshot.pending_text.clone(),
             full_transcript: snapshot.full_text.clone(),
+            session_audio_f32: audio.samples.clone(),
+            session_audio_sample_rate_hz: audio.sample_rate_hz,
             tail_ambiguity: snapshot.ambiguity.clone(),
             worst_raw_span_index,
             worst_contentful_span_index,
@@ -644,15 +646,15 @@ impl BeeMlService {
             let wav_bytes = std::fs::read(&recording.wav_path)
                 .map_err(|e| format!("reading {}: {e}", recording.wav_path))?;
             let samples = bee_transcribe::decode_wav(&wav_bytes).map_err(|e| e.to_string())?;
-            let audio = AudioBuffer {
-                samples: samples.clone(),
-                sample_rate_hz: 16_000,
-            };
 
             let mut options = bee_transcribe::SessionOptions::default();
             options.language = bee_transcribe::Language("English".to_string());
             let (result, snapshots) =
                 self.transcribe_samples_with_options_and_history(&samples, options)?;
+            let audio = AudioBuffer {
+                samples: result.session_audio.samples().to_vec(),
+                sample_rate_hz: result.session_audio.sample_rate().0 as u32,
+            };
             let snapshot = result.snapshot;
 
             match self.build_transcribe_phonetic_trace(&audio, &snapshot, &snapshots) {

@@ -199,6 +199,8 @@ export type PhoneticRescueTrace = {
   alignedTranscript: string;
   pendingText: string;
   fullTranscript: string;
+  sessionAudioF32: number[];
+  sessionAudioSampleRateHz: number;
   tailAmbiguity: {
     pendingTokenCount: number;
     lowConcentrationCount: number;

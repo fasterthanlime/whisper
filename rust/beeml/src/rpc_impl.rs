@@ -27,15 +27,14 @@ use crate::util::*;
 impl BeeMl for BeeMlService {
     async fn transcribe_wav(&self, wav_bytes: Vec<u8>) -> Result<TranscribeWavResult, String> {
         let samples = bee_transcribe::decode_wav(&wav_bytes).map_err(|e| e.to_string())?;
-        let audio = AudioBuffer {
-            samples: samples.clone(),
-            sample_rate_hz: 16_000,
-        };
-
         let (result, snapshots) = self.transcribe_samples_with_options_and_history(
             &samples,
             bee_transcribe::SessionOptions::default(),
         )?;
+        let audio = AudioBuffer {
+            samples: result.session_audio.samples().to_vec(),
+            sample_rate_hz: result.session_audio.sample_rate().0 as u32,
+        };
         let snapshot = result.snapshot;
         let phonetic_trace = self
             .build_transcribe_phonetic_trace(&audio, &snapshot, &snapshots)

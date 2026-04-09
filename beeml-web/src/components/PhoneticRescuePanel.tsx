@@ -161,11 +161,13 @@ function TimelineLane({
   bars,
   duration,
   tone,
+  onPlayRange,
 }: {
   label: string;
   bars: TimelineBar[];
   duration: number;
   tone: "qwen" | "zipa" | "phone";
+  onPlayRange: (startSec: number, endSec: number) => void;
 }) {
   return (
     <div className="phonetic-timeline-lane">
@@ -175,14 +177,16 @@ function TimelineLane({
           const left = duration > 0 ? (bar.startSec / duration) * 100 : 0;
           const width = duration > 0 ? ((bar.endSec - bar.startSec) / duration) * 100 : 0;
           return (
-            <div
+            <button
+              type="button"
               key={`${label}:${index}:${bar.startSec}:${bar.endSec}`}
               className={`phonetic-timeline-bar tone-${tone}`}
               style={{ left: `${left}%`, width: `${Math.max(width, 0.6)}%` }}
               title={bar.title}
+              onClick={() => onPlayRange(bar.startSec, bar.endSec)}
             >
               <span>{bar.label}</span>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -193,9 +197,11 @@ function TimelineLane({
 function PhoneticTimingTimeline({
   wordAlignments,
   phoneSpans,
+  onPlayRange,
 }: {
   wordAlignments: PhoneticWordAlignment[];
   phoneSpans: PhoneticRescueTrace["utteranceZipaPhoneSpans"];
+  onPlayRange: (startSec: number, endSec: number) => void;
 }) {
   const qwenBars = wordAlignments.map<TimelineBar>((word) => ({
     label: word.wordText,
@@ -250,9 +256,27 @@ function PhoneticTimingTimeline({
               ))}
             </div>
           </div>
-          <TimelineLane label="Qwen" bars={qwenBars} duration={duration} tone="qwen" />
-          <TimelineLane label="ZIPA words" bars={zipaWordBars} duration={duration} tone="zipa" />
-          <TimelineLane label="ZIPA phones" bars={phoneBars} duration={duration} tone="phone" />
+          <TimelineLane
+            label="Qwen"
+            bars={qwenBars}
+            duration={duration}
+            tone="qwen"
+            onPlayRange={onPlayRange}
+          />
+          <TimelineLane
+            label="ZIPA words"
+            bars={zipaWordBars}
+            duration={duration}
+            tone="zipa"
+            onPlayRange={onPlayRange}
+          />
+          <TimelineLane
+            label="ZIPA phones"
+            bars={phoneBars}
+            duration={duration}
+            tone="phone"
+            onPlayRange={onPlayRange}
+          />
         </div>
       </div>
     </div>
@@ -525,13 +549,9 @@ async function decodeWavBytes(
 export function PhoneticRescuePanel({
   trace,
   wsUrl,
-  sourceAudioUrl,
-  sourceAudioPath,
 }: {
   trace: PhoneticRescueTrace;
   wsUrl?: string;
-  sourceAudioUrl?: string;
-  sourceAudioPath?: string;
 }) {
   const wordAlignments = useMemo(
     () => [...trace.wordAlignments].sort((a, b) => a.tokenStart - b.tokenStart),
@@ -563,15 +583,15 @@ export function PhoneticRescuePanel({
   const [controlError, setControlError] = useState<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const playingSourceRef = useRef<AudioBufferSourceNode | null>(null);
-  const originalBufferRef = useRef<AudioBuffer | null>(null);
-  const originalBufferKeyRef = useRef<string | null>(null);
+  const sessionBufferRef = useRef<AudioBuffer | null>(null);
+  const sessionBufferKeyRef = useRef<string | null>(null);
   const playbackRunIdRef = useRef(0);
   const synthBufferCacheRef = useRef<Map<string, Promise<AudioBuffer>>>(new Map());
 
   useEffect(() => {
-    originalBufferRef.current = null;
-    originalBufferKeyRef.current = null;
-  }, [sourceAudioUrl, sourceAudioPath]);
+    sessionBufferRef.current = null;
+    sessionBufferKeyRef.current = null;
+  }, [trace.sessionAudioF32, trace.sessionAudioSampleRateHz]);
 
   useEffect(() => {
     synthBufferCacheRef.current.clear();
@@ -646,34 +666,20 @@ export function PhoneticRescuePanel({
     });
   };
 
-  const ensureOriginalBuffer = async () => {
-    const key = sourceAudioPath ?? sourceAudioUrl ?? null;
-    if (!key) {
-      throw new Error("original audio is unavailable for this trace");
+  const ensureSessionBuffer = async () => {
+    const key = `${trace.snapshotRevision.toString()}:${trace.sessionAudioSampleRateHz}:${trace.sessionAudioF32.length}`;
+    if (!trace.sessionAudioF32.length || !trace.sessionAudioSampleRateHz) {
+      throw new Error("session audio is unavailable for this trace");
     }
-    if (originalBufferRef.current && originalBufferKeyRef.current === key) {
-      return originalBufferRef.current;
+    if (sessionBufferRef.current && sessionBufferKeyRef.current === key) {
+      return sessionBufferRef.current;
     }
     const context = await ensureAudioContext();
-    let wavBytes: Uint8Array;
-    if (sourceAudioUrl) {
-      const response = await fetch(sourceAudioUrl);
-      if (!response.ok) {
-        throw new Error(`failed to load original audio: ${response.status}`);
-      }
-      wavBytes = new Uint8Array(await response.arrayBuffer());
-    } else {
-      if (!wsUrl || !sourceAudioPath) {
-        throw new Error("original audio is unavailable for this trace");
-      }
-      const client = await connectBeeMl(wsUrl);
-      const response = await client.loadAudioFile({ path: sourceAudioPath });
-      if (!response.ok) throw new Error(response.error);
-      wavBytes = new Uint8Array(response.value.wav_bytes);
-    }
-    const buffer = await decodeWavBytes(context, wavBytes);
-    originalBufferRef.current = buffer;
-    originalBufferKeyRef.current = key;
+    const channel = new Float32Array(trace.sessionAudioF32);
+    const buffer = context.createBuffer(1, channel.length, trace.sessionAudioSampleRateHz);
+    buffer.copyToChannel(channel, 0);
+    sessionBufferRef.current = buffer;
+    sessionBufferKeyRef.current = key;
     return buffer;
   };
 
@@ -734,8 +740,21 @@ export function PhoneticRescuePanel({
       setControlError(null);
       setActiveGlobalControl(null);
       setActiveControl({ tokenStart: word.tokenStart, kind: "original", phase: "loading" });
-      const buffer = await ensureOriginalBuffer();
+      const buffer = await ensureSessionBuffer();
       await playBufferRange(buffer, word.startSec, word.endSec, word.tokenStart, "original");
+    } catch (error) {
+      setControlError(error instanceof Error ? error.message : String(error));
+      setActiveControl(null);
+    }
+  };
+
+  const playOriginalRange = async (startSec: number, endSec: number) => {
+    try {
+      setControlError(null);
+      setActiveGlobalControl(null);
+      setActiveControl(null);
+      const buffer = await ensureSessionBuffer();
+      await playBufferRange(buffer, startSec, endSec, Number.MAX_SAFE_INTEGER, "original");
     } catch (error) {
       setControlError(error instanceof Error ? error.message : String(error));
       setActiveControl(null);
@@ -750,7 +769,7 @@ export function PhoneticRescuePanel({
       setActiveGlobalControl({ kind, phase: "loading" });
       let originalBuffer: AudioBuffer | null = null;
       if (kind === "original") {
-        originalBuffer = await ensureOriginalBuffer();
+        originalBuffer = await ensureSessionBuffer();
       }
       if (playbackRunIdRef.current !== runId) return;
       setActiveGlobalControl({ kind, phase: "playing" });
@@ -864,6 +883,7 @@ export function PhoneticRescuePanel({
           <PhoneticTimingTimeline
             wordAlignments={wordAlignments}
             phoneSpans={trace.utteranceZipaPhoneSpans}
+            onPlayRange={(startSec, endSec) => void playOriginalRange(startSec, endSec)}
           />
 
           {controlError && (

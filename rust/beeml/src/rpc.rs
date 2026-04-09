@@ -148,6 +148,8 @@ pub struct TranscribePhoneticTrace {
     pub aligned_transcript: String,
     pub pending_text: String,
     pub full_transcript: String,
+    pub session_audio_f32: Vec<f32>,
+    pub session_audio_sample_rate_hz: u32,
     pub tail_ambiguity: SessionAmbiguitySummary,
     pub worst_raw_span_index: Option<u32>,
     pub worst_contentful_span_index: Option<u32>,

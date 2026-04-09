@@ -41,6 +41,7 @@ pub type SharedCorrectionEngine = Arc<Mutex<CorrectionEngine>>;
 /// the corrector state (for teach/save).
 pub struct FinishResult {
     pub snapshot: SessionSnapshot,
+    pub session_audio: audio_buffer::AudioBuffer,
     pub corrector: Option<Corrector>,
 }
 

@@ -24,19 +24,29 @@ export function EvalInspector({
   const rafRef = useRef<number>(0);
   const playStartRef = useRef<{ ctxTime: number; offset: number } | null>(null);
   const rangeEndRef = useRef<number | null>(null);
+  const sessionAudio = data.phoneticTrace;
 
   useEffect(() => {
-    if (!audioUrl) return;
+    const traceAudio = sessionAudio?.sessionAudioF32;
+    const traceRate = sessionAudio?.sessionAudioSampleRateHz;
+    if ((!audioUrl && !traceAudio?.length) || !traceRate && !audioUrl) return;
     const ctx = new AudioContext();
     ctxRef.current = ctx;
-
-    fetch(audioUrl)
-      .then((r) => r.arrayBuffer())
-      .then((ab) => ctx.decodeAudioData(ab))
-      .then((buf) => {
-        bufferRef.current = buf;
-        setDuration(buf.duration);
-      });
+    if (traceAudio?.length && traceRate) {
+      const channel = new Float32Array(traceAudio);
+      const buf = ctx.createBuffer(1, channel.length, traceRate);
+      buf.copyToChannel(channel, 0);
+      bufferRef.current = buf;
+      setDuration(buf.duration);
+    } else if (audioUrl) {
+      fetch(audioUrl)
+        .then((r) => r.arrayBuffer())
+        .then((ab) => ctx.decodeAudioData(ab))
+        .then((buf) => {
+          bufferRef.current = buf;
+          setDuration(buf.duration);
+        });
+    }
 
     return () => {
       sourceRef.current?.stop();
@@ -128,7 +138,7 @@ export function EvalInspector({
 
   return (
     <div className="eval-inspector">
-      {audioUrl && (
+      {(audioUrl || sessionAudio?.sessionAudioF32.length) && (
         <EvalPlaybackBar
           playing={playing}
           currentTime={currentTime}
@@ -172,9 +182,8 @@ export function EvalInspector({
           <PhoneticRescuePanel
             trace={data.phoneticTrace}
             wsUrl={wsUrl}
-            sourceAudioUrl={audioUrl}
           />
-        ) : null}
+      ) : null}
       </div>
     </div>
   );

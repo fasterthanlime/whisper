@@ -44,6 +44,8 @@ function toPhoneticTrace(trace: RpcTranscribePhoneticTrace): PhoneticRescueTrace
     alignedTranscript: trace.aligned_transcript,
     pendingText: trace.pending_text,
     fullTranscript: trace.full_transcript,
+    sessionAudioF32: trace.session_audio_f32,
+    sessionAudioSampleRateHz: trace.session_audio_sample_rate_hz,
     tailAmbiguity: {
       pendingTokenCount: trace.tail_ambiguity.pending_token_count,
       lowConcentrationCount: trace.tail_ambiguity.low_concentration_count,
@@ -511,7 +513,6 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
                   <PhoneticRescuePanel
                     trace={toPhoneticTrace(selectedRow.trace)}
                     wsUrl={wsUrl}
-                    sourceAudioPath={selectedRow.wav_path}
                   />
                 ) : (
                   <div className="prototype-empty">

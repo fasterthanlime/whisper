@@ -59,6 +59,7 @@ pub struct Session<'a> {
     incoming: Vec<f32>,
     chunk_size_samples: usize,
     revision: u64,
+    session_audio: AudioBuffer,
 }
 
 impl<'a> Session<'a> {
@@ -95,6 +96,7 @@ impl<'a> Session<'a> {
             incoming: Vec::new(),
             chunk_size_samples,
             revision: 0,
+            session_audio: AudioBuffer::empty(SampleRate::HZ_16000),
         }
     }
 
@@ -130,6 +132,7 @@ impl<'a> Session<'a> {
                     audio_samples = chunk.len(),
                     "feed: speech chunk passed filters"
                 );
+                self.session_audio.append(&chunk);
                 self.decode.append_audio(&chunk);
                 let decode_start = phase_start();
                 self.decode_and_maybe_commit(
@@ -258,6 +261,7 @@ impl<'a> Session<'a> {
         let corrector = self.correction.take().map(|(_, c)| c);
         Ok(FinishResult {
             snapshot,
+            session_audio: self.session_audio,
             corrector,
         })
     }
