@@ -1,3 +1,5 @@
+import { useMemo, useState } from "react";
+
 import type {
   PhoneticAlignmentOp,
   PhoneticRescueSpan,
@@ -135,9 +137,13 @@ export function AlignmentView({
   );
 }
 
-function SpanCard({ span }: { span: PhoneticRescueSpan }) {
+function WordInspector({ span }: { span: PhoneticRescueSpan }) {
   return (
-    <article key={`${span.tokenStart}:${span.tokenEnd}:${span.spanText}`} className="failure-card" style={{ gap: "0.55rem" }}>
+    <article
+      key={`${span.tokenStart}:${span.tokenEnd}:${span.spanText}`}
+      className="failure-card"
+      style={{ gap: "0.55rem" }}
+    >
       <div className="failure-topline">
         <span className="mini-badge">
           {span.tokenStart}:{span.tokenEnd}
@@ -146,73 +152,50 @@ function SpanCard({ span }: { span: PhoneticRescueSpan }) {
           ZIPA {span.zipaNormStart}:{span.zipaNormEnd}
         </span>
         <span className="mini-badge">{span.alignmentSource}</span>
-        <span className="mini-badge">{span.anchorConfidence.toLowerCase()}</span>
-        <span className="mini-badge">{span.spanClass.replaceAll(/([A-Z])/g, "-$1").toLowerCase().replace(/^-/, "")}</span>
-        <span className="mini-badge">{span.spanUsefulness.toLowerCase()}</span>
-        <span className="mini-badge">
-          {span.zipaRescueEligible ? "eligible" : "not-eligible"}
-        </span>
-        <span className="failure-score">
-          base {formatMetric(span.transcriptFeatureSimilarity)}
-        </span>
+        <span className="failure-score">base {formatMetric(span.transcriptFeatureSimilarity)}</span>
       </div>
       <div className="failure-transcript">{span.spanText}</div>
       <div className="failure-pills">
-        <span className="failure-pill">
-          phones {span.transcriptPhoneCount}{"->"}
-          {span.chosenZipaPhoneCount}
-        </span>
-        <span className="failure-pill">
-          proj {formatMetric(span.projectedAlignmentScore)}
-        </span>
-        <span className="failure-pill">
-          chosen {formatMetric(span.chosenAlignmentScore)}
-        </span>
-        <span className="failure-pill">
-          gap {formatMetric(span.alignmentScoreGap)}
-        </span>
+        <span className="failure-pill">phones {span.transcriptPhoneCount}{"->"}{span.chosenZipaPhoneCount}</span>
+      </div>
+      <div className="prototype-stack" style={{ gap: "0.35rem" }}>
+        <div className="token-row muted" style={{ userSelect: "text" }}>
+          transcript IPA: {formatTokens(span.transcriptNormalized)}
+        </div>
+        <div className="token-row muted" style={{ userSelect: "text" }}>
+          ZIPA raw: {formatTokens(span.zipaRaw)}
+        </div>
+        <div className="token-row muted" style={{ userSelect: "text" }}>
+          ZIPA norm: {formatTokens(span.zipaNormalized)}
+        </div>
       </div>
       <AlignmentView ops={span.alignment} transcriptLabel="Transcript" zipaLabel="ZIPA" />
-      <div className="accepted-edits" style={{ marginTop: "0.25rem" }}>
-        {span.candidates
-          .filter((candidate) => (candidate.similarityDelta ?? 0) > 0)
-          .slice(0, 4)
-          .map((candidate) => (
-            <span
-              key={`${span.tokenStart}:${span.tokenEnd}:${candidate.aliasText}`}
-              className="accepted-edit"
-            >
-              <span className="replacement">{candidate.aliasText}</span>
-              <span className="score">{formatMetric(candidate.featureSimilarity)}</span>
-              <span className="delta positive">
-                Δ +{(candidate.similarityDelta ?? 0).toFixed(4)}
-              </span>
-            </span>
-          ))}
-      </div>
     </article>
   );
 }
 
 export function PhoneticRescuePanel({ trace }: { trace: PhoneticRescueTrace }) {
-  const spans = trace.spans.filter((span) =>
-    span.candidates.some((candidate) => (candidate.similarityDelta ?? 0) > 0),
+  const wordSpans = useMemo(
+    () =>
+      trace.spans
+        .filter((span) => span.tokenEnd === span.tokenStart + 1)
+        .sort((a, b) => a.tokenStart - b.tokenStart),
+    [trace.spans],
   );
-  const worstRawSpan =
-    trace.worstRawSpanIndex != null ? trace.spans[trace.worstRawSpanIndex] : null;
-  const worstContentfulSpan =
-    trace.worstContentfulSpanIndex != null ? trace.spans[trace.worstContentfulSpanIndex] : null;
-  const bestRescueSpan =
-    trace.bestRescueSpanIndex != null ? trace.spans[trace.bestRescueSpanIndex] : null;
+  const [selectedWordTokenStart, setSelectedWordTokenStart] = useState<number | null>(
+    wordSpans[0]?.tokenStart ?? null,
+  );
+  const selectedWord =
+    wordSpans.find((span) => span.tokenStart === selectedWordTokenStart) ?? wordSpans[0] ?? null;
 
   return (
     <section className="prototype-card" style={{ marginTop: "0.75rem" }}>
       <header className="panel-header-row">
         <div>
           <strong>ZIPA Rescue</strong>
-          <span>Utterance and span-level DP alignment between transcript eSpeak and ZIPA.</span>
+          <span>Utterance alignment between transcript IPA and ZIPA, with word-level inspection.</span>
         </div>
-        <span className="badge">{spans.length} positive spans</span>
+        <span className="badge">{wordSpans.length} words</span>
       </header>
 
       <div className="prototype-summary">
@@ -220,10 +203,6 @@ export function PhoneticRescuePanel({ trace }: { trace: PhoneticRescueTrace }) {
         <span>utterance norm {formatMetric(trace.utteranceFeatureSimilarity)}</span>
         <span>utterance raw {formatMetric(trace.utteranceSimilarity)}</span>
         <span>tail volatile {trace.tailAmbiguity.volatileTokenCount}</span>
-        {bestRescueSpan ? <span>best rescue {bestRescueSpan.spanText}</span> : null}
-        {worstContentfulSpan ? (
-          <span>worst contentful {worstContentfulSpan.spanText}</span>
-        ) : null}
       </div>
 
       <div className="prototype-stack" style={{ gap: "0.35rem" }}>
@@ -252,27 +231,38 @@ export function PhoneticRescuePanel({ trace }: { trace: PhoneticRescueTrace }) {
         zipaLabel="ZIPA"
       />
 
-      {(bestRescueSpan || worstContentfulSpan || worstRawSpan) && (
-        <div className="prototype-summary" style={{ marginTop: "0.75rem" }}>
-          {bestRescueSpan ? (
-            <span>inspect rescue: {bestRescueSpan.spanText}</span>
-          ) : null}
-          {worstContentfulSpan ? (
-            <span>inspect contentful: {worstContentfulSpan.spanText}</span>
-          ) : null}
-          {worstRawSpan ? <span>inspect raw: {worstRawSpan.spanText}</span> : null}
-        </div>
-      )}
-
-      {spans.length > 0 ? (
+      {wordSpans.length > 0 ? (
         <div style={{ display: "grid", gap: "0.75rem", marginTop: "0.75rem" }}>
-          {spans.slice(0, 12).map((span) => (
-            <SpanCard key={`${span.tokenStart}:${span.tokenEnd}:${span.spanText}`} span={span} />
-          ))}
+          <div className="prototype-stack" style={{ gap: "0.45rem" }}>
+            <div className="token-row muted">Click a word to inspect its grouped IPA and corresponding ZIPA slice.</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
+              {wordSpans.map((span) => {
+                const selected = selectedWord?.tokenStart === span.tokenStart;
+                return (
+                  <button
+                    key={`${span.tokenStart}:${span.tokenEnd}:${span.spanText}`}
+                    type="button"
+                    className="mini-badge"
+                    onClick={() => setSelectedWordTokenStart(span.tokenStart)}
+                    style={{
+                      cursor: "pointer",
+                      userSelect: "text",
+                      border: selected ? "1px solid var(--accent)" : "1px solid var(--border)",
+                      background: selected ? "var(--bg-subtle)" : "var(--bg-elevated)",
+                    }}
+                    title={`${span.tokenStart}:${span.tokenEnd}`}
+                  >
+                    {span.spanText}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          {selectedWord ? <WordInspector span={selectedWord} /> : null}
         </div>
       ) : (
         <div className="prototype-empty" style={{ marginTop: "0.75rem" }}>
-          No positive rescue deltas in this transcription.
+          No word-level alignment slices available in this transcription.
         </div>
       )}
     </section>
