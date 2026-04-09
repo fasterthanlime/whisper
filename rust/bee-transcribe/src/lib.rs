@@ -12,6 +12,7 @@ pub mod text_buffer;
 mod timing;
 mod types;
 mod wav_util;
+pub mod zipa_align;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

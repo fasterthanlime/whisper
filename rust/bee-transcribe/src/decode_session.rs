@@ -971,6 +971,8 @@ impl DecodeSession {
         let flat = output.log_probs.as_slice::<f32>();
         let blank_id = 0usize;
         let seconds_per_frame = align_audio.duration().0 / frame_count as f64;
+        let phone_spans =
+            output.derive_phone_spans(&zipa.tokens, align_audio.duration().0, blank_id);
 
         let mut runs = Vec::new();
         let mut frame = 0usize;
@@ -1046,16 +1048,36 @@ impl DecodeSession {
             })
             .collect::<Vec<_>>()
             .join(", ");
+        let phone_spans_near_end = phone_spans
+            .iter()
+            .filter(|span| {
+                let center = (span.start_time_secs + span.end_time_secs) * 0.5;
+                (center - aligned_end.0).abs() <= 0.5
+            })
+            .map(|span| {
+                format!(
+                    "{}[{:.3}-{:.3}s f{}..{}]",
+                    span.token,
+                    span.start_time_secs,
+                    span.end_time_secs,
+                    span.start_frame,
+                    span.end_frame
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
 
         tracing::info!(
             commit_text = %commit_text.trim(),
             zipa_frames = frame_count,
             zipa_frame_ms = seconds_per_frame * 1000.0,
             zipa_phone_count = output.tokens.len(),
+            zipa_phone_spans = phone_spans.len(),
             zipa_aligned_end = aligned_end.0,
             zipa_nearest_cut = nearest.cut_time.0,
             zipa_nearest_cut_delta_ms = (nearest.cut_time.0 - aligned_end.0) * 1000.0,
             zipa_strongest_blank_runs = %strongest_summary,
+            zipa_phone_spans_near_end = %phone_spans_near_end,
             "zipa cut report"
         );
 

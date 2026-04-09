@@ -1,23 +1,23 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use mlx_rs::module::ModuleParameters;
-use mlx_rs::ops::indexing::{argmax_axis, IndexOp};
 use mlx_rs::Array;
+use mlx_rs::module::ModuleParameters;
+use mlx_rs::ops::indexing::{IndexOp, argmax_axis};
 
+use crate::Result;
 use crate::artifacts::ReferenceArtifacts;
-use crate::audio::{load_wav_mono_f32, AudioBuffer};
+use crate::audio::{AudioBuffer, load_wav_mono_f32};
 use crate::config::{ZipaModelConfig, ZipaVariant};
 use crate::encoder::{Stage0Encoder, Stage1EncoderPrefix, StageEncoder};
 use crate::error::ZipaError;
 use crate::features::{FbankExtractor, FbankParams};
 use crate::load::{
-    load_bypass_scale_from_map, load_downsample_weights_from_map, load_frontend_and_ctc_weights,
-    load_stage_layer_weights_from_map, LoadStats,
+    LoadStats, load_bypass_scale_from_map, load_downsample_weights_from_map,
+    load_frontend_and_ctc_weights, load_stage_layer_weights_from_map,
 };
 use crate::model::ZipaModel;
 use crate::tokenizer::TokenTable;
-use crate::Result;
 
 pub struct ZipaInference {
     pub config: ZipaModelConfig,
@@ -34,6 +34,16 @@ pub struct InferenceOutput {
     pub log_probs_len: usize,
     pub token_ids: Vec<usize>,
     pub tokens: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhoneSpan {
+    pub token_id: usize,
+    pub token: String,
+    pub start_frame: usize,
+    pub end_frame: usize,
+    pub start_time_secs: f64,
+    pub end_time_secs: f64,
 }
 
 const QUANTIZED_CHECKPOINT_FORMAT: &str = "zipa-mlx-quantized-v1";
@@ -249,6 +259,64 @@ impl ZipaInference {
     }
 }
 
+impl InferenceOutput {
+    pub fn derive_phone_spans(
+        &self,
+        token_table: &TokenTable,
+        total_duration_secs: f64,
+        blank_id: usize,
+    ) -> Vec<PhoneSpan> {
+        if self.log_probs_len == 0 || self.token_ids.is_empty() || total_duration_secs <= 0.0 {
+            return Vec::new();
+        }
+
+        let seconds_per_frame = total_duration_secs / self.log_probs_len as f64;
+        let mut spans = Vec::new();
+        let mut frame = 0usize;
+        let mut prev_nonblank = None;
+
+        while frame < self.token_ids.len() {
+            let token_id = self.token_ids[frame];
+            if token_id == blank_id {
+                prev_nonblank = None;
+                frame += 1;
+                continue;
+            }
+
+            if prev_nonblank == Some(token_id) {
+                frame += 1;
+                continue;
+            }
+
+            let start_frame = frame;
+            frame += 1;
+            while frame < self.token_ids.len() && self.token_ids[frame] == token_id {
+                frame += 1;
+            }
+            let end_frame = frame;
+            prev_nonblank = Some(token_id);
+
+            let Some(token) = token_table.get(token_id) else {
+                continue;
+            };
+            if token.is_empty() {
+                continue;
+            }
+
+            spans.push(PhoneSpan {
+                token_id,
+                token: token.to_owned(),
+                start_frame,
+                end_frame,
+                start_time_secs: start_frame as f64 * seconds_per_frame,
+                end_time_secs: end_frame as f64 * seconds_per_frame,
+            });
+        }
+
+        spans
+    }
+}
+
 fn collect_prefixed_parameters<M: ModuleParameters>(
     prefix: &str,
     module: &M,
@@ -385,10 +453,36 @@ mod tests {
 
     use std::path::PathBuf;
 
-    use mlx_rs::ops::indexing::IndexOp;
     use mlx_rs::Array;
+    use mlx_rs::ops::indexing::IndexOp;
 
-    use super::ZipaInference;
+    use super::{InferenceOutput, ZipaInference};
+    use crate::tokenizer::TokenTable;
+
+    #[test]
+    fn derives_phone_spans_from_ctc_argmax_frames() {
+        let table = TokenTable::from_str("<blk> 0\nə 1\nn 2\n").unwrap();
+        let output = InferenceOutput {
+            log_probs: Array::from_slice(&[0.0f32; 7 * 3], &[1, 7, 3]),
+            log_probs_len: 7,
+            token_ids: vec![0, 1, 1, 0, 2, 2, 0],
+            tokens: vec!["ə".to_string(), "n".to_string()],
+        };
+
+        let spans = output.derive_phone_spans(&table, 0.7, 0);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].token, "ə");
+        assert_eq!(spans[0].start_frame, 1);
+        assert_eq!(spans[0].end_frame, 3);
+        assert!((spans[0].start_time_secs - 0.1).abs() < 1e-6);
+        assert!((spans[0].end_time_secs - 0.3).abs() < 1e-6);
+
+        assert_eq!(spans[1].token, "n");
+        assert_eq!(spans[1].start_frame, 4);
+        assert_eq!(spans[1].end_frame, 6);
+        assert!((spans[1].start_time_secs - 0.4).abs() < 1e-6);
+        assert!((spans[1].end_time_secs - 0.6).abs() < 1e-6);
+    }
 
     #[test]
     fn end_to_end_log_probs_match_onnx_reference_when_local_artifacts_exist() {
