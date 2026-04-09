@@ -259,6 +259,177 @@ textarea:focus {
   font-size: 12px;
 }
 
+.phonetic-debug-details {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-surface-alt) 72%, transparent);
+  padding: 0.6rem 0.75rem;
+}
+
+.phonetic-debug-details summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  user-select: none;
+}
+
+.word-workbench {
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 0.9rem;
+}
+
+.word-workbench-copy {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.word-group-strip {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding: 0.15rem 0.05rem 0.35rem;
+}
+
+.word-group-card {
+  min-width: 12rem;
+  display: grid;
+  gap: 0.55rem;
+  align-content: start;
+  padding: 0.85rem 0.8rem 0.75rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-surface) 85%, transparent),
+    color-mix(in srgb, var(--bg-surface-alt) 92%, transparent)
+  );
+  text-align: left;
+}
+
+.word-group-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-surface-hover) 80%, transparent),
+    color-mix(in srgb, var(--bg-surface-alt) 94%, transparent)
+  );
+}
+
+.word-group-card.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.word-group-accolade {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 1.8rem;
+  padding: 0 0.3rem;
+}
+
+.word-group-accolade::before,
+.word-group-accolade::after {
+  content: "";
+  flex: 1;
+  border-top: 1.5px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+  min-width: 1rem;
+}
+
+.word-group-accolade::before {
+  border-left: 1.5px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+  border-top-left-radius: 12px;
+  margin-right: 0.55rem;
+  height: 0.8rem;
+}
+
+.word-group-accolade::after {
+  border-right: 1.5px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+  border-top-right-radius: 12px;
+  margin-left: 0.55rem;
+  height: 0.8rem;
+}
+
+.word-group-accolade-label {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.word-group-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.word-group-lanes {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.word-group-lane {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
+  gap: 0.45rem;
+  align-items: start;
+}
+
+.word-group-lane-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  line-height: 2.25rem;
+}
+
+.word-group-box-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+}
+
+.ipa-token-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.45rem;
+  min-height: 2.4rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.72rem;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 62%, transparent);
+  background: color-mix(in srgb, var(--bg-surface) 86%, transparent);
+  color: var(--text);
+  font-family: "Manuale IPA", serif;
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.ipa-token-box.op-match {
+  border-color: color-mix(in srgb, var(--lane-qwen) 42%, var(--border));
+  background: color-mix(in srgb, var(--lane-qwen-bg) 35%, var(--bg-surface));
+}
+
+.ipa-token-box.op-substitute {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--lane-espeak-bg) 48%, var(--bg-surface));
+}
+
+.ipa-token-box.op-insert,
+.ipa-token-box.op-delete {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--text-dim) 45%, transparent);
+  background: color-mix(in srgb, var(--bg-surface-alt) 75%, transparent);
+}
+
+.ipa-token-box.is-gap {
+  opacity: 0.58;
+}
+
 .prototype-form {
   display: flex;
   gap: 0.5rem;
