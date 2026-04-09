@@ -337,31 +337,19 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
             </div>
           </section>
 
-          <section className="prototype-card">
-            <header className="panel-header-row">
-              <div>
-                <strong>Rows</strong>
-                <span>Worst utterance-level feature matches first.</span>
-              </div>
-              <span className="badge">{result.rows.length}</span>
-            </header>
-            <div style={{ display: "grid", gap: "0.75rem" }}>
-              {result.rows.map((row) => (
-                <RowCard
-                  key={`${row.prompt_id}:${row.take}`}
-                  row={row}
-                  selected={row.prompt_id === selectedRow?.prompt_id}
-                  onSelect={() => setSelectedPromptId(row.prompt_id)}
-                />
-              ))}
-            </div>
-          </section>
-
           {selectedRow ? (
-            <section className="prototype-card" style={{ gap: "0.75rem" }}>
+            <section
+              className="prototype-card"
+              style={{
+                gap: "0.75rem",
+                border: "1px solid color-mix(in srgb, var(--accent) 45%, var(--border))",
+                background:
+                  "linear-gradient(180deg, color-mix(in srgb, var(--bg-subtle) 85%, transparent), var(--bg-elevated))",
+              }}
+            >
               <header className="panel-header-row">
                 <div>
-                  <strong>Selected Row</strong>
+                  <strong>Alignment Inspector</strong>
                   <span>
                     {selectedRow.prompt_id} · {selectedRow.bucket} · take {selectedRow.take}
                   </span>
@@ -372,7 +360,14 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
                 <span>prompt {selectedRow.prompt_text}</span>
               </div>
               {selectedRow.prompt_notes ? (
-                <div className="prototype-empty" style={{ textAlign: "left" }}>
+                <div
+                  className="prototype-empty"
+                  style={{
+                    textAlign: "left",
+                    border: "1px solid color-mix(in srgb, var(--accent) 18%, var(--border))",
+                    background: "color-mix(in srgb, var(--bg-subtle) 78%, transparent)",
+                  }}
+                >
                   {selectedRow.prompt_notes}
                 </div>
               ) : null}
@@ -389,6 +384,26 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
               )}
             </section>
           ) : null}
+
+          <section className="prototype-card">
+            <header className="panel-header-row">
+              <div>
+                <strong>Rows</strong>
+                <span>Worst utterance-level feature matches first. Click a row to inspect it above.</span>
+              </div>
+              <span className="badge">{result.rows.length}</span>
+            </header>
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              {result.rows.map((row) => (
+                <RowCard
+                  key={`${row.prompt_id}:${row.take}`}
+                  row={row}
+                  selected={row.prompt_id === selectedRow?.prompt_id}
+                  onSelect={() => setSelectedPromptId(row.prompt_id)}
+                />
+              ))}
+            </div>
+          </section>
         </>
       ) : (
         <section className="prototype-card prototype-card-tight">
