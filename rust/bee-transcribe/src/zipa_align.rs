@@ -6,6 +6,7 @@ use bee_phonetic::{
     normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans, phoneme_similarity,
     sentence_word_tokens, top_right_anchor_windows,
 };
+use bee_zipa_mlx::infer::PhoneSpan;
 
 #[derive(Debug, Clone)]
 pub struct SpanAlignmentSelection {
@@ -17,6 +18,14 @@ pub struct SpanAlignmentSelection {
     pub second_best_alignment_score: Option<f32>,
     pub alignment_score_gap: Option<f32>,
     pub alignment_source: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimedZipaRange {
+    pub normalized_range: Range<usize>,
+    pub raw_phone_range: Range<usize>,
+    pub start_time_secs: f64,
+    pub end_time_secs: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +111,44 @@ pub fn raw_slice_for_normalized_range(
         .get(first.source_start..last.source_end)
         .unwrap_or(&[])
         .to_vec()
+}
+
+pub fn raw_phone_range_for_normalized_range(
+    normalized: &[bee_phonetic::ComparisonToken],
+    normalized_range: Range<usize>,
+) -> Option<Range<usize>> {
+    let first = normalized.get(normalized_range.start)?;
+    let last = normalized.get(normalized_range.end.checked_sub(1)?)?;
+    Some(first.source_start..last.source_end)
+}
+
+pub fn timed_range_for_raw_phone_range(
+    phone_spans: &[PhoneSpan],
+    raw_phone_range: Range<usize>,
+) -> Option<TimedZipaRange> {
+    if raw_phone_range.start >= raw_phone_range.end {
+        return None;
+    }
+    let start = phone_spans.get(raw_phone_range.start)?;
+    let end = phone_spans.get(raw_phone_range.end.checked_sub(1)?)?;
+    Some(TimedZipaRange {
+        normalized_range: 0..0,
+        raw_phone_range,
+        start_time_secs: start.start_time_secs,
+        end_time_secs: end.end_time_secs,
+    })
+}
+
+pub fn timed_range_for_normalized_range(
+    normalized: &[bee_phonetic::ComparisonToken],
+    phone_spans: &[PhoneSpan],
+    normalized_range: Range<usize>,
+) -> Option<TimedZipaRange> {
+    let raw_phone_range =
+        raw_phone_range_for_normalized_range(normalized, normalized_range.clone())?;
+    let mut timed = timed_range_for_raw_phone_range(phone_spans, raw_phone_range)?;
+    timed.normalized_range = normalized_range;
+    Some(timed)
 }
 
 pub fn select_span_alignment_range(
@@ -777,10 +824,15 @@ pub fn normalize_zipa_raw_for_alignment(
 
 #[cfg(test)]
 mod tests {
-    use super::{partition_word_alignment_windows, select_segmental_word_windows};
-    use bee_phonetic::{
-        AlignmentOp, AlignmentOpKind, align_token_sequences_with_left_word_boundaries,
+    use super::{
+        partition_word_alignment_windows, select_segmental_word_windows,
+        timed_range_for_normalized_range,
     };
+    use bee_phonetic::{
+        AlignmentOp, AlignmentOpKind, ComparisonToken,
+        align_token_sequences_with_left_word_boundaries,
+    };
+    use bee_zipa_mlx::infer::PhoneSpan;
 
     fn op(
         kind: AlignmentOpKind,
@@ -878,5 +930,63 @@ mod tests {
         let first = windows[0].as_ref().unwrap();
         let second = windows[1].as_ref().unwrap();
         assert!(first.zipa_norm_range.end <= second.zipa_norm_range.start);
+    }
+
+    #[test]
+    fn maps_normalized_range_to_phone_timestamps() {
+        let normalized = vec![
+            ComparisonToken {
+                token: "t".to_string(),
+                source_start: 0,
+                source_end: 1,
+            },
+            ComparisonToken {
+                token: "ʃ".to_string(),
+                source_start: 1,
+                source_end: 2,
+            },
+            ComparisonToken {
+                token: "a".to_string(),
+                source_start: 2,
+                source_end: 3,
+            },
+            ComparisonToken {
+                token: "ɪ".to_string(),
+                source_start: 2,
+                source_end: 3,
+            },
+        ];
+        let phone_spans = vec![
+            PhoneSpan {
+                token_id: 1,
+                token: "t".to_string(),
+                start_frame: 10,
+                end_frame: 12,
+                start_time_secs: 0.10,
+                end_time_secs: 0.12,
+            },
+            PhoneSpan {
+                token_id: 2,
+                token: "ʃ".to_string(),
+                start_frame: 12,
+                end_frame: 14,
+                start_time_secs: 0.12,
+                end_time_secs: 0.14,
+            },
+            PhoneSpan {
+                token_id: 3,
+                token: "aɪ".to_string(),
+                start_frame: 14,
+                end_frame: 15,
+                start_time_secs: 0.14,
+                end_time_secs: 0.15,
+            },
+        ];
+
+        let timed = timed_range_for_normalized_range(&normalized, &phone_spans, 1..4).unwrap();
+        assert_eq!(timed.normalized_range, 1..4);
+        assert_eq!(timed.raw_phone_range, 1..3);
+        assert!((timed.start_time_secs - 0.12).abs() < 1e-6);
+        assert!((timed.end_time_secs - 0.15).abs() < 1e-6);
     }
 }
