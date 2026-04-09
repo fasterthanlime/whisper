@@ -151,26 +151,32 @@ final class BeeIMEBridgeState: NSObject {
             beeInputLog("discardMarkedText[\(reason)]: no client object")
             return
         }
-        let clientType = String(describing: type(of: client))
-        if let object = client as? NSObject {
-            let inputContextSelector = NSSelectorFromString("inputContext")
-            if object.responds(to: inputContextSelector),
-                let inputContext = object.perform(inputContextSelector)?.takeUnretainedValue()
-                    as? NSTextInputContext
-            {
-                beeInputLog("discardMarkedText[\(reason)]: via client inputContext client=\(clientType)")
-                inputContext.discardMarkedText()
-                return
-            }
-        }
-
-        if let inputContext = NSTextInputContext.current {
-            beeInputLog("discardMarkedText[\(reason)]: via currentInputContext client=\(clientType)")
-            inputContext.discardMarkedText()
+        guard let client = client as? (any IMKTextInput & NSObjectProtocol) else {
+            beeInputLog(
+                "discardMarkedText[\(reason)]: client does not conform to IMKTextInput type=\(String(describing: type(of: client)))"
+            )
             return
         }
 
-        beeInputLog("discardMarkedText[\(reason)]: no text input context available client=\(clientType)")
+        let markedRange = client.markedRange()
+        let replacementRange =
+            markedRange.location == NSNotFound
+            ? NSRange(location: NSNotFound, length: 0)
+            : markedRange
+
+        beeInputLog(
+            "discardMarkedText[\(reason)]: via setMarkedText client=\(String(describing: type(of: client))) markedRange(before)=\(NSStringFromRange(markedRange)) selectedRange(before)=\(NSStringFromRange(client.selectedRange())) replacementRange=\(NSStringFromRange(replacementRange))"
+        )
+
+        client.setMarkedText(
+            "",
+            selectionRange: NSRange(location: 0, length: 0),
+            replacementRange: replacementRange
+        )
+
+        beeInputLog(
+            "discardMarkedText[\(reason)]: markedRange(after)=\(NSStringFromRange(client.markedRange())) selectedRange(after)=\(NSStringFromRange(client.selectedRange()))"
+        )
     }
 
     // MARK: - State transitions
@@ -188,7 +194,8 @@ final class BeeIMEBridgeState: NSObject {
         lastSessionID = nil
         let session = BeeIMESession(controller: controller, pid: pid, clientID: clientID)
         state = .activated(session)
-        beeInputLog("state → activated pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil")")
+        beeInputLog(
+            "state → activated pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil")")
         Task { await self.performAsyncClaim() }
     }
 
@@ -264,7 +271,8 @@ final class BeeIMEBridgeState: NSObject {
         }
 
         beeInputLog(
-            "performAsyncClaim: claimed session=\(sessionID.uuidString.prefix(8)) pid=\(frontmostPID)")
+            "performAsyncClaim: claimed session=\(sessionID.uuidString.prefix(8)) pid=\(frontmostPID)"
+        )
         attachSession(sessionID: sessionID)
         flushPending()
         BeeVoxIMEClient.shared.imeAttach(sessionId: sessionID.uuidString)
