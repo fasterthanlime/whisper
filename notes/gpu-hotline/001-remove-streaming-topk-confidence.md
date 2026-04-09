@@ -44,13 +44,18 @@ partial.
 
 - Implemented split confidence modes:
   - streaming decode uses top-2-only confidence
-  - commit/final refresh rescoring uses full top-k
+  - commit-time refresh rescoring uses full top-k only for the text being committed
 - The correction pipeline keeps full alternatives on committed chunks by
-  rescoring the generated suffix immediately before `commit()` /
-  `commit_all()`.
+  rescoring the committable text prefix immediately before `commit()`.
+- Removed the redundant finish-time full-confidence rescore; finalization now
+  relies on the final full decode pass instead of paying a second MLX pass on
+  the same sub-session.
 - Corpus spot-check on the clean correction-free baseline:
   - final transcripts remained clean
   - two previously bad first partials improved in that run
+- Follow-up benchmark on the clean correction-free corpus:
+  - vs `37b823b`: `total_ms -1.3%`, `finish_ms -3.1%`, `max_feed_ms -2.0%`
+  - vs `3aeabb4`: `total_ms -13.1%`, `finish_ms -38.5%`, `max_feed_ms -11.0%`
 
 ## Depends on
 

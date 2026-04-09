@@ -126,6 +126,18 @@ impl DecodeSession {
         self.chunk_count
     }
 
+    /// Number of leading text tokens that came from the fixed rollback prefix
+    /// rather than the most recent generation pass.
+    pub fn generated_text_start(&self) -> usize {
+        self.generated_start.saturating_sub(self.metadata_end)
+    }
+
+    /// How many text tokens can be committed without splitting a word.
+    pub fn committable_text_tokens(&self, tokenizer: &Tokenizer, n: TokenCount) -> TokenCount {
+        let entries = TextBuffer::from_entries(self.pending_entries(tokenizer));
+        entries.snap_to_word_boundary(n)
+    }
+
     /// Run one decode step: mel extraction, encoding, generation.
     /// Updates internal tokens.
     pub fn decode_step(
@@ -201,19 +213,24 @@ impl DecodeSession {
         Ok(())
     }
 
-    /// Refresh confidence metadata for the most recent generated suffix.
+    /// Refresh confidence metadata for a text-token range.
     ///
-    /// This is used right before commit/finalize so committed chunks carry
-    /// full top-k alternatives for the correction pipeline, while live
-    /// streaming revisions stay on a cheaper top-2 path.
-    pub fn refresh_confidence(
+    /// `text_start..text_end` are offsets into `self.text_tokens()`. This lets
+    /// callers rescore only the text they are about to commit instead of the
+    /// entire current sub-session.
+    pub fn refresh_text_confidence(
         &mut self,
         model: &Qwen3ASRModel,
         tokenizer: &Tokenizer,
         language: &str,
         confidence_mode: ConfidenceMode,
+        text_start: usize,
+        text_end: usize,
     ) -> Result<(), Exception> {
-        if self.tokens.is_empty() || self.generated_start >= self.tokens.len() {
+        let text_len = self.text_tokens().len();
+        let text_start = text_start.min(text_len);
+        let text_end = text_end.min(text_len);
+        if text_start >= text_end {
             return Ok(());
         }
 
@@ -226,16 +243,15 @@ impl DecodeSession {
         let audio_features = mlx_rs::ops::expand_dims(&audio_features, 0)?;
         audio_features.eval()?;
 
-        let prefix = &self.tokens[..self.generated_start];
         let mut prompt = generate::build_initial_prompt(
             audio_features.shape()[1] as usize,
             language,
             "",
             tokenizer,
         );
-        prompt.extend(prefix.iter().map(|t| t.id as i32));
+        prompt.extend(self.text_tokens()[..text_start].iter().map(|t| t.id as i32));
 
-        let continuation: Vec<i32> = self.tokens[self.generated_start..]
+        let continuation: Vec<i32> = self.text_tokens()[text_start..text_end]
             .iter()
             .map(|t| t.id as i32)
             .collect();
@@ -247,7 +263,9 @@ impl DecodeSession {
             confidence_mode,
         )?;
 
-        for (token, confidence) in self.tokens[self.generated_start..]
+        let token_start = self.metadata_end + text_start;
+        let token_end = token_start + continuation.len();
+        for (token, confidence) in self.tokens[token_start..token_end]
             .iter_mut()
             .zip(confidences.into_iter())
         {

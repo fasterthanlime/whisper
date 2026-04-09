@@ -170,13 +170,6 @@ impl<'a> Session<'a> {
                 "finish: committing remaining pending tokens"
             );
             if self.decode.has_audio() {
-                let language = self.effective_language().to_owned();
-                self.decode.refresh_confidence(
-                    self.model,
-                    self.tokenizer,
-                    &language,
-                    ConfidenceMode::Full,
-                )?;
                 if let Some(aligned) = self
                     .decode
                     .commit_all(self.forced_aligner, self.tokenizer)?
@@ -321,12 +314,20 @@ impl<'a> Session<'a> {
                 threshold = commit_threshold,
                 "rotating: committing tokens and starting fresh decode"
             );
-            self.decode.refresh_confidence(
-                self.model,
+            let commit_n = self.decode.committable_text_tokens(
                 self.tokenizer,
-                &language,
-                ConfidenceMode::Full,
-            )?;
+                TokenCount(self.options.commit_token_count),
+            );
+            if commit_n.0 > 0 {
+                self.decode.refresh_text_confidence(
+                    self.model,
+                    self.tokenizer,
+                    &language,
+                    ConfidenceMode::Full,
+                    0,
+                    commit_n.0,
+                )?;
+            }
             if let Some(aligned) = self.decode.commit(
                 TokenCount(self.options.commit_token_count),
                 self.forced_aligner,
