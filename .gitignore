@@ -65,3 +65,4 @@ profile.json.gz
 # souuunds
 *.wav
 !swift/bee/Sounds/*.wav
+.tmp
