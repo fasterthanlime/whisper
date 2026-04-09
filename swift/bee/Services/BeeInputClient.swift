@@ -25,7 +25,10 @@ final class BeeInputClient: Sendable {
 
     @discardableResult
     func activate(sessionID: UUID, targetPID: pid_t?) async -> Bool {
-        beeLog("IME ACTIVATE: prepareSession start id=\(sessionID.uuidString.prefix(8))")
+        let isConnected = await MainActor.run(body: { BeeIPCServer.shared.isIMEConnected })
+        beeLog(
+            "IME ACTIVATE: prepareSession start id=\(sessionID.uuidString.prefix(8)) targetPID=\(targetPID.map(String.init) ?? "nil") connected=\(isConnected)"
+        )
         await BeeIPCServer.shared.prepareDictationSession(
             sessionId: sessionID.uuidString,
             targetPid: Int32(targetPID ?? 0)
@@ -73,6 +76,7 @@ final class BeeInputClient: Sendable {
     // MARK: - IME Commands
 
     func setMarkedText(_ text: String, sessionID: UUID) {
+        beeLog("IME CMD: setMarkedText id=\(sessionID.uuidString.prefix(8)) len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)")
         Task { await BeeIPCServer.shared.setMarkedText(sessionId: sessionID.uuidString, text: text) }
     }
 
@@ -82,19 +86,18 @@ final class BeeInputClient: Sendable {
     }
 
     func commitText(_ text: String, sessionID: UUID) {
+        beeLog("IME CMD: commitText id=\(sessionID.uuidString.prefix(8)) len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)")
         Task { await BeeIPCServer.shared.commitText(sessionId: sessionID.uuidString, text: text) }
     }
 
     func clearMarkedText(sessionID: UUID) {
+        beeLog("IME CMD: clearMarkedText id=\(sessionID.uuidString.prefix(8))")
         Task { await BeeIPCServer.shared.stopDictating(sessionId: sessionID.uuidString) }
     }
 
     func stopDictating(sessionID: UUID) {
+        beeLog("IME CMD: stopDictating id=\(sessionID.uuidString.prefix(8))")
         Task { await BeeIPCServer.shared.stopDictating(sessionId: sessionID.uuidString) }
-    }
-
-    func cancelComposition(sessionID: UUID) async {
-        await BeeIPCServer.shared.stopDictating(sessionId: sessionID.uuidString)
     }
 
     func replaceText(sessionId: String, oldText: String, newText: String) {

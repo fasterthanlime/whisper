@@ -106,7 +106,6 @@ struct DebugOverlay: View {
         case .inactive: "Inactive"
         case .activating: "Activating"
         case .active: "Active"
-        case .parked: "Parked"
         }
     }
 

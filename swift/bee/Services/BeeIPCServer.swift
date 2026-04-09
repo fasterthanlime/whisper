@@ -160,7 +160,11 @@ final class BeeIPCServer {
     var isIMEConnected: Bool { imeClient != nil }
 
     func waitForIMEReady() async -> Bool {
-        if imeClient != nil { return true }
+        if imeClient != nil {
+            beeLog("VOXIPC: waitForIMEReady immediate=true")
+            return true
+        }
+        beeLog("VOXIPC: waitForIMEReady waiting")
         return await withCheckedContinuation { continuation in
             imeReadyWaiters.append(continuation)
         }
@@ -168,6 +172,9 @@ final class BeeIPCServer {
 
     func prepareDictationSession(sessionId: String, targetPid: Int32) async {
         pendingSessionId = sessionId
+        beeLog(
+            "VOXIPC: prepareSession request session=\(sessionId.prefix(8)) targetPid=\(targetPid) connected=\(imeClient != nil)"
+        )
         if let client = imeClient {
             do {
                 _ = try await client.prepareSession(sessionId: sessionId, targetPid: targetPid)
@@ -185,6 +192,9 @@ final class BeeIPCServer {
             beeLog("VOXIPC: setMarkedText — IME not connected, dropping")
             return
         }
+        beeLog(
+            "VOXIPC: setMarkedText session=\(sessionId.prefix(8)) len=\(text.utf16.count) activeSession=\(activeSessionId?.prefix(8) ?? "nil") text=\(text.prefix(80).debugDescription)"
+        )
         do {
             _ = try await client.setMarkedText(sessionId: sessionId, text: text)
         } catch {
@@ -197,6 +207,9 @@ final class BeeIPCServer {
             beeLog("VOXIPC: commitText — IME not connected, dropping")
             return
         }
+        beeLog(
+            "VOXIPC: commitText session=\(sessionId.prefix(8)) len=\(text.utf16.count) activeSession=\(activeSessionId?.prefix(8) ?? "nil") text=\(text.prefix(80).debugDescription)"
+        )
         do {
             _ = try await client.commitText(sessionId: sessionId, text: text)
         } catch {
@@ -209,6 +222,9 @@ final class BeeIPCServer {
             beeLog("VOXIPC: stopDictating — IME not connected, dropping")
             return
         }
+        beeLog(
+            "VOXIPC: stopDictating session=\(sessionId.prefix(8)) activeSession=\(activeSessionId?.prefix(8) ?? "nil")"
+        )
         do {
             _ = try await client.stopDictating(sessionId: sessionId)
         } catch {
