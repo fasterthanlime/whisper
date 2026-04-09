@@ -58,6 +58,8 @@ function toPhoneticTrace(trace: RpcTranscribePhoneticTrace): PhoneticRescueTrace
       wordText: word.word_text,
       tokenStart: word.token_start,
       tokenEnd: word.token_end,
+      startSec: word.start_sec,
+      endSec: word.end_sec,
       transcriptNormalized: word.transcript_normalized,
       zipaNormStart: word.zipa_norm_start,
       zipaNormEnd: word.zipa_norm_end,
@@ -352,7 +354,7 @@ export function TranscribeDemoPanel({
           {streaming && <span className="cursor" />}
         </div>
       ) : inspectorData ? (
-        <EvalInspector data={inspectorData} audioUrl={audioUrl} />
+        <EvalInspector data={inspectorData} audioUrl={audioUrl} wsUrl={wsUrl} />
       ) : (
         <div className="demo-empty">
           {recorder.state === "recording"

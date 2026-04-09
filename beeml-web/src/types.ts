@@ -155,6 +155,8 @@ export type PhoneticWordAlignment = {
   wordText: string;
   tokenStart: number;
   tokenEnd: number;
+  startSec: number;
+  endSec: number;
   transcriptNormalized: string[];
   zipaNormStart: number;
   zipaNormEnd: number;

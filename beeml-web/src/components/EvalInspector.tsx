@@ -8,9 +8,11 @@ import { TranscriptComparison } from "./TranscriptComparison";
 export function EvalInspector({
   data,
   audioUrl,
+  wsUrl,
 }: {
   data: EvalInspectorData;
   audioUrl?: string;
+  wsUrl?: string;
 }) {
   const ctxRef = useRef<AudioContext | null>(null);
   const bufferRef = useRef<AudioBuffer | null>(null);
@@ -167,7 +169,11 @@ export function EvalInspector({
         />
 
         {data.phoneticTrace ? (
-          <PhoneticRescuePanel trace={data.phoneticTrace} />
+          <PhoneticRescuePanel
+            trace={data.phoneticTrace}
+            wsUrl={wsUrl}
+            sourceAudioUrl={audioUrl}
+          />
         ) : null}
       </div>
     </div>

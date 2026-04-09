@@ -13,8 +13,29 @@ function formatMetric(value: number | null | undefined) {
   return value == null ? "n/a" : value.toFixed(4);
 }
 
+function formatPercentMetric(value: number | null | undefined) {
+  return value == null ? "n/a" : `${Math.round(value * 100)}%`;
+}
+
 function formatTokens(tokens: string[]) {
   return tokens.length > 0 ? tokens.join(" ") : "∅";
+}
+
+function bucketLabel(bucket: string) {
+  switch (bucket) {
+    case "repeat_confusion":
+      return "repeated phrase";
+    case "dropped_word":
+      return "missing word";
+    case "extra_word":
+      return "extra word";
+    case "proper_noun":
+      return "name";
+    case "homophoneish":
+      return "sounds alike";
+    default:
+      return bucket.replaceAll("_", " ");
+  }
 }
 
 function toPhoneticTrace(trace: RpcTranscribePhoneticTrace): PhoneticRescueTrace {
@@ -53,6 +74,8 @@ function toPhoneticTrace(trace: RpcTranscribePhoneticTrace): PhoneticRescueTrace
       wordText: word.word_text,
       tokenStart: word.token_start,
       tokenEnd: word.token_end,
+      startSec: word.start_sec,
+      endSec: word.end_sec,
       transcriptNormalized: word.transcript_normalized,
       zipaNormStart: word.zipa_norm_start,
       zipaNormEnd: word.zipa_norm_end,
@@ -131,36 +154,19 @@ function RowCard({
           onSelect();
         }
       }}
-      className="failure-card"
+      className={`corpus-eval-row-card${selected ? " is-selected" : ""}`}
       style={{
-        gap: "0.45rem",
-        textAlign: "left",
-        border: selected
-          ? "1px solid color-mix(in srgb, var(--accent) 70%, var(--border))"
-          : "1px solid var(--border)",
-        background: selected
-          ? "linear-gradient(180deg, color-mix(in srgb, var(--bg-subtle) 88%, transparent), var(--bg-elevated))"
-          : "var(--bg-elevated)",
         cursor: "pointer",
         userSelect: "text",
-        padding: "0.65rem 0.7rem",
       }}
     >
-      <div className="failure-topline">
-        <span className="mini-badge">{row.ordinal}</span>
-        <span className="mini-badge">{row.bucket}</span>
+      <div className="corpus-eval-row-topline">
         <span className="mini-badge">{row.term}</span>
-        <span className="failure-score">uf {formatMetric(row.utterance_feature_similarity)}</span>
+        <span className="corpus-eval-row-score">phonetic {formatPercentMetric(row.utterance_feature_similarity)}</span>
       </div>
-      <div className="failure-transcript">{row.prompt_text}</div>
-      <div className="failure-pills">
-        <span className="failure-pill">take {row.take}</span>
-        <span className="failure-pill">raw {formatMetric(row.utterance_similarity)}</span>
-        <span className="failure-pill">contentful {row.contentful_span_count}</span>
-        <span className="failure-pill">eligible {row.rescue_eligible_span_count}</span>
-      </div>
-      <div className="token-row muted" style={{ lineHeight: 1.45 }}>
-        ASR: {row.asr_transcript}
+      <div className="corpus-eval-row-title">{row.prompt_text}</div>
+      <div className="corpus-eval-row-subline">
+        <span>heard: {row.asr_transcript}</span>
       </div>
       {row.error ? <div className="error-pill">{row.error}</div> : null}
     </div>
@@ -287,7 +293,7 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
         <section
           style={{
             display: "grid",
-            gridTemplateColumns: "minmax(280px, 360px) minmax(0, 1fr)",
+            gridTemplateColumns: "minmax(250px, 310px) minmax(0, 1fr)",
             gap: "0.75rem",
             alignItems: "start",
           }}
@@ -301,12 +307,17 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
               overflow: "hidden",
             }}
           >
-            <header className="panel-header-row panel-header-compact">
-              <div>
-                <strong>Cases</strong>
-                <span>Pick a recording to inspect.</span>
+            <div className="corpus-eval-sidebar-toolbar">
+              <div className="corpus-eval-sidebar-header">
+                <strong>Examples</strong>
+                {job ? (
+                  <span className="mini-badge">
+                    {job.completed_rows}/{job.total_rows}
+                  </span>
+                ) : null}
+                <span className="mini-badge">{result.rows.length} rows</span>
               </div>
-              <div style={{ display: "flex", gap: "0.45rem", alignItems: "center" }}>
+              <div className="corpus-eval-sidebar-actions">
                 <button
                   type="button"
                   className="mini-badge"
@@ -323,23 +334,14 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
                 >
                   + New run
                 </button>
-                <span className="badge">{result.rows.length} rows</span>
               </div>
-            </header>
+            </div>
 
-            <div className="prototype-stack" style={{ gap: "0.5rem" }}>
-              <div className="token-row muted">
-                Corpus Eval defaults to a random 5-case run on entry.
-              </div>
+            <div className="prototype-stack corpus-eval-sidebar-stack" style={{ gap: "0.5rem" }}>
               {(status || error || job) && (
-                <div className="notice-row" style={{ margin: 0 }}>
+                <div className="notice-row corpus-eval-status-row" style={{ margin: 0 }}>
                   {status ? <span className="status-pill">{status}</span> : null}
                   {error ? <span className="error-pill">{error}</span> : null}
-                  {job ? (
-                    <span className="mini-badge">
-                      job {job.job_id} · {job.completed_rows}/{job.total_rows}
-                    </span>
-                  ) : null}
                 </div>
               )}
               {showRunComposer ? (
@@ -384,49 +386,24 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
               ) : null}
             </div>
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                gap: "0.45rem",
-              }}
-            >
-              <div
-                style={{
-                  border: "1px solid var(--border)",
-                  borderRadius: "6px",
-                  padding: "0.55rem 0.6rem",
-                  background: "var(--bg-elevated)",
-                }}
-              >
-                <div className="eyebrow">Overall UF</div>
-                <div style={{ fontSize: "1.9rem", fontWeight: 700, lineHeight: 1.05 }}>
-                  {formatMetric(overallMean)}
-                </div>
+            <div className="corpus-eval-summary-strip">
+              <div className="corpus-eval-summary-chip corpus-eval-summary-chip-primary">
+                <span className="eyebrow">Overall phonetic match</span>
+                <strong>{formatPercentMetric(overallMean)}</strong>
               </div>
               {result.bucket_summaries.map((summary) => (
-                <div
-                  key={summary.bucket}
-                  style={{
-                    border: "1px solid var(--border)",
-                    borderRadius: "6px",
-                    padding: "0.55rem 0.6rem",
-                    background: "var(--bg-elevated)",
-                  }}
-                >
-                  <div className="eyebrow">{summary.bucket}</div>
-                  <div style={{ fontSize: "1.1rem", fontWeight: 700, lineHeight: 1.1 }}>
-                    {formatMetric(summary.utterance_feature_similarity_mean)}
-                  </div>
-                  <div className="token-row muted">{summary.rows} rows</div>
+                <div key={summary.bucket} className="corpus-eval-summary-chip">
+                  <span className="eyebrow">{bucketLabel(summary.bucket)}</span>
+                  <strong>{formatPercentMetric(summary.utterance_feature_similarity_mean)}</strong>
                 </div>
               ))}
             </div>
 
             <div
+              className="corpus-eval-row-list"
               style={{
                 display: "grid",
-                gap: "0.6rem",
+                gap: "0.45rem",
                 overflow: "auto",
                 paddingRight: "0.1rem",
               }}
@@ -445,45 +422,34 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
           <section
             className="prototype-card"
             style={{
-              gap: "0.85rem",
+              gap: "0.65rem",
               minHeight: "calc(100vh - 8rem)",
-              border: "1px solid color-mix(in srgb, var(--accent) 35%, var(--border))",
             }}
           >
             {selectedRow ? (
               <>
-                <header className="panel-header-row">
-                  <div>
-                    <strong>{selectedRow.prompt_text}</strong>
-                    <span>
-                      {selectedRow.prompt_id} · {selectedRow.bucket} · take {selectedRow.take}
-                    </span>
+                <div className="corpus-eval-case-toolbar">
+                  <strong className="corpus-eval-case-title">{selectedRow.prompt_text}</strong>
+                  <div className="corpus-eval-case-chips">
+                    <span className="badge">{selectedRow.term}</span>
+                    <span className="mini-badge">{bucketLabel(selectedRow.bucket)}</span>
+                    <span className="mini-badge">take {selectedRow.take}</span>
+                    <span className="mini-badge">{selectedRow.prompt_id}</span>
                   </div>
-                  <span className="badge">{selectedRow.term}</span>
-                </header>
-
-                <div className="prototype-summary">
-                  <span>UF {formatMetric(selectedRow.utterance_feature_similarity)}</span>
-                  <span>raw {formatMetric(selectedRow.utterance_similarity)}</span>
-                  <span>ASR {selectedRow.asr_transcript}</span>
                 </div>
 
-                {selectedRow.prompt_notes ? (
-                  <div
-                    className="prototype-empty"
-                    style={{
-                      textAlign: "left",
-                      padding: "0.6rem 0.75rem",
-                      border: "1px solid color-mix(in srgb, var(--accent) 18%, var(--border))",
-                      background: "color-mix(in srgb, var(--bg-subtle) 78%, transparent)",
-                    }}
-                  >
-                    {selectedRow.prompt_notes}
-                  </div>
-                ) : null}
+                <div className="token-row muted corpus-eval-case-meta">
+                  <span>Heard: {selectedRow.asr_transcript}</span>
+                  <span>{formatPercentMetric(selectedRow.utterance_feature_similarity)} match</span>
+                  {selectedRow.prompt_notes ? <span>Note: {selectedRow.prompt_notes}</span> : null}
+                </div>
 
                 {selectedRow.trace ? (
-                  <PhoneticRescuePanel trace={toPhoneticTrace(selectedRow.trace)} />
+                  <PhoneticRescuePanel
+                    trace={toPhoneticTrace(selectedRow.trace)}
+                    wsUrl={wsUrl}
+                    sourceAudioPath={selectedRow.wav_path}
+                  />
                 ) : (
                   <div className="prototype-empty">
                     {selectedRow.error ?? "No phonetic trace available."}
