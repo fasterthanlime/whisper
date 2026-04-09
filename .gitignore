@@ -45,6 +45,7 @@ data/*
 training/data/
 training/adapters/
 scripts/__pycache__/
+.artifacts
 
 # env vars
 .env
