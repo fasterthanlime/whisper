@@ -12,6 +12,11 @@ use bee_zipa_mlx::audio::AudioBuffer as ZipaAudioBuffer;
 use bee_zipa_mlx::infer::ZipaInference;
 use mlx_rs::Array;
 use mlx_rs::error::Exception;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokenizers::Tokenizer;
 
 use crate::audio_buffer::{AudioBuffer, Seconds};
@@ -47,10 +52,17 @@ pub struct DecodeSession {
     checkpoints: Vec<DecodeCheckpoint>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct DecodeCheckpoint {
     audio_len_samples: usize,
-    word_count: usize,
+    text_token_ids: Vec<TokenId>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SelectedCheckpoint {
+    index: usize,
+    audio_len_samples: usize,
+    text_token_count: usize,
 }
 
 impl DecodeSession {
@@ -244,14 +256,9 @@ impl DecodeSession {
             self.tokens = merged;
             self.generated_start = prefix_len;
             self.recompute_metadata_boundary();
-            let word_count = self
-                .pending_entries(tokenizer)
-                .iter()
-                .filter(|entry| entry.word.is_some())
-                .count();
             self.checkpoints.push(DecodeCheckpoint {
                 audio_len_samples: self.audio.len(),
-                word_count,
+                text_token_ids: self.text_tokens().iter().map(|token| token.id).collect(),
             });
         }
 
@@ -398,8 +405,19 @@ impl DecodeSession {
         let chunk_index = self.chunk_count;
         // Build entries from text tokens, snap to word boundary
         let boundary_start = phase_start();
+        let Some(selected_checkpoint) = self.select_rotation_checkpoint(tokenizer) else {
+            tracing::warn!(
+                requested_tokens = n.0,
+                total_text_tokens = self.text_tokens().len(),
+                checkpoints = self.checkpoints.len(),
+                "commit: no compatible token checkpoint for rotation cutoff"
+            );
+            return Ok(None);
+        };
+
+        let checkpoint_tokens = TokenCount(selected_checkpoint.text_token_count);
         let mut entries = TextBuffer::from_entries(self.pending_entries(tokenizer));
-        let safe_n = entries.snap_to_word_boundary(n);
+        let safe_n = entries.snap_to_word_boundary(checkpoint_tokens);
         log_phase_chunk(
             "commit",
             "snap_to_word_boundary",
@@ -408,6 +426,7 @@ impl DecodeSession {
         );
         tracing::debug!(
             requested = n.0,
+            checkpoint_tokens = checkpoint_tokens.0,
             snapped = safe_n.0,
             total_text_tokens = self.text_tokens().len(),
             "commit: snap to word boundary"
@@ -440,9 +459,10 @@ impl DecodeSession {
             return Ok(None);
         }
 
-        let align_prefix_end = self
-            .estimated_commit_audio_cutoff(committed_word_count)
-            .unwrap_or_else(|| self.audio.duration());
+        let align_prefix_end = Seconds::from_samples(
+            selected_checkpoint.audio_len_samples,
+            self.audio.sample_rate(),
+        );
         let align_audio = self.audio.slice(crate::audio_buffer::TimeRange::new(
             Seconds::ZERO,
             align_prefix_end,
@@ -485,18 +505,32 @@ impl DecodeSession {
         // so the model doesn't think it's starting a new utterance).
         let rotate_start = phase_start();
         let last_end = Seconds(items.last().unwrap().end_time as f64);
-        let trim_at = if align_prefix_end < last_end {
-            align_prefix_end
-        } else {
-            last_end
-        };
+        let trim_at = align_prefix_end;
         let new_start = self.start_time + trim_at;
-        let (_, remaining) = self.audio.split_at(trim_at);
+        let (committed_audio, remaining) = self.audio.split_at(trim_at);
+        let remaining_token_ids: Vec<TokenId> = self.text_tokens()[safe_n.0..]
+            .iter()
+            .map(|token| token.id)
+            .collect();
+
+        if let Err(error) = self.dump_rotation_debug_artifacts(
+            tokenizer,
+            selected_checkpoint,
+            trim_at,
+            &commit_ids,
+            &remaining_token_ids,
+            &commit_text,
+            &committed_audio,
+            &remaining,
+        ) {
+            tracing::warn!(%error, "commit: failed to dump rotation debug artifacts");
+        }
 
         let remaining_text_tokens = self.text_tokens().len() - safe_n.0;
         tracing::info!(
             committed_word_count,
             checkpoints = self.checkpoints.len(),
+            selected_checkpoint = selected_checkpoint.index,
             committed_tokens = safe_n.0,
             remaining_text_tokens,
             old_start = %format!("{:.3}s", self.start_time.0),
@@ -605,19 +639,222 @@ impl DecodeSession {
             .unwrap_or(0);
     }
 
-    fn estimated_commit_audio_cutoff(&self, committed_word_count: usize) -> Option<Seconds> {
-        const ROTATION_CHECKPOINT_REWIND: usize = 1;
+    fn select_rotation_checkpoint(&self, tokenizer: &Tokenizer) -> Option<SelectedCheckpoint> {
+        let current: Vec<TokenId> = self.text_tokens().iter().map(|token| token.id).collect();
+        if current.is_empty() {
+            return None;
+        }
 
-        let cutoff_index = self
+        let current_text = tokenizer
+            .decode(
+                &current.iter().map(|&id| id as u32).collect::<Vec<_>>(),
+                true,
+            )
+            .unwrap_or_else(|_| "<decode failed>".to_string())
+            .replace('\n', "\\n");
+
+        let candidates = self
             .checkpoints
             .iter()
-            .position(|checkpoint| checkpoint.word_count >= committed_word_count)?;
-        let chosen_index = cutoff_index.saturating_sub(ROTATION_CHECKPOINT_REWIND);
-        let checkpoint = self.checkpoints.get(chosen_index)?;
-        Some(Seconds::from_samples(
-            checkpoint.audio_len_samples,
-            self.audio.sample_rate(),
-        ))
+            .enumerate()
+            .map(|(index, checkpoint)| {
+                let lcp_len = common_prefix_len(&checkpoint.text_token_ids, &current);
+                let checkpoint_len = checkpoint.text_token_ids.len();
+                let stable_len = checkpoint_len.saturating_sub(self.rollback_tokens.0);
+                let matches = stable_len > 0 && lcp_len >= stable_len;
+                let current_prefix = &current[..checkpoint_len.min(current.len())];
+                let checkpoint_text = tokenizer
+                    .decode(
+                        &checkpoint
+                            .text_token_ids
+                            .iter()
+                            .map(|&id| id as u32)
+                            .collect::<Vec<_>>(),
+                        true,
+                    )
+                    .unwrap_or_else(|_| "<decode failed>".to_string())
+                    .replace('\n', "\\n");
+                let current_prefix_text = tokenizer
+                    .decode(
+                        &current_prefix
+                            .iter()
+                            .map(|&id| id as u32)
+                            .collect::<Vec<_>>(),
+                        true,
+                    )
+                    .unwrap_or_else(|_| "<decode failed>".to_string())
+                    .replace('\n', "\\n");
+                let divergence = if lcp_len < checkpoint_len && lcp_len < current.len() {
+                    format!(
+                        "cp[{}]={} current[{}]={}",
+                        lcp_len, checkpoint.text_token_ids[lcp_len], lcp_len, current[lcp_len]
+                    )
+                } else {
+                    "none".to_string()
+                };
+                (
+                    index,
+                    checkpoint.audio_len_samples,
+                    checkpoint_len,
+                    stable_len,
+                    lcp_len,
+                    matches,
+                    checkpoint_text,
+                    current_prefix_text,
+                    divergence,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        tracing::info!(
+            rollback_tokens = self.rollback_tokens.0,
+            current_tokens = current.len(),
+            current_text = %current_text,
+            checkpoint_candidates = %candidates
+                .iter()
+                .map(|(index, audio_len_samples, checkpoint_len, stable_len, lcp_len, matches, checkpoint_text, current_prefix_text, divergence)| {
+                    format!(
+                        "#{index}@{:.3}s match={} lcp={}/{} stable_len={} cp_text={checkpoint_text} current_prefix={current_prefix_text} divergence={divergence}",
+                        Seconds::from_samples(*audio_len_samples, self.audio.sample_rate()).0,
+                        matches,
+                        lcp_len,
+                        checkpoint_len,
+                        stable_len
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" | "),
+            "checkpoint cutoff candidates"
+        );
+
+        let compatible_indices = candidates
+            .iter()
+            .filter(|(_, _, _, _, _, matches, _, _, _)| *matches)
+            .map(|(index, _, _, _, _, _, _, _, _)| *index)
+            .collect::<Vec<_>>();
+
+        let selected_index = match compatible_indices.as_slice() {
+            [] => panic!(
+                "no compatible checkpoint: current_text={current_text}; checkpoints={}",
+                self.checkpoints.len()
+            ),
+            [only] if *only == self.checkpoints.len().saturating_sub(1) => panic!(
+                "only latest checkpoint is compatible: current_text={current_text}; latest_index={only}"
+            ),
+            [only] => *only,
+            many => {
+                let earlier = many[..many.len() - 1].last().copied();
+                earlier.unwrap_or_else(|| {
+                    panic!(
+                        "compatible checkpoints only contained latest/current: current_text={current_text}; compatible={many:?}"
+                    )
+                })
+            }
+        };
+
+        let checkpoint = &self.checkpoints[selected_index];
+        tracing::info!(
+            selected_checkpoint = selected_index,
+            selected_audio_len_samples = checkpoint.audio_len_samples,
+            selected_text_tokens = checkpoint.text_token_ids.len(),
+            selected_audio_secs =
+                Seconds::from_samples(checkpoint.audio_len_samples, self.audio.sample_rate()).0,
+            "checkpoint selected"
+        );
+
+        Some(SelectedCheckpoint {
+            index: selected_index,
+            audio_len_samples: checkpoint.audio_len_samples,
+            text_token_count: checkpoint.text_token_ids.len(),
+        })
+    }
+
+    fn dump_rotation_debug_artifacts(
+        &self,
+        tokenizer: &Tokenizer,
+        selected_checkpoint: SelectedCheckpoint,
+        trim_at: Seconds,
+        committed_token_ids: &[TokenId],
+        remaining_token_ids: &[TokenId],
+        commit_text: &str,
+        committed_audio: &AudioBuffer,
+        remaining_audio: &AudioBuffer,
+    ) -> Result<(), Exception> {
+        let round_dir = next_rotation_debug_dir()?;
+        fs::create_dir_all(&round_dir)
+            .map_err(|e| Exception::custom(format!("create {}: {e}", round_dir.display())))?;
+
+        write_wav_file(&round_dir.join("before.wav"), &self.audio)?;
+        write_wav_file(&round_dir.join("committed.wav"), committed_audio)?;
+        write_wav_file(&round_dir.join("remaining.wav"), remaining_audio)?;
+
+        let current_ids: Vec<TokenId> = self.text_tokens().iter().map(|token| token.id).collect();
+        let current_text = decode_ids(tokenizer, &current_ids);
+        let committed_text = decode_ids(tokenizer, committed_token_ids);
+        let remaining_text = decode_ids(tokenizer, remaining_token_ids);
+
+        fs::write(
+            round_dir.join("summary.txt"),
+            format!(
+                "selected_checkpoint={}\nselected_audio_secs={:.3}\nselected_text_tokens={}\ntrim_at={:.3}\naudio_before_samples={}\naudio_committed_samples={}\naudio_remaining_samples={}\ncurrent_text={}\ncommitted_text={}\nremaining_text={}\ncommit_text_aligner={}\n",
+                selected_checkpoint.index,
+                Seconds::from_samples(selected_checkpoint.audio_len_samples, self.audio.sample_rate()).0,
+                selected_checkpoint.text_token_count,
+                trim_at.0,
+                self.audio.len(),
+                committed_audio.len(),
+                remaining_audio.len(),
+                current_text.replace('\n', "\\n"),
+                committed_text.replace('\n', "\\n"),
+                remaining_text.replace('\n', "\\n"),
+                commit_text.replace('\n', "\\n"),
+            ),
+        )
+        .map_err(|e| Exception::custom(format!("write summary: {e}")))?;
+
+        fs::write(
+            round_dir.join("current_tokens.txt"),
+            render_token_dump(tokenizer, &current_ids),
+        )
+        .map_err(|e| Exception::custom(format!("write current tokens: {e}")))?;
+        fs::write(
+            round_dir.join("committed_tokens.txt"),
+            render_token_dump(tokenizer, committed_token_ids),
+        )
+        .map_err(|e| Exception::custom(format!("write committed tokens: {e}")))?;
+        fs::write(
+            round_dir.join("remaining_tokens.txt"),
+            render_token_dump(tokenizer, remaining_token_ids),
+        )
+        .map_err(|e| Exception::custom(format!("write remaining tokens: {e}")))?;
+        fs::write(
+            round_dir.join("checkpoints.txt"),
+            self.render_checkpoint_ladder(tokenizer, &current_ids),
+        )
+        .map_err(|e| Exception::custom(format!("write checkpoints: {e}")))?;
+
+        tracing::info!(dir = %round_dir.display(), "commit: wrote rotation debug artifacts");
+        Ok(())
+    }
+
+    fn render_checkpoint_ladder(&self, tokenizer: &Tokenizer, current: &[TokenId]) -> String {
+        self.checkpoints
+            .iter()
+            .enumerate()
+            .map(|(index, checkpoint)| {
+                let lcp_len = common_prefix_len(&checkpoint.text_token_ids, current);
+                let text = decode_ids(tokenizer, &checkpoint.text_token_ids).replace('\n', "\\n");
+                format!(
+                    "#{index}\naudio_secs={:.3}\ntoken_count={}\nlcp_with_current={}\ntext={}\nids={:?}\n",
+                    Seconds::from_samples(checkpoint.audio_len_samples, self.audio.sample_rate()).0,
+                    checkpoint.text_token_ids.len(),
+                    lcp_len,
+                    text,
+                    checkpoint.text_token_ids
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn log_zipa_cut_report(
@@ -748,6 +985,68 @@ impl DecodeSession {
     }
 }
 
+fn common_prefix_len(left: &[TokenId], right: &[TokenId]) -> usize {
+    left.iter()
+        .zip(right.iter())
+        .take_while(|(left, right)| left == right)
+        .count()
+}
+
+fn decode_ids(tokenizer: &Tokenizer, ids: &[TokenId]) -> String {
+    tokenizer
+        .decode(&ids.iter().map(|&id| id).collect::<Vec<_>>(), true)
+        .unwrap_or_else(|_| "<decode failed>".to_string())
+}
+
+fn render_token_dump(tokenizer: &Tokenizer, ids: &[TokenId]) -> String {
+    let decoded = decode_ids(tokenizer, ids).replace('\n', "\\n");
+    format!("decoded={decoded}\nids={ids:?}\n")
+}
+
+fn next_rotation_debug_dir() -> Result<PathBuf, Exception> {
+    static RUN_ROOT: OnceLock<PathBuf> = OnceLock::new();
+    static ROUND_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    let run_root = RUN_ROOT.get_or_init(|| {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        Path::new(".artifacts")
+            .join("gpu-hotline")
+            .join("rotation-debug")
+            .join(format!("run-{stamp}"))
+    });
+
+    fs::create_dir_all(run_root)
+        .map_err(|e| Exception::custom(format!("create {}: {e}", run_root.display())))?;
+
+    let round = ROUND_COUNTER.fetch_add(1, Ordering::SeqCst) + 1;
+    Ok(run_root.join(format!("round-{round:02}")))
+}
+
+fn write_wav_file(path: &Path, audio: &AudioBuffer) -> Result<(), Exception> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: audio.sample_rate().0,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec)
+        .map_err(|e| Exception::custom(format!("create wav {}: {e}", path.display())))?;
+    for &sample in audio.samples() {
+        let clamped = sample.clamp(-1.0, 1.0);
+        let pcm = (clamped * i16::MAX as f32) as i16;
+        writer
+            .write_sample(pcm)
+            .map_err(|e| Exception::custom(format!("write wav {}: {e}", path.display())))?;
+    }
+    writer
+        .finalize()
+        .map_err(|e| Exception::custom(format!("finalize wav {}: {e}", path.display())))?;
+    Ok(())
+}
+
 #[derive(Clone)]
 struct ZipaCutRun {
     start_frame: usize,
@@ -755,4 +1054,16 @@ struct ZipaCutRun {
     cut_time: Seconds,
     mean_blank: f32,
     max_blank: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::common_prefix_len;
+
+    #[test]
+    fn common_prefix_len_stops_at_first_mismatch() {
+        assert_eq!(common_prefix_len(&[1, 2, 3, 4], &[1, 2, 9, 4]), 2);
+        assert_eq!(common_prefix_len(&[1, 2, 3], &[1, 2, 3, 4]), 3);
+        assert_eq!(common_prefix_len(&[9, 2, 3], &[1, 2, 3]), 0);
+    }
 }
