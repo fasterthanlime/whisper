@@ -65,6 +65,8 @@ struct SelectedCheckpoint {
     text_token_count: usize,
 }
 
+const MIN_ROTATION_TAIL_AUDIO: Seconds = Seconds(0.8);
+
 impl DecodeSession {
     /// Create a new decode session.
     pub fn new(audio: AudioBuffer, start_time: Seconds, rollback_tokens: TokenCount) -> Self {
@@ -652,6 +654,7 @@ impl DecodeSession {
             )
             .unwrap_or_else(|_| "<decode failed>".to_string())
             .replace('\n', "\\n");
+        let min_tail_samples = MIN_ROTATION_TAIL_AUDIO.to_samples(self.audio.sample_rate());
 
         let candidates = self
             .checkpoints
@@ -698,6 +701,9 @@ impl DecodeSession {
                     checkpoint_len,
                     stable_len,
                     lcp_len,
+                    self.audio
+                        .len()
+                        .saturating_sub(checkpoint.audio_len_samples),
                     matches,
                     checkpoint_text,
                     current_prefix_text,
@@ -710,16 +716,18 @@ impl DecodeSession {
             rollback_tokens = self.rollback_tokens.0,
             current_tokens = current.len(),
             current_text = %current_text,
+            min_tail_audio_secs = MIN_ROTATION_TAIL_AUDIO.0,
             checkpoint_candidates = %candidates
                 .iter()
-                .map(|(index, audio_len_samples, checkpoint_len, stable_len, lcp_len, matches, checkpoint_text, current_prefix_text, divergence)| {
+                .map(|(index, audio_len_samples, checkpoint_len, stable_len, lcp_len, tail_samples, matches, checkpoint_text, current_prefix_text, divergence)| {
                     format!(
-                        "#{index}@{:.3}s match={} lcp={}/{} stable_len={} cp_text={checkpoint_text} current_prefix={current_prefix_text} divergence={divergence}",
+                        "#{index}@{:.3}s match={} lcp={}/{} stable_len={} tail_samples={} cp_text={checkpoint_text} current_prefix={current_prefix_text} divergence={divergence}",
                         Seconds::from_samples(*audio_len_samples, self.audio.sample_rate()).0,
                         matches,
                         lcp_len,
                         checkpoint_len,
-                        stable_len
+                        stable_len,
+                        tail_samples
                     )
                 })
                 .collect::<Vec<_>>()
@@ -729,14 +737,16 @@ impl DecodeSession {
 
         let compatible_indices = candidates
             .iter()
-            .filter(|(_, _, _, _, _, matches, _, _, _)| *matches)
-            .map(|(index, _, _, _, _, _, _, _, _)| *index)
+            .filter(|(_, _, _, _, _, tail_samples, matches, _, _, _)| {
+                *matches && *tail_samples >= min_tail_samples
+            })
+            .map(|(index, _, _, _, _, _, _, _, _, _)| *index)
             .collect::<Vec<_>>();
 
         let selected_index = match compatible_indices.as_slice() {
             [] => panic!(
-                "no compatible checkpoint: current_text={current_text}; checkpoints={}",
-                self.checkpoints.len()
+                "no compatible checkpoint with enough tail audio: current_text={current_text}; checkpoints={}; min_tail_samples={min_tail_samples}",
+                self.checkpoints.len(),
             ),
             [only] if *only == self.checkpoints.len().saturating_sub(1) => panic!(
                 "only latest checkpoint is compatible: current_text={current_text}; latest_index={only}"
