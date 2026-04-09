@@ -29,6 +29,7 @@ use beeml::rpc::{
     TranscribePhoneticSpanClass, TranscribePhoneticSpanUsefulness, TranscribePhoneticTrace,
     TranscribePhoneticWordAlignment,
 };
+use rand::seq::SliceRandom;
 
 use crate::offline_eval::*;
 use crate::rapid_fire::build_rapid_fire_decision_set;
@@ -509,8 +510,13 @@ impl BeeMlService {
         &self,
         limit: usize,
         bucket_filter: Option<&str>,
+        randomize: bool,
     ) -> Result<CorpusAlignmentEvalResult, String> {
-        let recordings = self.latest_corpus_recordings(bucket_filter)?;
+        let mut recordings = self.latest_corpus_recordings(bucket_filter)?;
+        if randomize {
+            let mut rng = rand::thread_rng();
+            recordings.shuffle(&mut rng);
+        }
         let mut rows = Vec::new();
 
         for (prompt, recording) in recordings.into_iter().take(limit) {
@@ -693,6 +699,7 @@ impl BeeMlService {
         &self,
         limit: u32,
         bucket: Option<String>,
+        _randomize: bool,
     ) -> Result<CorpusAlignmentEvalJob, String> {
         let total_rows = self
             .latest_corpus_recordings(bucket.as_deref())?

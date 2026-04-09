@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { connectBeeMl } from "../beeml.generated";
 import type {
   CorpusAlignmentEvalJob,
@@ -175,16 +175,22 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
   const [result, setResult] = useState<CorpusAlignmentEvalResult | null>(null);
   const [job, setJob] = useState<CorpusAlignmentEvalJob | null>(null);
   const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
+  const [showRunComposer, setShowRunComposer] = useState(false);
+  const autoStartedRef = useRef(false);
 
-  const runEval = useCallback(async () => {
+  const runEval = useCallback(async (options?: { limit?: number; bucket?: string; randomize?: boolean }) => {
     try {
       setStatus("Starting corpus alignment eval...");
       setError(null);
       setResult(null);
+      setSelectedPromptId(null);
       const client = await connectBeeMl(wsUrl);
+      const nextLimit = options?.limit ?? limit;
+      const nextBucket = options?.bucket ?? bucket;
       const response = await client.startCorpusAlignmentEvalJob({
-        limit,
-        bucket: bucket.trim() ? bucket.trim() : null,
+        limit: nextLimit,
+        bucket: nextBucket.trim() ? nextBucket.trim() : null,
+        randomize: options?.randomize ?? false,
       });
       if (!response.ok) throw new Error(response.error);
       setJob(response.value);
@@ -194,6 +200,12 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
       setStatus(null);
     }
   }, [bucket, limit, wsUrl]);
+
+  useEffect(() => {
+    if (autoStartedRef.current) return;
+    autoStartedRef.current = true;
+    void runEval({ limit: 5, bucket: "", randomize: true });
+  }, [runEval]);
 
   useEffect(() => {
     if (!job || job.status.tag !== "Running") return;
@@ -250,6 +262,18 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
     return values.reduce((sum, value) => sum + value, 0) / values.length;
   }, [result]);
 
+  const startRandomFiveRun = useCallback(() => {
+    setBucket("");
+    setLimit(5);
+    setShowRunComposer(false);
+    void runEval({ limit: 5, bucket: "", randomize: true });
+  }, [runEval]);
+
+  const startConfiguredRun = useCallback(() => {
+    setShowRunComposer(false);
+    void runEval({ limit, bucket, randomize: false });
+  }, [bucket, limit, runEval]);
+
   return (
     <div
       className="prototype-lab"
@@ -259,60 +283,6 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
         gap: "0.75rem",
       }}
     >
-      <section className="prototype-card prototype-card-tight">
-        <header className="panel-header-row">
-          <div>
-            <strong>Corpus Alignment Eval</strong>
-            <span>Use the left rail to pick a case. Use the right workspace to inspect utterance alignment and per-word IPA.</span>
-          </div>
-          {result ? <span className="badge">{result.rows.length} rows</span> : null}
-        </header>
-
-        <div className="control-bar">
-          <div className="numeric-row">
-            <label>
-              <span>limit</span>
-              <input
-                type="number"
-                min={1}
-                max={200}
-                value={limit}
-                onChange={(e) => setLimit(Number(e.target.value) || 1)}
-              />
-            </label>
-            <label style={{ minWidth: 180 }}>
-              <span>bucket filter</span>
-              <input
-                value={bucket}
-                onChange={(e) => setBucket(e.target.value)}
-                placeholder="optional"
-              />
-            </label>
-          </div>
-          <div className="control-actions">
-            <button className="primary" onClick={() => void runEval()}>
-              {job?.status.tag === "Running" ? "Re-run Eval" : "Start Eval"}
-            </button>
-          </div>
-        </div>
-
-        {(status || error) && (
-          <div className="notice-row">
-            {status ? <span className="status-pill">{status}</span> : null}
-            {error ? <span className="error-pill">{error}</span> : null}
-          </div>
-        )}
-        {job ? (
-          <div className="prototype-summary">
-            <span>job {job.job_id}</span>
-            <span>status {job.status.tag.toLowerCase()}</span>
-            <span>
-              progress {job.completed_rows}/{job.total_rows}
-            </span>
-          </div>
-        ) : null}
-      </section>
-
       {result ? (
         <section
           style={{
@@ -336,8 +306,83 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
                 <strong>Cases</strong>
                 <span>Pick a recording to inspect.</span>
               </div>
-              <span className="badge">{result.rows.length}</span>
+              <div style={{ display: "flex", gap: "0.45rem", alignItems: "center" }}>
+                <button
+                  type="button"
+                  className="mini-badge"
+                  style={{ cursor: "pointer" }}
+                  onClick={startRandomFiveRun}
+                >
+                  ↻ Random 5-run
+                </button>
+                <button
+                  type="button"
+                  className="mini-badge"
+                  style={{ cursor: "pointer" }}
+                  onClick={() => setShowRunComposer((value) => !value)}
+                >
+                  + New run
+                </button>
+                <span className="badge">{result.rows.length} rows</span>
+              </div>
             </header>
+
+            <div className="prototype-stack" style={{ gap: "0.5rem" }}>
+              <div className="token-row muted">
+                Corpus Eval defaults to a random 5-case run on entry.
+              </div>
+              {(status || error || job) && (
+                <div className="notice-row" style={{ margin: 0 }}>
+                  {status ? <span className="status-pill">{status}</span> : null}
+                  {error ? <span className="error-pill">{error}</span> : null}
+                  {job ? (
+                    <span className="mini-badge">
+                      job {job.job_id} · {job.completed_rows}/{job.total_rows}
+                    </span>
+                  ) : null}
+                </div>
+              )}
+              {showRunComposer ? (
+                <div
+                  className="prototype-card prototype-card-tight"
+                  style={{
+                    gap: "0.65rem",
+                    padding: "0.75rem",
+                    background: "var(--bg-elevated)",
+                  }}
+                >
+                  <div className="eyebrow">New run</div>
+                  <div className="numeric-row" style={{ gridTemplateColumns: "1fr", gap: "0.5rem" }}>
+                    <label>
+                      <span>limit</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={200}
+                        value={limit}
+                        onChange={(e) => setLimit(Number(e.target.value) || 1)}
+                      />
+                    </label>
+                    <label>
+                      <span>bucket filter</span>
+                      <input
+                        value={bucket}
+                        onChange={(e) => setBucket(e.target.value)}
+                        placeholder="optional"
+                      />
+                    </label>
+                  </div>
+                  <div className="control-actions" style={{ justifyContent: "flex-start" }}>
+                    <button className="primary" onClick={startConfiguredRun}>
+                      Start run
+                    </button>
+                    <button type="button" onClick={() => setShowRunComposer(false)}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
 
             <div
               style={{
@@ -452,7 +497,15 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
         </section>
       ) : (
         <section className="prototype-card prototype-card-tight">
-          <div className="prototype-empty">No corpus eval run yet.</div>
+          <header className="panel-header-row">
+            <div>
+              <strong>Corpus Alignment Eval</strong>
+              <span>Starting a random 5-case run.</span>
+            </div>
+          </header>
+          <div className="prototype-empty">
+            {error ?? status ?? "Starting random 5-case run..."}
+          </div>
         </section>
       )}
     </div>
