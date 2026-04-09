@@ -151,6 +151,18 @@ export type PhoneticRescueSpan = {
   candidates: PhoneticRescueCandidate[];
 };
 
+export type PhoneticWordAlignment = {
+  wordText: string;
+  tokenStart: number;
+  tokenEnd: number;
+  transcriptNormalized: string[];
+  zipaNormStart: number;
+  zipaNormEnd: number;
+  zipaRaw: string[];
+  zipaNormalized: string[];
+  alignment: PhoneticAlignmentOp[];
+};
+
 export type PhoneticRescueTrace = {
   snapshotRevision: bigint;
   alignedTranscript: string;
@@ -175,6 +187,7 @@ export type PhoneticRescueTrace = {
   utteranceSimilarity?: number | null;
   utteranceFeatureSimilarity?: number | null;
   utteranceAlignment: PhoneticAlignmentOp[];
+  wordAlignments: PhoneticWordAlignment[];
   spans: PhoneticRescueSpan[];
 };
 

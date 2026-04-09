@@ -27,6 +27,7 @@ use beeml::rpc::{
     TranscribePhoneticAlignmentKind, TranscribePhoneticAlignmentOp,
     TranscribePhoneticAnchorConfidence, TranscribePhoneticCandidate, TranscribePhoneticSpan,
     TranscribePhoneticSpanClass, TranscribePhoneticSpanUsefulness, TranscribePhoneticTrace,
+    TranscribePhoneticWordAlignment,
 };
 
 use crate::offline_eval::*;
@@ -192,6 +193,50 @@ impl BeeMlService {
             .collect::<Vec<_>>();
         let utterance_alignment =
             align_token_sequences(&utterance_transcript_normalized, &utterance_zipa_normalized);
+        let transcript_words = sentence_word_tokens(transcript);
+        let word_alignments = transcript_word_normalized_ranges
+            .iter()
+            .enumerate()
+            .filter_map(|(word_index, (_, transcript_normalized))| {
+                let transcript_norm_range = transcript_token_range_for_span(
+                    &transcript_word_normalized_ranges,
+                    word_index,
+                    word_index + 1,
+                );
+                let zipa_norm_range = strict_project_left_range(
+                    &utterance_alignment.ops,
+                    transcript_norm_range.clone(),
+                )?;
+                let zipa_normalized = utterance_zipa_normalized
+                    .get(zipa_norm_range.clone())
+                    .unwrap_or(&[])
+                    .to_vec();
+                if zipa_normalized.is_empty() {
+                    return None;
+                }
+                let zipa_raw = raw_slice_for_normalized_range(
+                    &utterance_zipa_raw,
+                    &utterance_zipa_normalized_with_spans,
+                    zipa_norm_range.clone(),
+                );
+                let word_text = transcript_words.get(word_index)?.text.clone();
+                Some(TranscribePhoneticWordAlignment {
+                    word_text,
+                    token_start: word_index as u32,
+                    token_end: (word_index + 1) as u32,
+                    transcript_normalized: transcript_normalized.clone(),
+                    zipa_norm_start: zipa_norm_range.start as u32,
+                    zipa_norm_end: zipa_norm_range.end as u32,
+                    zipa_raw,
+                    zipa_normalized,
+                    alignment: map_alignment_ops(&slice_alignment_ops(
+                        &utterance_alignment.ops,
+                        transcript_norm_range,
+                        zipa_norm_range,
+                    )),
+                })
+            })
+            .collect::<Vec<_>>();
 
         let spans = enumerate_transcript_spans_with(transcript, 3, Some(&alignments[..]), |text| {
             g2p.ipa_tokens(text).ok().flatten()
@@ -408,6 +453,7 @@ impl BeeMlService {
             utterance_zipa_normalized,
             utterance_transcript_normalized,
             utterance_alignment: map_alignment_ops(&utterance_alignment.ops),
+            word_alignments,
             spans: phonetic_spans,
         })
     }
@@ -1664,6 +1710,79 @@ fn select_span_alignment_range(
         alignment_score_gap,
         alignment_source,
     })
+}
+
+fn slice_alignment_ops(
+    ops: &[AlignmentOp],
+    transcript_range: std::ops::Range<usize>,
+    zipa_range: std::ops::Range<usize>,
+) -> Vec<AlignmentOp> {
+    ops.iter()
+        .filter(|op| {
+            let left_ok = op
+                .left_index
+                .map(|index| {
+                    transcript_range.start <= index as usize
+                        && (index as usize) < transcript_range.end
+                })
+                .unwrap_or(false);
+            let right_ok = op
+                .right_index
+                .map(|index| {
+                    zipa_range.start <= index as usize && (index as usize) < zipa_range.end
+                })
+                .unwrap_or(false);
+            left_ok || right_ok
+        })
+        .cloned()
+        .collect()
+}
+
+fn strict_project_left_range(
+    ops: &[AlignmentOp],
+    left_range: std::ops::Range<usize>,
+) -> Option<std::ops::Range<usize>> {
+    if left_range.start >= left_range.end {
+        return None;
+    }
+
+    let mut matched_right = Vec::new();
+    let mut right_before = None;
+    let mut right_after = None;
+
+    for op in ops {
+        let left_index = op.left_index.map(|index| index as usize);
+        let right_index = op.right_index.map(|index| index as usize);
+
+        if let Some(left_index) = left_index {
+            if left_range.contains(&left_index) {
+                if let Some(right_index) = right_index {
+                    matched_right.push(right_index);
+                }
+                continue;
+            }
+
+            if left_index < left_range.start {
+                if let Some(right_index) = right_index {
+                    right_before = Some(right_index);
+                }
+            } else if left_index >= left_range.end && right_after.is_none() {
+                if let Some(right_index) = right_index {
+                    right_after = Some(right_index);
+                }
+            }
+        }
+    }
+
+    if let (Some(start), Some(end)) = (matched_right.first(), matched_right.last()) {
+        return Some(*start..(*end + 1));
+    }
+
+    match (right_before, right_after) {
+        (Some(start), Some(end)) if start < end => Some((start + 1)..end),
+        (Some(start), Some(end)) => Some(start..(end + 1)),
+        _ => None,
+    }
 }
 
 fn normalize_candidate_ranges(ranges: &mut Vec<std::ops::Range<usize>>, utterance_len: usize) {

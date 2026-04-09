@@ -96,6 +96,19 @@ pub struct TranscribePhoneticSpan {
 }
 
 #[derive(Clone, Debug, Facet)]
+pub struct TranscribePhoneticWordAlignment {
+    pub word_text: String,
+    pub token_start: u32,
+    pub token_end: u32,
+    pub transcript_normalized: Vec<String>,
+    pub zipa_norm_start: u32,
+    pub zipa_norm_end: u32,
+    pub zipa_raw: Vec<String>,
+    pub zipa_normalized: Vec<String>,
+    pub alignment: Vec<TranscribePhoneticAlignmentOp>,
+}
+
+#[derive(Clone, Debug, Facet)]
 pub struct TranscribePhoneticTrace {
     pub snapshot_revision: u64,
     pub aligned_transcript: String,
@@ -111,6 +124,7 @@ pub struct TranscribePhoneticTrace {
     pub utterance_similarity: Option<f32>,
     pub utterance_feature_similarity: Option<f32>,
     pub utterance_alignment: Vec<TranscribePhoneticAlignmentOp>,
+    pub word_alignments: Vec<TranscribePhoneticWordAlignment>,
     pub spans: Vec<TranscribePhoneticSpan>,
 }
 
