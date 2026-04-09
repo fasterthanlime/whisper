@@ -72,15 +72,24 @@ async fn main() -> Result<()> {
     let silero_dir = env::var("BEE_VAD_DIR")
         .map(PathBuf::from)
         .context("BEE_VAD_DIR must be set")?;
+    let zipa_bundle_dir = env::var("BEE_ZIPA_BUNDLE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("bearcove/zipa-mlx-hf")
+        });
 
     info!(model_dir = %model_dir.display(), "loading ASR engine");
     let engine = Engine::load(&EngineConfig {
         model_dir: &model_dir,
         tokenizer_dir: &tokenizer_dir,
         aligner_dir: &aligner_dir,
+        share_aligner_audio_tower: false,
         silero_dir: &silero_dir,
         correction_dir: None,
         correction_events_path: None,
+        zipa_bundle_dir: &zipa_bundle_dir,
     })
     .context("loading engine")?;
 
@@ -97,13 +106,6 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".beeml")
         .join("events.jsonl");
-    let zipa_bundle_dir = env::var("BEE_ZIPA_BUNDLE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("bearcove/zipa-mlx-hf")
-        });
     let zipa_wav_dir = env::var("BEE_PHONETIC_WAV_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {

@@ -34,6 +34,13 @@ fn main() -> anyhow::Result<()> {
         std::env::var("BEE_ALIGNER_DIR").map_err(|_| anyhow::anyhow!("BEE_ALIGNER_DIR not set"))?;
     let silero_dir =
         std::env::var("BEE_VAD_DIR").map_err(|_| anyhow::anyhow!("BEE_VAD_DIR not set"))?;
+    let zipa_bundle_dir = std::env::var("BEE_ZIPA_BUNDLE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("bearcove/zipa-mlx-hf")
+        });
 
     let corpus_root = SeedDataset::canonical_root();
 
@@ -44,9 +51,11 @@ fn main() -> anyhow::Result<()> {
         model_dir: Path::new(&model_dir),
         tokenizer_dir: Path::new(&tokenizer_dir),
         aligner_dir: Path::new(&aligner_dir),
+        share_aligner_audio_tower: false,
         silero_dir: Path::new(&silero_dir),
         correction_dir: None,
         correction_events_path: None,
+        zipa_bundle_dir: &zipa_bundle_dir,
     })?;
     println!("done ({:.0}ms)", t0.elapsed().as_millis());
 

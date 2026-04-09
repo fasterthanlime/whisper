@@ -190,4 +190,8 @@ pub struct EngineConfig<'a> {
 
     /// Optional path to the correction events JSONL file (for online learning).
     pub correction_events_path: Option<std::path::PathBuf>,
+
+    /// Directory containing the ZIPA-CR bundle (`config.json`,
+    /// `model.safetensors`, `tokens.txt`).
+    pub zipa_bundle_dir: &'a Path,
 }

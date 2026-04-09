@@ -9,6 +9,7 @@ use bee_qwen3_asr::generate::ConfidenceMode;
 use bee_qwen3_asr::model::Qwen3ASRModel;
 use bee_types::AlignedWord;
 use bee_vad::SileroVad;
+use bee_zipa_mlx::infer::ZipaInference;
 use mlx_rs::error::Exception;
 use tokenizers::Tokenizer;
 
@@ -35,6 +36,7 @@ pub struct Session<'a> {
     model: &'a Qwen3ASRModel,
     tokenizer: &'a Tokenizer,
     forced_aligner: &'a ForcedAligner,
+    zipa: &'a ZipaInference,
 
     filters: AudioFilterChain,
     decode: DecodeSession,
@@ -64,6 +66,7 @@ impl<'a> Session<'a> {
         model: &'a Qwen3ASRModel,
         tokenizer: &'a Tokenizer,
         forced_aligner: &'a ForcedAligner,
+        zipa: &'a ZipaInference,
         vad: SileroVad,
         options: SessionOptions,
         correction: Option<(SharedCorrectionEngine, Corrector)>,
@@ -74,6 +77,7 @@ impl<'a> Session<'a> {
             model,
             tokenizer,
             forced_aligner,
+            zipa,
             filters: audio_filter::default_filter_chain(vad, options.vad_threshold),
             decode: DecodeSession::new(
                 AudioBuffer::empty(SampleRate::HZ_16000),
@@ -191,9 +195,9 @@ impl<'a> Session<'a> {
             );
             if self.decode.has_audio() {
                 let commit_all_start = phase_start();
-                if let Some(aligned) = self
-                    .decode
-                    .commit_all(self.forced_aligner, self.tokenizer)?
+                if let Some(aligned) =
+                    self.decode
+                        .commit_all(self.forced_aligner, self.zipa, self.tokenizer)?
                 {
                     log_phase("finish", "commit_all", commit_all_start);
                     let final_words: Vec<AlignedWord> = aligned
@@ -382,6 +386,7 @@ impl<'a> Session<'a> {
             if let Some(aligned) = self.decode.commit(
                 TokenCount(self.options.commit_token_count),
                 self.forced_aligner,
+                self.zipa,
                 self.tokenizer,
             )? {
                 log_phase_chunk(

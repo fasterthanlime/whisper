@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use bee_vad::SileroVad;
+use bee_zipa_mlx::infer::ZipaInference;
 pub use mlx_stuff::*;
 pub use types::*;
 pub use wav_util::decode_wav;
@@ -56,6 +57,7 @@ pub struct Engine {
     tokenizer: Tokenizer,
     model: Qwen3ASRModel,
     aligner: ForcedAligner,
+    zipa: ZipaInference,
     vad_tensors: HashMap<String, mlx_rs::Array>,
     correction: Option<SharedCorrectionEngine>,
 }
@@ -102,6 +104,10 @@ impl Engine {
         )?;
         log::info!("Aligner loaded");
 
+        let zipa = ZipaInference::load_quantized_bundle_dir(config.zipa_bundle_dir)
+            .map_err(|e| Exception::custom(format!("zipa inference: {e}")))?;
+        log::info!("ZIPA loaded");
+
         let st_path = config.silero_dir.join("model.safetensors");
         let vad_tensors = mlx_rs::Array::load_safetensors(&st_path)
             .map_err(|e| Exception::custom(format!("vad weights load: {e}")))?;
@@ -125,6 +131,7 @@ impl Engine {
             model,
             tokenizer,
             aligner,
+            zipa,
             vad_tensors,
             correction,
         })
@@ -142,6 +149,7 @@ impl Engine {
             &self.model,
             &self.tokenizer,
             &self.aligner,
+            &self.zipa,
             vad,
             options,
             correction,

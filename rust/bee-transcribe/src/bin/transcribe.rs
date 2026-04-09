@@ -31,6 +31,13 @@ fn main() -> anyhow::Result<()> {
         std::env::var("BEE_ALIGNER_DIR").map_err(|_| anyhow::anyhow!("BEE_ALIGNER_DIR not set"))?;
     let vad_dir =
         std::env::var("BEE_VAD_DIR").map_err(|_| anyhow::anyhow!("BEE_VAD_DIR not set"))?;
+    let zipa_bundle_dir = std::env::var("BEE_ZIPA_BUNDLE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("bearcove/zipa-mlx-hf")
+        });
     let share_aligner_audio_tower = std::env::var("BEE_SHARE_ALIGNER_AUDIO_TOWER")
         .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false);
@@ -68,6 +75,7 @@ fn main() -> anyhow::Result<()> {
         silero_dir: Path::new(&vad_dir),
         correction_dir,
         correction_events_path,
+        zipa_bundle_dir: &zipa_bundle_dir,
     })?;
     println!("Engine loaded in {:.0}ms", t0.elapsed().as_millis());
 

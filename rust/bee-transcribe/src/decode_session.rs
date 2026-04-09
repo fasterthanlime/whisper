@@ -4,14 +4,15 @@
 //! The start_time tracks where this sub-session begins in the timeline.
 
 use bee_qwen3_asr::encoder::EncoderCache;
+use bee_qwen3_asr::forced_aligner::{ForcedAlignItem, ForcedAligner};
 use bee_qwen3_asr::generate::{self, ConfidenceMode, TOP_K, TokenConfidence};
 use bee_qwen3_asr::mel::MelExtractor;
 use bee_qwen3_asr::model::Qwen3ASRModel;
+use bee_zipa_mlx::audio::AudioBuffer as ZipaAudioBuffer;
+use bee_zipa_mlx::infer::ZipaInference;
 use mlx_rs::Array;
 use mlx_rs::error::Exception;
 use tokenizers::Tokenizer;
-
-use bee_qwen3_asr::forced_aligner::ForcedAligner;
 
 use crate::audio_buffer::{AudioBuffer, Seconds};
 use crate::mlx_stuff::clear_mlx_cache;
@@ -390,6 +391,7 @@ impl DecodeSession {
         &mut self,
         n: TokenCount,
         forced_aligner: &ForcedAligner,
+        zipa: &ZipaInference,
         tokenizer: &Tokenizer,
     ) -> Result<Option<TextBuffer>, Exception> {
         let commit_total_start = phase_start();
@@ -456,6 +458,8 @@ impl DecodeSession {
             tracing::warn!("commit: forced aligner returned no items");
             return Ok(None);
         }
+
+        self.log_zipa_cut_report(zipa, &align_audio, &items, &commit_text)?;
 
         // Build AlignmentItems and align the buffer (pure function)
         let align_buffer_start = phase_start();
@@ -530,10 +534,11 @@ impl DecodeSession {
     pub fn commit_all(
         &mut self,
         forced_aligner: &ForcedAligner,
+        zipa: &ZipaInference,
         tokenizer: &Tokenizer,
     ) -> Result<Option<TextBuffer>, Exception> {
         let n = TokenCount(self.text_tokens().len());
-        self.commit(n, forced_aligner, tokenizer)
+        self.commit(n, forced_aligner, zipa, tokenizer)
     }
 
     /// Clear all tokens and reset state.
@@ -614,4 +619,140 @@ impl DecodeSession {
             self.audio.sample_rate(),
         ))
     }
+
+    fn log_zipa_cut_report(
+        &self,
+        zipa: &ZipaInference,
+        align_audio: &AudioBuffer,
+        items: &[ForcedAlignItem],
+        commit_text: &str,
+    ) -> Result<(), Exception> {
+        let zipa_audio = ZipaAudioBuffer {
+            samples: align_audio.samples().to_vec(),
+            sample_rate_hz: align_audio.sample_rate().0,
+        };
+        let output = zipa
+            .infer_audio(&zipa_audio)
+            .map_err(|e| Exception::custom(format!("zipa inference: {e}")))?;
+
+        let frame_count = output.log_probs_len;
+        if frame_count == 0 || output.token_ids.is_empty() {
+            tracing::info!(
+                commit_text = %commit_text.trim(),
+                "zipa: no frames available for cut analysis"
+            );
+            return Ok(());
+        }
+
+        let shape = output.log_probs.shape();
+        let vocab_size = *shape.last().unwrap_or(&0) as usize;
+        if vocab_size == 0 {
+            tracing::info!(
+                commit_text = %commit_text.trim(),
+                "zipa: empty vocab in log_probs"
+            );
+            return Ok(());
+        }
+        let flat = output.log_probs.as_slice::<f32>();
+        let blank_id = 0usize;
+        let seconds_per_frame = align_audio.duration().0 / frame_count as f64;
+
+        let mut runs = Vec::new();
+        let mut frame = 0usize;
+        while frame < output.token_ids.len() {
+            if output.token_ids[frame] != blank_id {
+                frame += 1;
+                continue;
+            }
+            let start = frame;
+            let mut max_blank = 0.0f32;
+            let mut blank_sum = 0.0f32;
+            while frame < output.token_ids.len() && output.token_ids[frame] == blank_id {
+                let blank_log_prob = flat[frame * vocab_size + blank_id];
+                let blank_prob = blank_log_prob.exp();
+                max_blank = max_blank.max(blank_prob);
+                blank_sum += blank_prob;
+                frame += 1;
+            }
+            let end = frame;
+            let len = end - start;
+            if len >= 2 {
+                let mean_blank = blank_sum / len as f32;
+                let cut_time = Seconds((start + end) as f64 * 0.5 * seconds_per_frame);
+                runs.push(ZipaCutRun {
+                    start_frame: start,
+                    end_frame: end,
+                    cut_time,
+                    mean_blank,
+                    max_blank,
+                });
+            }
+        }
+
+        if runs.is_empty() {
+            tracing::info!(
+                commit_text = %commit_text.trim(),
+                zipa_frames = frame_count,
+                zipa_tokens = output.tokens.join(" "),
+                "zipa: no blank-run cut candidates"
+            );
+            return Ok(());
+        }
+
+        let aligned_end = Seconds(items.last().unwrap().end_time as f64);
+        let nearest = runs
+            .iter()
+            .min_by(|a, b| {
+                let da = (a.cut_time.0 - aligned_end.0).abs();
+                let db = (b.cut_time.0 - aligned_end.0).abs();
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+
+        let mut strongest = runs.clone();
+        strongest.sort_by(|a, b| {
+            b.mean_blank
+                .partial_cmp(&a.mean_blank)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    b.max_blank
+                        .partial_cmp(&a.max_blank)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        });
+        let strongest_summary = strongest
+            .iter()
+            .take(5)
+            .map(|run| {
+                format!(
+                    "{:.3}s[f{}..{} mean={:.2} max={:.2}]",
+                    run.cut_time.0, run.start_frame, run.end_frame, run.mean_blank, run.max_blank
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        tracing::info!(
+            commit_text = %commit_text.trim(),
+            zipa_frames = frame_count,
+            zipa_frame_ms = seconds_per_frame * 1000.0,
+            zipa_phone_count = output.tokens.len(),
+            zipa_aligned_end = aligned_end.0,
+            zipa_nearest_cut = nearest.cut_time.0,
+            zipa_nearest_cut_delta_ms = (nearest.cut_time.0 - aligned_end.0) * 1000.0,
+            zipa_strongest_blank_runs = %strongest_summary,
+            "zipa cut report"
+        );
+
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct ZipaCutRun {
+    start_frame: usize,
+    end_frame: usize,
+    cut_time: Seconds,
+    mean_blank: f32,
+    max_blank: f32,
 }

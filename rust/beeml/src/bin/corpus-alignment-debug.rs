@@ -411,14 +411,23 @@ fn load_service() -> Result<BeeMlService> {
     let silero_dir = env::var("BEE_VAD_DIR")
         .map(PathBuf::from)
         .context("BEE_VAD_DIR must be set")?;
+    let zipa_bundle_dir = env::var("BEE_ZIPA_BUNDLE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("bearcove/zipa-mlx-hf")
+        });
 
     let engine = Engine::load(&EngineConfig {
         model_dir: &model_dir,
         tokenizer_dir: &tokenizer_dir,
         aligner_dir: &aligner_dir,
+        share_aligner_audio_tower: false,
         silero_dir: &silero_dir,
         correction_dir: None,
         correction_events_path: None,
+        zipa_bundle_dir: &zipa_bundle_dir,
     })
     .context("loading engine")?;
 
@@ -428,13 +437,6 @@ fn load_service() -> Result<BeeMlService> {
     let counterexamples =
         load_counterexample_recordings().context("loading counterexample recordings")?;
 
-    let zipa_bundle_dir = env::var("BEE_ZIPA_BUNDLE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("bearcove/zipa-mlx-hf")
-        });
     let zipa_wav_dir = env::var("BEE_PHONETIC_WAV_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {

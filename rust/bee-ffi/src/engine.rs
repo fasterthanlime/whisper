@@ -63,12 +63,18 @@ fn resolve_engine_config(
     };
 
     let silero_dir: PathBuf = find_vad_dir(cache_base).ok_or("Silero VAD not found")?;
+    let zipa_bundle_dir: PathBuf =
+        cache_base.join("bearcove--zipa-small-crctc-ns-no-diacritics-700k-mlx-q8");
+    if !zipa_bundle_dir.exists() {
+        return Err("ZIPA bundle not found".to_string());
+    }
 
     // Leak the PathBufs to get 'static references (engine lives for process lifetime)
     let model_dir: &'static Path = Box::leak(model_dir.to_path_buf().into_boxed_path());
     let tokenizer_dir: &'static Path = Box::leak(tokenizer_dir.into_boxed_path());
     let aligner_dir: &'static Path = Box::leak(aligner_dir.into_boxed_path());
     let silero_dir: &'static Path = Box::leak(silero_dir.into_boxed_path());
+    let zipa_bundle_dir: &'static Path = Box::leak(zipa_bundle_dir.into_boxed_path());
 
     // Look for the correction dataset directory
     let correction_dir_path = cache_base.join("bee-correct-dataset");
@@ -89,6 +95,7 @@ fn resolve_engine_config(
         silero_dir,
         correction_dir,
         correction_events_path,
+        zipa_bundle_dir,
     })
 }
 
@@ -167,6 +174,33 @@ pub(crate) fn required_downloads() -> Vec<RepoDownload> {
                     url: hf_file_url(
                         "mlx-community/Qwen3-ForcedAligner-0.6B-4bit",
                         "model.safetensors",
+                    ),
+                },
+            ],
+        },
+        RepoDownload {
+            repo_id: "bearcove/zipa-small-crctc-ns-no-diacritics-700k-mlx-q8".into(),
+            local_dir: "bearcove--zipa-small-crctc-ns-no-diacritics-700k-mlx-q8".into(),
+            files: vec![
+                RepoFile {
+                    name: "config.json".into(),
+                    url: hf_file_url(
+                        "bearcove/zipa-small-crctc-ns-no-diacritics-700k-mlx-q8",
+                        "config.json",
+                    ),
+                },
+                RepoFile {
+                    name: "model.safetensors".into(),
+                    url: hf_file_url(
+                        "bearcove/zipa-small-crctc-ns-no-diacritics-700k-mlx-q8",
+                        "model.safetensors",
+                    ),
+                },
+                RepoFile {
+                    name: "tokens.txt".into(),
+                    url: hf_file_url(
+                        "bearcove/zipa-small-crctc-ns-no-diacritics-700k-mlx-q8",
+                        "tokens.txt",
                     ),
                 },
             ],
