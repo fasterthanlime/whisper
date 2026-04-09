@@ -7,6 +7,8 @@ import InputMethodKit
 class BeeInputController: IMKInputController {
     @MainActor
     private var isHandlingCancelComposition = false
+    @MainActor
+    private weak var activeInputContext: NSTextInputContext?
 
     nonisolated override init!(server: IMKServer!, delegate: Any!, client: Any!) {
         super.init(server: server, delegate: delegate, client: client)
@@ -19,11 +21,12 @@ class BeeInputController: IMKInputController {
     nonisolated override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
         MainActor.assumeIsolated {
+            activeInputContext = NSTextInputContext.current
             let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
             let clientIdentity = currentClientIdentity()
             let bridge = BeeIMEBridgeState.shared
             beeInputLog(
-                "activateServer: entry frontmostPID=\(frontmostPID.map(String.init) ?? "nil") clientID=\(clientIdentity ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) client=\(describeClient())"
+                "activateServer: entry frontmostPID=\(frontmostPID.map(String.init) ?? \"nil\") clientID=\(clientIdentity ?? \"nil\") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) inputContextCaptured=\(activeInputContext != nil) client=\(describeClient())"
             )
             bridge.activate(self, pid: frontmostPID, clientID: clientIdentity)
         }
@@ -48,16 +51,17 @@ class BeeInputController: IMKInputController {
 
             let hadMarkedText = !(session?.currentMarkedText.isEmpty ?? true)
             beeInputLog(
-                "deactivateServer: session=\(sessionID?.uuidString.prefix(8) ?? "none") hadMarkedText=\(hadMarkedText) clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) client=\(describeClient())"
+                "deactivateServer: session=\(sessionID?.uuidString.prefix(8) ?? "none") hadMarkedText=\(hadMarkedText) clientID=\(currentClientIdentity() ?? \"nil\") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) client=\(describeClient())"
             )
 
             if hadMarkedText || clientHasMarked {
                 beeInputLog("deactivateServer: discarding marked text before detach")
-                bridge.discardMarkedText(on: self.client() as AnyObject, reason: "deactivate")
+                discardMarkedTextFromCapturedContext(reason: "deactivate")
                 bridge.didCancelComposition(on: self)
             }
 
             bridge.deactivate(self)
+            activeInputContext = nil
 
             if isDictating {
                 BeeVoxIMEClient.shared.imeContextLost(hadMarkedText: hadMarkedText)
@@ -69,7 +73,7 @@ class BeeInputController: IMKInputController {
     nonisolated override func cancelComposition() {
         MainActor.assumeIsolated {
             beeInputLog(
-                "cancelComposition: entry clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) reentrant=\(isHandlingCancelComposition)"
+                "cancelComposition: entry clientID=\(currentClientIdentity() ?? \"nil\") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) reentrant=\(isHandlingCancelComposition)"
             )
 
             guard !isHandlingCancelComposition else {
@@ -80,10 +84,7 @@ class BeeInputController: IMKInputController {
             isHandlingCancelComposition = true
             defer { isHandlingCancelComposition = false }
 
-            BeeIMEBridgeState.shared.discardMarkedText(
-                on: self.client() as AnyObject,
-                reason: "cancelComposition"
-            )
+            discardMarkedTextFromCapturedContext(reason: "cancelComposition")
             BeeIMEBridgeState.shared.didCancelComposition(on: self)
         }
     }
@@ -213,6 +214,26 @@ class BeeInputController: IMKInputController {
                 return false
             }
         }
+    }
+
+    @MainActor
+    private func discardMarkedTextFromCapturedContext(reason: String) {
+        guard let inputContext = activeInputContext ?? NSTextInputContext.current else {
+            beeInputLog(
+                "discardMarkedText[\(reason)]: no captured/current input context clientID=\(currentClientIdentity() ?? \"nil\") client=\(describeClient())"
+            )
+            return
+        }
+
+        let contextClientDescription = inputContext.client.map { String(describing: type(of: $0)) } ?? "nil"
+
+        beeInputLog(
+            "discardMarkedText[\(reason)]: via NSTextInputContext clientID=\(currentClientIdentity() ?? \"nil\") markedRange(before)=\(currentMarkedRangeDescription()) selectedRange(before)=\(currentSelectedRangeDescription()) contextClient=\(contextClientDescription)"
+        )
+        inputContext.discardMarkedText()
+        beeInputLog(
+            "discardMarkedText[\(reason)]: markedRange(after)=\(currentMarkedRangeDescription()) selectedRange(after)=\(currentSelectedRangeDescription())"
+        )
     }
 
     // MARK: - Utilities
