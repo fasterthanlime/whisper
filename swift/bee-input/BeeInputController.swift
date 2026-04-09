@@ -152,11 +152,22 @@ class BeeInputController: IMKInputController {
         let text = MainActor.assumeIsolated {
             BeeIMEBridgeState.shared.currentSession?.currentMarkedText
         } ?? ""
+        MainActor.assumeIsolated {
+            beeInputLog(
+                "composedString: returning text=\(text.prefix(80).debugDescription) clientID=\(self.currentClientIdentity() ?? "nil") markedRange=\(self.currentMarkedRangeDescription()) selectedRange=\(self.currentSelectedRangeDescription())"
+            )
+        }
         return text as NSString
     }
 
     nonisolated override func originalString(_ sender: Any!) -> NSAttributedString! {
-        NSAttributedString(string: "")
+        let attr = NSAttributedString(string: "")
+        MainActor.assumeIsolated {
+            beeInputLog(
+                "originalString: returning empty attributed string clientID=\(self.currentClientIdentity() ?? "nil") markedRange=\(self.currentMarkedRangeDescription()) selectedRange=\(self.currentSelectedRangeDescription())"
+            )
+        }
+        return attr
     }
 
     nonisolated override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
