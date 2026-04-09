@@ -95,7 +95,11 @@ impl Engine {
         let tokenizer = load_tokenizer(config.tokenizer_dir)?;
         log::info!("Tokenizer loaded");
 
-        let aligner = ForcedAligner::load(config.aligner_dir, tokenizer.clone())?;
+        let aligner = ForcedAligner::load(
+            config.aligner_dir,
+            tokenizer.clone(),
+            config.share_aligner_audio_tower.then_some(&model),
+        )?;
         log::info!("Aligner loaded");
 
         let st_path = config.silero_dir.join("model.safetensors");

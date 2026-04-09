@@ -1,3 +1,4 @@
+use mlx_rs::Array;
 use mlx_rs::builder::Builder;
 use mlx_rs::error::Exception;
 use mlx_rs::macros::{ModuleParameters, Quantizable};
@@ -6,7 +7,6 @@ use mlx_rs::nn;
 use mlx_rs::ops;
 use mlx_rs::ops::indexing::IndexOp;
 use mlx_rs::quantization::MaybeQuantized;
-use mlx_rs::Array;
 
 use crate::config::AudioEncoderConfig;
 
@@ -425,6 +425,19 @@ impl AudioEncoder {
         let x = nn::gelu(&x)?;
         let x = self.conv2d3.forward(&x)?;
         nn::gelu(&x)
+    }
+
+    /// Replace the heavy shared backbone with another encoder's backbone while
+    /// preserving this encoder's final output projection.
+    pub fn share_backbone_from(&mut self, other: &AudioEncoder) {
+        self.conv2d1 = other.conv2d1.clone();
+        self.conv2d2 = other.conv2d2.clone();
+        self.conv2d3 = other.conv2d3.clone();
+        self.conv_out = other.conv_out.clone();
+        self.layers = other.layers.clone();
+        self.ln_post = other.ln_post.clone();
+        self.proj1 = other.proj1.clone();
+        self.sinusoidal_pe = other.sinusoidal_pe.clone();
     }
 }
 

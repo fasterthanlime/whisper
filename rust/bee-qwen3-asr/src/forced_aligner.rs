@@ -40,7 +40,11 @@ pub struct ForcedAligner {
 
 impl ForcedAligner {
     /// Load a forced aligner from a model directory.
-    pub fn load(model_dir: &Path, tokenizer: tokenizers::Tokenizer) -> Result<Self, Exception> {
+    pub fn load(
+        model_dir: &Path,
+        tokenizer: tokenizers::Tokenizer,
+        shared_audio_tower_from: Option<&Qwen3ASRModel>,
+    ) -> Result<Self, Exception> {
         let config_path = model_dir.join("config.json");
         let config_str = std::fs::read_to_string(&config_path).map_err(|e| {
             Exception::custom(format!("read config: {e} at {}", config_path.display()))
@@ -66,6 +70,14 @@ impl ForcedAligner {
         // Load weights — the lm_head in the safetensors is [classify_num, hidden_size],
         // different from what Qwen3ASRModel creates (vocab_size). We'll load it separately.
         let stats = load::load_weights(&mut model, model_dir)?;
+
+        if let Some(shared_model) = shared_audio_tower_from {
+            model
+                .audio_tower
+                .share_backbone_from(&shared_model.audio_tower);
+            log::info!("Aligner audio backbone shared from ASR model");
+        }
+
         model.eval()?;
 
         log::info!(

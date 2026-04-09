@@ -85,6 +85,7 @@ fn resolve_engine_config(
         model_dir,
         tokenizer_dir,
         aligner_dir,
+        share_aligner_audio_tower: false,
         silero_dir,
         correction_dir,
         correction_events_path,

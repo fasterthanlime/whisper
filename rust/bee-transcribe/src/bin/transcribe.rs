@@ -31,6 +31,9 @@ fn main() -> anyhow::Result<()> {
         std::env::var("BEE_ALIGNER_DIR").map_err(|_| anyhow::anyhow!("BEE_ALIGNER_DIR not set"))?;
     let vad_dir =
         std::env::var("BEE_VAD_DIR").map_err(|_| anyhow::anyhow!("BEE_VAD_DIR not set"))?;
+    let share_aligner_audio_tower = std::env::var("BEE_SHARE_ALIGNER_AUDIO_TOWER")
+        .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
 
     // Correction engine: look in group container (same as install-bee.sh)
     let disable_correction = std::env::var("BEE_DISABLE_CORRECTION")
@@ -61,6 +64,7 @@ fn main() -> anyhow::Result<()> {
         model_dir: Path::new(&model_dir),
         tokenizer_dir: Path::new(&tokenizer_dir),
         aligner_dir: Path::new(&aligner_dir),
+        share_aligner_audio_tower,
         silero_dir: Path::new(&vad_dir),
         correction_dir,
         correction_events_path,

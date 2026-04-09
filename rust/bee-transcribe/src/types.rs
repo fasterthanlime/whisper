@@ -175,6 +175,12 @@ pub struct EngineConfig<'a> {
     /// Directory containing the forced aligner model weights.
     pub aligner_dir: &'a Path,
 
+    /// Experiment: make the forced aligner reuse the ASR audio encoder
+    /// backbone instead of loading its own copy. The aligner keeps its
+    /// own final projection head so feature dimensionality still matches
+    /// the aligner text model.
+    pub share_aligner_audio_tower: bool,
+
     /// Directory containing silero VAD weights
     pub silero_dir: &'a Path,
 
