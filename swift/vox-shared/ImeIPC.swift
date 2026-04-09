@@ -202,10 +202,10 @@ public final class ImeDispatcher: ServiceDispatcher {
                 let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
                 taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
-                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
             }
         } catch {
-            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
         }
     }
 
@@ -223,10 +223,10 @@ public final class ImeDispatcher: ServiceDispatcher {
                 let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
                 taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
-                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
             }
         } catch {
-            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
         }
     }
 
@@ -243,10 +243,10 @@ public final class ImeDispatcher: ServiceDispatcher {
                 let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
                 taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
-                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
             }
         } catch {
-            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
         }
     }
 
@@ -264,10 +264,10 @@ public final class ImeDispatcher: ServiceDispatcher {
                 let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
                 taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
-                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
             }
         } catch {
-            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
         }
     }
 
@@ -286,10 +286,10 @@ public final class ImeDispatcher: ServiceDispatcher {
                 let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
                 taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
-                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
             }
         } catch {
-            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))
+            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
         }
     }
 
