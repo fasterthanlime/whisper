@@ -573,8 +573,76 @@ impl DecodeSession {
         zipa: &ZipaInference,
         tokenizer: &Tokenizer,
     ) -> Result<Option<TextBuffer>, Exception> {
-        let n = TokenCount(self.text_tokens().len());
-        self.commit(n, forced_aligner, zipa, tokenizer)
+        let commit_total_start = phase_start();
+        let chunk_index = self.chunk_count;
+
+        let split_start = phase_start();
+        let to_commit = TextBuffer::from_entries(self.pending_entries(tokenizer));
+        let commit_ids = to_commit.token_ids();
+        let commit_text = tokenizer.decode(&commit_ids, true).unwrap_or_default();
+        log_phase_chunk(
+            "commit_all",
+            "extract_commit_text",
+            chunk_index,
+            split_start,
+        );
+        if commit_text.trim().is_empty() {
+            tracing::debug!("commit_all: empty text after decode, skipping");
+            return Ok(None);
+        }
+
+        if self.audio.is_empty() {
+            tracing::warn!("commit_all: no audio to align against, skipping");
+            return Ok(None);
+        }
+
+        let align_audio = self.audio.clone();
+        let align_start = phase_start();
+        let items = forced_aligner
+            .align(align_audio.samples(), &commit_text)
+            .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
+        log_phase_chunk("commit_all", "forced_align", chunk_index, align_start);
+        if items.is_empty() {
+            tracing::warn!("commit_all: forced aligner returned no items");
+            return Ok(None);
+        }
+
+        self.log_zipa_cut_report(zipa, &align_audio, &items, &commit_text)?;
+
+        let align_buffer_start = phase_start();
+        let alignment_items: Vec<AlignmentItem> = items
+            .iter()
+            .map(|item| AlignmentItem {
+                word: item.word.clone(),
+                start: Seconds(item.start_time as f64),
+                end: Seconds(item.end_time as f64),
+            })
+            .collect();
+        let aligned =
+            text_buffer::align(to_commit, &alignment_items, &align_audio, self.start_time);
+        log_phase_chunk(
+            "commit_all",
+            "build_aligned_buffer",
+            chunk_index,
+            align_buffer_start,
+        );
+
+        tracing::info!(
+            committed_tokens = self.text_tokens().len(),
+            audio_samples = self.audio.len(),
+            aligned_words = items.len(),
+            "commit_all: final commit without checkpoint rotation"
+        );
+
+        self.audio = AudioBuffer::empty(self.audio.sample_rate());
+        self.tokens.truncate(self.metadata_end);
+        self.encoder_cache = EncoderCache::new();
+        self.mel_extractor = MelExtractor::new(400, 160, 128, 16000);
+        self.generated_start = 0;
+        self.checkpoints.clear();
+        log_phase_chunk("commit_all", "total", chunk_index, commit_total_start);
+
+        Ok(Some(aligned))
     }
 
     /// Clear all tokens and reset state.
