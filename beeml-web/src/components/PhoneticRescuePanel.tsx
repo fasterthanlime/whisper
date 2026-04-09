@@ -1,4 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import { connectBeeMl } from "../beeml.generated";
 
 import type {
   PhoneticAlignmentOp,
@@ -12,6 +14,36 @@ function formatMetric(value: number | null | undefined) {
 
 function formatTokens(tokens: string[]) {
   return tokens.length > 0 ? tokens.join(" ") : "∅";
+}
+
+function controlGlyph(
+  controlState:
+    | {
+        kind: "original" | "transcript" | "zipa";
+        phase: "loading" | "playing";
+      }
+    | null,
+  kind: "original" | "transcript" | "zipa",
+) {
+  if (controlState?.kind !== kind) return "▶";
+  return controlState.phase === "loading" ? "…" : "■";
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+}
+
+function controlStateClass(
+  controlState:
+    | {
+        kind: "original" | "transcript" | "zipa";
+        phase: "loading" | "playing";
+      }
+    | null,
+  kind: "original" | "transcript" | "zipa",
+) {
+  if (controlState?.kind !== kind) return "";
+  return controlState.phase === "loading" ? " is-loading" : " is-playing";
 }
 
 function opBorder(kind: PhoneticAlignmentOp["kind"]) {
@@ -50,9 +82,15 @@ function AlignmentLane({
   columnCount: number;
 }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "78px minmax(0, 1fr)", gap: "0.65rem" }}>
-      <div style={{ color, fontWeight: 700, paddingTop: "0.3rem" }}>{label}</div>
+    <div
+      className="alignment-lane"
+      style={{ display: "grid", gridTemplateColumns: "78px minmax(0, 1fr)", gap: "0.65rem" }}
+    >
+      <div className="alignment-lane-label" style={{ color, fontWeight: 700, paddingTop: "0.3rem" }}>
+        {label}
+      </div>
       <div
+        className="alignment-lane-boxes"
         style={{
           display: "grid",
           gridTemplateColumns: `repeat(${columnCount}, minmax(2.25rem, max-content))`,
@@ -114,14 +152,15 @@ export function AlignmentView({
 
   return (
     <div
+      className="alignment-view"
       style={{
         display: "grid",
         gap: "0.45rem",
         marginTop: "0.5rem",
       }}
     >
-      <div style={{ overflowX: "auto", paddingBottom: "0.15rem" }}>
-        <div style={{ width: "max-content", minWidth: "100%" }}>
+      <div className="alignment-view-scroll" style={{ overflowX: "auto", paddingBottom: "0.15rem" }}>
+        <div className="alignment-view-inner" style={{ width: "max-content", minWidth: "100%" }}>
           <AlignmentLane
             label={transcriptLabel}
             values={transcript}
@@ -140,79 +179,60 @@ export function AlignmentView({
   );
 }
 
-function WordInspector({ word }: { word: PhoneticWordAlignment }) {
-  return (
-    <article
-      key={`${word.tokenStart}:${word.tokenEnd}:${word.wordText}`}
-      className="failure-card"
-      style={{ gap: "0.55rem" }}
-    >
-      <div className="failure-topline">
-        <span className="mini-badge">
-          {word.tokenStart}:{word.tokenEnd}
-        </span>
-        <span className="mini-badge">
-          ZIPA {word.zipaNormStart}:{word.zipaNormEnd}
-        </span>
-      </div>
-      <div className="failure-transcript">{word.wordText}</div>
-      <div className="failure-pills">
-        <span className="failure-pill">
-          phones {word.transcriptNormalized.length}{"->"}{word.zipaNormalized.length}
-        </span>
-      </div>
-      <div className="prototype-stack" style={{ gap: "0.35rem" }}>
-        <div className="token-row muted" style={{ userSelect: "text" }}>
-          transcript IPA: {formatTokens(word.transcriptNormalized)}
-        </div>
-        <div className="token-row muted" style={{ userSelect: "text" }}>
-          ZIPA raw: {formatTokens(word.zipaRaw)}
-        </div>
-        <div className="token-row muted" style={{ userSelect: "text" }}>
-          ZIPA norm: {formatTokens(word.zipaNormalized)}
-        </div>
-      </div>
-      <AlignmentView ops={word.alignment} transcriptLabel="Transcript" zipaLabel="ZIPA" />
-    </article>
-  );
-}
-
 function WordGroup({
   word,
   label,
-  selected,
-  onSelect,
+  onPlayOriginal,
+  onPlayTranscript,
+  onPlayZipa,
+  controlState,
 }: {
   word: PhoneticWordAlignment;
   label: string;
-  selected: boolean;
-  onSelect: () => void;
+  onPlayOriginal: () => void;
+  onPlayTranscript: () => void;
+  onPlayZipa: () => void;
+  controlState:
+    | {
+        kind: "original" | "transcript" | "zipa";
+        phase: "loading" | "playing";
+      }
+    | null;
 }) {
   const transcript = alignmentRowValues(word.alignment, "transcript");
   const zipa = alignmentRowValues(word.alignment, "zipa");
 
   return (
-    <button
-      type="button"
-      className={`word-group-card${selected ? " is-selected" : ""}`}
-      onClick={onSelect}
+    <div
+      className={`word-group-card${controlState ? " is-selected" : ""}`}
       title={`${word.tokenStart}:${word.tokenEnd} · ZIPA ${word.zipaNormStart}:${word.zipaNormEnd}`}
     >
-      <div className="word-group-accolade">
-        <span className="word-group-accolade-label">{label}</span>
-      </div>
-      <div className="word-group-meta">
-        <span>
-          {word.tokenStart}:{word.tokenEnd}
-        </span>
-        <span>
-          ZIPA {word.zipaNormStart}:{word.zipaNormEnd}
-        </span>
-      </div>
-      <div className="word-group-lanes">
-        <div className="word-group-lane">
-          <span className="word-group-lane-label">T</span>
-          <div className="word-group-box-row">
+      <div className="word-group-inline-lanes">
+        <div className="word-group-inline-lane">
+          <button
+            type="button"
+            className={`word-group-inline-play-button${controlStateClass(controlState, "original")}`}
+            onClick={onPlayOriginal}
+            title={`Play original audio for ${label}`}
+            aria-label={`Play original audio for ${label}`}
+          >
+            {controlGlyph(controlState, "original")}
+          </button>
+          <div className="word-group-inline-box-row">
+            <span className="word-group-text-box">{label}</span>
+          </div>
+        </div>
+        <div className="word-group-inline-lane">
+          <button
+            type="button"
+            className={`word-group-inline-play-button${controlStateClass(controlState, "transcript")}`}
+            onClick={onPlayTranscript}
+            title={`Speak transcript IPA for ${label}`}
+            aria-label={`Speak transcript IPA for ${label}`}
+          >
+            {controlGlyph(controlState, "transcript")}
+          </button>
+          <div className="word-group-inline-box-row">
             {transcript.map((value, index) => (
               <span
                 key={`t:${word.tokenStart}:${index}`}
@@ -224,9 +244,17 @@ function WordGroup({
             ))}
           </div>
         </div>
-        <div className="word-group-lane">
-          <span className="word-group-lane-label">Z</span>
-          <div className="word-group-box-row">
+        <div className="word-group-inline-lane">
+          <button
+            type="button"
+            className={`word-group-inline-play-button${controlStateClass(controlState, "zipa")}`}
+            onClick={onPlayZipa}
+            title={`Speak ZIPA IPA for ${label}`}
+            aria-label={`Speak ZIPA IPA for ${label}`}
+          >
+            {controlGlyph(controlState, "zipa")}
+          </button>
+          <div className="word-group-inline-box-row">
             {zipa.map((value, index) => (
               <span
                 key={`z:${word.tokenStart}:${index}`}
@@ -239,105 +267,406 @@ function WordGroup({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function GlobalLaneButton({
+  label,
+  kind,
+  controlState,
+  onClick,
+}: {
+  label: string;
+  kind: "original" | "transcript" | "zipa";
+  controlState:
+    | {
+        kind: "original" | "transcript" | "zipa";
+        phase: "loading" | "playing";
+      }
+    | null;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`word-group-inline-play-button global-lane-play-button${controlStateClass(controlState, kind)}`}
+      onClick={onClick}
+      title={`Play all ${label}`}
+      aria-label={`Play all ${label}`}
+    >
+      <span className="global-lane-play-glyph">{controlGlyph(controlState, kind)}</span>
+      <span>{label}</span>
     </button>
   );
 }
 
-export function PhoneticRescuePanel({ trace }: { trace: PhoneticRescueTrace }) {
+async function decodeWavBytes(
+  context: AudioContext,
+  bytes: Uint8Array,
+): Promise<AudioBuffer> {
+  const copy = Uint8Array.from(bytes);
+  return await context.decodeAudioData(copy.buffer);
+}
+
+export function PhoneticRescuePanel({
+  trace,
+  wsUrl,
+  sourceAudioUrl,
+  sourceAudioPath,
+}: {
+  trace: PhoneticRescueTrace;
+  wsUrl?: string;
+  sourceAudioUrl?: string;
+  sourceAudioPath?: string;
+}) {
   const wordAlignments = useMemo(
     () => [...trace.wordAlignments].sort((a, b) => a.tokenStart - b.tokenStart),
     [trace.wordAlignments],
   );
-  const wordGroups = useMemo(() => {
-    const counts = new Map<string, number>();
-    const seen = new Map<string, number>();
-    for (const word of wordAlignments) {
-      counts.set(word.wordText, (counts.get(word.wordText) ?? 0) + 1);
-    }
-    return wordAlignments.map((word) => {
-      const occurrence = (seen.get(word.wordText) ?? 0) + 1;
-      seen.set(word.wordText, occurrence);
-      const total = counts.get(word.wordText) ?? 1;
-      return {
+  const wordGroups = useMemo(
+    () =>
+      wordAlignments.map((word) => ({
         word,
-        label: total > 1 ? `${word.wordText} #${occurrence}` : word.wordText,
-      };
-    });
-  }, [wordAlignments]);
-  const [selectedWordTokenStart, setSelectedWordTokenStart] = useState<number | null>(
-    wordAlignments[0]?.tokenStart ?? null,
+        label: word.wordText,
+      })),
+    [wordAlignments],
   );
-  const selectedWord =
-    wordAlignments.find((word) => word.tokenStart === selectedWordTokenStart) ??
-    wordAlignments[0] ??
-    null;
+  const [activeControl, setActiveControl] = useState<
+    | {
+        tokenStart: number;
+        kind: "original" | "transcript" | "zipa";
+        phase: "loading" | "playing";
+      }
+    | null
+  >(null);
+  const [activeGlobalControl, setActiveGlobalControl] = useState<
+    | {
+        kind: "original" | "transcript" | "zipa";
+        phase: "loading" | "playing";
+      }
+    | null
+  >(null);
+  const [controlError, setControlError] = useState<string | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const playingSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const originalBufferRef = useRef<AudioBuffer | null>(null);
+  const originalBufferKeyRef = useRef<string | null>(null);
+  const playbackRunIdRef = useRef(0);
+  const synthBufferCacheRef = useRef<Map<string, Promise<AudioBuffer>>>(new Map());
+
+  useEffect(() => {
+    originalBufferRef.current = null;
+    originalBufferKeyRef.current = null;
+  }, [sourceAudioUrl, sourceAudioPath]);
+
+  useEffect(() => {
+    synthBufferCacheRef.current.clear();
+  }, [wsUrl]);
+
+  useEffect(
+    () => () => {
+      playingSourceRef.current?.stop();
+      playingSourceRef.current = null;
+      audioContextRef.current?.close().catch(() => {});
+      audioContextRef.current = null;
+    },
+    [],
+  );
+
+  const ensureAudioContext = async () => {
+    const existing = audioContextRef.current;
+    if (existing) {
+      if (existing.state === "suspended") await existing.resume();
+      return existing;
+    }
+    const next = new AudioContext();
+    audioContextRef.current = next;
+    return next;
+  };
+
+  const stopCurrentSource = () => {
+    const source = playingSourceRef.current;
+    if (source) {
+      source.onended = null;
+      source.stop();
+      playingSourceRef.current = null;
+    }
+  };
+
+  const stopPlayback = () => {
+    playbackRunIdRef.current += 1;
+    stopCurrentSource();
+    setActiveControl(null);
+    setActiveGlobalControl(null);
+  };
+
+  const playBufferRange = async (
+    buffer: AudioBuffer,
+    startSec: number,
+    endSec: number,
+    tokenStart: number,
+    kind: "original" | "transcript" | "zipa",
+  ) => {
+    const context = await ensureAudioContext();
+    stopCurrentSource();
+    const runId = playbackRunIdRef.current;
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+    source.connect(context.destination);
+    const safeStart = Math.max(0, Math.min(startSec, buffer.duration));
+    const safeEnd = Math.max(safeStart, Math.min(endSec, buffer.duration));
+    const duration = Math.max(0.01, safeEnd - safeStart);
+    playingSourceRef.current = source;
+    setActiveControl({ tokenStart, kind, phase: "playing" });
+    await new Promise<void>((resolve) => {
+      source.onended = () => {
+        if (playingSourceRef.current === source) {
+          playingSourceRef.current = null;
+        }
+        if (playbackRunIdRef.current === runId) {
+          setActiveControl(null);
+        }
+        resolve();
+      };
+      source.start(0, safeStart, duration);
+    });
+  };
+
+  const ensureOriginalBuffer = async () => {
+    const key = sourceAudioPath ?? sourceAudioUrl ?? null;
+    if (!key) {
+      throw new Error("original audio is unavailable for this trace");
+    }
+    if (originalBufferRef.current && originalBufferKeyRef.current === key) {
+      return originalBufferRef.current;
+    }
+    const context = await ensureAudioContext();
+    let wavBytes: Uint8Array;
+    if (sourceAudioUrl) {
+      const response = await fetch(sourceAudioUrl);
+      if (!response.ok) {
+        throw new Error(`failed to load original audio: ${response.status}`);
+      }
+      wavBytes = new Uint8Array(await response.arrayBuffer());
+    } else {
+      if (!wsUrl || !sourceAudioPath) {
+        throw new Error("original audio is unavailable for this trace");
+      }
+      const client = await connectBeeMl(wsUrl);
+      const response = await client.loadAudioFile({ path: sourceAudioPath });
+      if (!response.ok) throw new Error(response.error);
+      wavBytes = new Uint8Array(response.value.wav_bytes);
+    }
+    const buffer = await decodeWavBytes(context, wavBytes);
+    originalBufferRef.current = buffer;
+    originalBufferKeyRef.current = key;
+    return buffer;
+  };
+
+  const synthCacheKey = (kind: "transcript" | "zipa", phonemes: string[]) =>
+    `${kind}|af_sarah|1|${phonemes.join(" ")}`;
+
+  const synthWordBuffer = async (
+    kind: "transcript" | "zipa",
+    phonemes: string[],
+  ) => {
+    if (!wsUrl) throw new Error("phoneme synthesis is unavailable for this trace");
+    const client = await connectBeeMl(wsUrl);
+    const response = await client.synthesizePhonemes({
+      phonemes: phonemes.join(" "),
+      voice: "af_sarah",
+      speed: 1,
+    });
+    if (!response.ok) throw new Error(response.error);
+    const context = await ensureAudioContext();
+    return await decodeWavBytes(context, new Uint8Array(response.value.wav_bytes));
+  };
+
+  const getSynthBufferCached = (
+    kind: "transcript" | "zipa",
+    phonemes: string[],
+  ) => {
+    const key = synthCacheKey(kind, phonemes);
+    const existing = synthBufferCacheRef.current.get(key);
+    if (existing) return existing;
+    const promise = synthWordBuffer(kind, phonemes).catch((error) => {
+      synthBufferCacheRef.current.delete(key);
+      throw error;
+    });
+    synthBufferCacheRef.current.set(key, promise);
+    return promise;
+  };
+
+  const synthWord = async (
+    word: PhoneticWordAlignment,
+    kind: "transcript" | "zipa",
+    phonemes: string[],
+  ) => {
+    if (!wsUrl) return;
+    try {
+      setControlError(null);
+      setActiveGlobalControl(null);
+      setActiveControl({ tokenStart: word.tokenStart, kind, phase: "loading" });
+      const buffer = await getSynthBufferCached(kind, phonemes);
+      await playBufferRange(buffer, 0, buffer.duration, word.tokenStart, kind);
+    } catch (error) {
+      setControlError(error instanceof Error ? error.message : String(error));
+      setActiveControl(null);
+    }
+  };
+
+  const playOriginalWord = async (word: PhoneticWordAlignment) => {
+    try {
+      setControlError(null);
+      setActiveGlobalControl(null);
+      setActiveControl({ tokenStart: word.tokenStart, kind: "original", phase: "loading" });
+      const buffer = await ensureOriginalBuffer();
+      await playBufferRange(buffer, word.startSec, word.endSec, word.tokenStart, "original");
+    } catch (error) {
+      setControlError(error instanceof Error ? error.message : String(error));
+      setActiveControl(null);
+    }
+  };
+
+  const playLaneSequence = async (kind: "original" | "transcript" | "zipa") => {
+    try {
+      setControlError(null);
+      stopPlayback();
+      const runId = playbackRunIdRef.current;
+      setActiveGlobalControl({ kind, phase: "loading" });
+      let originalBuffer: AudioBuffer | null = null;
+      if (kind === "original") {
+        originalBuffer = await ensureOriginalBuffer();
+      }
+      if (playbackRunIdRef.current !== runId) return;
+      setActiveGlobalControl({ kind, phase: "playing" });
+      for (const word of wordAlignments) {
+        if (playbackRunIdRef.current !== runId) return;
+        if (kind === "original") {
+          await playBufferRange(originalBuffer!, word.startSec, word.endSec, word.tokenStart, kind);
+        } else {
+          const buffer = await getSynthBufferCached(
+            kind,
+            kind === "transcript" ? word.transcriptNormalized : word.zipaNormalized,
+          );
+          if (playbackRunIdRef.current !== runId) return;
+          await playBufferRange(buffer, 0, buffer.duration, word.tokenStart, kind);
+        }
+        if (playbackRunIdRef.current !== runId) return;
+        setActiveControl(null);
+        await sleep(140);
+      }
+      if (playbackRunIdRef.current === runId) {
+        setActiveGlobalControl(null);
+      }
+    } catch (error) {
+      setControlError(error instanceof Error ? error.message : String(error));
+      setActiveControl(null);
+      setActiveGlobalControl(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!wsUrl || wordAlignments.length === 0) return;
+    void Promise.allSettled([
+      ...wordAlignments.map((word) => getSynthBufferCached("transcript", word.transcriptNormalized)),
+      ...wordAlignments.map((word) => getSynthBufferCached("zipa", word.zipaNormalized)),
+    ]);
+  }, [wsUrl, wordAlignments]);
 
   return (
     <section className="prototype-card" style={{ marginTop: "0.75rem" }}>
-      <header className="panel-header-row">
-        <div>
-          <strong>Alignment Inspector</strong>
-          <span>Utterance alignment first, then grouped per-word transcript and ZIPA phones.</span>
-        </div>
-        <span className="badge">{wordAlignments.length} words</span>
-      </header>
-
-      <div className="prototype-stack" style={{ gap: "0.35rem" }}>
-        <div className="token-row muted" style={{ userSelect: "text" }}>
-          aligned transcript: {trace.alignedTranscript || "∅"}
-        </div>
-        {trace.pendingText ? (
-          <div className="token-row muted" style={{ userSelect: "text" }}>
-            pending tail: {trace.pendingText}
-          </div>
-        ) : null}
-      </div>
-
-      <AlignmentView
-        ops={trace.utteranceAlignment}
-        transcriptLabel="Transcript"
-        zipaLabel="ZIPA"
-      />
-
-      <details className="phonetic-debug-details">
-        <summary>Utterance diagnostics</summary>
-        <div className="prototype-summary" style={{ marginTop: "0.55rem" }}>
-          <span>rev {trace.snapshotRevision.toString()}</span>
-          <span>utterance norm {formatMetric(trace.utteranceFeatureSimilarity)}</span>
-          <span>utterance raw {formatMetric(trace.utteranceSimilarity)}</span>
-          <span>tail volatile {trace.tailAmbiguity.volatileTokenCount}</span>
-        </div>
-        <div className="prototype-stack" style={{ gap: "0.35rem", marginTop: "0.55rem" }}>
-          <div className="token-row muted" style={{ userSelect: "text" }}>
-            transcript norm: {formatTokens(trace.utteranceTranscriptNormalized)}
-          </div>
-          <div className="token-row muted" style={{ userSelect: "text" }}>
-            ZIPA raw: {formatTokens(trace.utteranceZipaRaw)}
-          </div>
-          <div className="token-row muted" style={{ userSelect: "text" }}>
-            ZIPA norm: {formatTokens(trace.utteranceZipaNormalized)}
-          </div>
-        </div>
-      </details>
-
       {wordAlignments.length > 0 ? (
         <div className="word-workbench">
-          <div className="word-workbench-copy">Click a grouped word block to zoom into its local transcript and ZIPA alignment.</div>
+          <div className="phonetic-debug-toolbar">
+            <details className="phonetic-debug-details phonetic-debug-details-inline">
+              <summary>Utterance alignment</summary>
+              <div className="prototype-stack phonetic-panel-summary" style={{ gap: "0.35rem", marginTop: "0.55rem" }}>
+                <div className="token-row muted phonetic-panel-summary-row" style={{ userSelect: "text" }}>
+                  aligned transcript: {trace.alignedTranscript || "∅"}
+                </div>
+                {trace.pendingText ? (
+                  <div className="token-row muted phonetic-panel-summary-row" style={{ userSelect: "text" }}>
+                    pending tail: {trace.pendingText}
+                  </div>
+                ) : null}
+              </div>
+              <AlignmentView
+                ops={trace.utteranceAlignment}
+                transcriptLabel="Transcript"
+                zipaLabel="ZIPA"
+              />
+            </details>
+
+            <details className="phonetic-debug-details phonetic-debug-details-inline">
+              <summary>Utterance diagnostics</summary>
+              <div className="prototype-summary phonetic-debug-metrics" style={{ marginTop: "0.55rem" }}>
+                <span>rev {trace.snapshotRevision.toString()}</span>
+                <span>utterance norm {formatMetric(trace.utteranceFeatureSimilarity)}</span>
+                <span>utterance raw {formatMetric(trace.utteranceSimilarity)}</span>
+                <span>tail volatile {trace.tailAmbiguity.volatileTokenCount}</span>
+              </div>
+              <div className="prototype-stack phonetic-debug-token-stack" style={{ gap: "0.35rem", marginTop: "0.55rem" }}>
+                <div className="token-row muted phonetic-debug-token-row" style={{ userSelect: "text" }}>
+                  transcript norm: {formatTokens(trace.utteranceTranscriptNormalized)}
+                </div>
+                <div className="token-row muted phonetic-debug-token-row" style={{ userSelect: "text" }}>
+                  ZIPA raw: {formatTokens(trace.utteranceZipaRaw)}
+                </div>
+                <div className="token-row muted phonetic-debug-token-row" style={{ userSelect: "text" }}>
+                  ZIPA norm: {formatTokens(trace.utteranceZipaNormalized)}
+                </div>
+              </div>
+            </details>
+          </div>
+
+          <div className="global-lane-toolbar">
+            <GlobalLaneButton
+              label="Original"
+              kind="original"
+              controlState={activeGlobalControl}
+              onClick={() => void playLaneSequence("original")}
+            />
+            <GlobalLaneButton
+              label="Transcript IPA"
+              kind="transcript"
+              controlState={activeGlobalControl}
+              onClick={() => void playLaneSequence("transcript")}
+            />
+            <GlobalLaneButton
+              label="ZIPA"
+              kind="zipa"
+              controlState={activeGlobalControl}
+              onClick={() => void playLaneSequence("zipa")}
+            />
+          </div>
+
+          {controlError && (
+            <div className="notice-row">
+              <span className="error-pill">{controlError}</span>
+            </div>
+          )}
           <div className="word-group-strip">
             {wordGroups.map(({ word, label }) => (
               <WordGroup
                 key={`${word.tokenStart}:${word.tokenEnd}:${word.wordText}`}
                 word={word}
                 label={label}
-                selected={selectedWord?.tokenStart === word.tokenStart}
-                onSelect={() => setSelectedWordTokenStart(word.tokenStart)}
+                onPlayOriginal={() => void playOriginalWord(word)}
+                onPlayTranscript={() => void synthWord(word, "transcript", word.transcriptNormalized)}
+                onPlayZipa={() => void synthWord(word, "zipa", word.zipaNormalized)}
+                controlState={
+                  activeControl?.tokenStart === word.tokenStart
+                    ? { kind: activeControl.kind, phase: activeControl.phase }
+                    : null
+                }
               />
             ))}
           </div>
-          {selectedWord ? <WordInspector word={selectedWord} /> : null}
         </div>
       ) : (
-        <div className="prototype-empty" style={{ marginTop: "0.75rem" }}>
+        <div className="prototype-empty phonetic-panel-empty" style={{ marginTop: "0.75rem" }}>
           No word-level alignment slices available in this transcription.
         </div>
       )}

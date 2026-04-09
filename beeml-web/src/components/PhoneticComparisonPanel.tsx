@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { connectBeeMl } from "../beeml.generated";
 import type { PhoneticComparisonResult, PhoneticComparisonRow } from "../beeml.generated";
 
@@ -6,7 +6,13 @@ function formatMetric(value: number | null | undefined) {
   return value == null ? "n/a" : value.toFixed(4);
 }
 
-function RowCard({ row }: { row: PhoneticComparisonRow }) {
+function RowCard({
+  row,
+  onUsePhonemes,
+}: {
+  row: PhoneticComparisonRow;
+  onUsePhonemes: (phonemes: string) => void;
+}) {
   return (
     <article className="failure-card" style={{ gap: "0.55rem" }}>
       <div className="failure-topline">
@@ -36,6 +42,14 @@ function RowCard({ row }: { row: PhoneticComparisonRow }) {
       <div className="token-row muted" style={{ fontFamily: "'Manuale IPA', serif" }}>
         eSpeak norm: {row.espeak_normalized.join(" ")}
       </div>
+      <div className="control-actions">
+        <button onClick={() => onUsePhonemes(row.zipa_normalized.join(" "))}>
+          Use ZIPA norm
+        </button>
+        <button onClick={() => onUsePhonemes(row.espeak_normalized.join(" "))}>
+          Use eSpeak norm
+        </button>
+      </div>
     </article>
   );
 }
@@ -47,6 +61,14 @@ export function PhoneticComparisonPanel({ wsUrl }: { wsUrl: string }) {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PhoneticComparisonResult | null>(null);
+  const [synthPhonemes, setSynthPhonemes] = useState("k iː m j uː");
+  const [synthVoice, setSynthVoice] = useState("af_sarah");
+  const [synthSpeed, setSynthSpeed] = useState(1);
+  const [synthStatus, setSynthStatus] = useState<string | null>(null);
+  const [synthError, setSynthError] = useState<string | null>(null);
+  const [synthAudioUrl, setSynthAudioUrl] = useState<string | null>(null);
+  const [resolvedVoice, setResolvedVoice] = useState<string | null>(null);
+  const synthAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const runComparison = useCallback(async () => {
     try {
@@ -66,6 +88,36 @@ export function PhoneticComparisonPanel({ wsUrl }: { wsUrl: string }) {
       setStatus(null);
     }
   }, [limit, term, useTranscript, wsUrl]);
+
+  const runSynthesis = useCallback(async () => {
+    try {
+      setSynthStatus("Synthesizing phonemes with Kokoro...");
+      setSynthError(null);
+      const client = await connectBeeMl(wsUrl);
+      const response = await client.synthesizePhonemes({
+        phonemes: synthPhonemes.trim(),
+        voice: synthVoice.trim() ? synthVoice.trim() : null,
+        speed: synthSpeed,
+      });
+      if (!response.ok) throw new Error(response.error);
+      if (synthAudioUrl) URL.revokeObjectURL(synthAudioUrl);
+      const wavBytes = new Uint8Array(response.value.wav_bytes);
+      const blob = new Blob([wavBytes], { type: "audio/wav" });
+      setSynthAudioUrl(URL.createObjectURL(blob));
+      setResolvedVoice(response.value.resolved_voice);
+      setSynthStatus(null);
+    } catch (e) {
+      setSynthError(e instanceof Error ? e.message : String(e));
+      setSynthStatus(null);
+    }
+  }, [synthAudioUrl, synthPhonemes, synthSpeed, synthVoice, wsUrl]);
+
+  useEffect(() => {
+    if (!synthAudioUrl || !synthAudioRef.current) return;
+    const audio = synthAudioRef.current;
+    audio.currentTime = 0;
+    void audio.play().catch(() => {});
+  }, [synthAudioUrl]);
 
   return (
     <div className="prototype-lab prototype-stack judge-eval-layout">
@@ -118,6 +170,56 @@ export function PhoneticComparisonPanel({ wsUrl }: { wsUrl: string }) {
             {error ? <span className="error-pill">{error}</span> : null}
           </div>
         )}
+      </section>
+
+      <section className="prototype-card prototype-card-tight">
+        <header className="panel-header-row">
+          <div>
+            <strong>Kokoro IPA Synth</strong>
+            <span>Speak phonemes directly. Default voice avoids af_adam.</span>
+          </div>
+          {resolvedVoice ? <span className="badge">{resolvedVoice}</span> : null}
+        </header>
+        <div className="prototype-stack">
+          <label>
+            <span>phonemes</span>
+            <textarea
+              value={synthPhonemes}
+              onChange={(e) => setSynthPhonemes(e.target.value)}
+              rows={3}
+              style={{ width: "100%", fontFamily: "'Manuale IPA', serif" }}
+            />
+          </label>
+          <div className="numeric-row">
+            <label style={{ minWidth: 180 }}>
+              <span>voice</span>
+              <input value={synthVoice} onChange={(e) => setSynthVoice(e.target.value)} />
+            </label>
+            <label>
+              <span>speed</span>
+              <input
+                type="number"
+                min={0.5}
+                max={2}
+                step={0.1}
+                value={synthSpeed}
+                onChange={(e) => setSynthSpeed(Number(e.target.value) || 1)}
+              />
+            </label>
+          </div>
+          <div className="control-actions">
+            <button className="primary" onClick={() => void runSynthesis()}>
+              Speak Phonemes
+            </button>
+          </div>
+          {(synthStatus || synthError) && (
+            <div className="notice-row">
+              {synthStatus ? <span className="status-pill">{synthStatus}</span> : null}
+              {synthError ? <span className="error-pill">{synthError}</span> : null}
+            </div>
+          )}
+          {synthAudioUrl ? <audio ref={synthAudioRef} controls src={synthAudioUrl} /> : null}
+        </div>
       </section>
 
       {result ? (
@@ -174,6 +276,7 @@ export function PhoneticComparisonPanel({ wsUrl }: { wsUrl: string }) {
                 <RowCard
                   key={`${row.term}:${row.wav_path}:${row.text}`}
                   row={row}
+                  onUsePhonemes={setSynthPhonemes}
                 />
               ))}
             </div>

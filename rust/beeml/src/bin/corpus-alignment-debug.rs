@@ -468,6 +468,7 @@ fn load_service() -> Result<BeeMlService> {
             zipa: Mutex::new(zipa),
             zipa_wav_dir,
             corpus_dir,
+            kokoro_sidecar: Mutex::new(None),
             corpus_eval_jobs: Mutex::new(std::collections::HashMap::new()),
             next_corpus_eval_job_id: std::sync::atomic::AtomicU64::new(1),
             judge: Mutex::new(OnlineJudge::default()),

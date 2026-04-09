@@ -154,12 +154,18 @@ async fn main() -> Result<()> {
             zipa: Mutex::new(zipa),
             zipa_wav_dir,
             corpus_dir,
+            kokoro_sidecar: Mutex::new(None),
             corpus_eval_jobs: Mutex::new(std::collections::HashMap::new()),
             next_corpus_eval_job_id: std::sync::atomic::AtomicU64::new(1),
             judge: Mutex::new(judge),
             event_log_path,
         }),
     };
+
+    match handler.warm_kokoro_sidecar() {
+        Ok(()) => info!("kokoro sidecar warmed"),
+        Err(error) => warn!(error = %error, "failed to warm kokoro sidecar at startup"),
+    }
 
     // --export-weights: train on all data and export frozen weights
     if std::env::args().any(|a| a == "--export-weights") {

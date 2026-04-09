@@ -6,15 +6,16 @@ use beeml::rpc::{
     AcceptedEdit, BeeMl, CorpusAlignmentEvalJob, CorpusAlignmentEvalRequest,
     CorpusAlignmentEvalResult, CorpusCapturePlanResult, CorrectionDebugResult, CorrectionRequest,
     CorrectionResult, DeleteCorpusRecordingRequest, DeleteCorpusRecordingResult, JudgeEvalFailure,
-    ModelSummary, OfflineJudgeEvalRequest, OfflineJudgeEvalResult, PhoneticComparisonRequest,
-    PhoneticComparisonResult, ProbDistribution, RerankerDebugTrace, RetrievalEvalMiss,
-    RetrievalEvalTermSummary, RetrievalPrototypeEvalProgress, RetrievalPrototypeEvalRequest,
-    RetrievalPrototypeEvalResult, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
-    RetrievalPrototypeTeachingCase, RetrievalPrototypeTeachingDeckRequest,
-    RetrievalPrototypeTeachingDeckResult, SaveCorpusRecordingRequest, SaveCorpusRecordingResult,
-    TeachRetrievalPrototypeJudgeRequest, TermAliasView, TermInspectionRequest,
-    TermInspectionResult, ThresholdRow, TimingBreakdown, TranscribeWavResult, TwoStageGridPoint,
-    TwoStageResult,
+    LoadAudioFileRequest, LoadAudioFileResult, ModelSummary, OfflineJudgeEvalRequest,
+    OfflineJudgeEvalResult, PhoneticComparisonRequest, PhoneticComparisonResult, ProbDistribution,
+    RerankerDebugTrace, RetrievalEvalMiss, RetrievalEvalTermSummary,
+    RetrievalPrototypeEvalProgress, RetrievalPrototypeEvalRequest, RetrievalPrototypeEvalResult,
+    RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult, RetrievalPrototypeTeachingCase,
+    RetrievalPrototypeTeachingDeckRequest, RetrievalPrototypeTeachingDeckResult,
+    SaveCorpusRecordingRequest, SaveCorpusRecordingResult, SynthesizePhonemesRequest,
+    SynthesizePhonemesResult, TeachRetrievalPrototypeJudgeRequest, TermAliasView,
+    TermInspectionRequest, TermInspectionResult, ThresholdRow, TimingBreakdown,
+    TranscribeWavResult, TwoStageGridPoint, TwoStageResult,
 };
 use tracing::info;
 use vox::{Rx, Tx};
@@ -1613,6 +1614,22 @@ impl BeeMl for BeeMlService {
         request: PhoneticComparisonRequest,
     ) -> Result<PhoneticComparisonResult, String> {
         self.run_phonetic_comparison(request)
+    }
+
+    async fn synthesize_phonemes(
+        &self,
+        request: SynthesizePhonemesRequest,
+    ) -> Result<SynthesizePhonemesResult, String> {
+        self.synthesize_phonemes(request)
+    }
+
+    async fn load_audio_file(
+        &self,
+        request: LoadAudioFileRequest,
+    ) -> Result<LoadAudioFileResult, String> {
+        Ok(LoadAudioFileResult {
+            wav_bytes: self.load_audio_file(&request.path)?,
+        })
     }
 
     async fn get_corpus_capture_plan(&self) -> Result<CorpusCapturePlanResult, String> {

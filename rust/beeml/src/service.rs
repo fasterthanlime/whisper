@@ -1,5 +1,8 @@
 use std::collections::HashMap;
+use std::fs;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -23,17 +26,42 @@ use beeml::rpc::{
     PhoneticComparisonRequest, PhoneticComparisonResult, PhoneticComparisonRow,
     PhoneticComparisonSummary, RapidFireChoice, RetrievalCandidateDebug,
     RetrievalPrototypeEvalRequest, RetrievalPrototypeProbeRequest, RetrievalPrototypeProbeResult,
-    SpanDebugTrace, SpanDebugView, TeachRetrievalPrototypeJudgeRequest, TimingBreakdown,
-    TranscribePhoneticAlignmentKind, TranscribePhoneticAlignmentOp,
-    TranscribePhoneticAnchorConfidence, TranscribePhoneticCandidate, TranscribePhoneticSpan,
-    TranscribePhoneticSpanClass, TranscribePhoneticSpanUsefulness, TranscribePhoneticTrace,
-    TranscribePhoneticWordAlignment,
+    SpanDebugTrace, SpanDebugView, SynthesizePhonemesRequest, SynthesizePhonemesResult,
+    TeachRetrievalPrototypeJudgeRequest, TimingBreakdown, TranscribePhoneticAlignmentKind,
+    TranscribePhoneticAlignmentOp, TranscribePhoneticAnchorConfidence, TranscribePhoneticCandidate,
+    TranscribePhoneticSpan, TranscribePhoneticSpanClass, TranscribePhoneticSpanUsefulness,
+    TranscribePhoneticTrace, TranscribePhoneticWordAlignment,
 };
 use rand::seq::SliceRandom;
 
 use crate::offline_eval::*;
 use crate::rapid_fire::build_rapid_fire_decision_set;
 use crate::util::*;
+
+#[derive(Clone, Debug, facet::Facet)]
+struct KokoroSidecarRequest {
+    phonemes: String,
+    voice: Option<String>,
+    speed: f32,
+    lang: String,
+    out: String,
+}
+
+#[derive(Clone, Debug, facet::Facet)]
+struct KokoroSidecarResponse {
+    ok: bool,
+    resolved_voice: Option<String>,
+    sample_rate_hz: Option<u32>,
+    wav_path: Option<String>,
+    error: Option<String>,
+}
+
+pub(crate) struct KokoroSidecar {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    stderr: BufReader<ChildStderr>,
+}
 
 struct SpanAlignmentSelection {
     range: std::ops::Range<usize>,
@@ -60,6 +88,7 @@ pub(crate) struct BeemlServiceInner {
     pub(crate) zipa: Mutex<ZipaInference>,
     pub(crate) zipa_wav_dir: PathBuf,
     pub(crate) corpus_dir: PathBuf,
+    pub(crate) kokoro_sidecar: Mutex<Option<KokoroSidecar>>,
     pub(crate) corpus_eval_jobs: Mutex<HashMap<u64, CorpusAlignmentEvalJob>>,
     pub(crate) next_corpus_eval_job_id: AtomicU64,
     pub(crate) judge: Mutex<OnlineJudge>,
@@ -221,10 +250,13 @@ impl BeeMlService {
                     zipa_norm_range.clone(),
                 );
                 let word_text = transcript_words.get(word_index)?.text.clone();
+                let aligned_word = words.get(word_index)?;
                 Some(TranscribePhoneticWordAlignment {
                     word_text,
                     token_start: word_index as u32,
                     token_end: (word_index + 1) as u32,
+                    start_sec: aligned_word.start,
+                    end_sec: aligned_word.end,
                     transcript_normalized: transcript_normalized.clone(),
                     zipa_norm_start: zipa_norm_range.start as u32,
                     zipa_norm_end: zipa_norm_range.end as u32,
@@ -884,6 +916,135 @@ impl BeeMlService {
             },
             rows,
         })
+    }
+
+    pub(crate) fn synthesize_phonemes(
+        &self,
+        request: SynthesizePhonemesRequest,
+    ) -> Result<SynthesizePhonemesResult, String> {
+        let phonemes = request.phonemes.trim();
+        if phonemes.is_empty() {
+            return Err("phonemes must not be empty".to_string());
+        }
+
+        let model_path = kokoro_model_path()?;
+        let voices_path = kokoro_voices_path()?;
+        let pythonpath = kokoro_site_packages_path()?;
+        let voice = request
+            .voice
+            .as_deref()
+            .filter(|voice| !voice.trim().is_empty())
+            .unwrap_or("af_sarah");
+        let speed = request.speed.unwrap_or(1.0).clamp(0.5, 2.0);
+
+        let temp_root = std::env::temp_dir().join("beeml-kokoro");
+        fs::create_dir_all(&temp_root)
+            .map_err(|e| format!("creating temp dir {}: {e}", temp_root.display()))?;
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_nanos();
+        let out_path = temp_root.join(format!("phonemes-{stamp}.wav"));
+        let response =
+            self.with_kokoro_sidecar(&model_path, &voices_path, &pythonpath, |sidecar| {
+                let line = facet_json::to_string(&KokoroSidecarRequest {
+                    phonemes: phonemes.to_string(),
+                    voice: Some(voice.to_string()),
+                    speed,
+                    lang: "en-us".to_string(),
+                    out: out_path.display().to_string(),
+                })
+                .map_err(|e| format!("encoding kokoro request: {e}"))?;
+                sidecar
+                    .stdin
+                    .write_all(line.as_bytes())
+                    .map_err(|e| format!("writing kokoro request: {e}"))?;
+                sidecar
+                    .stdin
+                    .write_all(b"\n")
+                    .map_err(|e| format!("writing kokoro request newline: {e}"))?;
+                sidecar
+                    .stdin
+                    .flush()
+                    .map_err(|e| format!("flushing kokoro request: {e}"))?;
+
+                let mut response_line = String::new();
+                let read = sidecar
+                    .stdout
+                    .read_line(&mut response_line)
+                    .map_err(|e| format!("reading kokoro response: {e}"))?;
+                if read == 0 {
+                    let mut stderr = String::new();
+                    let _ = sidecar.stderr.read_to_string(&mut stderr);
+                    return Err(format!(
+                        "kokoro sidecar exited unexpectedly{}",
+                        if stderr.trim().is_empty() {
+                            String::new()
+                        } else {
+                            format!(", stderr:\n{stderr}")
+                        }
+                    ));
+                }
+                facet_json::from_str::<KokoroSidecarResponse>(response_line.trim())
+                    .map_err(|e| format!("parsing kokoro response: {e}"))
+            })?;
+
+        if !response.ok {
+            return Err(response
+                .error
+                .unwrap_or_else(|| "kokoro sidecar returned an unknown error".to_string()));
+        }
+
+        let wav_bytes =
+            fs::read(&out_path).map_err(|e| format!("reading {}: {e}", out_path.display()))?;
+        let _ = fs::remove_file(&out_path);
+
+        Ok(SynthesizePhonemesResult {
+            wav_bytes,
+            sample_rate_hz: response.sample_rate_hz.unwrap_or(24_000),
+            resolved_voice: response.resolved_voice.unwrap_or_else(|| voice.to_string()),
+        })
+    }
+
+    pub(crate) fn load_audio_file(&self, path: &str) -> Result<Vec<u8>, String> {
+        fs::read(path).map_err(|e| format!("reading {path}: {e}"))
+    }
+
+    pub(crate) fn warm_kokoro_sidecar(&self) -> Result<(), String> {
+        let model_path = kokoro_model_path()?;
+        let voices_path = kokoro_voices_path()?;
+        let pythonpath = kokoro_site_packages_path()?;
+        self.with_kokoro_sidecar(&model_path, &voices_path, &pythonpath, |_| Ok(()))
+    }
+
+    fn with_kokoro_sidecar<T>(
+        &self,
+        model_path: &PathBuf,
+        voices_path: &PathBuf,
+        pythonpath: &str,
+        f: impl FnOnce(&mut KokoroSidecar) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut guard = self
+            .inner
+            .kokoro_sidecar
+            .lock()
+            .map_err(|_| "kokoro sidecar mutex poisoned".to_string())?;
+
+        if guard.is_none() {
+            *guard = Some(start_kokoro_sidecar(model_path, voices_path, pythonpath)?);
+        }
+
+        let sidecar = guard
+            .as_mut()
+            .ok_or_else(|| "kokoro sidecar failed to initialize".to_string())?;
+        match f(sidecar) {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                let _ = sidecar.child.kill();
+                *guard = None;
+                Err(err)
+            }
+        }
     }
 
     pub(crate) fn run_probe(
@@ -1575,6 +1736,106 @@ impl BeeMlService {
             first_failure,
         })
     }
+}
+
+fn kokoro_model_path() -> Result<PathBuf, String> {
+    let path = std::env::var("BEE_KOKORO_MODEL_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("bearcove/whisper/kokoro-v1.0.onnx")
+        });
+    if path.is_file() {
+        Ok(path)
+    } else {
+        Err(format!(
+            "kokoro ONNX model not found at {}. Set BEE_KOKORO_MODEL_PATH to kokoro-v1.0.onnx.",
+            path.display()
+        ))
+    }
+}
+
+fn kokoro_voices_path() -> Result<PathBuf, String> {
+    let path = std::env::var("BEE_KOKORO_VOICES_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("bearcove/whisper/voices-v1.0.bin")
+        });
+    if path.is_file() {
+        Ok(path)
+    } else {
+        Err(format!(
+            "kokoro voices not found at {}. Set BEE_KOKORO_VOICES_PATH.",
+            path.display()
+        ))
+    }
+}
+
+fn kokoro_site_packages_path() -> Result<String, String> {
+    if let Ok(path) = std::env::var("BEE_KOKORO_PYTHONPATH") {
+        return Ok(path);
+    }
+
+    let lib_root = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".local/share/uv/tools/kokoro-tts/lib");
+    let entries =
+        fs::read_dir(&lib_root).map_err(|e| format!("reading {}: {e}", lib_root.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let site_packages = entry.path().join("site-packages");
+        if site_packages.join("kokoro_onnx").exists() {
+            return Ok(site_packages.display().to_string());
+        }
+    }
+    Err(format!(
+        "could not find kokoro_onnx under {}. Set BEE_KOKORO_PYTHONPATH.",
+        lib_root.display()
+    ))
+}
+
+fn start_kokoro_sidecar(
+    model_path: &PathBuf,
+    voices_path: &PathBuf,
+    pythonpath: &str,
+) -> Result<KokoroSidecar, String> {
+    let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/kokoro_phonemes.py");
+    let mut child = Command::new("python3")
+        .env("PYTHONPATH", pythonpath)
+        .arg(script_path)
+        .arg("--server")
+        .arg("--model")
+        .arg(model_path)
+        .arg("--voices")
+        .arg(voices_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("starting kokoro sidecar: {e}"))?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "kokoro sidecar stdin unavailable".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "kokoro sidecar stdout unavailable".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "kokoro sidecar stderr unavailable".to_string())?;
+
+    Ok(KokoroSidecar {
+        child,
+        stdin,
+        stdout: BufReader::new(stdout),
+        stderr: BufReader::new(stderr),
+    })
 }
 
 fn mean_option(values: impl Iterator<Item = Option<f32>>) -> Option<f32> {

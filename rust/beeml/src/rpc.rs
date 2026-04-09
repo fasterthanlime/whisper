@@ -100,6 +100,8 @@ pub struct TranscribePhoneticWordAlignment {
     pub word_text: String,
     pub token_start: u32,
     pub token_end: u32,
+    pub start_sec: f64,
+    pub end_sec: f64,
     pub transcript_normalized: Vec<String>,
     pub zipa_norm_start: u32,
     pub zipa_norm_end: u32,
@@ -733,6 +735,30 @@ pub struct PhoneticComparisonResult {
 }
 
 #[derive(Clone, Debug, Facet)]
+pub struct SynthesizePhonemesRequest {
+    pub phonemes: String,
+    pub voice: Option<String>,
+    pub speed: Option<f32>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct SynthesizePhonemesResult {
+    pub wav_bytes: Vec<u8>,
+    pub sample_rate_hz: u32,
+    pub resolved_voice: String,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct LoadAudioFileRequest {
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct LoadAudioFileResult {
+    pub wav_bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Facet)]
 pub struct CorpusCapturePrompt {
     pub prompt_id: String,
     pub ordinal: u32,
@@ -929,6 +955,16 @@ pub trait BeeMl {
         &self,
         request: PhoneticComparisonRequest,
     ) -> Result<PhoneticComparisonResult, String>;
+
+    async fn synthesize_phonemes(
+        &self,
+        request: SynthesizePhonemesRequest,
+    ) -> Result<SynthesizePhonemesResult, String>;
+
+    async fn load_audio_file(
+        &self,
+        request: LoadAudioFileRequest,
+    ) -> Result<LoadAudioFileResult, String>;
 
     async fn get_corpus_capture_plan(&self) -> Result<CorpusCapturePlanResult, String>;
 
