@@ -401,6 +401,33 @@ textarea:focus {
   white-space: nowrap;
 }
 
+.word-group-copy-row {
+  appearance: none;
+  width: 100%;
+  padding: 0 0 0.1rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  cursor: copy;
+  text-align: left;
+}
+
+.word-group-copy-row:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+.word-group-copy-row:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  outline-offset: 2px;
+  border-radius: 0.25rem;
+}
+
+.word-group-copy-row.is-copied .ipa-token-box {
+  color: color-mix(in srgb, var(--accent) 76%, var(--text));
+}
+
 .ipa-token-box {
   display: inline-flex;
   align-items: center;

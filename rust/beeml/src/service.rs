@@ -233,10 +233,8 @@ impl BeeMlService {
                     word_index,
                     word_index + 1,
                 );
-                let zipa_norm_range = strict_project_left_range(
-                    &utterance_alignment.ops,
-                    transcript_norm_range.clone(),
-                )?;
+                let (zipa_norm_range, word_alignment_ops) =
+                    word_alignment_window(&utterance_alignment.ops, transcript_norm_range.clone())?;
                 let zipa_normalized = utterance_zipa_normalized
                     .get(zipa_norm_range.clone())
                     .unwrap_or(&[])
@@ -262,11 +260,7 @@ impl BeeMlService {
                     zipa_norm_end: zipa_norm_range.end as u32,
                     zipa_raw,
                     zipa_normalized,
-                    alignment: map_alignment_ops(&slice_alignment_ops(
-                        &utterance_alignment.ops,
-                        transcript_norm_range,
-                        zipa_norm_range,
-                    )),
+                    alignment: map_alignment_ops(&word_alignment_ops),
                 })
             })
             .collect::<Vec<_>>();
@@ -2053,6 +2047,67 @@ fn strict_project_left_range(
     }
 }
 
+fn word_alignment_window(
+    ops: &[AlignmentOp],
+    left_range: std::ops::Range<usize>,
+) -> Option<(std::ops::Range<usize>, Vec<AlignmentOp>)> {
+    if left_range.start >= left_range.end {
+        return None;
+    }
+
+    let relevant_positions = ops
+        .iter()
+        .enumerate()
+        .filter_map(|(position, op)| {
+            let left_index = op.left_index.map(|index| index as usize)?;
+            left_range.contains(&left_index).then_some(position)
+        })
+        .collect::<Vec<_>>();
+
+    let Some(&first_position) = relevant_positions.first() else {
+        return None;
+    };
+    let Some(&last_position) = relevant_positions.last() else {
+        return None;
+    };
+
+    let mut start_position = first_position;
+    while start_position > 0 {
+        let previous = &ops[start_position - 1];
+        if previous.left_index.is_none() && previous.right_index.is_some() {
+            start_position -= 1;
+        } else {
+            break;
+        }
+    }
+
+    let mut end_position = last_position;
+    while end_position + 1 < ops.len() {
+        let next = &ops[end_position + 1];
+        if next.left_index.is_none() && next.right_index.is_some() {
+            end_position += 1;
+        } else {
+            break;
+        }
+    }
+
+    let word_alignment_ops = ops[start_position..=end_position].to_vec();
+    let mut right_indices = word_alignment_ops
+        .iter()
+        .filter_map(|op| op.right_index.map(|index| index as usize))
+        .collect::<Vec<_>>();
+
+    if right_indices.is_empty() {
+        let zipa_norm_range = strict_project_left_range(ops, left_range.clone())?;
+        let word_alignment_ops = slice_alignment_ops(ops, left_range, zipa_norm_range.clone());
+        return Some((zipa_norm_range, word_alignment_ops));
+    }
+
+    right_indices.sort_unstable();
+    let zipa_norm_range = right_indices[0]..(right_indices[right_indices.len() - 1] + 1);
+    Some((zipa_norm_range, word_alignment_ops))
+}
+
 fn normalize_candidate_ranges(ranges: &mut Vec<std::ops::Range<usize>>, utterance_len: usize) {
     for range in ranges.iter_mut() {
         let start = range.start.saturating_sub(1);
@@ -2094,6 +2149,99 @@ fn anchor_confidence(
         TranscribePhoneticAnchorConfidence::Medium
     } else {
         TranscribePhoneticAnchorConfidence::Low
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::word_alignment_window;
+    use bee_phonetic::{AlignmentOp, AlignmentOpKind};
+
+    fn op(
+        kind: AlignmentOpKind,
+        left_index: Option<u32>,
+        right_index: Option<u32>,
+        left_token: Option<&str>,
+        right_token: Option<&str>,
+    ) -> AlignmentOp {
+        AlignmentOp {
+            kind,
+            left_index,
+            right_index,
+            left_token: left_token.map(ToOwned::to_owned),
+            right_token: right_token.map(ToOwned::to_owned),
+            cost: 0.0,
+        }
+    }
+
+    #[test]
+    fn word_alignment_window_keeps_adjacent_right_inserts() {
+        let ops = vec![
+            op(
+                AlignmentOpKind::Match,
+                Some(0),
+                Some(0),
+                Some("m"),
+                Some("m"),
+            ),
+            op(AlignmentOpKind::Insert, None, Some(1), None, Some("ɪ")),
+            op(
+                AlignmentOpKind::Substitute,
+                Some(1),
+                Some(2),
+                Some("ɹ"),
+                Some("ə"),
+            ),
+            op(
+                AlignmentOpKind::Match,
+                Some(2),
+                Some(3),
+                Some("ɪ"),
+                Some("ɪ"),
+            ),
+        ];
+
+        let (range, word_ops) = word_alignment_window(&ops, 0..3).expect("word alignment window");
+
+        assert_eq!(range, 0..4);
+        assert_eq!(word_ops.len(), 4);
+        assert_eq!(word_ops[1].kind, AlignmentOpKind::Insert);
+        assert_eq!(word_ops[1].right_token.as_deref(), Some("ɪ"));
+    }
+
+    #[test]
+    fn word_alignment_window_expands_to_edge_inserts() {
+        let ops = vec![
+            op(AlignmentOpKind::Insert, None, Some(0), None, Some("d")),
+            op(
+                AlignmentOpKind::Match,
+                Some(0),
+                Some(1),
+                Some("m"),
+                Some("m"),
+            ),
+            op(
+                AlignmentOpKind::Match,
+                Some(1),
+                Some(2),
+                Some("ɪ"),
+                Some("ɪ"),
+            ),
+            op(AlignmentOpKind::Insert, None, Some(3), None, Some("ə")),
+        ];
+
+        let (range, word_ops) = word_alignment_window(&ops, 0..2).expect("word alignment window");
+
+        assert_eq!(range, 0..4);
+        assert_eq!(word_ops.len(), 4);
+        assert_eq!(
+            word_ops.first().and_then(|op| op.right_token.as_deref()),
+            Some("d")
+        );
+        assert_eq!(
+            word_ops.last().and_then(|op| op.right_token.as_deref()),
+            Some("ə")
+        );
     }
 }
 

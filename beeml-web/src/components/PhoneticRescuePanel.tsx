@@ -201,6 +201,25 @@ function WordGroup({
 }) {
   const transcript = alignmentRowValues(word.alignment, "transcript");
   const zipa = alignmentRowValues(word.alignment, "zipa");
+  const [copiedLane, setCopiedLane] = useState<"transcript" | "zipa" | null>(null);
+
+  const copyLane = async (kind: "transcript" | "zipa") => {
+    const values = kind === "transcript" ? transcript : zipa;
+    const text = values
+      .map((value) => value.text)
+      .filter((value) => value !== "∅")
+      .join(" ");
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedLane(kind);
+      window.setTimeout(() => {
+        setCopiedLane((current) => (current === kind ? null : current));
+      }, 900);
+    } catch {
+      // Ignore clipboard failures silently; the button title already hints at the action.
+    }
+  };
 
   return (
     <div
@@ -232,7 +251,13 @@ function WordGroup({
           >
             {controlGlyph(controlState, "transcript")}
           </button>
-          <div className="word-group-inline-box-row">
+          <button
+            type="button"
+            className={`word-group-inline-box-row word-group-copy-row${copiedLane === "transcript" ? " is-copied" : ""}`}
+            onClick={() => void copyLane("transcript")}
+            title={`Copy transcript IPA for ${label}`}
+            aria-label={`Copy transcript IPA for ${label}`}
+          >
             {transcript.map((value, index) => (
               <span
                 key={`t:${word.tokenStart}:${index}`}
@@ -242,7 +267,7 @@ function WordGroup({
                 {value.text}
               </span>
             ))}
-          </div>
+          </button>
         </div>
         <div className="word-group-inline-lane">
           <button
@@ -254,7 +279,13 @@ function WordGroup({
           >
             {controlGlyph(controlState, "zipa")}
           </button>
-          <div className="word-group-inline-box-row">
+          <button
+            type="button"
+            className={`word-group-inline-box-row word-group-copy-row${copiedLane === "zipa" ? " is-copied" : ""}`}
+            onClick={() => void copyLane("zipa")}
+            title={`Copy ZIPA IPA for ${label}`}
+            aria-label={`Copy ZIPA IPA for ${label}`}
+          >
             {zipa.map((value, index) => (
               <span
                 key={`z:${word.tokenStart}:${index}`}
@@ -264,7 +295,7 @@ function WordGroup({
                 {value.text}
               </span>
             ))}
-          </div>
+          </button>
         </div>
       </div>
     </div>
