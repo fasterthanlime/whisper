@@ -88,6 +88,7 @@ function toPhoneticTrace(trace: RpcTranscribePhoneticTrace): PhoneticRescueTrace
       tokenEnd: word.token_end,
       startSec: word.start_sec,
       endSec: word.end_sec,
+      transcriptRaw: word.transcript_raw,
       transcriptNormalized: word.transcript_normalized,
       zipaNormStart: word.zipa_norm_start,
       zipaNormEnd: word.zipa_norm_end,

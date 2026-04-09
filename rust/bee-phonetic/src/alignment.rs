@@ -44,6 +44,12 @@ pub struct AlignmentWindowCandidate {
     pub length_delta: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LeftBoundaryContext {
+    is_word_start: bool,
+    is_word_end: bool,
+}
+
 impl TokenAlignment {
     pub fn project_left_range(&self, left_range: Range<usize>) -> Option<Range<usize>> {
         if left_range.start >= left_range.end {
@@ -105,6 +111,45 @@ impl TokenAlignment {
 }
 
 pub fn align_token_sequences(left: &[String], right: &[String]) -> TokenAlignment {
+    align_token_sequences_with_context(
+        left,
+        right,
+        &vec![
+            LeftBoundaryContext {
+                is_word_start: false,
+                is_word_end: false,
+            };
+            left.len()
+        ],
+    )
+}
+
+pub fn align_token_sequences_with_left_word_boundaries(
+    left: &[String],
+    right: &[String],
+    left_word_ids: &[usize],
+) -> TokenAlignment {
+    assert_eq!(
+        left.len(),
+        left_word_ids.len(),
+        "left_word_ids must match left token count"
+    );
+    let contexts = left_word_ids
+        .iter()
+        .enumerate()
+        .map(|(index, &word_id)| LeftBoundaryContext {
+            is_word_start: index == 0 || left_word_ids[index - 1] != word_id,
+            is_word_end: index + 1 == left_word_ids.len() || left_word_ids[index + 1] != word_id,
+        })
+        .collect::<Vec<_>>();
+    align_token_sequences_with_context(left, right, &contexts)
+}
+
+fn align_token_sequences_with_context(
+    left: &[String],
+    right: &[String],
+    contexts: &[LeftBoundaryContext],
+) -> TokenAlignment {
     #[derive(Clone, Copy)]
     enum Step {
         Match,
@@ -119,19 +164,20 @@ pub fn align_token_sequences(left: &[String], right: &[String]) -> TokenAlignmen
     let mut steps = vec![vec![Step::Match; cols + 1]; rows + 1];
 
     for i in 1..=rows {
-        dp[i][0] = dp[i - 1][0] + 1.0;
+        dp[i][0] = dp[i - 1][0] + delete_cost(&left[i - 1], contexts[i - 1]);
         steps[i][0] = Step::Delete;
     }
     for j in 1..=cols {
-        dp[0][j] = dp[0][j - 1] + 1.0;
+        dp[0][j] = dp[0][j - 1] + insert_cost(left, right, contexts, 0, j - 1);
         steps[0][j] = Step::Insert;
     }
 
     for i in 1..=rows {
         for j in 1..=cols {
-            let subst_cost = substitution_cost(&left[i - 1], &right[j - 1]);
-            let del = dp[i - 1][j] + 1.0;
-            let ins = dp[i][j - 1] + 1.0;
+            let subst_cost =
+                substitution_cost_with_context(&left[i - 1], &right[j - 1], contexts[i - 1]);
+            let del = dp[i - 1][j] + delete_cost(&left[i - 1], contexts[i - 1]);
+            let ins = dp[i][j - 1] + insert_cost(left, right, contexts, i, j - 1);
             let sub = dp[i - 1][j - 1] + subst_cost;
 
             let (best, step) = if sub <= del && sub <= ins {
@@ -196,7 +242,7 @@ pub fn align_token_sequences(left: &[String], right: &[String]) -> TokenAlignmen
                     right_index: None,
                     left_token: Some(left[i - 1].clone()),
                     right_token: None,
-                    cost: 1.0,
+                    cost: delete_cost(&left[i - 1], contexts[i - 1]),
                 });
                 i -= 1;
             }
@@ -207,7 +253,7 @@ pub fn align_token_sequences(left: &[String], right: &[String]) -> TokenAlignmen
                     right_index: Some((j - 1) as u32),
                     left_token: None,
                     right_token: Some(right[j - 1].clone()),
-                    cost: 1.0,
+                    cost: insert_cost(left, right, contexts, i, j - 1),
                 });
                 j -= 1;
             }
@@ -216,6 +262,59 @@ pub fn align_token_sequences(left: &[String], right: &[String]) -> TokenAlignmen
     ops.reverse();
 
     TokenAlignment { ops }
+}
+
+fn substitution_cost_with_context(left: &str, right: &str, context: LeftBoundaryContext) -> f32 {
+    let base = substitution_cost(left, right);
+    if base == 0.0 {
+        return 0.0;
+    }
+
+    let mut extra = 0.0;
+    if context.is_word_start && !is_weak_vowel(left) {
+        extra += 0.35;
+    }
+    if context.is_word_end {
+        extra += if is_weak_vowel(left) { 0.2 } else { 0.3 };
+    }
+    (base + extra).min(2.5)
+}
+
+fn delete_cost(token: &str, context: LeftBoundaryContext) -> f32 {
+    let mut cost = 1.0;
+    if context.is_word_start && !is_weak_vowel(token) {
+        cost += 0.35;
+    }
+    if context.is_word_end {
+        cost += if is_weak_vowel(token) { 0.25 } else { 0.45 };
+    }
+    cost
+}
+
+fn insert_cost(
+    left: &[String],
+    right: &[String],
+    contexts: &[LeftBoundaryContext],
+    left_consumed: usize,
+    right_index: usize,
+) -> f32 {
+    let mut cost = 1.0;
+    let Some(token) = right.get(right_index) else {
+        return cost;
+    };
+    if let Some((next_left, next_context)) =
+        left.get(left_consumed).zip(contexts.get(left_consumed))
+    {
+        if next_context.is_word_start {
+            let similarity = token_similarity(next_left, token);
+            if !is_weak_vowel(next_left) {
+                cost -= 0.45 * similarity;
+            } else {
+                cost -= 0.2 * similarity;
+            }
+        }
+    }
+    cost.max(0.25)
 }
 
 pub fn top_right_anchor_windows(
@@ -425,7 +524,7 @@ fn ranges_overlap(left: Range<usize>, right: Range<usize>) -> bool {
 mod tests {
     use super::{
         AlignmentOp, AlignmentOpKind, ComparisonToken, TokenAlignment, align_token_sequences,
-        top_right_anchor_windows,
+        align_token_sequences_with_left_word_boundaries, top_right_anchor_windows,
     };
 
     #[test]
@@ -581,5 +680,37 @@ mod tests {
         assert_eq!(windows.len(), 2);
         assert_eq!(windows[0].right_start, 0);
         assert_eq!(windows[1].right_start, 4);
+    }
+
+    #[test]
+    fn boundary_aware_alignment_protects_word_tails_and_next_onset() {
+        let left = vec!["a", "k", "t", "ʃ", "ʊ", "l", "ɪ", "m", "ɛ", "ɹ", "ɪ"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let right = vec!["ɛ", "k", "t", "ʃ", "ə", "w", "ə", "l", "ɪ", "m", "ɪ", "ɪ"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let word_ids = vec![0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1];
+
+        let alignment = align_token_sequences_with_left_word_boundaries(&left, &right, &word_ids);
+        let ops = alignment.ops;
+
+        let l_index = ops
+            .iter()
+            .position(|op| op.left_token.as_deref() == Some("l"))
+            .expect("l op present");
+        let final_i_index = ops
+            .iter()
+            .rposition(|op| op.left_token.as_deref() == Some("ɪ"))
+            .expect("final i op present");
+        let first_second_word_index = ops
+            .iter()
+            .position(|op| op.left_index.is_some_and(|index| index as usize >= 7))
+            .expect("second-word op present");
+
+        assert!(l_index < first_second_word_index);
+        assert!(final_i_index < first_second_word_index);
     }
 }

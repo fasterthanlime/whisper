@@ -639,7 +639,7 @@ export function PhoneticRescuePanel({
         } else {
           const buffer = await getSynthBufferCached(
             kind,
-            kind === "transcript" ? word.transcriptNormalized : word.zipaNormalized,
+            kind === "transcript" ? word.transcriptRaw : word.zipaRaw,
           );
           if (playbackRunIdRef.current !== runId) return;
           await playBufferRange(buffer, 0, buffer.duration, word.tokenStart, kind);
@@ -661,8 +661,8 @@ export function PhoneticRescuePanel({
   useEffect(() => {
     if (!wsUrl || wordAlignments.length === 0) return;
     void Promise.allSettled([
-      ...wordAlignments.map((word) => getSynthBufferCached("transcript", word.transcriptNormalized)),
-      ...wordAlignments.map((word) => getSynthBufferCached("zipa", word.zipaNormalized)),
+      ...wordAlignments.map((word) => getSynthBufferCached("transcript", word.transcriptRaw)),
+      ...wordAlignments.map((word) => getSynthBufferCached("zipa", word.zipaRaw)),
     ]);
   }, [wsUrl, wordAlignments]);
 
@@ -751,8 +751,8 @@ export function PhoneticRescuePanel({
                 word={word}
                 label={label}
                 onPlayOriginal={() => void playOriginalWord(word)}
-                onPlayTranscript={() => void synthWord(word, "transcript", word.transcriptNormalized)}
-                onPlayZipa={() => void synthWord(word, "zipa", word.zipaNormalized)}
+                onPlayTranscript={() => void synthWord(word, "transcript", word.transcriptRaw)}
+                onPlayZipa={() => void synthWord(word, "zipa", word.zipaRaw)}
                 controlState={
                   activeControl?.tokenStart === word.tokenStart
                     ? { kind: activeControl.kind, phase: activeControl.phase }

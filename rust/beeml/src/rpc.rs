@@ -102,6 +102,7 @@ pub struct TranscribePhoneticWordAlignment {
     pub token_end: u32,
     pub start_sec: f64,
     pub end_sec: f64,
+    pub transcript_raw: Vec<String>,
     pub transcript_normalized: Vec<String>,
     pub zipa_norm_start: u32,
     pub zipa_norm_end: u32,

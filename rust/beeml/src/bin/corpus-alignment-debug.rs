@@ -29,11 +29,17 @@ fn main() -> Result<()> {
     let limit = parse_flag_u32("--limit").unwrap_or(20);
     let show = parse_flag_u32("--show").unwrap_or(8);
     let bucket = parse_flag_string("--bucket");
+    let prompt_id = parse_flag_string("--prompt-id");
     let snapshot_out = parse_flag_string("--snapshot-out");
 
     let service = load_service()?;
     let result = service
-        .eval_corpus_alignment(limit as usize, bucket.as_deref(), false, None)
+        .eval_corpus_alignment(
+            limit as usize,
+            bucket.as_deref(),
+            false,
+            prompt_id.as_deref(),
+        )
         .map_err(|error| anyhow::anyhow!("running corpus alignment eval: {error}"))?;
 
     if let Some(path) = snapshot_out.as_deref() {

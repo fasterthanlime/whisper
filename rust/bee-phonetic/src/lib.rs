@@ -11,7 +11,8 @@ pub mod word_split;
 
 pub use alignment::{
     AlignmentOp, AlignmentOpKind, AlignmentWindowCandidate, ComparisonToken, TokenAlignment,
-    align_token_sequences, top_right_anchor_windows,
+    align_token_sequences, align_token_sequences_with_left_word_boundaries,
+    top_right_anchor_windows,
 };
 pub use dataset::{
     CounterexampleRecordingRow, RecordingExampleRow, SeedDataset, SeedDatasetError,
