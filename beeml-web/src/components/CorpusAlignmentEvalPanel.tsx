@@ -163,15 +163,6 @@ function RowCard({
 
 function lanePreviewOps(trace: PhoneticRescueTrace | null): PhoneticAlignmentOp[] {
   if (!trace) return [];
-  const selectedSpan =
-    (trace.bestRescueSpanIndex != null ? trace.spans[trace.bestRescueSpanIndex] : null) ??
-    (trace.worstContentfulSpanIndex != null
-      ? trace.spans[trace.worstContentfulSpanIndex]
-      : null) ??
-    (trace.worstRawSpanIndex != null ? trace.spans[trace.worstRawSpanIndex] : null);
-  if (selectedSpan && selectedSpan.alignment.length > 0) {
-    return cropOps(selectedSpan.alignment, 18);
-  }
   return cropOps(trace.utteranceAlignment, 18);
 }
 
