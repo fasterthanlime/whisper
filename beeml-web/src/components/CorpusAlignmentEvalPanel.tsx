@@ -103,8 +103,6 @@ function RowCard({
   selected: boolean;
   onSelect: () => void;
 }) {
-  const trace = row.trace ? toPhoneticTrace(row.trace) : null;
-  const previewOps = lanePreviewOps(trace);
   return (
     <div
       role="button"
@@ -118,12 +116,17 @@ function RowCard({
       }}
       className="failure-card"
       style={{
-        gap: "0.55rem",
+        gap: "0.45rem",
         textAlign: "left",
-        border: selected ? "1px solid var(--accent)" : "1px solid var(--border)",
-        background: selected ? "var(--bg-subtle)" : "var(--bg-elevated)",
+        border: selected
+          ? "1px solid color-mix(in srgb, var(--accent) 70%, var(--border))"
+          : "1px solid var(--border)",
+        background: selected
+          ? "linear-gradient(180deg, color-mix(in srgb, var(--bg-subtle) 88%, transparent), var(--bg-elevated))"
+          : "var(--bg-elevated)",
         cursor: "pointer",
         userSelect: "text",
+        padding: "0.65rem 0.7rem",
       }}
     >
       <div className="failure-topline">
@@ -136,45 +139,15 @@ function RowCard({
       <div className="failure-pills">
         <span className="failure-pill">take {row.take}</span>
         <span className="failure-pill">raw {formatMetric(row.utterance_similarity)}</span>
-        <span className="failure-pill">spans {row.positive_span_count}</span>
-        <span className="failure-pill">
-          worst {formatMetric(row.worst_span_feature_similarity)}
-        </span>
-        <span className="failure-pill">best Δ {formatMetric(row.best_span_delta)}</span>
+        <span className="failure-pill">contentful {row.contentful_span_count}</span>
+        <span className="failure-pill">eligible {row.rescue_eligible_span_count}</span>
       </div>
-      <div className="token-row muted">ASR: {row.asr_transcript}</div>
-      {trace ? (
-        <>
-          <div className="token-row muted">ZIPA raw: {formatTokens(trace.utteranceZipaRaw)}</div>
-          <div className="token-row muted">
-            ZIPA norm: {formatTokens(trace.utteranceZipaNormalized)}
-          </div>
-        </>
-      ) : null}
-      {previewOps.length > 0 ? (
-        <div style={{ marginTop: "0.15rem" }}>
-          <AlignmentView ops={previewOps} transcriptLabel="Transcript" zipaLabel="ZIPA" />
-        </div>
-      ) : null}
+      <div className="token-row muted" style={{ lineHeight: 1.45 }}>
+        ASR: {row.asr_transcript}
+      </div>
       {row.error ? <div className="error-pill">{row.error}</div> : null}
     </div>
   );
-}
-
-function lanePreviewOps(trace: PhoneticRescueTrace | null): PhoneticAlignmentOp[] {
-  if (!trace) return [];
-  return cropOps(trace.utteranceAlignment, 18);
-}
-
-function cropOps(ops: PhoneticAlignmentOp[], targetWidth: number): PhoneticAlignmentOp[] {
-  if (ops.length <= targetWidth) return ops;
-  const mismatchIndex = ops.findIndex((op) => op.kind !== "Match");
-  if (mismatchIndex < 0) {
-    return ops.slice(0, targetWidth);
-  }
-  const left = Math.max(0, mismatchIndex - Math.floor(targetWidth / 2));
-  const right = Math.min(ops.length, left + targetWidth);
-  return ops.slice(Math.max(0, right - targetWidth), right);
 }
 
 export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
@@ -261,12 +234,19 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
   }, [result]);
 
   return (
-    <div className="prototype-lab prototype-stack judge-eval-layout">
+    <div
+      className="prototype-lab"
+      style={{
+        width: "min(1500px, 100%)",
+        margin: "0 auto",
+        gap: "0.75rem",
+      }}
+    >
       <section className="prototype-card prototype-card-tight">
         <header className="panel-header-row">
           <div>
             <strong>Corpus Alignment Eval</strong>
-            <span>Run the current ASR + ZIPA DP path over the recorded targeted corpus.</span>
+            <span>Use the left rail to pick a case. Use the right workspace to inspect utterance alignment and per-word IPA.</span>
           </div>
           {result ? <span className="badge">{result.rows.length} rows</span> : null}
         </header>
@@ -317,83 +297,78 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
       </section>
 
       {result ? (
-        <>
-          <section className="prototype-card eval-hero-card">
-            <div className="eval-hero-main">
-              <span className="eyebrow">Corpus utterance feature similarity</span>
-              <div className="eval-hero-number">{formatMetric(overallMean)}</div>
-              <div className="eval-hero-caption">
-                Worst rows are sorted to the top for inspection.
-              </div>
-            </div>
-            <div className="eval-stat-grid">
-              {result.bucket_summaries.map((summary) => (
-                <div className="eval-stat-card" key={summary.bucket}>
-                  <span className="eval-stat-label">{summary.bucket}</span>
-                  <strong>{formatMetric(summary.utterance_feature_similarity_mean)}</strong>
-                  <span className="muted">{summary.rows} rows</span>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          {selectedRow ? (
-            <section
-              className="prototype-card"
-              style={{
-                gap: "0.75rem",
-                border: "1px solid color-mix(in srgb, var(--accent) 45%, var(--border))",
-                background:
-                  "linear-gradient(180deg, color-mix(in srgb, var(--bg-subtle) 85%, transparent), var(--bg-elevated))",
-              }}
-            >
-              <header className="panel-header-row">
-                <div>
-                  <strong>Alignment Inspector</strong>
-                  <span>
-                    {selectedRow.prompt_id} · {selectedRow.bucket} · take {selectedRow.take}
-                  </span>
-                </div>
-                <span className="badge">{selectedRow.term}</span>
-              </header>
-              <div className="prototype-summary">
-                <span>prompt {selectedRow.prompt_text}</span>
-              </div>
-              {selectedRow.prompt_notes ? (
-                <div
-                  className="prototype-empty"
-                  style={{
-                    textAlign: "left",
-                    border: "1px solid color-mix(in srgb, var(--accent) 18%, var(--border))",
-                    background: "color-mix(in srgb, var(--bg-subtle) 78%, transparent)",
-                  }}
-                >
-                  {selectedRow.prompt_notes}
-                </div>
-              ) : null}
-              <div className="prototype-summary">
-                <span>ASR {selectedRow.asr_transcript}</span>
-                <span>{selectedRow.wav_path}</span>
-              </div>
-              {selectedRow.trace ? (
-                <PhoneticRescuePanel trace={toPhoneticTrace(selectedRow.trace)} />
-              ) : (
-                <div className="prototype-empty">
-                  {selectedRow.error ?? "No phonetic trace available."}
-                </div>
-              )}
-            </section>
-          ) : null}
-
-          <section className="prototype-card">
-            <header className="panel-header-row">
+        <section
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(280px, 360px) minmax(0, 1fr)",
+            gap: "0.75rem",
+            alignItems: "start",
+          }}
+        >
+          <section
+            className="prototype-card"
+            style={{
+              position: "sticky",
+              top: "0.75rem",
+              maxHeight: "calc(100vh - 1.5rem)",
+              overflow: "hidden",
+            }}
+          >
+            <header className="panel-header-row panel-header-compact">
               <div>
-                <strong>Rows</strong>
-                <span>Worst utterance-level feature matches first. Click a row to inspect it above.</span>
+                <strong>Cases</strong>
+                <span>Pick a recording to inspect.</span>
               </div>
               <span className="badge">{result.rows.length}</span>
             </header>
-            <div style={{ display: "grid", gap: "0.75rem" }}>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                gap: "0.45rem",
+              }}
+            >
+              <div
+                style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: "6px",
+                  padding: "0.55rem 0.6rem",
+                  background: "var(--bg-elevated)",
+                }}
+              >
+                <div className="eyebrow">Overall UF</div>
+                <div style={{ fontSize: "1.9rem", fontWeight: 700, lineHeight: 1.05 }}>
+                  {formatMetric(overallMean)}
+                </div>
+              </div>
+              {result.bucket_summaries.map((summary) => (
+                <div
+                  key={summary.bucket}
+                  style={{
+                    border: "1px solid var(--border)",
+                    borderRadius: "6px",
+                    padding: "0.55rem 0.6rem",
+                    background: "var(--bg-elevated)",
+                  }}
+                >
+                  <div className="eyebrow">{summary.bucket}</div>
+                  <div style={{ fontSize: "1.1rem", fontWeight: 700, lineHeight: 1.1 }}>
+                    {formatMetric(summary.utterance_feature_similarity_mean)}
+                  </div>
+                  <div className="token-row muted">{summary.rows} rows</div>
+                </div>
+              ))}
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gap: "0.6rem",
+                overflow: "auto",
+                paddingRight: "0.1rem",
+              }}
+            >
               {result.rows.map((row) => (
                 <RowCard
                   key={`${row.prompt_id}:${row.take}`}
@@ -404,7 +379,60 @@ export function CorpusAlignmentEvalPanel({ wsUrl }: { wsUrl: string }) {
               ))}
             </div>
           </section>
-        </>
+
+          <section
+            className="prototype-card"
+            style={{
+              gap: "0.85rem",
+              minHeight: "calc(100vh - 8rem)",
+              border: "1px solid color-mix(in srgb, var(--accent) 35%, var(--border))",
+            }}
+          >
+            {selectedRow ? (
+              <>
+                <header className="panel-header-row">
+                  <div>
+                    <strong>{selectedRow.prompt_text}</strong>
+                    <span>
+                      {selectedRow.prompt_id} · {selectedRow.bucket} · take {selectedRow.take}
+                    </span>
+                  </div>
+                  <span className="badge">{selectedRow.term}</span>
+                </header>
+
+                <div className="prototype-summary">
+                  <span>UF {formatMetric(selectedRow.utterance_feature_similarity)}</span>
+                  <span>raw {formatMetric(selectedRow.utterance_similarity)}</span>
+                  <span>ASR {selectedRow.asr_transcript}</span>
+                </div>
+
+                {selectedRow.prompt_notes ? (
+                  <div
+                    className="prototype-empty"
+                    style={{
+                      textAlign: "left",
+                      padding: "0.6rem 0.75rem",
+                      border: "1px solid color-mix(in srgb, var(--accent) 18%, var(--border))",
+                      background: "color-mix(in srgb, var(--bg-subtle) 78%, transparent)",
+                    }}
+                  >
+                    {selectedRow.prompt_notes}
+                  </div>
+                ) : null}
+
+                {selectedRow.trace ? (
+                  <PhoneticRescuePanel trace={toPhoneticTrace(selectedRow.trace)} />
+                ) : (
+                  <div className="prototype-empty">
+                    {selectedRow.error ?? "No phonetic trace available."}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="prototype-empty">Pick a row from the left.</div>
+            )}
+          </section>
+        </section>
       ) : (
         <section className="prototype-card prototype-card-tight">
           <div className="prototype-empty">No corpus eval run yet.</div>
