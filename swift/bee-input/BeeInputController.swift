@@ -5,6 +5,8 @@ import InputMethodKit
 /// Pure pass-through layer. All state lives in BeeIMEBridgeState (on the bridge).
 @objc(BeeInputController)
 class BeeInputController: IMKInputController {
+    @MainActor
+    private var isHandlingCancelComposition = false
 
     nonisolated override init!(server: IMKServer!, delegate: Any!, client: Any!) {
         super.init(server: server, delegate: delegate, client: client)
@@ -62,11 +64,21 @@ class BeeInputController: IMKInputController {
     nonisolated override func cancelComposition() {
         MainActor.assumeIsolated {
             beeInputLog(
-                "cancelComposition: entry clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription())"
+                "cancelComposition: entry clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) reentrant=\(isHandlingCancelComposition)"
             )
-        }
-        super.cancelComposition()
-        MainActor.assumeIsolated {
+
+            guard !isHandlingCancelComposition else {
+                BeeIMEBridgeState.shared.didCancelComposition(on: self)
+                return
+            }
+
+            isHandlingCancelComposition = true
+            defer { isHandlingCancelComposition = false }
+
+            BeeIMEBridgeState.shared.discardMarkedText(
+                on: self.client() as AnyObject,
+                reason: "cancelComposition"
+            )
             BeeIMEBridgeState.shared.didCancelComposition(on: self)
         }
     }
@@ -78,6 +90,21 @@ class BeeInputController: IMKInputController {
             )
         }
         cancelComposition()
+    }
+
+    nonisolated override func updateComposition() {
+        MainActor.assumeIsolated {
+            let composed = (self.composedString(nil) as? String) ?? String(describing: self.composedString(nil) ?? "nil")
+            beeInputLog(
+                "updateComposition: entry clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) composed=\(composed.prefix(80).debugDescription)"
+            )
+        }
+        super.updateComposition()
+        MainActor.assumeIsolated {
+            beeInputLog(
+                "updateComposition: exit clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription())"
+            )
+        }
     }
 
     nonisolated override func recognizedEvents(_ sender: Any!) -> Int {
