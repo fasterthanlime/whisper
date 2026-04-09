@@ -1,5 +1,5 @@
 import "./index.css";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { JudgeEvalPanel } from "./components/JudgeEvalPanel";
 import { JudgeRapidFirePanel } from "./components/JudgeRapidFirePanel";
 import { RetrievalPrototypeLab } from "./components/RetrievalPrototypeLab";
@@ -11,11 +11,68 @@ import { CorpusCapturePanel } from "./components/CorpusCapturePanel";
 import { CorpusAlignmentEvalPanel } from "./components/CorpusAlignmentEvalPanel";
 
 const WS_URL = "ws://127.0.0.1:9944";
+const TAB_ROUTES = {
+  "correction-ui": "/correction-ui",
+  "rapid-fire": "/rapid-fire",
+  "judge-eval": "/judge-eval",
+  "offline-eval": "/offline-eval",
+  retrieval: "/retrieval",
+  phonetics: "/phonetics",
+  transcribe: "/transcribe",
+  corpus: "/corpus",
+  "corpus-eval": "/corpus-eval",
+} as const;
+type TabKey = keyof typeof TAB_ROUTES;
+const ROUTE_TABS = Object.fromEntries(
+  Object.entries(TAB_ROUTES).map(([tab, route]) => [route, tab]),
+) as Record<(typeof TAB_ROUTES)[TabKey], TabKey>;
+
+function normalizePath(pathname: string): string {
+  if (pathname === "/") {
+    return "/corpus-eval";
+  }
+  const trimmed = pathname.endsWith("/") && pathname !== "/" ? pathname.slice(0, -1) : pathname;
+  return ROUTE_TABS[trimmed as keyof typeof ROUTE_TABS] ? trimmed : "/corpus-eval";
+}
+
+function tabForPath(pathname: string): TabKey {
+  return ROUTE_TABS[normalizePath(pathname) as keyof typeof ROUTE_TABS] ?? "corpus-eval";
+}
+
+function navigateTo(pathname: string, replace = false) {
+  const method = replace ? "replaceState" : "pushState";
+  window.history[method](null, "", pathname);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
 
 export default function App() {
-  const [tab, setTab] = useState<
-    "transcribe" | "retrieval" | "rapid-fire" | "judge-eval" | "offline-eval" | "correction-ui" | "phonetics" | "corpus" | "corpus-eval"
-  >("correction-ui");
+  const [tab, setTab] = useState<TabKey>(() =>
+    typeof window === "undefined" ? "corpus-eval" : tabForPath(window.location.pathname),
+  );
+
+  useEffect(() => {
+    const applyLocation = () => {
+      const normalizedPath = normalizePath(window.location.pathname);
+      if (window.location.pathname !== normalizedPath) {
+        navigateTo(normalizedPath, true);
+        return;
+      }
+      setTab(tabForPath(normalizedPath));
+    };
+
+    applyLocation();
+    window.addEventListener("popstate", applyLocation);
+    return () => window.removeEventListener("popstate", applyLocation);
+  }, []);
+
+  const selectTab = (nextTab: TabKey) => {
+    const route = TAB_ROUTES[nextTab];
+    if (window.location.pathname !== route) {
+      navigateTo(route);
+    } else {
+      setTab(nextTab);
+    }
+  };
 
   return (
     <div className="app-shell">
@@ -26,7 +83,7 @@ export default function App() {
             role="tab"
             aria-selected={tab === "correction-ui"}
             className={tab === "correction-ui" ? "primary" : ""}
-            onClick={() => setTab("correction-ui")}
+            onClick={() => selectTab("correction-ui")}
           >
             Correction UI
           </button>
@@ -34,7 +91,7 @@ export default function App() {
             role="tab"
             aria-selected={tab === "rapid-fire"}
             className={tab === "rapid-fire" ? "primary" : ""}
-            onClick={() => setTab("rapid-fire")}
+            onClick={() => selectTab("rapid-fire")}
           >
             Rapid Fire
           </button>
@@ -42,7 +99,7 @@ export default function App() {
             role="tab"
             aria-selected={tab === "judge-eval"}
             className={tab === "judge-eval" ? "primary" : ""}
-            onClick={() => setTab("judge-eval")}
+            onClick={() => selectTab("judge-eval")}
           >
             Judge Eval
           </button>
@@ -50,7 +107,7 @@ export default function App() {
             role="tab"
             aria-selected={tab === "offline-eval"}
             className={tab === "offline-eval" ? "primary" : ""}
-            onClick={() => setTab("offline-eval")}
+            onClick={() => selectTab("offline-eval")}
           >
             Offline Eval
           </button>
@@ -58,7 +115,7 @@ export default function App() {
             role="tab"
             aria-selected={tab === "retrieval"}
             className={tab === "retrieval" ? "primary" : ""}
-            onClick={() => setTab("retrieval")}
+            onClick={() => selectTab("retrieval")}
           >
             Retrieval Lab
           </button>
@@ -66,7 +123,7 @@ export default function App() {
             role="tab"
             aria-selected={tab === "phonetics"}
             className={tab === "phonetics" ? "primary" : ""}
-            onClick={() => setTab("phonetics")}
+            onClick={() => selectTab("phonetics")}
           >
             Phonetics
           </button>
@@ -74,7 +131,7 @@ export default function App() {
             role="tab"
             aria-selected={tab === "transcribe"}
             className={tab === "transcribe" ? "primary" : ""}
-            onClick={() => setTab("transcribe")}
+            onClick={() => selectTab("transcribe")}
           >
             Transcribe
           </button>
@@ -82,7 +139,7 @@ export default function App() {
             role="tab"
             aria-selected={tab === "corpus"}
             className={tab === "corpus" ? "primary" : ""}
-            onClick={() => setTab("corpus")}
+            onClick={() => selectTab("corpus")}
           >
             Corpus
           </button>
@@ -90,7 +147,7 @@ export default function App() {
             role="tab"
             aria-selected={tab === "corpus-eval"}
             className={tab === "corpus-eval" ? "primary" : ""}
-            onClick={() => setTab("corpus-eval")}
+            onClick={() => selectTab("corpus-eval")}
           >
             Corpus Eval
           </button>
