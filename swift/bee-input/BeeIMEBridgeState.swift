@@ -299,8 +299,13 @@ final class BeeIMEBridgeState: NSObject {
 
     func cancelInput(sessionID: UUID) {
         if case .serving(let session, let currentID, _) = state, currentID == sessionID {
+            if let controller = session.controller {
+                beeInputLog("cancelInput: cancelComposition session=\(sessionID.uuidString.prefix(8))")
+                controller.cancelComposition()
+            } else {
+                session.currentMarkedText = ""
+            }
             state = .activated(session)
-            session.handleCancelInput()
             return
         }
 
@@ -308,7 +313,7 @@ final class BeeIMEBridgeState: NSObject {
             beeInputLog("cancelInput: stale session=\(sessionID.uuidString.prefix(8)), dropping")
             return
         }
-        session.handleCancelInput()
+        session.currentMarkedText = ""
         lastSessionID = nil
     }
 
@@ -332,5 +337,10 @@ final class BeeIMEBridgeState: NSObject {
             return
         }
         session.handleReplaceText(oldText: oldText, newText: newText)
+    }
+
+    func didCancelComposition(on controller: BeeInputController) {
+        guard let session = currentSession, session.controller === controller else { return }
+        session.currentMarkedText = ""
     }
 }

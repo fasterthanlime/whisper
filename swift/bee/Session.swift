@@ -503,6 +503,7 @@ actor Session {
         guard ime == .inactive || ime == .activating || ime == .active else { return }
         ime = .parked
         beeLog("SESSION: park id=\(id.uuidString.prefix(8))")
+        await inputClient.cancelComposition(sessionID: id)
         await MainActor.run { inputClient.deactivate() }
     }
 
