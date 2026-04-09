@@ -32,10 +32,13 @@ else
 fi
 
 if [ -f "$ENVRC_PATH" ]; then
-  # Source project environment from repo root so paths using $PWD resolve correctly.
+  if ! command -v direnv >/dev/null 2>&1; then
+    printf '%s\n' "${RED}${BOLD}direnv is required to load $ENVRC_PATH${RESET}"
+    exit 1
+  fi
+  # Load project environment from repo root so paths using $PWD resolve correctly.
   pushd "$PROJECT_ROOT" >/dev/null
-  # shellcheck disable=SC1090
-  source "$ENVRC_PATH"
+  eval "$(direnv export bash)"
   popd >/dev/null
 fi
 
