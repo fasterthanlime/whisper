@@ -798,6 +798,7 @@ pub struct DeleteCorpusRecordingResult {
 pub struct CorpusAlignmentEvalRequest {
     pub limit: u32,
     pub bucket: Option<String>,
+    pub randomize: bool,
 }
 
 #[derive(Clone, Debug, Facet)]

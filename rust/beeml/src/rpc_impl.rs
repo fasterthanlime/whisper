@@ -1675,6 +1675,7 @@ impl BeeMl for BeeMlService {
                 .bucket
                 .as_deref()
                 .filter(|bucket| !bucket.is_empty()),
+            request.randomize,
         )
     }
 
@@ -1684,11 +1685,13 @@ impl BeeMl for BeeMlService {
     ) -> Result<CorpusAlignmentEvalJob, String> {
         let limit = request.limit.max(1);
         let bucket = request.bucket.filter(|bucket| !bucket.is_empty());
-        let job = self.create_corpus_eval_job(limit, bucket.clone())?;
+        let randomize = request.randomize;
+        let job = self.create_corpus_eval_job(limit, bucket.clone(), randomize)?;
         let service = self.clone();
         let job_id = job.job_id;
         tokio::task::spawn_blocking(move || {
-            let result = service.eval_corpus_alignment(limit as usize, bucket.as_deref());
+            let result =
+                service.eval_corpus_alignment(limit as usize, bucket.as_deref(), randomize);
             let _ = service.finish_corpus_eval_job(job_id, result);
         });
         Ok(job)
