@@ -109,10 +109,6 @@ final class BeeIMEBridgeState: NSObject {
 
     private(set) var state: State = .idle
 
-    /// Bundle IDs that had stale bee marked text when we deactivated.
-    /// On next activateServer for a matching bundle, clear the marked text.
-    var pendingCleanupBundles: Set<String> = []
-
     /// The `uniqueClientIdentifierString` of the client where dictation started.
     /// We only deliver `setMarkedText` to this client to prevent leakage when switching apps.
     private var dictationOriginClientID: String?
@@ -149,8 +145,7 @@ final class BeeIMEBridgeState: NSObject {
             session.controller = controller
             return false
         }
-        let bundleID = (controller.client() as? (any IMKTextInput & NSObjectProtocol))?
-            .bundleIdentifier()
+        let bundleID = controller.client()?.bundleIdentifier()
         let session = BeeIMESession(
             controller: controller, pid: pid, clientID: clientID, bundleID: bundleID)
         state = .active(session, pendingText: nil)
@@ -194,7 +189,7 @@ final class BeeIMEBridgeState: NSObject {
         // Capture origin on first setMarkedText of a dictation session
         if dictationOriginClientID == nil {
             dictationOriginClientID = session.clientID
-            dictationOriginClient = session.controller?.client() as? any IMKTextInput
+            dictationOriginClient = session.controller?.client()
             beeInputLog("setMarkedText: captured origin clientID=\(session.clientID ?? "nil")")
         }
 
