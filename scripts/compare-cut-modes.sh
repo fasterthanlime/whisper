@@ -28,7 +28,7 @@ if command -v direnv >/dev/null 2>&1; then
   eval "$(direnv export bash)"
 fi
 
-MODES=("uncut" "qwen3" "zipa")
+MODES=("zipa" "qwen3" "uncut")
 
 echo "WAV: $WAV_PATH"
 echo "OUT: $OUT_DIR"
@@ -38,15 +38,18 @@ for mode in "${MODES[@]}"; do
   log_file="$OUT_DIR/${mode}.log"
   echo "=== Running mode=$mode ==="
 
+  set +e
   (
     export BEE_DISABLE_CORRECTION=1
     export BEE_ROTATION_CUT_MODE="$mode"
     export RUST_LOG="bee_transcribe::session=info,bee_transcribe::decode_session=info"
     cargo run -q -p bee-transcribe --bin transcribe -- "$WAV_PATH"
-  ) >"$log_file" 2>&1 || true
+  ) 2>&1 | tee "$log_file"
+  cmd_status=${PIPESTATUS[0]}
+  set -e
 
   status="ok"
-  if rg -n "panicked at|thread 'main' panicked" "$log_file" >/dev/null 2>&1; then
+  if [[ "$cmd_status" -ne 0 ]] || rg -n "panicked at|thread 'main' panicked" "$log_file" >/dev/null 2>&1; then
     status="panic"
   fi
 
