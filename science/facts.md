@@ -80,3 +80,15 @@ Cleanup did not fire for Codex because the pendingCleanup recorded the wrong bun
 `activateServer` for the new app fires BEFORE `deactivateServer` for the old app. Confirmed with timestamps: Zed's activateServer at 13:56:41.102 precedes Codex's deactivateServer at 13:56:41.121 (19ms later).
 
 **Evidence**: [E-004-cleanup-on-reactivation](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-004-cleanup-on-reactivation.md)
+
+## F-014-cleanup-fires-too-early
+
+Cleanup fires on the first `activateServer` call, but the proxy's `markedRange` is still `{∅}` at that point. The `setMarkedText("")` goes to a proxy that hasn't reconnected to the real client, so it has no effect.
+
+**Evidence**: [E-005-cleanup-with-stored-bundle](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-005-cleanup-with-stored-bundle.md)
+
+## F-015-proxy-reconnects-on-second-activate
+
+The IMK proxy doesn't expose valid markedRange on the first `activateServer` — it shows `{∅}`. A second `activateServer` follows shortly after with the real markedRange. Cleanup must be deferred until the proxy reports a valid markedRange.
+
+**Evidence**: [E-005-cleanup-with-stored-bundle](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-005-cleanup-with-stored-bundle.md)
