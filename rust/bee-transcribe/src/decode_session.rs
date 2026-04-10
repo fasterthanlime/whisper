@@ -25,7 +25,7 @@ use crate::rotation_plan::{RotationTextPlan, plan_rotation};
 use crate::text_buffer::{
     self, AlignmentItem, AsrToken, TextBuffer, TokenCount, TokenEntry, TokenId, WordStart,
 };
-use crate::timing::{log_phase, log_phase_chunk, phase_start};
+use crate::timing::{log_phase_chunk, phase_start};
 use crate::types::{Aligner, RotationCutStrategy};
 use crate::zipa_align::{self, timed_range_for_normalized_range};
 
@@ -33,23 +33,32 @@ use crate::zipa_align::{self, timed_range_for_normalized_range};
 pub struct DecodeSession {
     /// Audio buffer for this sub-session.
     audio: AudioBuffer,
+
     /// When this sub-session starts in the session timeline.
     start_time: Seconds,
+
     /// Encoder cache for incremental encoding.
     encoder_cache: EncoderCache,
+
     /// Mel spectrogram extractor.
     mel_extractor: MelExtractor,
+
     /// Current tokens (metadata + text), merged from prefix + generated.
     tokens: Vec<AsrToken>,
+
     /// Index of the first text token (after `<asr_text>` tag).
     /// Everything before this is metadata.
     metadata_end: usize,
+
     /// How many recent tokens the model may revise each step.
     rollback_tokens: TokenCount,
+
     /// How many chunks have been decoded in this sub-session.
     chunk_count: usize,
+
     /// First index in `tokens` that came from model generation rather than prompt prefix.
     generated_start: usize,
+
     /// Number of text tokens at the start that are context carried forward from
     /// the previous rotation. These have audio at the beginning of `self.audio`
     /// and must not be counted toward the commit threshold.
@@ -270,84 +279,6 @@ impl DecodeSession {
             clear_start,
         );
         log_phase_chunk("decode_step", "total", self.chunk_count, decode_total_start);
-        Ok(())
-    }
-
-    /// Refresh confidence metadata for a text-token range.
-    ///
-    /// `text_start..text_end` are offsets into `self.text_tokens()`. This lets
-    /// callers rescore only the text they are about to commit instead of the
-    /// entire current sub-session.
-    pub fn refresh_text_confidence(
-        &mut self,
-        model: &Qwen3ASRModel,
-        tokenizer: &Tokenizer,
-        language: &str,
-        confidence_mode: ConfidenceMode,
-        text_start: usize,
-        text_end: usize,
-    ) -> Result<(), Exception> {
-        let text_len = self.text_tokens().len();
-        let text_start = text_start.min(text_len);
-        let text_end = text_end.min(text_len);
-        if text_start >= text_end {
-            return Ok(());
-        }
-
-        let refresh_total_start = phase_start();
-        let mel_start = phase_start();
-        let (mel_data, n_mels, n_frames) = self
-            .mel_extractor
-            .extract(self.audio.samples())
-            .map_err(|e| Exception::custom(format!("mel: {e}")))?;
-        log_phase("refresh_confidence", "mel_extract", mel_start);
-        let mel = Array::from_slice(&mel_data, &[n_mels as i32, n_frames as i32]);
-        let encode_start = phase_start();
-        let audio_features = model.encode_incremental(&mel, &mut self.encoder_cache)?;
-        let audio_features = mlx_rs::ops::expand_dims(&audio_features, 0)?;
-        audio_features.eval()?;
-        log_phase("refresh_confidence", "encode_incremental", encode_start);
-
-        let prompt_start = phase_start();
-        let mut prompt = generate::build_initial_prompt(
-            audio_features.shape()[1] as usize,
-            language,
-            "",
-            tokenizer,
-        );
-        prompt.extend(self.text_tokens()[..text_start].iter().map(|t| t.id as i32));
-        log_phase("refresh_confidence", "build_prompt", prompt_start);
-
-        let continuation: Vec<i32> = self.text_tokens()[text_start..text_end]
-            .iter()
-            .map(|t| t.id as i32)
-            .collect();
-        let score_start = phase_start();
-        let confidences = generate::score_continuation(
-            model,
-            &prompt,
-            &audio_features,
-            &continuation,
-            confidence_mode,
-        )?;
-        log_phase("refresh_confidence", "score_continuation", score_start);
-
-        let apply_start = phase_start();
-        let token_start = self.metadata_end + text_start;
-        let token_end = token_start + continuation.len();
-        for (token, confidence) in self.tokens[token_start..token_end]
-            .iter_mut()
-            .zip(confidences.into_iter())
-        {
-            token.concentration = confidence.concentration;
-            token.margin = confidence.margin;
-            token.alternative_count = confidence.alternative_count;
-            token.top_ids = confidence.top_ids.map(|id| id as TokenId);
-            token.top_logits = confidence.top_logits;
-        }
-        log_phase("refresh_confidence", "apply_confidence", apply_start);
-        log_phase("refresh_confidence", "total", refresh_total_start);
-
         Ok(())
     }
 

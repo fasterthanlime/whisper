@@ -30,41 +30,73 @@ use crate::{FinishResult, SharedCorrectionEngine};
 struct BufferedCommit {
     raw_text: String,
     words: Vec<AlignedWord>,
+
     /// The aligned token entries, deferred until flush.
     aligned: TextBuffer,
 }
 
 pub struct Session<'a> {
+    /// Session options (various knobs, which alignment strategy to use etc.)
+    options: SessionOptions,
+
+    /// VAD (voice activity detection), DC offset removal, normalization, etc.
+    filters: AudioFilterChain,
+
+    /// ASR model
     model: &'a Qwen3ASRModel,
+
+    /// Tokenizer for Qwen3-ASR
     tokenizer: &'a Tokenizer,
+
+    /// Qwen3 forced aligner
     forced_aligner: Option<&'a ForcedAligner>,
+
+    /// ZIPA audio to IPA model
     zipa: &'a ZipaInference,
 
-    filters: AudioFilterChain,
+    /// G2P model
+    g2p: Option<CachedEspeakG2p>,
+
+    /// Correction state: shared engine + per-session corrector.
+    correction: Option<(SharedCorrectionEngine, Corrector)>,
+
+    /// Current ASR session - gets rotated when it gets too long
     decode: DecodeSession,
+
+    /// Text we've already committed
     committed: TextBuffer,
+
+    /// Text we haven't committed yet (?)
     pending: TextBuffer,
+
+    /// Language detected by Qwen3-ASR ("", "English", "French", etc.)
     detected_language: String,
+
     /// Language locked after the first commit (rotation). In auto-detect mode,
     /// we wait until we have a full committed segment before trusting the
     /// detection — then freeze it so subsequent sub-sessions don't drift.
     locked_language: String,
 
-    /// Correction state: shared engine + per-session corrector.
-    correction: Option<(SharedCorrectionEngine, Corrector)>,
     /// One-commit-late buffer: waiting for right context before correction.
     buffered_commit: Option<BufferedCommit>,
+
     /// Raw words from the chunk before the buffered one (left context).
     prev_raw_words: Vec<AlignedWord>,
 
-    options: SessionOptions,
+    /// No idea.
     incoming: Vec<f32>,
-    chunk_size_samples: usize,
+
+    /// Revision baked into session snapshots, for unclear reasons
     revision: u64,
+
+    /// Audio for the entire session
     session_audio: AudioBuffer,
+
+    /// Optional event listener for cut events.
     cut_sink: Option<CutSink>,
+
+    /// Optional event listener for audio chunks.
     chunk_sink: Option<ChunkSink>,
-    g2p: Option<CachedEspeakG2p>,
 }
 
 impl<'a> Session<'a> {
@@ -80,8 +112,6 @@ impl<'a> Session<'a> {
         chunk_sink: Option<ChunkSink>,
         g2p: Option<CachedEspeakG2p>,
     ) -> Self {
-        let chunk_size_samples = (options.chunk_duration * 16000.0) as usize;
-        assert!(chunk_size_samples > 0, "chunk_duration too small");
         Self {
             model,
             tokenizer,
@@ -106,13 +136,18 @@ impl<'a> Session<'a> {
             prev_raw_words: Vec::new(),
             options,
             incoming: Vec::new(),
-            chunk_size_samples,
             revision: 0,
             session_audio: AudioBuffer::empty(SampleRate::HZ_16000),
             cut_sink,
             chunk_sink,
             g2p,
         }
+    }
+
+    fn chunk_size_samples(&self) -> usize {
+        let chunk_size_samples = (self.options.chunk_duration * 16000.0) as usize;
+        assert!(chunk_size_samples > 0, "chunk_duration too small");
+        chunk_size_samples
     }
 
     /// Access the current pending token entries (for inspecting alternatives).
@@ -130,13 +165,14 @@ impl<'a> Session<'a> {
         self.incoming.extend_from_slice(samples);
         tracing::trace!(
             incoming_len = self.incoming.len(),
-            chunk_size = self.chunk_size_samples,
+            chunk_size = self.chunk_size_samples(),
             "feed: buffering audio"
         );
 
         let mut did_decode = false;
-        while self.incoming.len() >= self.chunk_size_samples {
-            let chunk_samples: Vec<f32> = self.incoming.drain(..self.chunk_size_samples).collect();
+        while self.incoming.len() >= self.chunk_size_samples() {
+            let chunk_samples: Vec<f32> =
+                self.incoming.drain(..self.chunk_size_samples()).collect();
             let chunk = AudioBuffer::new(chunk_samples, SampleRate::HZ_16000);
             let raw_for_sink = self.chunk_sink.is_some().then(|| chunk.clone());
 
@@ -421,28 +457,6 @@ impl<'a> Session<'a> {
                 rotation_cut_strategy = ?self.options.rotation_cut_strategy,
                 "rotating: committing tokens and starting fresh decode"
             );
-            let commit_n = self
-                .decode
-                .committable_text_tokens(self.tokenizer, requested_commit_tokens);
-            if commit_n.0 > 0 {
-                let refresh_start_idx = self.decode.context_token_count();
-                let refresh_end_idx = refresh_start_idx + commit_n.0;
-                let refresh_start = phase_start();
-                self.decode.refresh_text_confidence(
-                    self.model,
-                    self.tokenizer,
-                    &language,
-                    ConfidenceMode::Full,
-                    refresh_start_idx,
-                    refresh_end_idx,
-                )?;
-                log_phase_chunk(
-                    "decode_and_maybe_commit",
-                    "refresh_text_confidence",
-                    chunk_index,
-                    refresh_start,
-                );
-            }
             let commit_start = phase_start();
             if let Some((aligned, committed_audio, remaining_audio)) = self.decode.commit(
                 requested_commit_tokens,
