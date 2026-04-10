@@ -62,3 +62,21 @@ Codex reports `markedRange={3, 2}` with `markedText="ba"` on reactivation — bu
 Zed fires two `activateServer` calls on return: first showing the emoji in markedText, then showing underlying document text. Zed's text engine processes reactivation in two phases.
 
 **Evidence**: [E-003-reactivation-state](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-003-reactivation-state.md)
+
+## F-011-cleanup-works-for-normal-apps
+
+`setMarkedText("")` on reactivation successfully clears leftover marked text in Messages. Visually confirmed by user.
+
+**Evidence**: [E-004-cleanup-on-reactivation](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-004-cleanup-on-reactivation.md)
+
+## F-012-cleanup-missed-codex-due-to-ordering
+
+Cleanup did not fire for Codex because the pendingCleanup recorded the wrong bundle ID (`dev.zed.Zed` instead of `com.openai.codex`). Root cause: `deactivate` reads the client's bundle from the controller, but by that time the controller's client already points at the new app (due to F-013).
+
+**Evidence**: [E-004-cleanup-on-reactivation](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-004-cleanup-on-reactivation.md)
+
+## F-013-activate-before-deactivate-ordering
+
+`activateServer` for the new app fires BEFORE `deactivateServer` for the old app. Confirmed with timestamps: Zed's activateServer at 13:56:41.102 precedes Codex's deactivateServer at 13:56:41.121 (19ms later).
+
+**Evidence**: [E-004-cleanup-on-reactivation](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-004-cleanup-on-reactivation.md)
