@@ -242,9 +242,53 @@ The old strategy of replaying a small fixed text prefix may become unnecessary i
 
 That does not mean it can never help as a fine tuning measure. It does mean it is no longer the central mechanism.
 
+## Prompt Structure in the Current Qwen3-ASR Usage
+
+After the initial discussion, the `bee-qwen3-asr` crate was inspected to understand how the model is actually being driven at inference time.
+
+The key finding is that the current setup is more literal than a generic "ongoing ASR state with some prompt scaffolding" abstraction. It uses a chat-style prompt with distinct initial and follow-up forms.
+
+The initial prompt establishes the frame:
+
+- `system` turn
+- optional textual context
+- `user` turn containing audio placeholders
+- `assistant` turn header
+- optional `language ... <asr_text>` prefix
+
+The follow-up prompt does something materially different:
+
+- closes the previous assistant turn
+- opens a new `user` turn
+- inserts a new audio placeholder span
+- opens a new `assistant` turn
+- reintroduces the optional `language ... <asr_text>` prefix
+
+This means the model is not merely being asked to continue one ongoing transcript. It is being asked to answer a sequence of chat-like turns, each of which contains an audio payload.
+
+That is important because it creates a potential mismatch with the intended rollback strategy. The desired product behavior is:
+
+- one evolving transcript
+- stable prefix
+- revisable suffix
+- local rewrites near the live edge
+
+The prompt framing, however, may be telling the model something closer to:
+
+- previous assistant answer is finished
+- new user message has arrived
+- produce another assistant answer
+
+Those semantics are not necessarily compatible.
+
+In particular, the follow-up prompt may bias the model toward append-style or chunk-segmented behavior rather than revision of one ongoing utterance. It may still work acceptably in practice, but that can no longer be assumed from first principles.
+
 ## What Still Appears Open
 
-At this stage, the main open question is not whether rollback is a sensible idea. It is what state can actually be reused safely and efficiently.
+At this stage, the main open questions are twofold:
+
+- what state can actually be reused safely and efficiently
+- whether the current prompt structure is semantically appropriate for rollback-style ASR
 
 ### 1. Text-side KV reuse
 
@@ -293,9 +337,71 @@ The current view is that explicit replay of a small fixed prefix is probably not
 
 This feels like a tuning question rather than a first-principles blocker, but it is still open.
 
+### 6. Whether the follow-up prompt is the right semantic unit at all
+
+The current follow-up prompt is not just "more audio for the same answer." It explicitly closes the previous assistant turn and opens a fresh user/assistant exchange.
+
+That raises a direct ASR question:
+
+- does the model treat this as continuation of one utterance
+- or as a sequence of separate chunk-local answers
+
+If it is the latter, then rollback of a live transcript tail may fight the prompt semantics rather than work with them.
+
+### 7. Whether rollback must delete chunk-local prompt framing, not just text tokens
+
+If a follow-up chunk is introduced by a new user turn, a new audio placeholder span, and a new assistant header, then the model state for that chunk is not just "generated transcript tokens."
+
+It may be necessary to roll back entire chunk-local prompt segments together with the generated text they produced. Otherwise the cache may preserve conversational structure that says "this answer already happened" even while the algorithm is trying to revise it.
+
+This is a more precise version of the earlier cache-topology question:
+
+- what transcript tokens can be discarded
+- what prompt tokens must be discarded with them
+- what prompt/audio state can safely remain
+
+### 8. Whether repeated follow-up prompting biases the model toward append-only behavior
+
+The chat-style serialization may naturally encourage:
+
+- additive continuation
+- chunk boundary duplication
+- re-answering behavior
+- weaker willingness to revise old text
+
+This is not a proof that it fails. It is a plausible behavioral bias that should now be treated as an explicit hypothesis.
+
+### 9. Whether the `language ... <asr_text>` prefix should be repeated on every follow-up
+
+The current prompt shape reintroduces the language/header prefix after each follow-up audio block.
+
+That may help keep the model on task. It may also reinforce the idea that each chunk is a fresh assistant answer rather than a continuation of one transcript. It is not obvious from theory alone whether this is helpful or harmful for rollback-based streaming.
+
+### 10. Whether there is a better prompt formulation for "one ongoing answer"
+
+The model may behave very differently under:
+
+- a multi-turn chat interpretation of streaming ASR
+- a single evolving assistant answer with fresh audio conditioning
+
+The existing initial/follow-up split supports the former. The product goal sounds closer to the latter. It is still open whether the current prompt scheme should be preserved, adapted, or replaced.
+
+### 11. What the model actually does is now an empirical question
+
+At this point, several important questions can no longer be settled by inspection alone.
+
+In particular, experiments are needed to answer:
+
+- whether follow-up prompts mainly append, revise, or re-answer
+- whether rollback can work while preserving existing follow-up framing
+- whether rollback must remove the entire most recent follow-up prompt segment
+- whether a different prompt shape produces cleaner suffix revision behavior
+
+This is not a failure of analysis. It is the point where model behavior has to be measured rather than inferred from helper function names.
+
 ## Overall Assessment So Far
 
-From the discussion alone, the direction looks technically interesting and internally coherent.
+From the discussion and the prompt inspection so far, the direction still looks technically interesting, but the confidence is now more conditional.
 
 The strongest case in its favor is that it lines up with the actual product goal:
 
@@ -312,21 +418,26 @@ The second strongest point in its favor is that the project already has unusuall
 
 That means rollback can be grounded in phonetic and temporal structure instead of raw token-count heuristics.
 
-The main thing still unanswered is not whether rollback is a valid product strategy. It is how far persistent cache reuse can be pushed in the actual model pipeline without violating the model's conditioning semantics.
+The main things still unanswered are:
+
+- how far persistent cache reuse can be pushed in the actual model pipeline without violating conditioning semantics
+- whether the current initial/follow-up prompt scheme is compatible with rollback as opposed to simple append-style streaming
 
 Put differently:
 
 - the transcript-side policy is mostly taking shape
 - the open systems question is cache topology
+- the open model-behavior question is prompt semantics
 
 ## Next Question
 
-The next step should be to reason carefully about the exact kinds of state involved during decoding and which of them are candidates for reuse under a rollback regime.
+The next step should be to reason carefully about the exact kinds of state involved during decoding and which of them are candidates for reuse under a rollback regime, while keeping in mind that prompt structure may force rollback to operate on larger units than just emitted transcript tokens.
 
 The key split to analyze is:
 
 - text-side autoregressive KV
 - audio-side encoded or attended state
+- prompt-local chat framing and audio placeholder segments
 - how those interact at the rollback boundary
 
 That is the technical center of gravity for the next phase of the discussion.
