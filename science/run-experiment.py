@@ -279,7 +279,7 @@ def cmd_run(args):
     meta["results"] = app_results
     meta_path.write_text(json.dumps(meta, indent=2) + "\n")
 
-    print(f"  [ok] Updated {experiment_path.relative_to(REPO_ROOT)}")
+    print(f"  [ok] Updated {experiment_path.relative_to(EXPERIMENTS_REPO)}")
     print(f"\n  Done. Fill in conclusions, then update science/facts.md.\n")
 
 
