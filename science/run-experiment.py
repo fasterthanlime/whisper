@@ -177,13 +177,13 @@ def cmd_run(args):
     apps = meta["apps"]
     procedure = meta["procedure"]
 
-    # Verify we're on the right commit
+    # Record the actual commit we're running at
     current_sha = git_sha()
+    current_sha_full = git_sha_full()
     if current_sha != meta["sha"]:
-        print(f"  WARNING: Current commit ({current_sha}) differs from experiment commit ({meta['sha']})")
-        resp = input("  Continue anyway? [y/N] ").strip().lower()
-        if resp != "y":
-            sys.exit(1)
+        print(f"  Note: Running at {current_sha} (prepared at {meta['sha']})")
+    meta["run_sha"] = current_sha
+    meta["run_sha_full"] = current_sha_full
 
     print(f"\n  Running: {experiment_id}")
     print(f"  Description: {meta['description']}")
