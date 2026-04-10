@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rotation Model</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #ffffff;
+      --fg: #111111;
+      --muted: #666666;
+      --border: #d0d0d0;
+      --panel: #f7f7f7;
+      --commit: #c9f2d3;
+      --prefix: #fde7b2;
+      --rollback: #f8caca;
+      --stable: #dbeafe;
+      --candidate: #e9d5ff;
+      --gap: #ececec;
+      --arrow: #444444;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111111;
+        --fg: #f5f5f5;
+        --muted: #b3b3b3;
+        --border: #3f3f46;
+        --panel: #18181b;
+        --commit: #1f5f38;
+        --prefix: #6b4e16;
+        --rollback: #6b2222;
+        --stable: #1d3b63;
+        --candidate: #4c1d95;
+        --gap: #2a2a2a;
+        --arrow: #d4d4d8;
+      }
+    }
+
+    body {
+      margin: 32px;
+      background: var(--bg);
+      color: var(--fg);
+      font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    h1, h2 {
+      font-size: 20px;
+      margin: 0 0 12px;
+    }
+
+    p {
+      margin: 0 0 16px;
+      color: var(--muted);
+      max-width: 980px;
+    }
+
+    .panel {
+      margin: 0 0 28px;
+      padding: 18px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 12px;
+      width: fit-content;
+    }
+
+    .legend {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .swatch {
+      width: 18px;
+      height: 18px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+    }
+
+    ul {
+      margin: 12px 0 0 20px;
+      color: var(--muted);
+      max-width: 980px;
+    }
+
+    .code-map {
+      margin: 18px 0 0;
+      padding: 14px 16px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--panel) 88%, transparent);
+      max-width: 980px;
+    }
+
+    .code-map h3 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+
+    .code-map ul {
+      margin-top: 8px;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: var(--fg);
+    }
+  </style>
+</head>
+<body>
+  <h1>Rotation Model</h1>
+  <p>
+    Shared model for how the decoded token stream is partitioned at session rotation time.
+    The goal is to agree on the spans and what each span is used for.
+  </p>
+
+  <h2>Final Partition</h2>
+  <div class="panel">
+    <svg width="980" height="250" viewBox="0 0 980 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Rotation partition diagram">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Full decoded token stream at rotation time</text>
+
+      <rect x="40" y="60" width="560" height="56" rx="8" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="600" y="60" width="200" height="56" rx="8" fill="var(--prefix)" stroke="var(--border)" />
+      <rect x="800" y="60" width="140" height="56" rx="8" fill="var(--rollback)" stroke="var(--border)" />
+
+      <text x="320" y="94" text-anchor="middle" fill="currentColor" font-size="16" font-weight="600">COMMITTABLE</text>
+      <text x="700" y="86" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">KEEP AS</text>
+      <text x="700" y="104" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">NEXT PREFIX</text>
+      <text x="870" y="94" text-anchor="middle" fill="currentColor" font-size="16" font-weight="600">ROLLBACK</text>
+
+      <line x1="40" y1="132" x2="40" y2="170" stroke="var(--arrow)" stroke-width="1.5" />
+      <line x1="600" y1="132" x2="600" y2="170" stroke="var(--arrow)" stroke-width="1.5" />
+      <line x1="800" y1="132" x2="800" y2="170" stroke="var(--arrow)" stroke-width="1.5" />
+      <line x1="940" y1="132" x2="940" y2="170" stroke="var(--arrow)" stroke-width="1.5" />
+
+      <text x="40" y="190" text-anchor="middle" fill="currentColor" font-size="14">start</text>
+      <text x="600" y="190" text-anchor="middle" fill="currentColor" font-size="14">cut A</text>
+      <text x="800" y="190" text-anchor="middle" fill="currentColor" font-size="14">cut B</text>
+      <text x="940" y="190" text-anchor="middle" fill="currentColor" font-size="14">end</text>
+
+      <text x="40" y="226" fill="currentColor" font-size="14">T = [ C ][ P ][ R ]</text>
+      <text x="190" y="226" fill="currentColor" font-size="14">C = commit now</text>
+      <text x="390" y="226" fill="currentColor" font-size="14">P = keep as next prefix/context</text>
+      <text x="690" y="226" fill="currentColor" font-size="14">R = unstable rollback tail</text>
+    </svg>
+
+    <div class="legend">
+      <div class="legend-item"><span class="swatch" style="background: var(--commit)"></span> committed this rotation</div>
+      <div class="legend-item"><span class="swatch" style="background: var(--prefix)"></span> stable, but carried into next sub-session</div>
+      <div class="legend-item"><span class="swatch" style="background: var(--rollback)"></span> unstable and still revisable</div>
+    </div>
+  </div>
+  <div class="code-map">
+    <h3>Code Map</h3>
+    <ul>
+      <li>crate <code>bee-transcribe</code> owns the rotation/session model</li>
+      <li><code>rust/bee-transcribe/src/types.rs</code>: <code>SessionOptions</code>, <code>RotationCutStrategy</code>, <code>Aligner</code>, <code>CutEvent</code></li>
+      <li><code>rust/bee-transcribe/src/session.rs</code>: <code>Session</code>, <code>decode_and_maybe_commit()</code>, <code>effective_rollback()</code>, <code>effective_commit_threshold()</code>, <code>requested_commit_tokens()</code></li>
+      <li><code>rust/bee-transcribe/src/decode_session.rs</code>: <code>DecodeSession</code>, <code>text_tokens()</code>, <code>pending_entries()</code>, <code>committable_text_tokens()</code>, <code>commit()</code></li>
+      <li><code>rust/bee-transcribe/src/text_buffer.rs</code>: <code>TextBuffer</code>, <code>snap_to_word_boundary()</code>, <code>align()</code>, <code>AlignmentItem</code></li>
+      <li><code>rust/bee-transcribe/src/audio_buffer.rs</code>: <code>AudioBuffer::split_at()</code></li>
+    </ul>
+  </div>
+
+  <h2>Step By Step</h2>
+  <div class="panel">
+    <svg width="980" height="360" viewBox="0 0 980 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Step by step rotation cuts">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">1. Current decoded tokens</text>
+      <rect x="40" y="42" width="900" height="44" rx="8" fill="var(--stable)" stroke="var(--border)" />
+      <text x="490" y="69" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">ALL TOKENS</text>
+
+      <text x="0" y="126" fill="currentColor" font-size="16" font-weight="600">2. Remove unstable rollback tail</text>
+      <rect x="40" y="144" width="760" height="44" rx="8" fill="var(--stable)" stroke="var(--border)" />
+      <rect x="800" y="144" width="140" height="44" rx="8" fill="var(--rollback)" stroke="var(--border)" />
+      <text x="420" y="171" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">STABLE</text>
+      <text x="870" y="171" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">ROLLBACK</text>
+
+      <text x="0" y="228" fill="currentColor" font-size="16" font-weight="600">3. Reserve stable prefix for the next session</text>
+      <rect x="40" y="246" width="560" height="44" rx="8" fill="var(--candidate)" stroke="var(--border)" />
+      <rect x="600" y="246" width="200" height="44" rx="8" fill="var(--prefix)" stroke="var(--border)" />
+      <rect x="800" y="246" width="140" height="44" rx="8" fill="var(--rollback)" stroke="var(--border)" />
+      <text x="320" y="273" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">COMMIT CANDIDATE</text>
+      <text x="700" y="273" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">NEXT PREFIX</text>
+      <text x="870" y="273" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">ROLLBACK</text>
+
+      <text x="0" y="330" fill="currentColor" font-size="16" font-weight="600">4. Snap commit backward to a preferred boundary</text>
+      <line x1="558" y1="314" x2="526" y2="300" stroke="var(--arrow)" stroke-width="2" />
+      <polygon points="526,300 534,300 530,292" fill="var(--arrow)" />
+    </svg>
+
+    <svg width="980" height="110" viewBox="0 0 980 110" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Snapped commit boundary">
+      <rect x="40" y="18" width="500" height="44" rx="8" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="540" y="18" width="60" height="44" rx="8" fill="var(--gap)" stroke="var(--border)" />
+      <rect x="600" y="18" width="200" height="44" rx="8" fill="var(--prefix)" stroke="var(--border)" />
+      <rect x="800" y="18" width="140" height="44" rx="8" fill="var(--rollback)" stroke="var(--border)" />
+
+      <text x="290" y="45" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">ACTUALLY COMMIT</text>
+      <text x="570" y="37" text-anchor="middle" fill="currentColor" font-size="12" font-weight="600">TRIMMED</text>
+      <text x="570" y="52" text-anchor="middle" fill="currentColor" font-size="12" font-weight="600">BACK</text>
+      <text x="700" y="45" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">NEXT PREFIX</text>
+      <text x="870" y="45" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">ROLLBACK</text>
+
+      <line x1="540" y1="68" x2="540" y2="98" stroke="var(--arrow)" stroke-width="1.5" />
+      <text x="540" y="106" text-anchor="middle" fill="currentColor" font-size="13">preferred boundary: sentence / clause / word</text>
+    </svg>
+  </div>
+  <div class="code-map">
+    <h3>Current Cut Logic in Code</h3>
+    <ul>
+      <li><code>Session::decode_and_maybe_commit()</code> in <code>rust/bee-transcribe/src/session.rs</code> decides when rotation should happen</li>
+      <li><code>DecodeSession::commit()</code> in <code>rust/bee-transcribe/src/decode_session.rs</code> computes the cut, runs alignment, and returns committed vs remaining audio</li>
+      <li><code>TextBuffer::snap_to_word_boundary()</code> in <code>rust/bee-transcribe/src/text_buffer.rs</code> is the current text-side boundary snap</li>
+      <li><code>DecodeSession::context_token_count()</code> in <code>rust/bee-transcribe/src/decode_session.rs</code> tracks how much stable prefix is carried forward</li>
+      <li><code>SessionOptions.rollback_tokens</code> in <code>rust/bee-transcribe/src/types.rs</code> controls the revisable tail</li>
+    </ul>
+  </div>
+
+  <h2>Interpretation</h2>
+  <ul>
+    <li><code>ROLLBACK</code> is the unstable tail and stays revisable.</li>
+    <li><code>KEEP AS NEXT PREFIX</code> is stable text retained for continuity in the next sub-session.</li>
+    <li><code>COMMITTABLE</code> is the stable text eligible for finalization in the current rotation.</li>
+    <li>The final text cut is the boundary between committed text and carried-forward text, after snapping backward to a preferred textual boundary.</li>
+  </ul>
+
+  <h2>Alignment First</h2>
+  <p>
+    Proposed model: align the full current Qwen transcript against the full current audio once,
+    derive timing for the whole stream, then apply the <code>[C][P][R]</code> partition on top of that timing.
+  </p>
+  <div class="panel">
+    <svg width="980" height="420" viewBox="0 0 980 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Full alignment then cut">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Inputs are the full current state, not a checkpointed prefix</text>
+
+      <rect x="40" y="48" width="900" height="48" rx="10" fill="var(--stable)" stroke="var(--border)" />
+      <text x="490" y="77" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">FULL CURRENT AUDIO</text>
+
+      <rect x="40" y="118" width="900" height="48" rx="10" fill="var(--candidate)" stroke="var(--border)" />
+      <text x="490" y="147" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">FULL CURRENT QWEN TRANSCRIPT / TOKENS</text>
+
+      <line x1="490" y1="166" x2="490" y2="208" stroke="var(--arrow)" stroke-width="2.5" />
+      <polygon points="490,220 482,206 498,206" fill="var(--arrow)" />
+
+      <rect x="250" y="220" width="480" height="64" rx="12" fill="var(--panel)" stroke="var(--border)" />
+      <text x="490" y="246" text-anchor="middle" fill="currentColor" font-size="16" font-weight="600">Alignment pipeline</text>
+      <text x="490" y="268" text-anchor="middle" fill="currentColor" font-size="14">ZIPA on full audio + G2P on full transcript + DP reconciliation</text>
+
+      <line x1="490" y1="284" x2="490" y2="314" stroke="var(--arrow)" stroke-width="2.5" />
+      <polygon points="490,326 482,312 498,312" fill="var(--arrow)" />
+
+      <rect x="200" y="326" width="580" height="54" rx="10" fill="var(--panel)" stroke="var(--border)" />
+      <text x="490" y="347" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">Derived timing model</text>
+      <text x="490" y="368" text-anchor="middle" fill="currentColor" font-size="14">phone timing → token timing → word timing</text>
+    </svg>
+
+    <svg width="980" height="250" viewBox="0 0 980 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Partition after alignment">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Only after timing exists do we cut the stream</text>
+
+      <rect x="40" y="56" width="560" height="52" rx="8" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="600" y="56" width="200" height="52" rx="8" fill="var(--prefix)" stroke="var(--border)" />
+      <rect x="800" y="56" width="140" height="52" rx="8" fill="var(--rollback)" stroke="var(--border)" />
+
+      <text x="320" y="87" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">COMMIT</text>
+      <text x="700" y="87" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">NEXT PREFIX</text>
+      <text x="870" y="87" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">ROLLBACK</text>
+
+      <line x1="600" y1="116" x2="600" y2="152" stroke="var(--arrow)" stroke-width="1.5" />
+      <line x1="800" y1="116" x2="800" y2="152" stroke="var(--arrow)" stroke-width="1.5" />
+      <text x="600" y="172" text-anchor="middle" fill="currentColor" font-size="14">cut A in text and audio</text>
+      <text x="800" y="172" text-anchor="middle" fill="currentColor" font-size="14">cut B in text and audio</text>
+
+      <text x="40" y="212" fill="currentColor" font-size="14">Process:</text>
+      <text x="110" y="212" fill="currentColor" font-size="14">drop rollback tail, reserve next-prefix span, then snap commit backward to preferred boundary</text>
+    </svg>
+  </div>
+  <div class="code-map">
+    <h3>Alignment-First Implementation Surface</h3>
+    <ul>
+      <li>full transcript comes from <code>DecodeSession::text_tokens()</code> in <code>rust/bee-transcribe/src/decode_session.rs</code></li>
+      <li>Qwen decoding and confidence refresh live in <code>DecodeSession</code> in <code>rust/bee-transcribe/src/decode_session.rs</code></li>
+      <li>the aligner choice is configured by <code>Aligner</code> in <code>rust/bee-transcribe/src/types.rs</code></li>
+      <li>current code routes ZIPA alignment through <code>zipa_word_alignments()</code> in <code>rust/bee-transcribe/src/decode_session.rs</code></li>
+      <li>current code routes Qwen timing through <code>ForcedAligner</code> from external crate <code>bee_qwen3_asr</code>, loaded in <code>rust/bee-transcribe/src/lib.rs</code></li>
+    </ul>
+  </div>
+
+  <h2>Phone Alignment Mapping</h2>
+  <p>
+    The transcript side already carries structure. Qwen gives text and tokenization; G2P expands that text into phones;
+    ZIPA gives phones from audio with timing. Dynamic programming aligns phone-to-phone, and that alignment can then be
+    lifted back to token spans and word spans because the transcript-side hierarchy is already known.
+  </p>
+  <div class="panel">
+    <svg width="980" height="420" viewBox="0 0 980 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Transcript phones aligned to audio phones">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Transcript side</text>
+      <rect x="40" y="46" width="420" height="46" rx="8" fill="var(--candidate)" stroke="var(--border)" />
+      <text x="250" y="74" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">GRAPHEMES / FULL TRANSCRIPT</text>
+
+      <line x1="250" y1="92" x2="250" y2="124" stroke="var(--arrow)" stroke-width="2" />
+      <polygon points="250,136 242,122 258,122" fill="var(--arrow)" />
+      <text x="272" y="117" fill="currentColor" font-size="13">G2P</text>
+
+      <rect x="40" y="136" width="420" height="54" rx="8" fill="var(--prefix)" stroke="var(--border)" />
+      <text x="250" y="160" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">PHONEMES FROM TRANSCRIPT</text>
+      <text x="250" y="179" text-anchor="middle" fill="currentColor" font-size="13">with known word → token → phone ownership</text>
+
+      <text x="520" y="24" fill="currentColor" font-size="16" font-weight="600">Audio side</text>
+      <rect x="520" y="46" width="420" height="46" rx="8" fill="var(--stable)" stroke="var(--border)" />
+      <text x="730" y="74" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">FULL CURRENT AUDIO</text>
+
+      <line x1="730" y1="92" x2="730" y2="124" stroke="var(--arrow)" stroke-width="2" />
+      <polygon points="730,136 722,122 738,122" fill="var(--arrow)" />
+      <text x="748" y="117" fill="currentColor" font-size="13">ZIPA</text>
+
+      <rect x="520" y="136" width="420" height="54" rx="8" fill="var(--stable)" stroke="var(--border)" />
+      <text x="730" y="160" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">PHONES FROM AUDIO</text>
+      <text x="730" y="179" text-anchor="middle" fill="currentColor" font-size="13">with phone timing from the acoustic model</text>
+
+      <line x1="460" y1="220" x2="520" y2="220" stroke="var(--arrow)" stroke-width="2.5" />
+      <polygon points="520,220 506,212 506,228" fill="var(--arrow)" />
+      <text x="490" y="210" text-anchor="middle" fill="currentColor" font-size="13">normalize phone notation</text>
+
+      <rect x="210" y="250" width="560" height="64" rx="12" fill="var(--panel)" stroke="var(--border)" />
+      <text x="490" y="276" text-anchor="middle" fill="currentColor" font-size="16" font-weight="600">Dynamic programming alignment</text>
+      <text x="490" y="298" text-anchor="middle" fill="currentColor" font-size="14">transcript-side phones ↔ audio-side phones</text>
+
+      <line x1="490" y1="314" x2="490" y2="344" stroke="var(--arrow)" stroke-width="2.5" />
+      <polygon points="490,356 482,342 498,342" fill="var(--arrow)" />
+
+      <rect x="80" y="356" width="260" height="44" rx="8" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="360" y="356" width="260" height="44" rx="8" fill="var(--prefix)" stroke="var(--border)" />
+      <rect x="640" y="356" width="260" height="44" rx="8" fill="var(--rollback)" stroke="var(--border)" />
+      <text x="210" y="383" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">WORD TIMING</text>
+      <text x="490" y="383" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">TOKEN TIMING</text>
+      <text x="770" y="383" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">TEXT/AUDIO CUTS</text>
+    </svg>
+  </div>
+  <div class="code-map">
+    <h3>Phone / G2P / Alignment Code Map</h3>
+    <ul>
+      <li>crate <code>bee-correct</code>: <code>CachedEspeakG2p</code> in <code>rust/bee-correct/src/g2p.rs</code></li>
+      <li>crate <code>bee-transcribe</code> re-exports G2P in <code>rust/bee-transcribe/src/g2p.rs</code></li>
+      <li>crate <code>bee-transcribe</code>: current ZIPA path is <code>zipa_word_alignments()</code> in <code>rust/bee-transcribe/src/decode_session.rs</code></li>
+      <li>crate <code>bee-zipa-mlx</code>: ZIPA acoustic inference implementation lives under <code>rust/bee-zipa-mlx/src/</code></li>
+      <li><code>TextBuffer::align()</code> plus <code>AlignmentItem</code> in <code>rust/bee-transcribe/src/text_buffer.rs</code> attach timing back onto text entries</li>
+      <li>the current checkpoint-based selector is <code>DecodeSession::select_rotation_checkpoint()</code> in <code>rust/bee-transcribe/src/decode_session.rs</code></li>
+    </ul>
+  </div>
+</body>
+</html>
