@@ -68,3 +68,8 @@ profile.json.gz
 !swift/bee/Sounds/*.wav
 .tmp
 .handoffs
+
+# SourceKit / xcode-build-server generated metadata
+.compile
+compile_commands.json
+buildServer.json
