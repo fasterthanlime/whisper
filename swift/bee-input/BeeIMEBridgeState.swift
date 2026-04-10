@@ -11,20 +11,52 @@ final class BeeIMESession {
     let pid: pid_t?
     let clientID: String?
 
-    /// The last client we successfully set marked text on.
-    /// Stashed because by the time deactivateServer runs, controller.client() is already swapped.
-    var lastUsedClient: (any IMKTextInput & NSObjectProtocol)?
-
-    /// The input context captured at activate time, for discardMarkedText() on context switch.
-    weak var inputContext: NSTextInputContext?
-
     var currentMarkedText: String = ""
     var lastCommittedText: String = ""
+
+    private static let heartbeatEmojis = ["🍎", "🍊", "🍋", "🍇", "🍓", "🫐", "🍑", "🍒", "🥝", "🍍"]
+    private var heartbeatTimer: Timer?
+    private var heartbeatIndex: Int = 0
 
     init(controller: BeeInputController, pid: pid_t?, clientID: String?) {
         self.controller = controller
         self.pid = pid
         self.clientID = clientID
+    }
+
+    func startHeartbeat() {
+        stopHeartbeat()
+        heartbeatIndex = 0
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.heartbeatTick()
+            }
+        }
+        heartbeatTick() // fire immediately
+    }
+
+    func stopHeartbeat() {
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = nil
+    }
+
+    private func heartbeatTick() {
+        guard let client = controller?.client() else {
+            beeInputLog("heartbeat: no client")
+            return
+        }
+        let emoji = Self.heartbeatEmojis[heartbeatIndex % Self.heartbeatEmojis.count]
+        heartbeatIndex += 1
+
+        let attributed = NSAttributedString(
+            string: emoji,
+            attributes: [.markedClauseSegment: 0])
+        client.setMarkedText(
+            attributed,
+            selectionRange: NSRange(location: emoji.utf16.count, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        beeInputLog("heartbeat: \(emoji) (#\(heartbeatIndex)) clientID=\(clientID ?? "nil") bundle=\(client.bundleIdentifier() ?? "?") markedRange(after)=\(NSStringFromRange(client.markedRange()))")
     }
 
     // MARK: - Text handling
@@ -37,21 +69,17 @@ final class BeeIMESession {
 
         currentMarkedText = text
         beeInputLog(
-            "handleSetMarkedText: pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") len=\(text.utf16.count) markedRange(before)=\(NSStringFromRange(client.markedRange())) selectedRange(before)=\(NSStringFromRange(client.selectedRange())) text=\(text.prefix(80).debugDescription)"
+            "handleSetMarkedText: pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)"
         )
 
         let attributed = NSAttributedString(
             string: text,
             attributes: [.markedClauseSegment: 0])
 
-        lastUsedClient = client
         client.setMarkedText(
             attributed,
             selectionRange: NSRange(location: text.utf16.count, length: 0),
             replacementRange: NSRange(location: NSNotFound, length: 0)
-        )
-        beeInputLog(
-            "handleSetMarkedText: clientID=\(clientID ?? "nil") markedRange(after)=\(NSStringFromRange(client.markedRange())) selectedRange(after)=\(NSStringFromRange(client.selectedRange()))"
         )
     }
 
@@ -71,7 +99,7 @@ final class BeeIMESession {
         }
 
         beeInputLog(
-            "commitText: clientID=\(clientID ?? "nil") submit=\(submit) markedRange(before)=\(NSStringFromRange(client.markedRange())) selectedRange(before)=\(NSStringFromRange(client.selectedRange())) text=\(finalText.prefix(80).debugDescription)"
+            "commitText: clientID=\(clientID ?? "nil") submit=\(submit) text=\(finalText.prefix(80).debugDescription)"
         )
         currentMarkedText = ""
         let textWithSpace = finalText + " "
@@ -79,9 +107,6 @@ final class BeeIMESession {
         client.insertText(
             textWithSpace,
             replacementRange: NSRange(location: NSNotFound, length: 0)
-        )
-        beeInputLog(
-            "commitText: clientID=\(clientID ?? "nil") markedRange(after)=\(NSStringFromRange(client.markedRange())) selectedRange(after)=\(NSStringFromRange(client.selectedRange())) inserted=\(textWithSpace.prefix(80).debugDescription)"
         )
     }
 
@@ -97,7 +122,7 @@ final class BeeIMESession {
         let replaceRange = NSRange(location: replaceStart, length: oldLen)
         let newWithSpace = newText + " "
         beeInputLog(
-            "handleReplaceText: clientID=\(clientID ?? "nil") selectedRange(before)=\(NSStringFromRange(sel)) replaceRange=\(NSStringFromRange(replaceRange)) old=\(oldWithSpace.prefix(60).debugDescription) new=\(newWithSpace.prefix(60).debugDescription)"
+            "handleReplaceText: clientID=\(clientID ?? "nil") old=\(oldWithSpace.prefix(60).debugDescription) new=\(newWithSpace.prefix(60).debugDescription)"
         )
         client.insertText(
             newWithSpace,
@@ -105,7 +130,6 @@ final class BeeIMESession {
         )
         lastCommittedText = newWithSpace
     }
-
 }
 
 // MARK: - Bridge State
@@ -138,68 +162,21 @@ final class BeeIMEBridgeState: NSObject {
         return nil
     }
 
-    func discardMarkedText(on client: AnyObject?, reason: String) {
-        guard let client else {
-            beeInputLog("discardMarkedText[\(reason)]: no client object")
-            return
-        }
-        guard let client = client as? (any IMKTextInput & NSObjectProtocol) else {
-            beeInputLog(
-                "discardMarkedText[\(reason)]: client does not conform to IMKTextInput type=\(String(describing: type(of: client)))"
-            )
-            return
-        }
-
-        let markedRange = client.markedRange()
-        let hasMarked = markedRange.location != NSNotFound && markedRange.length > 0
-
-        // Clear composition by setting an empty marked string and then unmarking.
-        if hasMarked {
-            beeInputLog(
-                "discardMarkedText[\(reason)]: cancel-style clear client=\(String(describing: type(of: client))) markedRange(before)=\(NSStringFromRange(markedRange)) selectedRange(before)=\(NSStringFromRange(client.selectedRange()))"
-            )
-        } else {
-            beeInputLog(
-                "discardMarkedText[\(reason)]: no marked range; clear via empty setMarkedText at caret"
-            )
-        }
-
-        // IMPORTANT: Do not call insertText here — many hosts treat it as a commit.
-        client.setMarkedText(
-            "",
-            selectionRange: NSRange(location: 0, length: 0),
-            replacementRange: NSRange(location: NSNotFound, length: 0)
-        )
-        // Some hosts require an explicit unmark to drop composition state without committing.
-        if client.responds(to: Selector(("unmarkText"))) {
-            (client as AnyObject).perform(Selector(("unmarkText")))
-        }
-        beeInputLog(
-            "discardMarkedText[\(reason)]: markedRange(after)=\(NSStringFromRange(client.markedRange())) selectedRange(after)=\(NSStringFromRange(client.selectedRange()))"
-        )
-    }
-
     // MARK: - State transitions
 
     /// Returns true if this is a fresh activation (not just a controller update).
     @discardableResult
-    func activate(_ controller: BeeInputController, pid: pid_t?, clientID: String?, inputContext: NSTextInputContext?) -> Bool {
+    func activate(_ controller: BeeInputController, pid: pid_t?, clientID: String?) -> Bool {
         if case .active(let session, let pending) = state {
             beeInputLog(
                 "activate: already active, updating controller pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") pendingLen=\(pending?.utf16.count ?? 0)"
             )
-            // Try to clear stale marked text before the controller swap
-            if !session.currentMarkedText.isEmpty, let oldController = session.controller {
-                beeInputLog("activate: cancelComposition on old controller before swap")
-                oldController.cancelComposition()
-            }
             session.controller = controller
-            session.inputContext = inputContext
             return false
         }
         let session = BeeIMESession(controller: controller, pid: pid, clientID: clientID)
-        session.inputContext = inputContext
         state = .active(session, pendingText: nil)
+        session.startHeartbeat()
         beeInputLog(
             "state → active pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil")")
         return true
@@ -207,6 +184,7 @@ final class BeeIMEBridgeState: NSObject {
 
     func deactivate(_ controller: BeeInputController) {
         guard activeController === controller else { return }
+        currentSession?.stopHeartbeat()
         state = .idle
         beeInputLog("state → idle")
     }
@@ -228,9 +206,6 @@ final class BeeIMEBridgeState: NSObject {
             return
         }
         if session.controller != nil {
-            beeInputLog(
-                "setMarkedText: delivering clientID=\(session.clientID ?? "nil") len=\(text.utf16.count)"
-            )
             session.handleSetMarkedText(text)
         } else {
             beeInputLog(
@@ -245,9 +220,6 @@ final class BeeIMEBridgeState: NSObject {
             beeInputLog("commitText: not active, dropping")
             return
         }
-        beeInputLog(
-            "commitText: clientID=\(session.clientID ?? "nil") submit=\(submit) len=\(text.utf16.count)"
-        )
         session.handleCommitText(text, submit: submit)
     }
 
@@ -256,11 +228,8 @@ final class BeeIMEBridgeState: NSObject {
             beeInputLog("cancelInput: not active, dropping")
             return
         }
-        if let client = session.controller?.client() {
-            beeInputLog("cancelInput: discardMarkedText clientID=\(session.clientID ?? "nil")")
-            discardMarkedText(on: client as AnyObject, reason: "cancel")
-        }
         session.currentMarkedText = ""
+        session.handleSetMarkedText("")
         beeInputLog("cancelInput: done")
     }
 
@@ -270,13 +239,5 @@ final class BeeIMEBridgeState: NSObject {
             return
         }
         session.handleReplaceText(oldText: oldText, newText: newText)
-    }
-
-    func didCancelComposition(on controller: BeeInputController) {
-        guard let session = currentSession, session.controller === controller else { return }
-        beeInputLog(
-            "didCancelComposition: clientID=\(session.clientID ?? "nil") clearing currentMarkedText len=\(session.currentMarkedText.utf16.count)"
-        )
-        session.currentMarkedText = ""
     }
 }
