@@ -360,7 +360,19 @@ impl DecodeSession {
             );
             return Ok(None);
         };
-        let plan = prefer_clause_boundary_within_context_window(tokenizer, &entries, plan);
+        let Some(plan) = prefer_clause_boundary_within_context_window(tokenizer, &entries, plan)
+        else {
+            tracing::debug!(
+                requested_tokens = n.0,
+                stable_total_tokens = plan.stable_total_tokens.0,
+                old_context_tokens = plan.old_context_tokens.0,
+                commit_tokens = plan.commit_tokens.0,
+                next_context_tokens = plan.next_context_tokens.0,
+                rollback_tokens = plan.rollback_tokens.0,
+                "commit: waiting for preferred punctuation boundary before alignment"
+            );
+            return Ok(None);
+        };
         log_phase_chunk("commit", "plan_rotation", chunk_index, plan_start);
 
         tracing::debug!(
@@ -837,8 +849,9 @@ fn prefer_clause_boundary_within_context_window(
     tokenizer: &Tokenizer,
     entries: &TextBuffer,
     plan: RotationTextPlan,
-) -> RotationTextPlan {
+) -> Option<RotationTextPlan> {
     const PREFERRED_BOUNDARY_LOOKBACK_TOKENS: usize = 6;
+    const FORCED_WORD_BOUNDARY_FALLBACK_TOKENS: usize = 64;
 
     let stable_fresh_tokens = plan
         .stable_total_tokens
@@ -870,10 +883,18 @@ fn prefer_clause_boundary_within_context_window(
     }
 
     let Some(commit_tokens) = preferred_commit_tokens else {
-        return plan;
+        let force_fallback = stable_fresh_tokens.0 >= FORCED_WORD_BOUNDARY_FALLBACK_TOKENS;
+        tracing::debug!(
+            stable_fresh_tokens = stable_fresh_tokens.0,
+            commit_tokens = plan.commit_tokens.0,
+            next_context_tokens = plan.next_context_tokens.0,
+            force_fallback,
+            "commit: no preferred punctuation boundary in stable text"
+        );
+        return force_fallback.then_some(plan);
     };
     if commit_tokens == plan.commit_tokens {
-        return plan;
+        return Some(plan);
     }
 
     let next_context_tokens = stable_fresh_tokens.saturating_sub(commit_tokens);
@@ -886,11 +907,11 @@ fn prefer_clause_boundary_within_context_window(
         "commit: preferred clause boundary within context window"
     );
 
-    RotationTextPlan {
+    Some(RotationTextPlan {
         commit_tokens,
         next_context_tokens,
         ..plan
-    }
+    })
 }
 
 fn ends_with_clause_punctuation(text: &str) -> bool {
