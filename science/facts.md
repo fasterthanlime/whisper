@@ -63,11 +63,11 @@ Zed fires two `activateServer` calls on return: first showing the emoji in marke
 
 **Evidence**: [E-003-reactivation-state](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-003-reactivation-state.md)
 
-## F-011-cleanup-works-for-normal-apps
+## F-011-cleanup-works-for-normal-apps (UNRELIABLE)
 
-`setMarkedText("")` on reactivation successfully clears leftover marked text in Messages. Visually confirmed by user.
+`setMarkedText("")` on reactivation cleared leftover marked text in Messages in E-004 (user confirmed). However, E-006 with the same approach did NOT clear in Messages. This result is not reliably reproducible — may depend on timing of which `activateServer` call the cleanup fires on.
 
-**Evidence**: [E-004-cleanup-on-reactivation](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-004-cleanup-on-reactivation.md)
+**Evidence**: [E-004-cleanup-on-reactivation](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-004-cleanup-on-reactivation.md), [E-006-deferred-cleanup](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-006-deferred-cleanup.md)
 
 ## F-012-cleanup-missed-codex-due-to-ordering
 
@@ -93,14 +93,14 @@ The IMK proxy doesn't expose valid markedRange on the first `activateServer` —
 
 **Evidence**: [E-005-cleanup-with-stored-bundle](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-005-cleanup-with-stored-bundle.md)
 
-## F-016-cleanup-clears-then-app-overwrites
+## F-016-setMarkedText-empty-does-not-clear
 
-Deferred cleanup successfully clears marked text (proxy reports markedRange going to `{N, 0}`). But the app-side bee session is still running and immediately pushes new `setMarkedText` with current dictation, overwriting the cleanup within milliseconds. Cleanup is invisible to the user.
+`setMarkedText("")` on reactivation does NOT visually clear the marked text in either Messages or Codex, despite the proxy reporting `markedRange` going from `{3, N}` to `{3, 0}`. User confirmed: text unchanged in both apps.
 
 **Evidence**: [E-006-deferred-cleanup](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-006-deferred-cleanup.md)
 
-## F-017-cleanup-requires-app-coordination
+## F-017-proxy-lies-about-cleanup
 
-For cleanup to work, the app side must stop pushing text before the IME attempts cleanup. `imeContextLost` fires on deactivate but the app session continues rendering until it processes the context loss — by which time the cleanup window has passed.
+The IMK proxy reports `markedRange={3, 0}` after `setMarkedText("")`, suggesting the marked range was cleared. This is a lie — the actual text in the client app is unaffected. The proxy's markedRange is not a reliable indicator of the client's actual state.
 
 **Evidence**: [E-006-deferred-cleanup](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-006-deferred-cleanup.md)
