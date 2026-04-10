@@ -26,16 +26,33 @@ final class Bridge: NSObject {
     @discardableResult
     func activate(_ controller: BeeInputController, pid: pid_t?, clientID: String?) -> Bool {
         self.controller = controller
-        self.dictationOriginBundleID = clientID
         let bundleID = controller.client().bundleIdentifier()
+        if dictationOriginBundleID == nil {
+            self.dictationOriginBundleID = clientID
+            beeInputLog(
+                "🟢 ACTIVATE pid=\(pid.map(String.init) ?? "-") client=\(clientID ?? "-") bundle=\(bundleID ?? "-") origin claimed"
+            )
+            return true
+        }
+
         beeInputLog(
-            "🟢 ACTIVATE pid=\(pid.map(String.init) ?? "-") client=\(clientID ?? "-") bundle=\(bundleID ?? "-")"
+            "⏭️ ACTIVATE ignored pid=\(pid.map(String.init) ?? "-") client=\(clientID ?? "-") bundle=\(bundleID ?? "-") existingOrigin=\(dictationOriginBundleID ?? "-")"
         )
-        return true
+        return false
     }
 
-    func deactivate(_ controller: BeeInputController) {
-        beeInputLog("🔴 DEACTIVATE")
+    func deactivate(_ controller: BeeInputController, clientID: String?) {
+        if clientID == dictationOriginBundleID {
+            beeInputLog(
+                "🔴 DEACTIVATE matched client=\(clientID ?? "-") origin=\(dictationOriginBundleID ?? "-") clearing origin"
+            )
+            dictationOriginBundleID = nil
+            return
+        }
+
+        beeInputLog(
+            "🚫 DEACTIVATE ignored client=\(clientID ?? "-") origin=\(dictationOriginBundleID ?? "-")"
+        )
     }
 
     // MARK: - Text routing
@@ -46,7 +63,7 @@ final class Bridge: NSObject {
         // Only deliver to sessions in the original bundle
         if client?.bundleIdentifier() != dictationOriginBundleID {
             beeInputLog(
-                "🚫 BLOCKED setMarkedText — origin=\(client?.bundleIdentifier() ?? "-") current=\(self.dictationOriginBundleID ?? "-")"
+                "🚫 BLOCKED setMarkedText — client=\(client?.bundleIdentifier() ?? "-") origin=\(self.dictationOriginBundleID ?? "-")"
             )
             return
         }
@@ -63,7 +80,7 @@ final class Bridge: NSObject {
         // Only deliver to sessions in the original bundle
         if client?.bundleIdentifier() != dictationOriginBundleID {
             beeInputLog(
-                "🚫 BLOCKED setMarkedText — origin=\(dictationOriginBundleID ?? "-") current=\(self.dictationOriginBundleID ?? "-")"
+                "🚫 BLOCKED commitText — client=\(client?.bundleIdentifier() ?? "-") origin=\(self.dictationOriginBundleID ?? "-")"
             )
             return
         }

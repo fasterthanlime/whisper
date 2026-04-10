@@ -36,16 +36,16 @@ class BeeInputController: IMKInputController {
     }
 
     nonisolated override func deactivateServer(_ sender: Any!) {
-        let senderId = describeClient(sender)
+        let senderID = describeClient(sender)
 
         MainActor.assumeIsolated {
             let bridge = Bridge.shared
 
             beeInputLog(
-                "deactivateServer: senderID=\(senderId) clientID=\(currentClientIdentity())"
+                "deactivateServer: senderID=\(senderID) clientID=\(currentClientIdentity())"
             )
 
-            bridge.deactivate(self)
+            bridge.deactivate(self, clientID: senderID)
             AppClientFactory.shared.imeContextLost(hadMarkedText: false)
         }
         super.deactivateServer(sender)
@@ -62,6 +62,6 @@ nonisolated func describeClient(_ obj: Any!) -> String {
     guard let client = obj as? (any IMKTextInput & NSObjectProtocol) else {
         return "?"
     }
-    let bundleID = client.bundleIdentifier() ?? "?"
-    return "\u{001B}[1;33m\(bundleID)\u{001B}[0m"
+    let bundleID = client.bundleIdentifier() ?? "-"
+    return bundleID
 }
