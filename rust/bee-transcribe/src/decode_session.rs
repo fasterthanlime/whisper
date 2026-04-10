@@ -16,16 +16,12 @@ use bee_zipa_mlx::audio::AudioBuffer as ZipaAudioBuffer;
 use bee_zipa_mlx::infer::ZipaInference;
 use mlx_rs::Array;
 use mlx_rs::error::Exception;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokenizers::Tokenizer;
 
 use crate::audio_buffer::{AudioBuffer, Seconds};
 use crate::g2p::CachedEspeakG2p;
 use crate::mlx_stuff::clear_mlx_cache;
+use crate::rotation_plan::{RotationTextPlan, plan_rotation};
 use crate::text_buffer::{
     self, AlignmentItem, AsrToken, TextBuffer, TokenCount, TokenEntry, TokenId, WordStart,
 };
@@ -54,29 +50,11 @@ pub struct DecodeSession {
     chunk_count: usize,
     /// First index in `tokens` that came from model generation rather than prompt prefix.
     generated_start: usize,
-    /// Decode checkpoints used to estimate a rotation cut without re-discovering
-    /// the full boundary from scratch at commit time.
-    checkpoints: Vec<DecodeCheckpoint>,
     /// Number of text tokens at the start that are context carried forward from
     /// the previous rotation. These have audio at the beginning of `self.audio`
     /// and must not be counted toward the commit threshold.
     context_token_count: usize,
 }
-
-#[derive(Debug, Clone)]
-struct DecodeCheckpoint {
-    audio_len_samples: usize,
-    text_token_ids: Vec<TokenId>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct SelectedCheckpoint {
-    index: usize,
-    audio_len_samples: usize,
-    text_token_count: usize,
-}
-
-const MIN_ROTATION_TAIL_AUDIO: Seconds = Seconds(0.8);
 
 impl DecodeSession {
     /// Create a new decode session.
@@ -91,7 +69,6 @@ impl DecodeSession {
             rollback_tokens,
             chunk_count: 0,
             generated_start: 0,
-            checkpoints: Vec::new(),
             context_token_count: 0,
         }
     }
@@ -180,8 +157,11 @@ impl DecodeSession {
     pub fn committable_text_tokens(&self, tokenizer: &Tokenizer, n: TokenCount) -> TokenCount {
         let all_entries = TextBuffer::from_entries(self.pending_entries(tokenizer));
         let old_ctx = self.context_token_count;
-        let fresh_entries = TextBuffer::from_entries(all_entries.entries()[old_ctx..].to_vec());
-        fresh_entries.snap_to_word_boundary(n)
+        let stable_total = all_entries.len().saturating_sub(self.rollback_tokens);
+        let stable_fresh = stable_total.0.saturating_sub(old_ctx);
+        let fresh_entries =
+            TextBuffer::from_entries(all_entries.entries()[old_ctx..stable_total.0].to_vec());
+        fresh_entries.snap_to_word_boundary(TokenCount(n.0.min(stable_fresh)))
     }
 
     /// Run one decode step: mel extraction, encoding, generation.
@@ -278,10 +258,6 @@ impl DecodeSession {
             self.tokens = merged;
             self.generated_start = prefix_len;
             self.recompute_metadata_boundary();
-            self.checkpoints.push(DecodeCheckpoint {
-                audio_len_samples: self.audio.len(),
-                text_token_ids: self.text_tokens().iter().map(|token| token.id).collect(),
-            });
         }
 
         drop(cache);
@@ -410,12 +386,9 @@ impl DecodeSession {
         entries
     }
 
-    /// Commit up to `n` text tokens. Snaps back to a word boundary, runs
-    /// forced alignment, and splits self: returns an aligned TextBuffer and
-    /// becomes the remainder (leftover audio, fresh cache).
-    ///
-    /// Returns `None` if nothing can be committed (no complete words, empty
-    /// text, alignment failure, etc.).
+    /// Commit a stable prefix of the current decode. The cut is planned from the
+    /// full current text state, then timing is derived by aligning the full
+    /// current transcript against the full current audio.
     pub fn commit(
         &mut self,
         n: TokenCount,
@@ -429,276 +402,110 @@ impl DecodeSession {
     ) -> Result<Option<(TextBuffer, AudioBuffer, AudioBuffer)>, Exception> {
         let commit_total_start = phase_start();
         let chunk_index = self.chunk_count;
-        // Build entries from text tokens, snap to word boundary
-        let boundary_start = phase_start();
-        let Some(selected_checkpoint) =
-            self.select_rotation_checkpoint(tokenizer, n, rotation_cut_strategy)
-        else {
-            tracing::warn!(
-                requested_tokens = n.0,
-                total_text_tokens = self.text_tokens().len(),
-                checkpoints = self.checkpoints.len(),
-                rotation_cut_strategy = ?rotation_cut_strategy,
-                "commit: no compatible token checkpoint for rotation cutoff"
-            );
-            return Ok(None);
-        };
+        let plan_start = phase_start();
 
-        let checkpoint_tokens = TokenCount(selected_checkpoint.text_token_count);
-        let mut entries = TextBuffer::from_entries(self.pending_entries(tokenizer));
-        let safe_n = entries.snap_to_word_boundary(checkpoint_tokens);
-        log_phase_chunk(
-            "commit",
-            "snap_to_word_boundary",
-            chunk_index,
-            boundary_start,
-        );
-        // --- context token accounting ---
-        // `safe_n` covers old context tokens (from previous rotation) + fresh committed tokens.
-        // We need to know how many old context tokens are at the front so we can:
-        //   - exclude them from the returned `aligned` (already in transcript)
-        //   - keep `context_tokens` fresh tokens in the next session (with their audio)
-        let old_ctx = self.context_token_count;
-        let fresh_safe_n = safe_n.0.saturating_sub(old_ctx);
-
-        // How many fresh tokens to keep as context for the next rotation.
-        // Snap to word boundary within the fresh portion.
-        let new_ctx_n = if context_tokens > 0 && fresh_safe_n > context_tokens {
-            let fresh_slice = &entries.entries()[old_ctx..safe_n.0];
-            let fresh_buf = TextBuffer::from_entries(fresh_slice.to_vec());
-            let drain_target = TokenCount(fresh_safe_n - context_tokens);
-            let fresh_drain_tokens = fresh_buf.snap_to_word_boundary(drain_target);
-            fresh_safe_n - fresh_drain_tokens.0
-        } else {
-            0
-        };
-        let fresh_drain_n = fresh_safe_n - new_ctx_n;
-        let drain_count = old_ctx + fresh_drain_n; // total tokens to actually drain
-
-        tracing::debug!(
-            requested = n.0,
-            checkpoint_tokens = checkpoint_tokens.0,
-            snapped = safe_n.0,
-            old_ctx,
-            fresh_safe_n,
-            new_ctx_n,
-            drain_count,
-            total_text_tokens = self.text_tokens().len(),
-            "commit: snap to word boundary"
-        );
-        if safe_n.0 == 0 {
-            tracing::debug!("commit: nothing to commit (no complete words)");
-            return Ok(None);
-        }
-
-        let split_start = phase_start();
-        let to_commit = entries.split_off_front(safe_n);
-        let commit_ids = to_commit.token_ids();
-        let commit_text = tokenizer.decode(&commit_ids, true).unwrap_or_default();
-        let committed_word_count = to_commit.words().count();
-        log_phase_chunk("commit", "extract_commit_text", chunk_index, split_start);
-        if commit_text.trim().is_empty() {
-            tracing::debug!("commit: empty text after decode, skipping");
-            return Ok(None);
-        }
-
-        tracing::debug!(
-            tokens = safe_n.0,
-            text = %commit_text.trim(),
-            "commit: aligning text"
-        );
-
-        // Guard: can't align against empty audio
         if self.audio.is_empty() {
             tracing::warn!("commit: no audio to align against, skipping");
             return Ok(None);
         }
 
-        let align_prefix_end = Seconds::from_samples(
-            selected_checkpoint.audio_len_samples,
-            self.audio.sample_rate(),
-        );
-        let align_audio = self.audio.slice(crate::audio_buffer::TimeRange::new(
-            Seconds::ZERO,
-            align_prefix_end,
-        ));
-
-        // Run word alignment to get per-word timing.
-        let align_start = phase_start();
-        tracing::debug!(
-            audio_samples = align_audio.len(),
-            audio_secs = align_audio.duration().0,
-            align_prefix_end_secs = align_prefix_end.0,
-            self_audio_samples = self.audio.len(),
-            self_audio_secs = self.audio.duration().0,
-            session_start_secs = self.start_time.0,
-            wav_slice_start_secs = self.start_time.0,
-            wav_slice_end_secs = self.start_time.0 + align_prefix_end.0,
-            "commit: audio passed to aligner"
-        );
-        let alignment_items: Vec<AlignmentItem> = match aligner {
-            Aligner::Zipa => {
-                let g2p = g2p.expect("Aligner::Zipa requires G2P but g2p is None — check that correction_dir / g2p_dir is configured");
-                let items = zipa_word_alignments(zipa, &align_audio, &commit_text, g2p)
-                    .unwrap_or_else(|e| panic!("commit: zipa alignment failed: {e}"));
-                if items.is_empty() {
-                    tracing::warn!(
-                        text = %commit_text.trim(),
-                        "commit: zipa alignment returned no items (all words outside audio?)"
-                    );
-                }
-                log_phase_chunk("commit", "zipa_align", chunk_index, align_start);
-                items
-            }
-            Aligner::Qwen => {
-                let fa = forced_aligner.expect(
-                    "Aligner::Qwen requires forced aligner but aligner_dir was not provided",
-                );
-                let fa_items = fa
-                    .align(align_audio.samples(), &commit_text)
-                    .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
-                log_phase_chunk("commit", "forced_align", chunk_index, align_start);
-                if fa_items.is_empty() {
-                    tracing::warn!("commit: forced aligner returned no items");
-                    return Ok(None);
-                }
-                fa_items
-                    .iter()
-                    .map(|i| AlignmentItem {
-                        word: i.word.clone(),
-                        start: Seconds(i.start_time as f64),
-                        end: Seconds(i.end_time as f64),
-                    })
-                    .collect()
-            }
-        };
-
-        if alignment_items.is_empty() {
+        let pending_entries = self.pending_entries(tokenizer);
+        let entries = TextBuffer::from_entries(pending_entries.clone());
+        let Some(plan) = plan_rotation(
+            &entries,
+            self.context_token_count,
+            self.rollback_tokens,
+            context_tokens,
+            n,
+            rotation_cut_strategy,
+        ) else {
+            tracing::warn!(
+                requested_tokens = n.0,
+                total_text_tokens = self.text_tokens().len(),
+                rollback_tokens = self.rollback_tokens.0,
+                old_context_tokens = self.context_token_count,
+                rotation_cut_strategy = ?rotation_cut_strategy,
+                "commit: no rotatable stable prefix"
+            );
             return Ok(None);
-        }
-
-        // Build aligned buffer (pure function)
-        let align_buffer_start = phase_start();
-        let mut aligned =
-            text_buffer::align(to_commit, &alignment_items, &align_audio, self.start_time);
-
-        // Before stripping context tokens, count words in the portions we need
-        // for the audio cut point calculation.
-        let drain_word_count = if new_ctx_n > 0 {
-            // Words in old context tokens (at the start of aligned)
-            let old_ctx_word_count = aligned.entries()[..old_ctx]
-                .iter()
-                .filter(|e| e.word.is_some())
-                .count();
-            // Words in the fresh tokens that will be drained (not kept as context)
-            let fresh_drain_word_count = aligned.entries()[old_ctx..old_ctx + fresh_drain_n]
-                .iter()
-                .filter(|e| e.word.is_some())
-                .count();
-            old_ctx_word_count + fresh_drain_word_count
-        } else {
-            alignment_items.len() // all words drained, no context kept
         };
+        log_phase_chunk("commit", "plan_rotation", chunk_index, plan_start);
 
-        // Strip old context tokens — they're already in the transcript from the previous rotation.
-        if old_ctx > 0 {
-            let _ctx_front = aligned.split_off_front(TokenCount(old_ctx));
-            // `aligned` now contains only fresh tokens.
+        tracing::debug!(
+            requested_tokens = n.0,
+            total_tokens = plan.total_tokens.0,
+            stable_total_tokens = plan.stable_total_tokens.0,
+            commit_tokens = plan.commit_tokens.0,
+            next_context_tokens = plan.next_context_tokens.0,
+            rollback_tokens = plan.rollback_tokens.0,
+            old_context_tokens = plan.old_context_tokens.0,
+            "commit: planned text partition"
+        );
+
+        let align_start = phase_start();
+        let mut aligned_full =
+            self.align_current_text(&entries, aligner, forced_aligner, zipa, tokenizer, g2p)?;
+        log_phase_chunk("commit", "align_current_text", chunk_index, align_start);
+
+        let trim_at = self.trim_time_for_plan(&aligned_full, plan, rotation_cut_strategy)?;
+        let committed_word_count = aligned_full.word_count_before(plan.commit_end());
+
+        let split_start = phase_start();
+        let mut committed_and_context = aligned_full.split_off_front(plan.commit_end());
+        if plan.old_context_tokens.0 > 0 {
+            let _ = committed_and_context.split_off_front(plan.old_context_tokens);
         }
+        let aligned_committed = committed_and_context;
         log_phase_chunk(
             "commit",
-            "build_aligned_buffer",
+            "extract_committed_buffer",
             chunk_index,
-            align_buffer_start,
+            split_start,
         );
 
-        // Rotate: trim audio and drop committed tokens, keep the rest.
-        //
-        // If context_tokens > 0, cut audio at the word boundary of `drain_count` tokens
-        // so the fresh context tokens (new_ctx_n) keep their audio in `remaining`.
-        // Otherwise use the strategy-determined cut point.
         let rotate_start = phase_start();
-        let last_end = alignment_items
-            .last()
-            .map(|item| item.end)
-            .unwrap_or(align_prefix_end);
-
-        let trim_at =
-            if new_ctx_n > 0 && drain_word_count > 0 && drain_word_count <= alignment_items.len() {
-                // Cut audio at the end of the last drained word, leaving context-token audio in remaining.
-                alignment_items[drain_word_count - 1].end
-            } else {
-                match rotation_cut_strategy {
-                    RotationCutStrategy::Zipa => {
-                        // Cut at the end of the last aligned word, clamped to checkpoint audio boundary.
-                        Seconds(last_end.0.clamp(0.0, align_prefix_end.0))
-                    }
-                    RotationCutStrategy::Qwen3
-                    | RotationCutStrategy::ManualTargetCommittedTextTokens(_)
-                    | RotationCutStrategy::Uncut => align_prefix_end,
-                }
-            };
         let new_start = self.start_time + trim_at;
         let (committed_audio, remaining) = self.audio.split_at(trim_at);
-        let remaining_token_ids: Vec<TokenId> = self.text_tokens()[drain_count..]
-            .iter()
-            .map(|token| token.id)
-            .collect();
+        let remaining_audio_for_sink = remaining.clone();
+        let remaining_text_tokens = self
+            .text_tokens()
+            .len()
+            .saturating_sub(plan.drain_count().0);
 
-        if let Err(error) = self.dump_rotation_debug_artifacts(
-            tokenizer,
-            selected_checkpoint,
-            trim_at,
-            &commit_ids,
-            &remaining_token_ids,
-            &commit_text,
-            &committed_audio,
-            &remaining,
-        ) {
-            tracing::warn!(%error, "commit: failed to dump rotation debug artifacts");
-        }
-
-        let remaining_text_tokens = self.text_tokens().len() - drain_count;
         tracing::info!(
             committed_word_count,
-            checkpoints = self.checkpoints.len(),
-            selected_checkpoint = selected_checkpoint.index,
-            committed_tokens = safe_n.0,
-            drain_count,
-            new_ctx_n,
+            committed_tokens = plan.commit_tokens.0,
+            drain_count = plan.drain_count().0,
+            next_context_tokens = plan.next_context_tokens.0,
+            rollback_tokens = plan.rollback_tokens.0,
             remaining_text_tokens,
             old_start = %format!("{:.3}s", self.start_time.0),
             new_start = %format!("{:.3}s", new_start.0),
-            align_prefix_end = %format!("{:.3}s", align_prefix_end.0),
-            aligned_end = %format!("{:.3}s", last_end.0),
             trim_at = %format!("{:.3}s", trim_at.0),
             audio_before = self.audio.len(),
             audio_after = remaining.len(),
-            aligned_words = alignment_items.len(),
             "commit: rotation"
         );
 
-        let remaining_audio_for_sink = remaining.clone();
         self.audio = remaining;
         self.start_time = new_start;
 
-        // Drain committed tokens. The fresh context tokens (new_ctx_n) stay in self.tokens
-        // with their audio now at the start of self.audio.
         let drop_start = self.metadata_end;
-        let drop_end = self.metadata_end + drain_count;
+        let drop_end = self.metadata_end + plan.drain_count().0;
         self.tokens.drain(drop_start..drop_end);
-        self.context_token_count = new_ctx_n;
-        // metadata_end stays the same (metadata tokens unchanged)
+        self.context_token_count = plan.next_context_tokens.0;
 
         self.encoder_cache = EncoderCache::new();
         self.mel_extractor = MelExtractor::new(400, 160, 128, 16000);
         self.generated_start = 0;
-        self.checkpoints.clear();
-        // Don't reset chunk_count — remaining tokens need prefix rollback to work
         log_phase_chunk("commit", "rotate_reset", chunk_index, rotate_start);
         log_phase_chunk("commit", "total", chunk_index, commit_total_start);
 
-        Ok(Some((aligned, committed_audio, remaining_audio_for_sink)))
+        Ok(Some((
+            aligned_committed,
+            committed_audio,
+            remaining_audio_for_sink,
+        )))
     }
 
     /// Commit all text tokens. Same as `commit` but without a token limit.
@@ -713,86 +520,31 @@ impl DecodeSession {
         let commit_total_start = phase_start();
         let chunk_index = self.chunk_count;
 
-        let split_start = phase_start();
-        let to_commit = TextBuffer::from_entries(self.pending_entries(tokenizer));
-        let commit_ids = to_commit.token_ids();
-        let commit_text = tokenizer.decode(&commit_ids, true).unwrap_or_default();
-        log_phase_chunk(
-            "commit_all",
-            "extract_commit_text",
-            chunk_index,
-            split_start,
-        );
-        if commit_text.trim().is_empty() {
-            tracing::debug!("commit_all: empty text after decode, skipping");
-            return Ok(None);
-        }
-
         if self.audio.is_empty() {
             tracing::warn!("commit_all: no audio to align against, skipping");
             return Ok(None);
         }
 
-        let align_audio = self.audio.clone();
         let align_start = phase_start();
-        let alignment_items: Vec<AlignmentItem> = match aligner {
-            Aligner::Zipa => {
-                let g2p = g2p.expect("Aligner::Zipa requires G2P but g2p is None — check that correction_dir / g2p_dir is configured");
-                let items = zipa_word_alignments(zipa, &align_audio, &commit_text, g2p)
-                    .unwrap_or_else(|e| panic!("commit_all: zipa alignment failed: {e}"));
-                if items.is_empty() {
-                    tracing::warn!(
-                        text = %commit_text.trim(),
-                        "commit_all: zipa alignment returned no items"
-                    );
-                }
-                log_phase_chunk("commit_all", "zipa_align", chunk_index, align_start);
-                items
-            }
-            Aligner::Qwen => {
-                let fa = forced_aligner.expect(
-                    "Aligner::Qwen requires forced aligner but aligner_dir was not provided",
-                );
-                let fa_items = fa
-                    .align(align_audio.samples(), &commit_text)
-                    .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
-                log_phase_chunk("commit_all", "forced_align", chunk_index, align_start);
-                if fa_items.is_empty() {
-                    tracing::warn!("commit_all: forced aligner returned no items");
-                    return Ok(None);
-                }
-                fa_items
-                    .iter()
-                    .map(|i| AlignmentItem {
-                        word: i.word.clone(),
-                        start: Seconds(i.start_time as f64),
-                        end: Seconds(i.end_time as f64),
-                    })
-                    .collect()
-            }
-        };
-
-        let align_buffer_start = phase_start();
+        let entries = TextBuffer::from_entries(self.pending_entries(tokenizer));
         let mut aligned =
-            text_buffer::align(to_commit, &alignment_items, &align_audio, self.start_time);
+            self.align_current_text(&entries, aligner, forced_aligner, zipa, tokenizer, g2p)?;
+        log_phase_chunk("commit_all", "align_current_text", chunk_index, align_start);
+
+        let strip_start = phase_start();
         // Strip any context tokens carried into this session — already in transcript.
         let old_ctx = self.context_token_count;
         if old_ctx > 0 {
             let _ctx_front = aligned.split_off_front(TokenCount(old_ctx));
         }
-        log_phase_chunk(
-            "commit_all",
-            "build_aligned_buffer",
-            chunk_index,
-            align_buffer_start,
-        );
+        log_phase_chunk("commit_all", "strip_old_context", chunk_index, strip_start);
 
         tracing::info!(
             committed_tokens = self.text_tokens().len(),
             old_ctx,
             audio_samples = self.audio.len(),
-            aligned_words = alignment_items.len(),
-            "commit_all: final commit without checkpoint rotation"
+            aligned_words = aligned.words().count(),
+            "commit_all: final commit without rotation"
         );
 
         self.audio = AudioBuffer::empty(self.audio.sample_rate());
@@ -800,7 +552,6 @@ impl DecodeSession {
         self.encoder_cache = EncoderCache::new();
         self.mel_extractor = MelExtractor::new(400, 160, 128, 16000);
         self.generated_start = 0;
-        self.checkpoints.clear();
         log_phase_chunk("commit_all", "total", chunk_index, commit_total_start);
 
         Ok(Some(aligned))
@@ -813,10 +564,79 @@ impl DecodeSession {
         self.encoder_cache = EncoderCache::new();
         self.chunk_count = 0;
         self.generated_start = 0;
-        self.checkpoints.clear();
     }
 
     // ── Internal ────────────────────────────────────────────────────
+
+    fn align_current_text(
+        &self,
+        entries: &TextBuffer,
+        aligner: &Aligner,
+        forced_aligner: Option<&ForcedAligner>,
+        zipa: &ZipaInference,
+        tokenizer: &Tokenizer,
+        g2p: Option<&mut CachedEspeakG2p>,
+    ) -> Result<TextBuffer, Exception> {
+        let transcript_ids = entries.token_ids();
+        let transcript = tokenizer.decode(&transcript_ids, true).unwrap_or_default();
+        if transcript.trim().is_empty() {
+            return Err(Exception::custom("empty transcript during alignment"));
+        }
+
+        let alignment_items: Vec<AlignmentItem> = match aligner {
+            Aligner::Zipa => {
+                let g2p = g2p.expect(
+                    "Aligner::Zipa requires G2P but g2p is None — check that correction_dir / g2p_dir is configured",
+                );
+                zipa_word_alignments(zipa, &self.audio, &transcript, g2p)
+                    .map_err(|e| Exception::custom(format!("zipa alignment: {e}")))?
+            }
+            Aligner::Qwen => {
+                let forced_aligner = forced_aligner.expect(
+                    "Aligner::Qwen requires forced aligner but aligner_dir was not provided",
+                );
+                forced_aligner
+                    .align(self.audio.samples(), &transcript)
+                    .map_err(|e| Exception::custom(format!("aligner: {e}")))?
+                    .into_iter()
+                    .map(|item| AlignmentItem {
+                        word: item.word,
+                        start: Seconds(item.start_time as f64),
+                        end: Seconds(item.end_time as f64),
+                    })
+                    .collect()
+            }
+        };
+
+        if alignment_items.is_empty() {
+            return Err(Exception::custom("alignment returned no items"));
+        }
+
+        Ok(text_buffer::align(
+            TextBuffer::from_entries(entries.entries().to_vec()),
+            &alignment_items,
+            &self.audio,
+            self.start_time,
+        ))
+    }
+
+    fn trim_time_for_plan(
+        &self,
+        aligned_full: &TextBuffer,
+        plan: RotationTextPlan,
+        rotation_cut_strategy: &RotationCutStrategy,
+    ) -> Result<Seconds, Exception> {
+        let commit_end = aligned_full
+            .last_aligned_word_end_before(plan.commit_end())
+            .ok_or_else(|| Exception::custom("no aligned word end at commit boundary"))?;
+        let trim_at = match rotation_cut_strategy {
+            RotationCutStrategy::Zipa => commit_end - self.start_time,
+            RotationCutStrategy::Qwen3
+            | RotationCutStrategy::ManualTargetCommittedTextTokens(_)
+            | RotationCutStrategy::Uncut => commit_end - self.start_time,
+        };
+        Ok(trim_at)
+    }
 
     /// Compute the fixed prefix for rollback — text tokens only.
     ///
@@ -868,292 +688,6 @@ impl DecodeSession {
             .position(|t| t.id == asr_text_id)
             .map(|pos| pos + 1) // +1 to skip the tag itself
             .unwrap_or(0);
-    }
-
-    fn select_rotation_checkpoint(
-        &self,
-        tokenizer: &Tokenizer,
-        requested_tokens: TokenCount,
-        rotation_cut_strategy: &RotationCutStrategy,
-    ) -> Option<SelectedCheckpoint> {
-        let current: Vec<TokenId> = self.text_tokens().iter().map(|token| token.id).collect();
-        if current.is_empty() {
-            return None;
-        }
-
-        let current_text = tokenizer
-            .decode(
-                &current.iter().map(|&id| id as u32).collect::<Vec<_>>(),
-                true,
-            )
-            .unwrap_or_else(|_| "<decode failed>".to_string())
-            .replace('\n', "\\n");
-        let min_tail_samples = MIN_ROTATION_TAIL_AUDIO.to_samples(self.audio.sample_rate());
-
-        let candidates = self
-            .checkpoints
-            .iter()
-            .enumerate()
-            .map(|(index, checkpoint)| {
-                let lcp_len = common_prefix_len(&checkpoint.text_token_ids, &current);
-                let checkpoint_len = checkpoint.text_token_ids.len();
-                let stable_len = checkpoint_len.saturating_sub(self.rollback_tokens.0);
-                let matches = stable_len > 0 && lcp_len >= stable_len;
-                let current_prefix = &current[..checkpoint_len.min(current.len())];
-                let checkpoint_text = tokenizer
-                    .decode(
-                        &checkpoint
-                            .text_token_ids
-                            .iter()
-                            .map(|&id| id as u32)
-                            .collect::<Vec<_>>(),
-                        true,
-                    )
-                    .unwrap_or_else(|_| "<decode failed>".to_string())
-                    .replace('\n', "\\n");
-                let current_prefix_text = tokenizer
-                    .decode(
-                        &current_prefix
-                            .iter()
-                            .map(|&id| id as u32)
-                            .collect::<Vec<_>>(),
-                        true,
-                    )
-                    .unwrap_or_else(|_| "<decode failed>".to_string())
-                    .replace('\n', "\\n");
-                let divergence = if lcp_len < checkpoint_len && lcp_len < current.len() {
-                    format!(
-                        "cp[{}]={} current[{}]={}",
-                        lcp_len, checkpoint.text_token_ids[lcp_len], lcp_len, current[lcp_len]
-                    )
-                } else {
-                    "none".to_string()
-                };
-                (
-                    index,
-                    checkpoint.audio_len_samples,
-                    checkpoint_len,
-                    stable_len,
-                    lcp_len,
-                    self.audio
-                        .len()
-                        .saturating_sub(checkpoint.audio_len_samples),
-                    matches,
-                    checkpoint_text,
-                    current_prefix_text,
-                    divergence,
-                )
-            })
-            .collect::<Vec<_>>();
-
-        tracing::info!(
-            rollback_tokens = self.rollback_tokens.0,
-            current_tokens = current.len(),
-            requested_tokens = requested_tokens.0,
-            rotation_cut_strategy = ?rotation_cut_strategy,
-            current_text = %current_text,
-            min_tail_audio_secs = MIN_ROTATION_TAIL_AUDIO.0,
-            checkpoint_candidates = %candidates
-                .iter()
-                .map(|(index, audio_len_samples, checkpoint_len, stable_len, lcp_len, tail_samples, matches, checkpoint_text, current_prefix_text, divergence)| {
-                    format!(
-                        "#{index}@{:.3}s match={} lcp={}/{} stable_len={} tail_samples={} cp_text={checkpoint_text} current_prefix={current_prefix_text} divergence={divergence}",
-                        Seconds::from_samples(*audio_len_samples, self.audio.sample_rate()).0,
-                        matches,
-                        lcp_len,
-                        checkpoint_len,
-                        stable_len,
-                        tail_samples
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(" | "),
-            "checkpoint cutoff candidates"
-        );
-
-        let compatible_indices = candidates
-            .iter()
-            .filter(|(_, _, _, _, _, tail_samples, matches, _, _, _)| {
-                *matches && *tail_samples >= min_tail_samples
-            })
-            .map(|(index, _, _, _, _, _, _, _, _, _)| *index)
-            .collect::<Vec<_>>();
-
-        let latest_index = self.checkpoints.len().saturating_sub(1);
-        let selected_index = match rotation_cut_strategy {
-            RotationCutStrategy::Qwen3 | RotationCutStrategy::Zipa => {
-                match compatible_indices.as_slice() {
-                    [] => {
-                        tracing::warn!(
-                            checkpoints = self.checkpoints.len(),
-                            min_tail_samples,
-                            current_text = %current_text,
-                            "no compatible checkpoint with enough tail audio; deferring rotation"
-                        );
-                        return None;
-                    }
-                    [only] if *only == latest_index => {
-                        tracing::warn!(
-                            latest_index = *only,
-                            checkpoints = self.checkpoints.len(),
-                            current_text = %current_text,
-                            "only latest checkpoint is compatible; deferring rotation"
-                        );
-                        return None;
-                    }
-                    [only] => *only,
-                    many => match many[..many.len() - 1].last().copied() {
-                        Some(earlier) => earlier,
-                        None => {
-                            tracing::warn!(
-                                compatible = ?many,
-                                current_text = %current_text,
-                                "compatible set had no non-latest checkpoint; deferring rotation"
-                            );
-                            return None;
-                        }
-                    },
-                }
-            }
-            RotationCutStrategy::ManualTargetCommittedTextTokens(target) => {
-                let target = *target as usize;
-                let capped = compatible_indices
-                    .iter()
-                    .copied()
-                    .filter(|&index| self.checkpoints[index].text_token_ids.len() <= target)
-                    .collect::<Vec<_>>();
-                match capped.last().copied() {
-                    Some(index) if index == latest_index => {
-                        tracing::warn!(
-                            target,
-                            index,
-                            current_text = %current_text,
-                            "manual target resolved to latest checkpoint; deferring rotation"
-                        );
-                        return None;
-                    }
-                    Some(index) => index,
-                    None => {
-                        tracing::warn!(
-                            target,
-                            compatible = ?compatible_indices,
-                            checkpoints = self.checkpoints.len(),
-                            current_text = %current_text,
-                            "no compatible checkpoint at-or-before manual target; deferring rotation"
-                        );
-                        return None;
-                    }
-                }
-            }
-            RotationCutStrategy::Uncut => {
-                tracing::warn!("select_rotation_checkpoint called in Uncut mode");
-                return None;
-            }
-        };
-
-        let checkpoint = &self.checkpoints[selected_index];
-        tracing::info!(
-            selected_checkpoint = selected_index,
-            selected_audio_len_samples = checkpoint.audio_len_samples,
-            selected_text_tokens = checkpoint.text_token_ids.len(),
-            selected_audio_secs =
-                Seconds::from_samples(checkpoint.audio_len_samples, self.audio.sample_rate()).0,
-            "checkpoint selected"
-        );
-
-        Some(SelectedCheckpoint {
-            index: selected_index,
-            audio_len_samples: checkpoint.audio_len_samples,
-            text_token_count: checkpoint.text_token_ids.len(),
-        })
-    }
-
-    fn dump_rotation_debug_artifacts(
-        &self,
-        tokenizer: &Tokenizer,
-        selected_checkpoint: SelectedCheckpoint,
-        trim_at: Seconds,
-        committed_token_ids: &[TokenId],
-        remaining_token_ids: &[TokenId],
-        commit_text: &str,
-        committed_audio: &AudioBuffer,
-        remaining_audio: &AudioBuffer,
-    ) -> Result<(), Exception> {
-        let round_dir = next_rotation_debug_dir()?;
-        fs::create_dir_all(&round_dir)
-            .map_err(|e| Exception::custom(format!("create {}: {e}", round_dir.display())))?;
-
-        write_wav_file(&round_dir.join("before.wav"), &self.audio)?;
-        write_wav_file(&round_dir.join("committed.wav"), committed_audio)?;
-        write_wav_file(&round_dir.join("remaining.wav"), remaining_audio)?;
-
-        let current_ids: Vec<TokenId> = self.text_tokens().iter().map(|token| token.id).collect();
-        let current_text = decode_ids(tokenizer, &current_ids);
-        let committed_text = decode_ids(tokenizer, committed_token_ids);
-        let remaining_text = decode_ids(tokenizer, remaining_token_ids);
-
-        fs::write(
-            round_dir.join("summary.txt"),
-            format!(
-                "selected_checkpoint={}\nselected_audio_secs={:.3}\nselected_text_tokens={}\ntrim_at={:.3}\naudio_before_samples={}\naudio_committed_samples={}\naudio_remaining_samples={}\ncurrent_text={}\ncommitted_text={}\nremaining_text={}\ncommit_text_aligner={}\n",
-                selected_checkpoint.index,
-                Seconds::from_samples(selected_checkpoint.audio_len_samples, self.audio.sample_rate()).0,
-                selected_checkpoint.text_token_count,
-                trim_at.0,
-                self.audio.len(),
-                committed_audio.len(),
-                remaining_audio.len(),
-                current_text.replace('\n', "\\n"),
-                committed_text.replace('\n', "\\n"),
-                remaining_text.replace('\n', "\\n"),
-                commit_text.replace('\n', "\\n"),
-            ),
-        )
-        .map_err(|e| Exception::custom(format!("write summary: {e}")))?;
-
-        fs::write(
-            round_dir.join("current_tokens.txt"),
-            render_token_dump(tokenizer, &current_ids),
-        )
-        .map_err(|e| Exception::custom(format!("write current tokens: {e}")))?;
-        fs::write(
-            round_dir.join("committed_tokens.txt"),
-            render_token_dump(tokenizer, committed_token_ids),
-        )
-        .map_err(|e| Exception::custom(format!("write committed tokens: {e}")))?;
-        fs::write(
-            round_dir.join("remaining_tokens.txt"),
-            render_token_dump(tokenizer, remaining_token_ids),
-        )
-        .map_err(|e| Exception::custom(format!("write remaining tokens: {e}")))?;
-        fs::write(
-            round_dir.join("checkpoints.txt"),
-            self.render_checkpoint_ladder(tokenizer, &current_ids),
-        )
-        .map_err(|e| Exception::custom(format!("write checkpoints: {e}")))?;
-
-        tracing::info!(dir = %round_dir.display(), "commit: wrote rotation debug artifacts");
-        Ok(())
-    }
-
-    fn render_checkpoint_ladder(&self, tokenizer: &Tokenizer, current: &[TokenId]) -> String {
-        self.checkpoints
-            .iter()
-            .enumerate()
-            .map(|(index, checkpoint)| {
-                let lcp_len = common_prefix_len(&checkpoint.text_token_ids, current);
-                let text = decode_ids(tokenizer, &checkpoint.text_token_ids).replace('\n', "\\n");
-                format!(
-                    "#{index}\naudio_secs={:.3}\ntoken_count={}\nlcp_with_current={}\ntext={}\nids={:?}\n",
-                    Seconds::from_samples(checkpoint.audio_len_samples, self.audio.sample_rate()).0,
-                    checkpoint.text_token_ids.len(),
-                    lcp_len,
-                    text,
-                    checkpoint.text_token_ids
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 }
 
@@ -1286,75 +820,5 @@ fn zipa_word_alignments(
     Ok(items)
 }
 
-fn common_prefix_len(left: &[TokenId], right: &[TokenId]) -> usize {
-    left.iter()
-        .zip(right.iter())
-        .take_while(|(left, right)| left == right)
-        .count()
-}
-
-fn decode_ids(tokenizer: &Tokenizer, ids: &[TokenId]) -> String {
-    tokenizer
-        .decode(&ids.iter().map(|&id| id).collect::<Vec<_>>(), true)
-        .unwrap_or_else(|_| "<decode failed>".to_string())
-}
-
-fn render_token_dump(tokenizer: &Tokenizer, ids: &[TokenId]) -> String {
-    let decoded = decode_ids(tokenizer, ids).replace('\n', "\\n");
-    format!("decoded={decoded}\nids={ids:?}\n")
-}
-
-fn next_rotation_debug_dir() -> Result<PathBuf, Exception> {
-    static RUN_ROOT: OnceLock<PathBuf> = OnceLock::new();
-    static ROUND_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    let run_root = RUN_ROOT.get_or_init(|| {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        Path::new(".artifacts")
-            .join("gpu-hotline")
-            .join("rotation-debug")
-            .join(format!("run-{stamp}"))
-    });
-
-    fs::create_dir_all(run_root)
-        .map_err(|e| Exception::custom(format!("create {}: {e}", run_root.display())))?;
-
-    let round = ROUND_COUNTER.fetch_add(1, Ordering::SeqCst) + 1;
-    Ok(run_root.join(format!("round-{round:02}")))
-}
-
-fn write_wav_file(path: &Path, audio: &AudioBuffer) -> Result<(), Exception> {
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: audio.sample_rate().0,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut writer = hound::WavWriter::create(path, spec)
-        .map_err(|e| Exception::custom(format!("create wav {}: {e}", path.display())))?;
-    for &sample in audio.samples() {
-        let clamped = sample.clamp(-1.0, 1.0);
-        let pcm = (clamped * i16::MAX as f32) as i16;
-        writer
-            .write_sample(pcm)
-            .map_err(|e| Exception::custom(format!("write wav {}: {e}", path.display())))?;
-    }
-    writer
-        .finalize()
-        .map_err(|e| Exception::custom(format!("finalize wav {}: {e}", path.display())))?;
-    Ok(())
-}
 #[cfg(test)]
-mod tests {
-    use super::common_prefix_len;
-
-    #[test]
-    fn common_prefix_len_stops_at_first_mismatch() {
-        assert_eq!(common_prefix_len(&[1, 2, 3, 4], &[1, 2, 9, 4]), 2);
-        assert_eq!(common_prefix_len(&[1, 2, 3], &[1, 2, 3, 4]), 3);
-        assert_eq!(common_prefix_len(&[9, 2, 3], &[1, 2, 3]), 0);
-    }
-}
+mod tests {}

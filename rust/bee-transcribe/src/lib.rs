@@ -9,6 +9,7 @@ pub mod decode_session;
 pub mod g2p;
 pub mod judge;
 mod mlx_stuff;
+pub mod rotation_plan;
 pub mod session;
 pub mod sparse_ftrl;
 pub mod text_buffer;

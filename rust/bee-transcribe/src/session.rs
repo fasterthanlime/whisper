@@ -425,14 +425,16 @@ impl<'a> Session<'a> {
                 .decode
                 .committable_text_tokens(self.tokenizer, requested_commit_tokens);
             if commit_n.0 > 0 {
+                let refresh_start_idx = self.decode.context_token_count();
+                let refresh_end_idx = refresh_start_idx + commit_n.0;
                 let refresh_start = phase_start();
                 self.decode.refresh_text_confidence(
                     self.model,
                     self.tokenizer,
                     &language,
                     ConfidenceMode::Full,
-                    0,
-                    commit_n.0,
+                    refresh_start_idx,
+                    refresh_end_idx,
                 )?;
                 log_phase_chunk(
                     "decode_and_maybe_commit",

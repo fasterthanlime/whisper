@@ -45,18 +45,18 @@ impl Default for Aligner {
     }
 }
 
-/// Strategy for choosing rotation cut points inside a decode session.
+/// Strategy for choosing rotation cut behavior inside a decode session.
 #[repr(u8)]
 #[derive(Debug, Clone, Facet)]
 pub enum RotationCutStrategy {
     /// Never rotate during streaming; commit only once at finish().
     Uncut,
-    /// Automatic checkpoint-based rotation using Qwen/aligner timing.
+    /// Automatic rotation using full-state planning and Qwen-derived timing.
     Qwen3,
-    /// Automatic checkpoint-based rotation using ZIPA-derived cut timing.
+    /// Automatic rotation using full-state planning and ZIPA-derived timing.
     Zipa,
-    /// Manual behavior: commit at the latest compatible checkpoint whose
-    /// text-token length is at most this target.
+    /// Manual behavior: cap the fresh committed token count at this target
+    /// after applying rollback and carry-forward context rules.
     ManualTargetCommittedTextTokens(u32),
 }
 

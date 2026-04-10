@@ -151,6 +151,36 @@ impl TextBuffer {
             pos: 0,
         }
     }
+
+    pub fn word_count_before(&self, n: TokenCount) -> usize {
+        let limit = n.0.min(self.entries.len());
+        self.words()
+            .map(|word| word.len())
+            .scan(0usize, |seen, word_len| {
+                *seen += word_len;
+                Some(*seen)
+            })
+            .take_while(|seen| *seen <= limit)
+            .count()
+    }
+
+    pub fn last_aligned_word_end_before(&self, n: TokenCount) -> Option<Seconds> {
+        let limit = n.0.min(self.entries.len());
+        let mut seen = 0usize;
+        let mut last_end = None;
+        for word in self.words() {
+            seen += word.len();
+            if seen > limit {
+                break;
+            }
+            last_end = word[0]
+                .word
+                .as_ref()
+                .and_then(|word| word.alignment.as_ref())
+                .map(|alignment| alignment.time.end);
+        }
+        last_end
+    }
 }
 
 impl Default for TextBuffer {
@@ -371,5 +401,21 @@ mod tests {
             .unwrap();
         assert_eq!(w1.time.start, Seconds(5.3));
         assert_eq!(w1.time.end, Seconds(5.6));
+    }
+
+    #[test]
+    fn word_count_before_counts_complete_words_only() {
+        let buf = TextBuffer::from_entries(vec![
+            tok(1, true),
+            tok(2, false),
+            tok(3, true),
+            tok(4, false),
+            tok(5, true),
+        ]);
+
+        assert_eq!(buf.word_count_before(TokenCount(0)), 0);
+        assert_eq!(buf.word_count_before(TokenCount(2)), 1);
+        assert_eq!(buf.word_count_before(TokenCount(4)), 2);
+        assert_eq!(buf.word_count_before(TokenCount(5)), 3);
     }
 }
