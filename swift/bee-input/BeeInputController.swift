@@ -119,6 +119,7 @@ class BeeInputController: IMKInputController {
             discardMarkedTextFromCapturedContext(reason: "cancelComposition")
             BeeIMEBridgeState.shared.didCancelComposition(on: self)
         }
+        super.cancelComposition()
     }
 
     nonisolated override func updateComposition() {

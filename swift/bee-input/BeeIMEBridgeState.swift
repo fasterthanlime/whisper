@@ -188,21 +188,10 @@ final class BeeIMEBridgeState: NSObject {
             beeInputLog(
                 "activate: already active, updating controller pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") pendingLen=\(pending?.utf16.count ?? 0)"
             )
-            // Clear marked text via the stashed input context before it becomes unreachable
-            if !session.currentMarkedText.isEmpty {
-                if let ctx = session.inputContext {
-                    beeInputLog("activate: discardMarkedText via stashed inputContext")
-                    ctx.discardMarkedText()
-                } else if let oldClient = session.lastUsedClient {
-                    beeInputLog("activate: clearing stale composition on old client (no inputContext)")
-                    oldClient.setMarkedText(
-                        "",
-                        selectionRange: NSRange(location: 0, length: 0),
-                        replacementRange: NSRange(location: NSNotFound, length: 0))
-                }
-                session.currentMarkedText = ""
-                session.lastUsedClient = nil
-                session.inputContext = nil
+            // Try to clear stale marked text before the controller swap
+            if !session.currentMarkedText.isEmpty, let oldController = session.controller {
+                beeInputLog("activate: cancelComposition on old controller before swap")
+                oldController.cancelComposition()
             }
             session.controller = controller
             session.inputContext = inputContext
