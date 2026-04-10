@@ -117,6 +117,10 @@ final class BeeIMEBridgeState: NSObject {
     /// We only deliver `setMarkedText` to this client to prevent leakage when switching apps.
     private var dictationOriginClientID: String?
 
+    /// Weak reference to the actual `IMKTextInput` client where dictation started.
+    /// Used to clear marked text when canceling from a different app.
+    private weak var dictationOriginClient: (any IMKTextInput)?
+
     // MARK: - Queries
 
     var isDictating: Bool {
@@ -190,6 +194,7 @@ final class BeeIMEBridgeState: NSObject {
         // Capture origin on first setMarkedText of a dictation session
         if dictationOriginClientID == nil {
             dictationOriginClientID = session.clientID
+            dictationOriginClient = session.controller?.client() as? any IMKTextInput
             beeInputLog("setMarkedText: captured origin clientID=\(session.clientID ?? "nil")")
         }
 
@@ -228,21 +233,31 @@ final class BeeIMEBridgeState: NSObject {
         }
         session.handleCommitText(text, submit: submit)
         dictationOriginClientID = nil
+        dictationOriginClient = nil
     }
 
     func cancelInput() {
         guard case .active(let session, _) = state else {
             beeInputLog("cancelInput: not active, dropping")
             dictationOriginClientID = nil
+            dictationOriginClient = nil
             return
         }
-        // Only clear marked text in the original client to avoid
-        // touching unrelated composition in apps we switched into.
+        // Always clear marked text in the original client so stale
+        // text doesn't linger when we switch back after canceling.
+        if let originClient = dictationOriginClient {
+            let empty = NSAttributedString(string: "", attributes: [.markedClauseSegment: 0])
+            originClient.setMarkedText(
+                empty,
+                selectionRange: NSRange(location: 0, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0)
+            )
+        }
         if session.clientID == dictationOriginClientID {
             session.currentMarkedText = ""
-            session.handleSetMarkedText("")
         }
         dictationOriginClientID = nil
+        dictationOriginClient = nil
         beeInputLog("cancelInput: done, cleared origin")
     }
 
