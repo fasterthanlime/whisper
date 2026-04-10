@@ -37,7 +37,7 @@ struct BufferedCommit {
 pub struct Session<'a> {
     model: &'a Qwen3ASRModel,
     tokenizer: &'a Tokenizer,
-    forced_aligner: &'a ForcedAligner,
+    forced_aligner: Option<&'a ForcedAligner>,
     zipa: &'a ZipaInference,
 
     filters: AudioFilterChain,
@@ -71,7 +71,7 @@ impl<'a> Session<'a> {
     pub fn new(
         model: &'a Qwen3ASRModel,
         tokenizer: &'a Tokenizer,
-        forced_aligner: &'a ForcedAligner,
+        forced_aligner: Option<&'a ForcedAligner>,
         zipa: &'a ZipaInference,
         vad: SileroVad,
         options: SessionOptions,

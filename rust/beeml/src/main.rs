@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
     let engine = Engine::load(&EngineConfig {
         model_dir: &model_dir,
         tokenizer_dir: &tokenizer_dir,
-        aligner_dir: &aligner_dir,
+        aligner_dir: Some(&aligner_dir),
         share_aligner_audio_tower: false,
         silero_dir: &silero_dir,
         correction_dir: None,

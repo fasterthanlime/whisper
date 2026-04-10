@@ -61,7 +61,7 @@ use crate::corrector::Corrector;
 pub struct Engine {
     tokenizer: Tokenizer,
     model: Qwen3ASRModel,
-    aligner: ForcedAligner,
+    aligner: Option<ForcedAligner>,
     zipa: ZipaInference,
     vad_tensors: HashMap<String, mlx_rs::Array>,
     correction: Option<SharedCorrectionEngine>,
@@ -105,12 +105,18 @@ impl Engine {
         let tokenizer = load_tokenizer(config.tokenizer_dir)?;
         log::info!("Tokenizer loaded");
 
-        let aligner = ForcedAligner::load(
-            config.aligner_dir,
-            tokenizer.clone(),
-            config.share_aligner_audio_tower.then_some(&model),
-        )?;
-        log::info!("Aligner loaded");
+        let aligner = if let Some(aligner_dir) = config.aligner_dir {
+            let a = ForcedAligner::load(
+                aligner_dir,
+                tokenizer.clone(),
+                config.share_aligner_audio_tower.then_some(&model),
+            )?;
+            log::info!("Aligner loaded");
+            Some(a)
+        } else {
+            log::info!("Aligner skipped (no aligner_dir)");
+            None
+        };
 
         let zipa = ZipaInference::load_quantized_bundle_dir(config.zipa_bundle_dir)
             .map_err(|e| Exception::custom(format!("zipa inference: {e}")))?;
@@ -188,7 +194,7 @@ impl Engine {
         Ok(session::Session::new(
             &self.model,
             &self.tokenizer,
-            &self.aligner,
+            self.aligner.as_ref(),
             &self.zipa,
             vad,
             options,

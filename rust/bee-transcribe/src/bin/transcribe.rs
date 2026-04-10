@@ -140,7 +140,7 @@ fn main() -> anyhow::Result<()> {
     let engine = bee_transcribe::Engine::load(&EngineConfig {
         model_dir: Path::new(&model_dir),
         tokenizer_dir: Path::new(&tokenizer_dir),
-        aligner_dir: Path::new(&aligner_dir),
+        aligner_dir: Some(Path::new(&aligner_dir)),
         share_aligner_audio_tower,
         silero_dir: Path::new(&vad_dir),
         correction_dir,
@@ -309,12 +309,21 @@ fn should_use_color() -> bool {
     std::io::stdout().is_terminal()
 }
 
-fn load_engine(disable_correction: bool) -> anyhow::Result<bee_transcribe::Engine> {
+fn load_engine(
+    disable_correction: bool,
+    need_forced_aligner: bool,
+) -> anyhow::Result<bee_transcribe::Engine> {
     let model_dir = std::env::var("BEE_ASR_MODEL_DIR")
         .map_err(|_| anyhow::anyhow!("BEE_ASR_MODEL_DIR not set"))?;
     let tokenizer_dir = std::env::var("BEE_TOKENIZER_DIR").unwrap_or_else(|_| model_dir.clone());
-    let aligner_dir =
-        std::env::var("BEE_ALIGNER_DIR").map_err(|_| anyhow::anyhow!("BEE_ALIGNER_DIR not set"))?;
+    let aligner_dir = if need_forced_aligner {
+        Some(
+            std::env::var("BEE_ALIGNER_DIR")
+                .map_err(|_| anyhow::anyhow!("BEE_ALIGNER_DIR not set"))?,
+        )
+    } else {
+        None
+    };
     let vad_dir =
         std::env::var("BEE_VAD_DIR").map_err(|_| anyhow::anyhow!("BEE_VAD_DIR not set"))?;
     let zipa_bundle_dir = std::env::var("BEE_ZIPA_BUNDLE_DIR")
@@ -340,7 +349,7 @@ fn load_engine(disable_correction: bool) -> anyhow::Result<bee_transcribe::Engin
     Ok(bee_transcribe::Engine::load(&EngineConfig {
         model_dir: Path::new(&model_dir),
         tokenizer_dir: Path::new(&tokenizer_dir),
-        aligner_dir: Path::new(&aligner_dir),
+        aligner_dir: aligner_dir.as_deref().map(Path::new),
         share_aligner_audio_tower,
         silero_dir: Path::new(&vad_dir),
         correction_dir,
@@ -578,14 +587,6 @@ fn cmd_compare(
     base_options: SessionOptions,
     modes_filter: Option<&[String]>,
 ) -> anyhow::Result<()> {
-    let t0 = Instant::now();
-    let engine = load_engine(false)?;
-    println!("Engine loaded in {:.0}ms", t0.elapsed().as_millis());
-
-    let samples = load_audio_any(audio_path)?;
-    let duration = samples.len() as f64 / 16000.0;
-    println!("Audio: {:.1}s ({} samples)\n", duration, samples.len());
-
     // (label, cut_strategy, bypass_audio_filters, word_aligner)
     let all_modes: Vec<(&str, RotationCutStrategy, bool, Aligner)> = vec![
         ("uncut", RotationCutStrategy::Uncut, false, Aligner::Qwen),
@@ -601,6 +602,16 @@ fn cmd_compare(
                 .unwrap_or(true)
         })
         .collect();
+
+    let need_forced_aligner = modes.iter().any(|(_, _, _, a)| matches!(a, Aligner::Qwen));
+
+    let t0 = Instant::now();
+    let engine = load_engine(false, need_forced_aligner)?;
+    println!("Engine loaded in {:.0}ms", t0.elapsed().as_millis());
+
+    let samples = load_audio_any(audio_path)?;
+    let duration = samples.len() as f64 / 16000.0;
+    println!("Audio: {:.1}s ({} samples)\n", duration, samples.len());
     if modes.is_empty() {
         let valid = ["uncut", "qwen3", "zipa", "raw"];
         anyhow::bail!(

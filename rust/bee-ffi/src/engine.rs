@@ -90,7 +90,7 @@ fn resolve_engine_config(
     Ok(EngineConfig {
         model_dir,
         tokenizer_dir,
-        aligner_dir,
+        aligner_dir: Some(aligner_dir),
         share_aligner_audio_tower: false,
         silero_dir,
         correction_dir,
@@ -109,7 +109,10 @@ pub(crate) fn load_engine(model_dir: &Path, cache_base: &Path) -> Result<AsrEngi
         "Engine config: model={}, tokenizer={}, aligner={}",
         config.model_dir.display(),
         config.tokenizer_dir.display(),
-        config.aligner_dir.display(),
+        config
+            .aligner_dir
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "none".into()),
     );
     let engine = Engine::load(&config).map_err(|e| format!("load engine: {e}"))?;
 

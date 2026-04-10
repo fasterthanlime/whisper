@@ -257,7 +257,9 @@ pub struct EngineConfig<'a> {
     pub tokenizer_dir: &'a Path,
 
     /// Directory containing the forced aligner model weights.
-    pub aligner_dir: &'a Path,
+    /// Pass `None` to skip loading the forced aligner (requires `Aligner::Zipa`
+    /// for all sessions created from this engine).
+    pub aligner_dir: Option<&'a Path>,
 
     /// Experiment: make the forced aligner reuse the ASR audio encoder
     /// backbone instead of loading its own copy. The aligner keeps its

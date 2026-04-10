@@ -422,7 +422,7 @@ impl DecodeSession {
         context_tokens: usize,
         rotation_cut_strategy: &RotationCutStrategy,
         aligner: &Aligner,
-        forced_aligner: &ForcedAligner,
+        forced_aligner: Option<&ForcedAligner>,
         zipa: &ZipaInference,
         tokenizer: &Tokenizer,
         g2p: Option<&mut CachedEspeakG2p>,
@@ -539,7 +539,10 @@ impl DecodeSession {
                 items
             }
             Aligner::Qwen => {
-                let fa_items = forced_aligner
+                let fa = forced_aligner.expect(
+                    "Aligner::Qwen requires forced aligner but aligner_dir was not provided",
+                );
+                let fa_items = fa
                     .align(align_audio.samples(), &commit_text)
                     .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
                 log_phase_chunk("commit", "forced_align", chunk_index, align_start);
@@ -687,7 +690,7 @@ impl DecodeSession {
     pub fn commit_all(
         &mut self,
         aligner: &Aligner,
-        forced_aligner: &ForcedAligner,
+        forced_aligner: Option<&ForcedAligner>,
         zipa: &ZipaInference,
         tokenizer: &Tokenizer,
         g2p: Option<&mut CachedEspeakG2p>,
@@ -731,7 +734,10 @@ impl DecodeSession {
                 items
             }
             Aligner::Qwen => {
-                let fa_items = forced_aligner
+                let fa = forced_aligner.expect(
+                    "Aligner::Qwen requires forced aligner but aligner_dir was not provided",
+                );
+                let fa_items = fa
                     .align(align_audio.samples(), &commit_text)
                     .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
                 log_phase_chunk("commit_all", "forced_align", chunk_index, align_start);

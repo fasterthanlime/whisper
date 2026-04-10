@@ -50,7 +50,7 @@ fn main() -> anyhow::Result<()> {
     let engine = Engine::load(&EngineConfig {
         model_dir: Path::new(&model_dir),
         tokenizer_dir: Path::new(&tokenizer_dir),
-        aligner_dir: Path::new(&aligner_dir),
+        aligner_dir: Some(Path::new(&aligner_dir)),
         share_aligner_audio_tower: false,
         silero_dir: Path::new(&silero_dir),
         correction_dir: None,
