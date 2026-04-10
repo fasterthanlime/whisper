@@ -55,7 +55,7 @@ scripts/__pycache__/
 .claude/settings.local.json
 build-debug/
 build-release/
-build-bee-debut/
+build-bee-debug/
 build-bee-release/
 .venv/
 venv/

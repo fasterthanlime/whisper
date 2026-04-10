@@ -21,7 +21,6 @@ class BeeInputController: IMKInputController {
     }
 
     nonisolated override func activateServer(_ sender: Any!) {
-        super.activateServer(sender)
         MainActor.assumeIsolated {
             activeInputContext = NSTextInputContext.current
             let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -32,6 +31,7 @@ class BeeInputController: IMKInputController {
             )
             bridge.activate(self, pid: frontmostPID, clientID: clientIdentity)
         }
+        super.activateServer(sender)
     }
 
     nonisolated override func deactivateServer(_ sender: Any!) {

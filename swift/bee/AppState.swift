@@ -39,13 +39,6 @@ final class AppState {
         static let animationAppendSpeed = "transcription.animationAppendSpeed"
     }
 
-    private static let imeSubmitName = NSNotification.Name("fasterthanlime.bee.imeSubmit")
-    private static let imeCancelName = NSNotification.Name("fasterthanlime.bee.imeCancel")
-    private static let imeUserTypedName = NSNotification.Name("fasterthanlime.bee.imeUserTyped")
-    private static let imeContextLostName = NSNotification.Name("fasterthanlime.bee.imeContextLost")
-    private static let imeSessionStartedName = NSNotification.Name(
-        "fasterthanlime.bee.imeSessionStarted")
-
     private(set) var hotkeyState: HotkeyState = .idle {
         didSet { NotificationCenter.default.post(name: Self.stateChangedNotification, object: nil) }
     }
@@ -54,7 +47,6 @@ final class AppState {
     private var consumeNextROptUp = false
     fileprivate var activeSessionTarget: TargetApp?
     // pendingIMEAckWorkItem declared near startIMEAckTimeoutIfNeeded
-    private var distributedObservers: [NSObjectProtocol] = []
     private var workspaceObservers: [NSObjectProtocol] = []
     private var captureDeviceObservers: [NSObjectProtocol] = []
     private var lastKnownInputDeviceUIDs: Set<String> = []
@@ -419,6 +411,7 @@ final class AppState {
         let savedAppendSpeed = defaults.float(forKey: DefaultsKey.animationAppendSpeed)
         if savedAppendSpeed > 0 { self.animationAppendSpeed = savedAppendSpeed }
         restoreAudioPreferences()
+        BeeIPCServer.shared.appState = self
         installExternalObservers()
         installCaptureDeviceObservers()
         refreshInputDevices(reason: "startup")
@@ -985,55 +978,8 @@ final class AppState {
     // MARK: - External Events
 
     private func installExternalObservers() {
-        let ncLocal = NotificationCenter.default
         let nc = NSWorkspace.shared.notificationCenter
 
-        distributedObservers.append(
-            ncLocal.addObserver(forName: Self.imeSubmitName, object: nil, queue: .main) {
-                [weak self] notification in
-                let sessionID = Self.extractSessionID(notification.userInfo)
-                Task { @MainActor in
-                    self?.handleIMESubmit(sessionID: sessionID)
-                }
-            }
-        )
-        distributedObservers.append(
-            ncLocal.addObserver(forName: Self.imeCancelName, object: nil, queue: .main) {
-                [weak self] notification in
-                let sessionID = Self.extractSessionID(notification.userInfo)
-                Task { @MainActor in
-                    self?.handleIMECancel(sessionID: sessionID)
-                }
-            }
-        )
-        distributedObservers.append(
-            ncLocal.addObserver(forName: Self.imeUserTypedName, object: nil, queue: .main) {
-                [weak self] notification in
-                let sessionID = Self.extractSessionID(notification.userInfo)
-                Task { @MainActor in
-                    self?.handleIMEUserTyped(sessionID: sessionID)
-                }
-            }
-        )
-        distributedObservers.append(
-            ncLocal.addObserver(forName: Self.imeContextLostName, object: nil, queue: .main) {
-                [weak self] notification in
-                let sessionID = Self.extractSessionID(notification.userInfo)
-                let hadMarkedText = Self.extractBool(notification.userInfo, key: "hadMarkedText")
-                Task { @MainActor in
-                    self?.handleIMEContextLost(sessionID: sessionID, hadMarkedText: hadMarkedText)
-                }
-            }
-        )
-        distributedObservers.append(
-            ncLocal.addObserver(forName: Self.imeSessionStartedName, object: nil, queue: .main) {
-                [weak self] notification in
-                let sessionID = Self.extractSessionID(notification.userInfo)
-                Task { @MainActor in
-                    self?.handleIMESessionStarted(sessionID: sessionID)
-                }
-            }
-        )
         workspaceObservers.append(
             nc.addObserver(
                 forName: NSWorkspace.didTerminateApplicationNotification,
@@ -1051,8 +997,7 @@ final class AppState {
         )
     }
 
-    private func handleIMESubmit(sessionID: UUID?) {
-        guard isNotificationForActiveSession(sessionID) else { return }
+    func handleIMESubmit() {
         switch hotkeyState {
         case .held(let session), .released(let session):
             pendingTimer?.cancel()
@@ -1066,8 +1011,7 @@ final class AppState {
         }
     }
 
-    private func handleIMECancel(sessionID: UUID?) {
-        guard isNotificationForActiveSession(sessionID) else { return }
+    func handleIMECancel() {
         switch hotkeyState {
         case .held(let session), .released(let session):
             pendingTimer?.cancel()
@@ -1081,8 +1025,7 @@ final class AppState {
         }
     }
 
-    private func handleIMEUserTyped(sessionID: UUID?) {
-        guard isNotificationForActiveSession(sessionID) else { return }
+    func handleIMEUserTyped() {
         switch hotkeyState {
         case .held(let session), .released(let session):
             pendingTimer?.cancel()
@@ -1096,11 +1039,10 @@ final class AppState {
         }
     }
 
-    private func handleIMEContextLost(sessionID: UUID?, hadMarkedText: Bool?) {
-        guard isNotificationForActiveSession(sessionID) else { return }
+    func handleIMEContextLost(hadMarkedText: Bool) {
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         beeLog(
-            "SESSION: imeContextLost id=\(hotkeyState.session?.id.uuidString.prefix(8) ?? "nil") hotkey=\(String(describing: hotkeyState)) imeState=\(imeSessionState) targetPID=\(activeSessionTarget?.pid.map(String.init) ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil") hadMarkedText=\(hadMarkedText.map(String.init) ?? "nil")"
+            "SESSION: imeContextLost id=\(hotkeyState.session?.id.uuidString.prefix(8) ?? "nil") hotkey=\(String(describing: hotkeyState)) imeState=\(imeSessionState) targetPID=\(activeSessionTarget?.pid.map(String.init) ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil") hadMarkedText=\(hadMarkedText)"
         )
 
         guard let session = hotkeyState.session else { return }
@@ -1109,11 +1051,10 @@ final class AppState {
         Task { await session.routeDidBecomeInactive(reason: "imeContextLost") }
     }
 
-    private func handleIMESessionStarted(sessionID: UUID?) {
-        guard isNotificationForActiveSession(sessionID) else { return }
+    func handleIMESessionStarted() {
         guard imeSessionState != .active else { return }
         beeLog(
-            "SESSION: handleIMESessionStarted session=\(sessionID?.uuidString.prefix(8) ?? "nil") hotkey=\(String(describing: hotkeyState)) imeState(before)=\(imeSessionState)"
+            "SESSION: handleIMESessionStarted hotkey=\(String(describing: hotkeyState)) imeState(before)=\(imeSessionState)"
         )
 
         switch hotkeyState {
@@ -1145,24 +1086,6 @@ final class AppState {
         beeLog("SESSION: target terminated pid=\(processIdentifier)")
         transitionToIdle()
         Task { await session.cancel() }
-    }
-
-    private func isNotificationForActiveSession(_ sessionID: UUID?) -> Bool {
-        guard let currentID = hotkeyState.session?.id, let sessionID else { return false }
-        return sessionID == currentID
-    }
-
-    nonisolated private static func extractSessionID(_ userInfo: [AnyHashable: Any]?) -> UUID? {
-        guard let raw = userInfo?["sessionID"] as? String else {
-            return nil
-        }
-        return UUID(uuidString: raw)
-    }
-
-    nonisolated private static func extractBool(_ userInfo: [AnyHashable: Any]?, key: String)
-        -> Bool?
-    {
-        userInfo?[key] as? Bool
     }
 
     private func transitionToIdle() {
