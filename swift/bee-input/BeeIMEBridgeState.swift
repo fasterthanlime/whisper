@@ -15,6 +15,9 @@ final class BeeIMESession {
     /// Stashed because by the time deactivateServer runs, controller.client() is already swapped.
     var lastUsedClient: (any IMKTextInput & NSObjectProtocol)?
 
+    /// The input context captured at activate time, for discardMarkedText() on context switch.
+    weak var inputContext: NSTextInputContext?
+
     var currentMarkedText: String = ""
     var lastCommittedText: String = ""
 
@@ -180,25 +183,33 @@ final class BeeIMEBridgeState: NSObject {
 
     /// Returns true if this is a fresh activation (not just a controller update).
     @discardableResult
-    func activate(_ controller: BeeInputController, pid: pid_t?, clientID: String?) -> Bool {
+    func activate(_ controller: BeeInputController, pid: pid_t?, clientID: String?, inputContext: NSTextInputContext?) -> Bool {
         if case .active(let session, let pending) = state {
             beeInputLog(
                 "activate: already active, updating controller pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") pendingLen=\(pending?.utf16.count ?? 0)"
             )
-            // Clear marked text on the old client before it becomes unreachable
-            if !session.currentMarkedText.isEmpty, let oldClient = session.lastUsedClient {
-                beeInputLog("activate: clearing stale composition on old client")
-                oldClient.setMarkedText(
-                    "",
-                    selectionRange: NSRange(location: 0, length: 0),
-                    replacementRange: NSRange(location: NSNotFound, length: 0))
+            // Clear marked text via the stashed input context before it becomes unreachable
+            if !session.currentMarkedText.isEmpty {
+                if let ctx = session.inputContext {
+                    beeInputLog("activate: discardMarkedText via stashed inputContext")
+                    ctx.discardMarkedText()
+                } else if let oldClient = session.lastUsedClient {
+                    beeInputLog("activate: clearing stale composition on old client (no inputContext)")
+                    oldClient.setMarkedText(
+                        "",
+                        selectionRange: NSRange(location: 0, length: 0),
+                        replacementRange: NSRange(location: NSNotFound, length: 0))
+                }
                 session.currentMarkedText = ""
                 session.lastUsedClient = nil
+                session.inputContext = nil
             }
             session.controller = controller
+            session.inputContext = inputContext
             return false
         }
         let session = BeeIMESession(controller: controller, pid: pid, clientID: clientID)
+        session.inputContext = inputContext
         state = .active(session, pendingText: nil)
         beeInputLog(
             "state → active pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil")")
