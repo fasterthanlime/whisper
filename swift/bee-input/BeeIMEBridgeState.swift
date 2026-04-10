@@ -10,6 +10,7 @@ final class BeeIMESession {
     weak var controller: BeeInputController?
     let pid: pid_t?
     let clientID: String?
+    let bundleID: String?
 
     var currentMarkedText: String = ""
     var lastCommittedText: String = ""
@@ -18,10 +19,11 @@ final class BeeIMESession {
     private var heartbeatTimer: Timer?
     private var heartbeatIndex: Int = 0
 
-    init(controller: BeeInputController, pid: pid_t?, clientID: String?) {
+    init(controller: BeeInputController, pid: pid_t?, clientID: String?, bundleID: String?) {
         self.controller = controller
         self.pid = pid
         self.clientID = clientID
+        self.bundleID = bundleID
     }
 
     func startHeartbeat() {
@@ -210,12 +212,13 @@ final class BeeIMEBridgeState: NSObject {
             session.controller = controller
             return false
         }
-        let session = BeeIMESession(controller: controller, pid: pid, clientID: clientID)
+        let bundleID = (controller.client() as? (any IMKTextInput & NSObjectProtocol))?.bundleIdentifier()
+        let session = BeeIMESession(controller: controller, pid: pid, clientID: clientID, bundleID: bundleID)
         state = .active(session, pendingText: nil)
         // E-004: heartbeat disabled to isolate cleanup experiment
         // session.startHeartbeat()
         beeInputLog(
-            "state → active pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil")")
+            "state → active pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") bundle=\(bundleID ?? "nil")")
         return true
     }
 
@@ -225,9 +228,10 @@ final class BeeIMEBridgeState: NSObject {
         session?.stopHeartbeat()
 
         // If we're leaving marked text behind, record it for cleanup on reactivation
+        // Use the session's stored bundleID (captured at activation time), NOT
+        // controller.client() which may already point at the new app (F-013).
         let markedLen = session?.currentMarkedText.utf16.count ?? 0
-        if markedLen > 0, let client = controller.client() as? (any IMKTextInput & NSObjectProtocol),
-           let bundle = client.bundleIdentifier() {
+        if markedLen > 0, let bundle = session?.bundleID {
             pendingCleanup = PendingCleanup(bundleID: bundle, markedTextUTF16Length: markedLen)
             beeInputLog("state → idle (pendingCleanup: bundle=\(bundle) len=\(markedLen))")
         } else {
