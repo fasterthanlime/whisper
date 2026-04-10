@@ -3,6 +3,8 @@ import Carbon
 import Foundation
 import InputMethodKit
 
+// MARK: - Session
+
 /// Holds all per-activation state. Lives on the bridge, not on the controller.
 /// IMKInputController instances are transient — the OS can create new ones
 /// before deactivating the old, and both share the same client().
@@ -26,13 +28,13 @@ final class BeeIMESession {
 
     func handleSetMarkedText(_ text: String) {
         guard let client = controller?.client() else {
-            beeInputLog("handleSetMarkedText: no client, dropping")
+            beeInputLog("⚠️ DROP  handleSetMarkedText — no client")
             return
         }
 
         currentMarkedText = text
         beeInputLog(
-            "handleSetMarkedText: pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)"
+            "📝 MARKED len=\(text.utf16.count) client=\(clientID ?? "?") \"\(text.prefix(80))\""
         )
 
         let attributed = NSAttributedString(
@@ -48,7 +50,7 @@ final class BeeIMESession {
 
     func handleCommitText(_ text: String, submit: Bool = false) {
         guard let client = controller?.client() else {
-            beeInputLog("handleCommitText: no client, dropping")
+            beeInputLog("⚠️ DROP  handleCommitText — no client")
             return
         }
 
@@ -62,7 +64,7 @@ final class BeeIMESession {
         }
 
         beeInputLog(
-            "commitText: clientID=\(clientID ?? "nil") submit=\(submit) text=\(finalText.prefix(80).debugDescription)"
+            "✅ COMMIT len=\(finalText.utf16.count) submit=\(submit) client=\(clientID ?? "?") \"\(finalText.prefix(80))\""
         )
         currentMarkedText = ""
         let textWithSpace = finalText + " "
@@ -75,7 +77,7 @@ final class BeeIMESession {
 
     func handleReplaceText(oldText: String, newText: String) {
         guard let client = controller?.client() else {
-            beeInputLog("handleReplaceText: no client, dropping")
+            beeInputLog("⚠️ DROP  handleReplaceText — no client")
             return
         }
         let sel = client.selectedRange()
@@ -85,7 +87,7 @@ final class BeeIMESession {
         let replaceRange = NSRange(location: replaceStart, length: oldLen)
         let newWithSpace = newText + " "
         beeInputLog(
-            "handleReplaceText: clientID=\(clientID ?? "nil") old=\(oldWithSpace.prefix(60).debugDescription) new=\(newWithSpace.prefix(60).debugDescription)"
+            "🔄 REPLACE client=\(clientID ?? "?") \"\(oldWithSpace.prefix(60))\" → \"\(newWithSpace.prefix(60))\""
         )
         client.insertText(
             newWithSpace,
@@ -140,7 +142,7 @@ final class BeeIMEBridgeState: NSObject {
     func activate(_ controller: BeeInputController, pid: pid_t?, clientID: String?) -> Bool {
         if case .active(let session, let pending) = state {
             beeInputLog(
-                "activate: already active, updating controller pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") pendingLen=\(pending?.utf16.count ?? 0)"
+                "🟢 REACTIVATE updating controller pid=\(pid.map(String.init) ?? "-") client=\(clientID ?? "-") pendingLen=\(pending?.utf16.count ?? 0)"
             )
             session.controller = controller
             return false
@@ -150,7 +152,7 @@ final class BeeIMEBridgeState: NSObject {
             controller: controller, pid: pid, clientID: clientID, bundleID: bundleID)
         state = .active(session, pendingText: nil)
         beeInputLog(
-            "state → active pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") bundle=\(bundleID ?? "nil")"
+            "🟢 ACTIVATE pid=\(pid.map(String.init) ?? "-") client=\(clientID ?? "-") bundle=\(bundleID ?? "-")"
         )
         return true
     }
@@ -158,23 +160,21 @@ final class BeeIMEBridgeState: NSObject {
     func deactivate(_ controller: BeeInputController) {
         guard activeController === controller else { return }
         state = .idle
-        beeInputLog("state → idle")
+        beeInputLog("🔴 DEACTIVATE → idle")
     }
 
     // MARK: - Text routing
 
     func flushPending() {
         guard case .active(let session, let text?) = state else { return }
-        // Only deliver to the original client to prevent text leakage
-        // into apps we switched into during dictation.
         guard session.clientID == dictationOriginClientID else {
             beeInputLog(
-                "flushPending: client mismatch, dropping (origin=\(dictationOriginClientID ?? "nil") current=\(session.clientID ?? "nil"))"
+                "🚫 BLOCKED flushPending — origin=\(dictationOriginClientID ?? "-") current=\(session.clientID ?? "-")"
             )
             return
         }
         beeInputLog(
-            "flushPending: delivering len=\(text.utf16.count) text=\(text.prefix(60).debugDescription)"
+            "📦 FLUSH len=\(text.utf16.count) → \"\(text.prefix(60))\""
         )
         state = .active(session, pendingText: nil)
         session.handleSetMarkedText(text)
@@ -182,7 +182,7 @@ final class BeeIMEBridgeState: NSObject {
 
     func setMarkedText(_ text: String) {
         guard case .active(let session, _) = state else {
-            beeInputLog("setMarkedText: not active, dropping")
+            beeInputLog("⚠️ DROP  setMarkedText — not active")
             return
         }
 
@@ -190,13 +190,13 @@ final class BeeIMEBridgeState: NSObject {
         if dictationOriginClientID == nil {
             dictationOriginClientID = session.clientID
             dictationOriginClient = session.controller?.client()
-            beeInputLog("setMarkedText: captured origin clientID=\(session.clientID ?? "nil")")
+            beeInputLog("🎯 ORIGIN captured client=\(session.clientID ?? "-")")
         }
 
         // Only deliver to the original client
         if session.clientID != dictationOriginClientID {
             beeInputLog(
-                "setMarkedText: client mismatch, dropping (origin=\(dictationOriginClientID ?? "nil") current=\(session.clientID ?? "nil"))"
+                "🚫 BLOCKED setMarkedText — origin=\(dictationOriginClientID ?? "-") current=\(session.clientID ?? "-")"
             )
             return
         }
@@ -205,7 +205,7 @@ final class BeeIMEBridgeState: NSObject {
             session.handleSetMarkedText(text)
         } else {
             beeInputLog(
-                "setMarkedText: controller lost, queuing clientID=\(session.clientID ?? "nil") len=\(text.utf16.count)"
+                "⏳ QUEUED setMarkedText len=\(text.utf16.count) (controller lost, client=\(session.clientID ?? "-"))"
             )
             state = .active(session, pendingText: text)
         }
@@ -213,17 +213,17 @@ final class BeeIMEBridgeState: NSObject {
 
     func commitText(_ text: String, submit: Bool = false) {
         guard case .active(let session, _) = state else {
-            beeInputLog("commitText: not active, dropping")
+            beeInputLog("⚠️ DROP  commitText — not active")
             dictationOriginClientID = nil
+            dictationOriginClient = nil
             return
         }
-        // Only commit text to the original client to prevent
-        // injecting text into apps we switched into during dictation.
         guard session.clientID == dictationOriginClientID else {
             beeInputLog(
-                "commitText: client mismatch, dropping (origin=\(dictationOriginClientID ?? "nil") current=\(session.clientID ?? "nil"))"
+                "🚫 BLOCKED commitText — origin=\(dictationOriginClientID ?? "-") current=\(session.clientID ?? "-")"
             )
             dictationOriginClientID = nil
+            dictationOriginClient = nil
             return
         }
         session.handleCommitText(text, submit: submit)
@@ -233,7 +233,7 @@ final class BeeIMEBridgeState: NSObject {
 
     func cancelInput() {
         guard case .active(let session, _) = state else {
-            beeInputLog("cancelInput: not active, dropping")
+            beeInputLog("⚠️ DROP  cancelInput — not active")
             dictationOriginClientID = nil
             dictationOriginClient = nil
             return
@@ -247,25 +247,24 @@ final class BeeIMEBridgeState: NSObject {
                 selectionRange: NSRange(location: 0, length: 0),
                 replacementRange: NSRange(location: NSNotFound, length: 0)
             )
+            beeInputLog("🧹 CLEAR  marked text in origin client=\(dictationOriginClientID ?? "-")")
         }
         if session.clientID == dictationOriginClientID {
             session.currentMarkedText = ""
         }
         dictationOriginClientID = nil
         dictationOriginClient = nil
-        beeInputLog("cancelInput: done, cleared origin")
+        beeInputLog("🗑️ CANCEL  done, origin cleared")
     }
 
     func replaceText(oldText: String, newText: String) {
         guard let session = currentSession else {
-            beeInputLog("replaceText: no active session, dropping")
+            beeInputLog("⚠️ DROP  replaceText — no active session")
             return
         }
-        // Only deliver to the original client to prevent text replacement
-        // in apps we switched into during dictation.
         guard session.clientID == dictationOriginClientID else {
             beeInputLog(
-                "replaceText: client mismatch, dropping (origin=\(dictationOriginClientID ?? "nil") current=\(session.clientID ?? "nil"))"
+                "🚫 BLOCKED replaceText — origin=\(dictationOriginClientID ?? "-") current=\(session.clientID ?? "-")"
             )
             return
         }
