@@ -532,7 +532,15 @@ fn build_word_segment_candidates(
 
     let mut candidate_ranges = Vec::<Range<usize>>::new();
     if let Some(transcript_token_range) = transcript_token_range.clone() {
-        let projected = utterance_alignment.project_left_range(transcript_token_range.clone());
+        let projected = utterance_alignment
+            .project_left_range(transcript_token_range.clone())
+            .map(|range| {
+                expand_degenerate_projected_range(
+                    range,
+                    transcript_tokens.len(),
+                    utterance_zipa_normalized.len(),
+                )
+            });
         tracing::debug!(
             tokens = %transcript_tokens.join(" "),
             token_range = ?transcript_token_range,
@@ -602,6 +610,25 @@ fn build_word_segment_candidates(
             })
         })
         .collect()
+}
+
+fn expand_degenerate_projected_range(
+    range: Range<usize>,
+    transcript_len: usize,
+    utterance_len: usize,
+) -> Range<usize> {
+    if range.start != range.end {
+        return range;
+    }
+
+    let width = transcript_len.clamp(1, 4);
+    let start = range.start.min(utterance_len);
+    let end = (start + width).min(utterance_len);
+    if end > start {
+        start..end
+    } else {
+        start.saturating_sub(width.min(start))..start
+    }
 }
 
 fn segment_local_alignment_score(
@@ -886,8 +913,8 @@ pub fn normalize_zipa_raw_for_alignment(
 #[cfg(test)]
 mod tests {
     use super::{
-        partition_word_alignment_windows, select_segmental_word_windows,
-        timed_range_for_normalized_range,
+        expand_degenerate_projected_range, partition_word_alignment_windows,
+        select_segmental_word_windows, timed_range_for_normalized_range,
     };
     use bee_phonetic::{
         AlignmentOp, AlignmentOpKind, ComparisonToken,
@@ -962,6 +989,17 @@ mod tests {
         assert_eq!(second.zipa_norm_range, 3..6);
         assert_eq!(first.ops.len(), 3);
         assert_eq!(second.ops.len(), 3);
+    }
+
+    #[test]
+    fn degenerate_projected_range_expands_forward() {
+        assert_eq!(expand_degenerate_projected_range(0..0, 3, 10), 0..3);
+        assert_eq!(expand_degenerate_projected_range(5..5, 2, 10), 5..7);
+    }
+
+    #[test]
+    fn degenerate_projected_range_expands_backward_at_end() {
+        assert_eq!(expand_degenerate_projected_range(10..10, 4, 10), 6..10);
     }
 
     #[test]
