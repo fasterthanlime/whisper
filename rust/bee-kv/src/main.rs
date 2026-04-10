@@ -28,6 +28,8 @@ const HOP_LENGTH: usize = 160;
 const DEFAULT_WAV_RELATIVE_TO_CRATE: &str = "../../.artifacts/repros/frozen/EB54CF36.wav";
 const DEFAULT_START_POSITION_FOR_FRESH_FOLLOWUP: usize = 0;
 const DEFAULT_CHUNK_MS: usize = 2_000;
+const DEFAULT_ROLLBACK_MS: usize = 1_000;
+const DEFAULT_BRIDGE_MS: usize = 1_000;
 const DEFAULT_LANE_B_FIRST_CHUNK_MS: usize = 3_000;
 const DEFAULT_REPLAY_CHUNK_INDEX: usize = 1;
 const DEFAULT_TRUNCATE_TOKENS: usize = 4;
@@ -180,6 +182,55 @@ fn main() -> Result<()> {
             )?;
             print_summary(&summary);
             print_truncate_replay_experiment(&experiment);
+        }
+        Mode::SlidingWindowTimedRollback => {
+            let experiment = decode_sliding_window_timed_rollback(
+                &model,
+                &tokenizer,
+                &samples,
+                &thinker,
+                &args.language,
+                &args.context,
+                args.max_new_tokens,
+                args.chunk_ms,
+                args.rollback_ms,
+                &args.wav_path,
+            )?;
+            print_summary(&summary);
+            print_sliding_window_timed_rollback_experiment(&experiment);
+        }
+        Mode::SlidingWindowFullReplay => {
+            let experiment = decode_sliding_window_full_replay(
+                &model,
+                &tokenizer,
+                &samples,
+                &thinker,
+                &args.language,
+                &args.context,
+                args.max_new_tokens,
+                args.chunk_ms,
+                args.rollback_ms,
+                &args.wav_path,
+            )?;
+            print_summary(&summary);
+            print_sliding_window_timed_rollback_experiment(&experiment);
+        }
+        Mode::SlidingWindowBridgeReplay => {
+            let experiment = decode_sliding_window_bridge_replay(
+                &model,
+                &tokenizer,
+                &samples,
+                &thinker,
+                &args.language,
+                &args.context,
+                args.max_new_tokens,
+                args.chunk_ms,
+                args.bridge_ms,
+                args.rollback_ms,
+                &args.wav_path,
+            )?;
+            print_summary(&summary);
+            print_sliding_window_timed_rollback_experiment(&experiment);
         }
         Mode::DualLaneFollowup => {
             let experiment = decode_dual_lane_followup(
@@ -553,6 +604,349 @@ fn decode_dual_lane_followup(
     })
 }
 
+fn decode_sliding_window_timed_rollback(
+    model: &Qwen3ASRModel,
+    tokenizer: &Tokenizer,
+    samples: &[f32],
+    thinker: &bee_qwen3_asr::config::ThinkerConfig,
+    language: &str,
+    context: &str,
+    max_new_tokens: usize,
+    chunk_ms: usize,
+    rollback_ms: usize,
+    wav_path: &Path,
+) -> Result<SlidingWindowTimedRollbackExperimentResult> {
+    let window_samples = ms_to_samples(chunk_ms)?;
+    let rollback_samples = ms_to_samples(rollback_ms)?;
+    if rollback_samples >= window_samples {
+        bail!(
+            "rollback must be smaller than window: rollback_ms={} chunk_ms={}",
+            rollback_ms,
+            chunk_ms
+        );
+    }
+
+    let stride_samples = window_samples - rollback_samples;
+    let window_plan = build_overlapping_window_plan(samples.len(), window_samples, stride_samples)?;
+    let mel_extractor = MelExtractor::new(
+        N_FFT,
+        HOP_LENGTH,
+        thinker.audio_config.num_mel_bins,
+        SAMPLE_RATE,
+    );
+    let probe_ids = Array::from_slice(&[0_i32], &[1, 1]);
+    let embed_dtype = model.model.embed_tokens.forward(&probe_ids)?.dtype();
+
+    let mut cache = None;
+    let mut start_position = 0usize;
+    let mut window_runs = Vec::new();
+
+    for (window_index, window) in window_plan.iter().enumerate() {
+        let chunk_samples = &samples[window.start_sample..window.end_sample];
+        let chunk_run = decode_chunk_followup_step(
+            model,
+            tokenizer,
+            &mel_extractor,
+            embed_dtype,
+            chunk_samples,
+            window_index,
+            language,
+            context,
+            max_new_tokens,
+            &mut cache,
+            start_position,
+            window.start_sample,
+            window.end_sample,
+            None,
+        )?;
+
+        let rollback = if window_index + 1 < window_plan.len() {
+            let keep_until_sample = window.end_sample.saturating_sub(rollback_samples);
+            let keep_until_secs =
+                (keep_until_sample.saturating_sub(window.start_sample)) as f64 / SAMPLE_RATE as f64;
+            let keep = timed_generated_prefix_for_cut(
+                tokenizer,
+                &chunk_run,
+                chunk_samples,
+                keep_until_secs,
+            )?;
+            let rollback_position =
+                chunk_run.start_position + chunk_run.prompt_tokens + keep.kept_token_count;
+            truncate_cache(&mut cache, rollback_position)?;
+            start_position = rollback_position;
+            Some(WindowRollbackDecision {
+                keep_until_secs,
+                replay_until_secs: None,
+                kept_word_count: keep.kept_word_count,
+                kept_token_count: keep.kept_token_count,
+                kept_text: keep.kept_text,
+                bridge_text: None,
+                rollback_position,
+            })
+        } else {
+            start_position = chunk_run.end_position;
+            None
+        };
+
+        window_runs.push(SlidingWindowRun {
+            chunk_run,
+            rollback,
+            replayed_prefix_text: None,
+        });
+    }
+
+    let html_path = write_sliding_window_timed_rollback_html(
+        "sliding-window-timed-rollback",
+        &window_runs,
+        samples,
+        wav_path,
+    )?;
+
+    Ok(SlidingWindowTimedRollbackExperimentResult {
+        mode_label: "sliding-window-timed-rollback",
+        chunk_ms,
+        rollback_ms,
+        stride_ms: (stride_samples * 1000) / SAMPLE_RATE as usize,
+        window_runs,
+        html_path,
+    })
+}
+
+fn decode_sliding_window_full_replay(
+    model: &Qwen3ASRModel,
+    tokenizer: &Tokenizer,
+    samples: &[f32],
+    thinker: &bee_qwen3_asr::config::ThinkerConfig,
+    language: &str,
+    context: &str,
+    max_new_tokens: usize,
+    chunk_ms: usize,
+    rollback_ms: usize,
+    wav_path: &Path,
+) -> Result<SlidingWindowTimedRollbackExperimentResult> {
+    let window_samples = ms_to_samples(chunk_ms)?;
+    let rollback_samples = ms_to_samples(rollback_ms)?;
+    if rollback_samples >= window_samples {
+        bail!(
+            "rollback must be smaller than window: rollback_ms={} chunk_ms={}",
+            rollback_ms,
+            chunk_ms
+        );
+    }
+
+    let stride_samples = window_samples - rollback_samples;
+    let window_plan = build_overlapping_window_plan(samples.len(), window_samples, stride_samples)?;
+    let mel_extractor = MelExtractor::new(
+        N_FFT,
+        HOP_LENGTH,
+        thinker.audio_config.num_mel_bins,
+        SAMPLE_RATE,
+    );
+    let probe_ids = Array::from_slice(&[0_i32], &[1, 1]);
+    let embed_dtype = model.model.embed_tokens.forward(&probe_ids)?.dtype();
+
+    let mut cache = None;
+    let mut start_position = 0usize;
+    let mut window_runs = Vec::new();
+    let mut replay_text_for_next: Option<String> = None;
+
+    for (window_index, window) in window_plan.iter().enumerate() {
+        let chunk_samples = &samples[window.start_sample..window.end_sample];
+        let replayed_prefix_text = replay_text_for_next.clone();
+        let chunk_run = decode_chunk_followup_step(
+            model,
+            tokenizer,
+            &mel_extractor,
+            embed_dtype,
+            chunk_samples,
+            window_index,
+            language,
+            context,
+            max_new_tokens,
+            &mut cache,
+            start_position,
+            window.start_sample,
+            window.end_sample,
+            replayed_prefix_text.as_deref(),
+        )?;
+
+        let rollback = if window_index + 1 < window_plan.len() {
+            let keep_until_sample = window.end_sample.saturating_sub(rollback_samples);
+            let keep_until_secs =
+                (keep_until_sample.saturating_sub(window.start_sample)) as f64 / SAMPLE_RATE as f64;
+            let keep = timed_generated_prefix_for_cut(
+                tokenizer,
+                &chunk_run,
+                chunk_samples,
+                keep_until_secs,
+            )?;
+            let rollback_position =
+                chunk_run.start_position + chunk_run.prompt_tokens + keep.kept_token_count;
+            truncate_cache(&mut cache, rollback_position)?;
+            start_position = rollback_position;
+            Some(WindowRollbackDecision {
+                keep_until_secs,
+                replay_until_secs: None,
+                kept_word_count: keep.kept_word_count,
+                kept_token_count: keep.kept_token_count,
+                kept_text: keep.kept_text,
+                bridge_text: None,
+                rollback_position,
+            })
+        } else {
+            start_position = chunk_run.end_position;
+            None
+        };
+
+        replay_text_for_next =
+            (!chunk_run.transcript.is_empty()).then(|| chunk_run.transcript.clone());
+        window_runs.push(SlidingWindowRun {
+            chunk_run,
+            rollback,
+            replayed_prefix_text,
+        });
+    }
+
+    let html_path = write_sliding_window_timed_rollback_html(
+        "sliding-window-full-replay",
+        &window_runs,
+        samples,
+        wav_path,
+    )?;
+
+    Ok(SlidingWindowTimedRollbackExperimentResult {
+        mode_label: "sliding-window-full-replay",
+        chunk_ms,
+        rollback_ms,
+        stride_ms: (stride_samples * 1000) / SAMPLE_RATE as usize,
+        window_runs,
+        html_path,
+    })
+}
+
+fn decode_sliding_window_bridge_replay(
+    model: &Qwen3ASRModel,
+    tokenizer: &Tokenizer,
+    samples: &[f32],
+    thinker: &bee_qwen3_asr::config::ThinkerConfig,
+    language: &str,
+    context: &str,
+    max_new_tokens: usize,
+    chunk_ms: usize,
+    bridge_ms: usize,
+    rollback_ms: usize,
+    wav_path: &Path,
+) -> Result<SlidingWindowTimedRollbackExperimentResult> {
+    let window_samples = ms_to_samples(chunk_ms)?;
+    let committed_samples = window_samples
+        .checked_sub(ms_to_samples(bridge_ms)? + ms_to_samples(rollback_ms)?)
+        .ok_or_else(|| anyhow::anyhow!("committed segment underflow"))?;
+    let bridge_samples = ms_to_samples(bridge_ms)?;
+    if committed_samples == 0 {
+        bail!(
+            "committed segment must be non-zero: bridge_ms={} rollback_ms={} chunk_ms={}",
+            bridge_ms,
+            rollback_ms,
+            chunk_ms
+        );
+    }
+
+    let stride_samples = committed_samples;
+    let window_plan = build_overlapping_window_plan(samples.len(), window_samples, stride_samples)?;
+    let mel_extractor = MelExtractor::new(
+        N_FFT,
+        HOP_LENGTH,
+        thinker.audio_config.num_mel_bins,
+        SAMPLE_RATE,
+    );
+    let probe_ids = Array::from_slice(&[0_i32], &[1, 1]);
+    let embed_dtype = model.model.embed_tokens.forward(&probe_ids)?.dtype();
+
+    let mut cache = None;
+    let mut start_position = 0usize;
+    let mut window_runs = Vec::new();
+    let mut replay_text_for_next: Option<String> = None;
+
+    for (window_index, window) in window_plan.iter().enumerate() {
+        let chunk_samples = &samples[window.start_sample..window.end_sample];
+        let replayed_prefix_text = replay_text_for_next.clone();
+        let chunk_run = decode_chunk_followup_step(
+            model,
+            tokenizer,
+            &mel_extractor,
+            embed_dtype,
+            chunk_samples,
+            window_index,
+            language,
+            context,
+            max_new_tokens,
+            &mut cache,
+            start_position,
+            window.start_sample,
+            window.end_sample,
+            replayed_prefix_text.as_deref(),
+        )?;
+
+        let rollback = if window_index + 1 < window_plan.len() {
+            let keep_until_sample = window.start_sample + committed_samples;
+            let replay_until_sample = keep_until_sample + bridge_samples;
+            let keep_until_secs =
+                (keep_until_sample.saturating_sub(window.start_sample)) as f64 / SAMPLE_RATE as f64;
+            let replay_until_secs = (replay_until_sample.saturating_sub(window.start_sample))
+                as f64
+                / SAMPLE_RATE as f64;
+            let split = timed_generated_bridge_for_cuts(
+                tokenizer,
+                &chunk_run,
+                chunk_samples,
+                keep_until_secs,
+                replay_until_secs,
+            )?;
+            let rollback_position =
+                chunk_run.start_position + chunk_run.prompt_tokens + split.kept_token_count;
+            truncate_cache(&mut cache, rollback_position)?;
+            start_position = rollback_position;
+            replay_text_for_next =
+                (!split.bridge_text.is_empty()).then_some(split.bridge_text.clone());
+            Some(WindowRollbackDecision {
+                keep_until_secs,
+                replay_until_secs: Some(replay_until_secs),
+                kept_word_count: split.kept_word_count,
+                kept_token_count: split.kept_token_count,
+                kept_text: split.kept_text,
+                bridge_text: (!split.bridge_text.is_empty()).then_some(split.bridge_text),
+                rollback_position,
+            })
+        } else {
+            start_position = chunk_run.end_position;
+            replay_text_for_next = None;
+            None
+        };
+
+        window_runs.push(SlidingWindowRun {
+            chunk_run,
+            rollback,
+            replayed_prefix_text,
+        });
+    }
+
+    let html_path = write_sliding_window_timed_rollback_html(
+        "sliding-window-bridge-replay",
+        &window_runs,
+        samples,
+        wav_path,
+    )?;
+
+    Ok(SlidingWindowTimedRollbackExperimentResult {
+        mode_label: "sliding-window-bridge-replay",
+        chunk_ms,
+        rollback_ms,
+        stride_ms: (stride_samples * 1000) / SAMPLE_RATE as usize,
+        window_runs,
+        html_path,
+    })
+}
+
 fn decode_chunk_segment_merge_rollback(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -612,6 +1006,7 @@ fn decode_chunk_segment_merge_rollback(
         0,
         chunk0.start_sample,
         chunk0.end_sample,
+        None,
     )?;
 
     let _original_chunk1 = decode_chunk_followup_step(
@@ -628,6 +1023,7 @@ fn decode_chunk_segment_merge_rollback(
         replay_chunk0.end_position,
         chunk1.start_sample,
         chunk1.end_sample,
+        None,
     )?;
 
     truncate_cache(&mut cache, replay_chunk0.end_position)?;
@@ -646,6 +1042,7 @@ fn decode_chunk_segment_merge_rollback(
         replay_chunk0.end_position,
         chunk1.start_sample,
         chunk2.end_sample,
+        None,
     )?;
 
     let baseline_annotated = annotate_chunk_runs(&baseline_runs, samples)?;
@@ -739,6 +1136,7 @@ fn decode_chunk_segment_merge_boundary_sweep(
             0,
             chunk0.start_sample,
             chunk0.end_sample,
+            None,
         )?;
 
         let _chunk1 = decode_chunk_followup_step(
@@ -755,6 +1153,7 @@ fn decode_chunk_segment_merge_boundary_sweep(
             replay_chunk0.end_position,
             chunk1.start_sample,
             chunk1.end_sample,
+            None,
         )?;
 
         let rollback_position = if offset.is_negative() {
@@ -778,6 +1177,7 @@ fn decode_chunk_segment_merge_boundary_sweep(
             rollback_position,
             chunk1.start_sample,
             chunk2.end_sample,
+            None,
         )?;
 
         sweep_results.push(BoundarySweepResult {
@@ -896,6 +1296,7 @@ fn run_chunked_followup_sequence(
             start_position,
             chunk.start_sample,
             chunk.end_sample,
+            None,
         )?;
         start_position = chunk_run.end_position;
         chunk_runs.push(chunk_run);
@@ -918,6 +1319,7 @@ fn decode_chunk_followup_step(
     start_position: usize,
     start_sample: usize,
     end_sample: usize,
+    replay_text_prefix: Option<&str>,
 ) -> Result<ChunkRun> {
     let (mel_data, n_mels, n_frames) = mel_extractor
         .extract(chunk_samples)
@@ -930,7 +1332,7 @@ fn decode_chunk_followup_step(
     let audio_features = ops::expand_dims(&audio_features, 0)?;
     let audio_features = audio_features.as_dtype(embed_dtype)?;
 
-    let (label, prompt_tokens) = if chunk_index == 0 {
+    let (label, mut prompt_tokens) = if chunk_index == 0 {
         (
             format!("chunk {chunk_index} initial"),
             build_initial_prompt(n_audio_tokens, language, context, tokenizer),
@@ -941,6 +1343,9 @@ fn decode_chunk_followup_step(
             build_followup_prompt(n_audio_tokens, language, tokenizer),
         )
     };
+    if let Some(prefix) = replay_text_prefix.filter(|prefix| !prefix.is_empty()) {
+        prompt_tokens.extend(tokenize_prompt_text(tokenizer, prefix)?);
+    }
 
     let prompt_len = prompt_tokens.len();
     let (generated, _confidence, end_position) = prefill_and_decode(
@@ -1034,6 +1439,39 @@ fn build_chunk_plan(
     Ok(plan)
 }
 
+fn build_overlapping_window_plan(
+    total_samples: usize,
+    window_samples: usize,
+    stride_samples: usize,
+) -> Result<Vec<ChunkPlanEntry>> {
+    if window_samples == 0 {
+        bail!("window size is zero");
+    }
+    if stride_samples == 0 {
+        bail!("stride size is zero");
+    }
+
+    let mut start = 0usize;
+    let mut chunk_index = 0usize;
+    let mut plan = Vec::new();
+
+    while start < total_samples {
+        let end = (start + window_samples).min(total_samples);
+        plan.push(ChunkPlanEntry {
+            chunk_index,
+            start_sample: start,
+            end_sample: end,
+        });
+        if end == total_samples {
+            break;
+        }
+        start = start.saturating_add(stride_samples);
+        chunk_index += 1;
+    }
+
+    Ok(plan)
+}
+
 fn ms_to_samples(chunk_ms: usize) -> Result<usize> {
     let chunk_size_samples = (chunk_ms * SAMPLE_RATE as usize) / 1000;
     if chunk_size_samples == 0 {
@@ -1090,6 +1528,8 @@ struct Args {
     context: String,
     mode: Mode,
     chunk_ms: usize,
+    bridge_ms: usize,
+    rollback_ms: usize,
     rollback_policy: RollbackPolicy,
     replay_chunk_index: usize,
     truncate_tokens: usize,
@@ -1102,6 +1542,8 @@ impl Args {
         let mut mode = Mode::Initial;
         let mut context = String::new();
         let mut chunk_ms = DEFAULT_CHUNK_MS;
+        let mut bridge_ms = DEFAULT_BRIDGE_MS;
+        let mut rollback_ms = DEFAULT_ROLLBACK_MS;
         let mut rollback_policy = RollbackPolicy::TextSuffix;
         let mut replay_chunk_index = DEFAULT_REPLAY_CHUNK_INDEX;
         let mut truncate_tokens = DEFAULT_TRUNCATE_TOKENS;
@@ -1147,6 +1589,36 @@ impl Args {
                 chunk_ms = value
                     .parse::<usize>()
                     .with_context(|| format!("parsing --chunk-ms from '{value}'"))?;
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--bridge-ms=") {
+                bridge_ms = value
+                    .parse::<usize>()
+                    .with_context(|| format!("parsing --bridge-ms from '{value}'"))?;
+                continue;
+            }
+            if arg == "--bridge-ms" {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--bridge-ms requires a value"))?;
+                bridge_ms = value
+                    .parse::<usize>()
+                    .with_context(|| format!("parsing --bridge-ms from '{value}'"))?;
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--rollback-ms=") {
+                rollback_ms = value
+                    .parse::<usize>()
+                    .with_context(|| format!("parsing --rollback-ms from '{value}'"))?;
+                continue;
+            }
+            if arg == "--rollback-ms" {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--rollback-ms requires a value"))?;
+                rollback_ms = value
+                    .parse::<usize>()
+                    .with_context(|| format!("parsing --rollback-ms from '{value}'"))?;
                 continue;
             }
             if let Some(value) = arg.strip_prefix("--rollback-policy=") {
@@ -1247,6 +1719,8 @@ impl Args {
             context,
             mode,
             chunk_ms,
+            bridge_ms,
+            rollback_ms,
             rollback_policy,
             replay_chunk_index,
             truncate_tokens,
@@ -1263,6 +1737,9 @@ enum Mode {
     ChunkedFollowup,
     PrefixRerun,
     TruncateReplay,
+    SlidingWindowTimedRollback,
+    SlidingWindowFullReplay,
+    SlidingWindowBridgeReplay,
     DualLaneFollowup,
     ChunkSegmentMergeRollback,
     ChunkSegmentMergeBoundarySweep,
@@ -1277,6 +1754,9 @@ impl Mode {
             "chunked-followup" => Ok(Self::ChunkedFollowup),
             "prefix-rerun" => Ok(Self::PrefixRerun),
             "truncate-replay" => Ok(Self::TruncateReplay),
+            "sliding-window-timed-rollback" => Ok(Self::SlidingWindowTimedRollback),
+            "sliding-window-full-replay" => Ok(Self::SlidingWindowFullReplay),
+            "sliding-window-bridge-replay" => Ok(Self::SlidingWindowBridgeReplay),
             "dual-lane-followup" => Ok(Self::DualLaneFollowup),
             "chunk-segment-merge-rollback" => Ok(Self::ChunkSegmentMergeRollback),
             "chunk-segment-merge-boundary-sweep" => Ok(Self::ChunkSegmentMergeBoundarySweep),
@@ -1403,6 +1883,31 @@ struct TruncateReplayExperimentResult {
     replay_runs: Vec<ChunkRun>,
 }
 
+struct WindowRollbackDecision {
+    keep_until_secs: f64,
+    replay_until_secs: Option<f64>,
+    kept_word_count: usize,
+    kept_token_count: usize,
+    kept_text: String,
+    bridge_text: Option<String>,
+    rollback_position: usize,
+}
+
+struct SlidingWindowRun {
+    chunk_run: ChunkRun,
+    rollback: Option<WindowRollbackDecision>,
+    replayed_prefix_text: Option<String>,
+}
+
+struct SlidingWindowTimedRollbackExperimentResult {
+    mode_label: &'static str,
+    chunk_ms: usize,
+    rollback_ms: usize,
+    stride_ms: usize,
+    window_runs: Vec<SlidingWindowRun>,
+    html_path: PathBuf,
+}
+
 struct DualLaneFollowupExperimentResult {
     chunk_ms: usize,
     lane_b_first_chunk_ms: usize,
@@ -1444,13 +1949,15 @@ fn default_wav_path() -> PathBuf {
 
 fn print_usage() {
     eprintln!(
-        "usage: bee-kv [--mode MODE] [--context TEXT] [--chunk-ms N] [wav-path] [language] [max-new-tokens]\n\
+        "usage: bee-kv [--mode MODE] [--context TEXT] [--chunk-ms N] [--bridge-ms N] [--rollback-ms N] [wav-path] [language] [max-new-tokens]\n\
          defaults:\n\
            wav-path = {}\n\
            language = {DEFAULT_LANGUAGE}\n\
            max-new-tokens = {DEFAULT_MAX_NEW_TOKENS}\n\
            mode = initial\n\
            chunk-ms = {DEFAULT_CHUNK_MS}\n\
+           bridge-ms = {DEFAULT_BRIDGE_MS}\n\
+           rollback-ms = {DEFAULT_ROLLBACK_MS}\n\
          modes:\n\
            initial\n\
            followup-fresh\n\
@@ -1458,6 +1965,9 @@ fn print_usage() {
            chunked-followup\n\
            prefix-rerun\n\
            truncate-replay\n\
+           sliding-window-timed-rollback\n\
+           sliding-window-full-replay\n\
+           sliding-window-bridge-replay\n\
            dual-lane-followup\n\
            chunk-segment-merge-rollback\n\
            chunk-segment-merge-boundary-sweep\n\
@@ -1534,6 +2044,44 @@ fn print_truncate_replay_experiment(experiment: &TruncateReplayExperimentResult)
     }
     println!("=== replay combined ===");
     println!("{}", combine_transcripts(&experiment.replay_runs));
+    println!();
+}
+
+fn print_sliding_window_timed_rollback_experiment(
+    experiment: &SlidingWindowTimedRollbackExperimentResult,
+) {
+    println!("=== {} ===", experiment.mode_label);
+    println!("chunk_ms={}", experiment.chunk_ms);
+    println!("rollback_ms={}", experiment.rollback_ms);
+    println!("stride_ms={}", experiment.stride_ms);
+    println!();
+
+    for run in &experiment.window_runs {
+        print_chunk_run(&run.chunk_run);
+        if let Some(prefix) = &run.replayed_prefix_text {
+            println!("replayed_prefix_text={}", prefix);
+        }
+        if let Some(rollback) = &run.rollback {
+            println!(
+                "rollback keep_until={:.3}s kept_words={} kept_tokens={} rollback_position={}",
+                rollback.keep_until_secs,
+                rollback.kept_word_count,
+                rollback.kept_token_count,
+                rollback.rollback_position
+            );
+            println!("kept_text={}", rollback.kept_text);
+            if let Some(replay_until_secs) = rollback.replay_until_secs {
+                println!("replay_until={:.3}s", replay_until_secs);
+            }
+            if let Some(bridge_text) = &rollback.bridge_text {
+                println!("bridge_text={}", bridge_text);
+            }
+        } else {
+            println!("rollback final-window");
+        }
+        println!();
+    }
+    println!("html_path={}", experiment.html_path.display());
     println!();
 }
 
@@ -1666,6 +2214,15 @@ struct WordPlacement {
     quality_label: &'static str,
 }
 
+struct SlidingWordPlacement {
+    text: String,
+    start_secs: Option<f64>,
+    end_secs: Option<f64>,
+    quality_label: &'static str,
+    kept: bool,
+    bridge: bool,
+}
+
 fn build_word_placements(chunks: &[ChunkRun], samples: &[f32]) -> Result<Vec<WordPlacement>> {
     let combined_transcript = combine_transcripts(chunks);
     let alignment = build_transcript_alignment(&combined_transcript, samples)?;
@@ -1701,6 +2258,331 @@ fn build_word_placements(chunks: &[ChunkRun], samples: &[f32]) -> Result<Vec<Wor
     Ok(placements)
 }
 
+fn write_sliding_window_timed_rollback_html(
+    mode_label: &str,
+    window_runs: &[SlidingWindowRun],
+    samples: &[f32],
+    wav_path: &Path,
+) -> Result<PathBuf> {
+    let duration_secs = samples.len() as f64 / SAMPLE_RATE as f64;
+    let out_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.artifacts/bee-kv");
+    fs::create_dir_all(&out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+    let out_path = out_dir.join(format!("{mode_label}.html"));
+    let audio_src = file_url_for_path(wav_path)?;
+    let html = render_sliding_window_timed_rollback_html(
+        mode_label,
+        window_runs,
+        samples,
+        duration_secs,
+        &audio_src,
+    )?;
+    fs::write(&out_path, html).with_context(|| format!("writing {}", out_path.display()))?;
+    Ok(out_path)
+}
+
+fn render_sliding_window_timed_rollback_html(
+    mode_label: &str,
+    window_runs: &[SlidingWindowRun],
+    samples: &[f32],
+    total_duration_secs: f64,
+    audio_src: &str,
+) -> Result<String> {
+    let width_px = 1100.0;
+    let row_height_px = 110.0;
+    let mut rows = String::new();
+
+    for (row_index, run) in window_runs.iter().enumerate() {
+        let chunk = &run.chunk_run;
+        let chunk_samples = &samples[chunk.start_sample..chunk.end_sample];
+        let words = build_window_word_placements(run, chunk_samples)?;
+        rows.push_str(&render_sliding_window_row(
+            width_px,
+            row_height_px,
+            row_index,
+            chunk,
+            run.rollback.as_ref(),
+            run.replayed_prefix_text.as_deref(),
+            &words,
+            total_duration_secs,
+            audio_src,
+        ));
+    }
+
+    Ok(format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>bee-kv {mode_label}</title><style>\
+body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f7f4ec;color:#1d1b19;padding:24px;}}\
+.legend{{margin-bottom:18px;font-size:13px;color:#514a41;}}\
+.audio-panel{{margin:0 0 20px 0;padding:12px 14px;border:1px solid #b9b09f;background:#fffdf8;width:{width_px}px;}}\
+.audio-title{{font-weight:700;margin:0 0 8px 0;}}\
+.audio-player{{width:100%;margin:6px 0 0 0;}}\
+.row{{margin-bottom:28px;}}\
+.row-title{{font-weight:700;margin:0 0 6px 0;}}\
+.row-meta{{margin:0 0 8px 0;font-size:13px;color:#5d554b;}}\
+.row-audio{{margin:0 0 8px 0;display:flex;align-items:center;gap:10px;}}\
+.row-audio audio{{width:420px;max-width:100%;}}\
+.transcript-line{{width:{width_px}px;margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#3b352d;}}\
+.timeline{{width:{width_px}px;border:1px solid #b9b09f;background:#fffdf8;position:relative;padding:12px 0;margin-bottom:8px;}}\
+.track{{position:relative;width:{width_px}px;height:{row_height_px}px;border-top:1px solid #d6cfbf;border-bottom:1px solid #d6cfbf;background:linear-gradient(180deg,#fffdf8,#f4efe3);overflow:hidden;}}\
+.prefix-band{{position:absolute;top:4px;height:20px;padding:2px 8px;border-radius:999px;background:#efe2b8;border:1px solid #9a7b2f;color:#5f4b17;font-size:11px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box;}}\
+.word{{text-align:center;vertical-align:middle;position:absolute;height:2em;padding:4px 2px;border-radius:4px;border:1px solid #7a6d56;white-space:nowrap;overflow:visible;font-size:12px;box-sizing:border-box;cursor:default;font-family:\"SF Pro\", serif;}}\
+.word.kept{{background:#cfdcc8;border-color:#71846f;}}\
+.word.bridge{{background:#efe2b8;border-color:#9a7b2f;}}\
+.word.rolled{{background:#e7c2c2;border-color:#9f5d5d;}}\
+.word.no-window,.word.no-timing{{background:#e5d9c9;border-color:#8f7f69;height:22px;font-size:11px;}}\
+.cut{{position:absolute;top:0;width:2px;height:{row_height_px}px;background:#2458a6;}}\
+.cut-label{{position:absolute;top:2px;transform:translateX(6px);font-size:11px;color:#2458a6;font-weight:700;}}\
+.window-start,.window-end{{position:absolute;top:0;width:1px;height:{row_height_px}px;background:#9d9483;}}\
+.window-label{{position:absolute;bottom:2px;transform:translateX(4px);font-size:11px;color:#6d6457;}}\
+.playhead{{position:absolute;top:0;width:2px;height:{row_height_px}px;background:#d97706;pointer-events:none;display:none;}}\
+.axis{{display:flex;justify-content:space-between;font-size:12px;color:#6d6457;margin-top:6px;}}\
+.word:hover::after{{content:attr(data-full-word);position:absolute;left:0;top:-28px;background:#1d1b19;color:#fffdf8;padding:2px 6px;border-radius:4px;white-space:nowrap;z-index:10;font-size:11px;line-height:16px;box-shadow:0 2px 6px rgba(0,0,0,0.18);}}\
+</style></head><body><h1>bee-kv {mode_label}</h1><div class=\"audio-panel\"><div class=\"audio-title\">Full Recording</div><div>Source: {audio_src}</div><audio id=\"master-audio\" class=\"audio-player\" controls preload=\"metadata\" src=\"{audio_src}\"></audio></div><p class=\"legend\">Each row is one decode window. The top yellow band is prompt text replayed into that row. Green words are KV-kept generated words. Yellow words are bridge-region generated words. Red words are re-decoded tail words. Blue line marks the keep cut. Brown line marks the bridge cut. Orange line is the current playhead.</p>{rows}<script>\
+const masterAudio = document.getElementById('master-audio');\
+const chunkAudios = Array.from(document.querySelectorAll('audio[data-window-start]'));\
+const allAudios = [masterAudio, ...chunkAudios].filter(Boolean);\
+let rafId = null;\
+let activeAudio = null;\
+function pauseOthers(active){{ for (const audio of allAudios) {{ if (audio !== active) audio.pause(); }} }}\
+function updatePlayheads(time){{\
+  document.querySelectorAll('[data-row-start]').forEach((row) => {{\
+    const start = Number(row.dataset.rowStart);\
+    const end = Number(row.dataset.rowEnd);\
+    const duration = end - start;\
+    const playhead = row.querySelector('.playhead');\
+    if (!playhead) return;\
+    if (time < start || time > end || duration <= 0) {{ playhead.style.display = 'none'; return; }}\
+    const frac = (time - start) / duration;\
+    playhead.style.display = 'block';\
+    playhead.style.left = `${{Math.max(0, Math.min(1, frac)) * 100}}%`;\
+  }});\
+}}\
+function stopTracking(){{ if (rafId !== null) cancelAnimationFrame(rafId); rafId = null; activeAudio = null; }}\
+function tick(){{\
+  if (!activeAudio || activeAudio.paused || activeAudio.ended) {{ stopTracking(); return; }}\
+  updatePlayheads(activeAudio.currentTime || 0);\
+  rafId = requestAnimationFrame(tick);\
+}}\
+function startTracking(audio){{\
+  pauseOthers(audio);\
+  activeAudio = audio;\
+  if (rafId !== null) cancelAnimationFrame(rafId);\
+  updatePlayheads(audio.currentTime || 0);\
+  rafId = requestAnimationFrame(tick);\
+}}\
+masterAudio.addEventListener('play', () => startTracking(masterAudio));\
+masterAudio.addEventListener('pause', () => {{ if (activeAudio === masterAudio) stopTracking(); }});\
+masterAudio.addEventListener('ended', () => {{ if (activeAudio === masterAudio) stopTracking(); }});\
+masterAudio.addEventListener('seeking', () => updatePlayheads(masterAudio.currentTime || 0));\
+chunkAudios.forEach((audio) => {{\
+  const start = Number(audio.dataset.windowStart);\
+  const end = Number(audio.dataset.windowEnd);\
+  audio.addEventListener('play', () => {{\
+    if (audio.currentTime < start || audio.currentTime >= end) audio.currentTime = start;\
+    startTracking(audio);\
+  }});\
+  audio.addEventListener('seeking', () => {{\
+    if (audio.currentTime < start) audio.currentTime = start;\
+    if (audio.currentTime > end) audio.currentTime = end;\
+    updatePlayheads(audio.currentTime || 0);\
+  }});\
+  audio.addEventListener('pause', () => {{ if (activeAudio === audio) stopTracking(); }});\
+  audio.addEventListener('ended', () => {{ if (activeAudio === audio) stopTracking(); }});\
+  audio.addEventListener('timeupdate', () => {{\
+    if (audio.currentTime >= end) {{ audio.pause(); audio.currentTime = end; }}\
+    updatePlayheads(audio.currentTime || 0);\
+  }});\
+}});\
+updatePlayheads(0);\
+</script></body></html>"
+    ))
+}
+
+fn render_sliding_window_row(
+    width_px: f64,
+    _row_height_px: f64,
+    row_index: usize,
+    chunk: &ChunkRun,
+    rollback: Option<&WindowRollbackDecision>,
+    replayed_prefix_text: Option<&str>,
+    words: &[SlidingWordPlacement],
+    total_duration_secs: f64,
+    audio_src: &str,
+) -> String {
+    let transcript_line = html_escape(&chunk.transcript);
+    let mut markers = String::new();
+    let window_start_secs = chunk.start_sample as f64 / SAMPLE_RATE as f64;
+    let window_end_secs = chunk.end_sample as f64 / SAMPLE_RATE as f64;
+    let window_duration_secs = (chunk.end_sample - chunk.start_sample) as f64 / SAMPLE_RATE as f64;
+
+    markers.push_str(&format!(
+        "<div class=\"window-start\" style=\"left:0px\"></div><div class=\"window-end\" style=\"left:{:.1}px\"></div><div class=\"window-label\" style=\"left:0px\">{:.2}s</div><div class=\"window-label\" style=\"left:{:.1}px\">{:.2}s</div>",
+        width_px,
+        window_start_secs,
+        width_px,
+        window_end_secs
+    ));
+    markers.push_str("<div class=\"playhead\"></div>");
+    if let Some(rollback) = rollback {
+        let cut_x = (rollback.keep_until_secs / window_duration_secs) * width_px;
+        markers.push_str(&format!(
+            "<div class=\"cut\" style=\"left:{cut_x:.1}px\"></div><div class=\"cut-label\" style=\"left:{cut_x:.1}px\">cut @{:.2}s</div>",
+            window_start_secs + rollback.keep_until_secs
+        ));
+        if let Some(replay_until_secs) = rollback.replay_until_secs {
+            let replay_x = (replay_until_secs / window_duration_secs) * width_px;
+            markers.push_str(&format!(
+                "<div class=\"cut\" style=\"left:{replay_x:.1}px;background:#8b5e1a\"></div><div class=\"cut-label\" style=\"left:{replay_x:.1}px;color:#8b5e1a\">bridge @{:.2}s</div>",
+                window_start_secs + replay_until_secs
+            ));
+        }
+    }
+
+    let prefix_band = if let (Some(prefix), Some(rollback)) = (
+        replayed_prefix_text.filter(|text| !text.is_empty()),
+        rollback,
+    ) {
+        let prefix_width = (rollback.keep_until_secs / window_duration_secs) * width_px;
+        format!(
+            "<div class=\"prefix-band\" style=\"left:0px;width:{prefix_width:.1}px\" title=\"replayed prefix\">{}</div>",
+            html_escape(prefix)
+        )
+    } else {
+        String::new()
+    };
+
+    let mut word_divs = String::new();
+    let mut fallback_x = 0.0;
+    let mut lane_end_x = [0.0_f64; 3];
+    let lane_tops = [16.0_f64, 46.0_f64, 76.0_f64];
+    for word in words {
+        let segment_class = if word.kept {
+            "kept"
+        } else if word.bridge {
+            "bridge"
+        } else {
+            "rolled"
+        };
+        let class = format!("word {segment_class} {}", word.quality_label);
+        let (left, width, lane_index) = match (word.start_secs, word.end_secs) {
+            (Some(start), Some(end)) => {
+                let left = (start / window_duration_secs) * width_px;
+                let width = ((end - start).max(0.08) / window_duration_secs) * width_px;
+                let width = width.max(36.0);
+                let mut lane_index = 0usize;
+                while lane_index + 1 < lane_end_x.len() && lane_end_x[lane_index] > left {
+                    lane_index += 1;
+                }
+                if lane_end_x[lane_index] > left && lane_index == lane_end_x.len() - 1 {
+                    lane_index = lane_end_x
+                        .iter()
+                        .enumerate()
+                        .min_by(|a, b| a.1.total_cmp(b.1))
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(0);
+                }
+                lane_end_x[lane_index] = left + width + 6.0;
+                (left, width, lane_index)
+            }
+            _ => {
+                let left = fallback_x;
+                fallback_x += 90.0;
+                (left, 84.0, 2)
+            }
+        };
+        let top = lane_tops[lane_index.min(lane_tops.len() - 1)];
+        word_divs.push_str(&format!(
+            "<div class=\"{class}\" style=\"left:{left:.1}px;top:{top:.1}px;width:{width:.1}px\" title=\"window {start:.2}-{end:.2}s: {text}\" data-full-word=\"{text}\">{text}</div>",
+            start = window_start_secs,
+            end = window_end_secs,
+            text = html_escape(&word.text)
+        ));
+    }
+
+    let meta = if let Some(rollback) = rollback {
+        format!(
+            "audio {:.2}s..{:.2}s | replayed_prefix={} | kept_text={} | bridge_text={} | kept_tokens={} | rollback_position={}",
+            window_start_secs,
+            window_end_secs,
+            html_escape(replayed_prefix_text.unwrap_or("none")),
+            html_escape(&rollback.kept_text),
+            html_escape(rollback.bridge_text.as_deref().unwrap_or("none")),
+            rollback.kept_token_count,
+            rollback.rollback_position
+        )
+    } else {
+        format!(
+            "audio {:.2}s..{:.2}s | final window",
+            window_start_secs, window_end_secs
+        )
+    };
+
+    format!(
+        "<section class=\"row\" data-row-start=\"{:.6}\" data-row-end=\"{:.6}\"><div class=\"row-title\">{}</div><div class=\"row-meta\">{}</div><div class=\"row-audio\"><span>Chunk Audio</span><audio id=\"chunk-audio-{}\" controls preload=\"metadata\" src=\"{}\" data-window-start=\"{:.6}\" data-window-end=\"{:.6}\"></audio></div><div class=\"transcript-line\">{}</div><div class=\"timeline\"><div class=\"track\">{}{}{}</div><div class=\"axis\"><span>0.00s</span><span>{:.2}s window</span><span>{:.2}s total</span></div></div></section>",
+        window_start_secs,
+        window_end_secs,
+        html_escape(&chunk.label),
+        meta,
+        row_index,
+        audio_src,
+        window_start_secs,
+        window_end_secs,
+        transcript_line,
+        prefix_band,
+        markers,
+        word_divs,
+        window_duration_secs,
+        total_duration_secs
+    )
+}
+
+fn build_window_word_placements(
+    run: &SlidingWindowRun,
+    chunk_samples: &[f32],
+) -> Result<Vec<SlidingWordPlacement>> {
+    let transcript = run.chunk_run.transcript.trim();
+    if transcript.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let alignment = build_transcript_alignment(transcript, chunk_samples)?;
+    let word_timings = alignment.word_timings();
+    let kept_word_count = run
+        .rollback
+        .as_ref()
+        .map_or(word_timings.len(), |r| r.kept_word_count);
+    let replay_word_count = run.rollback.as_ref().map_or(word_timings.len(), |r| {
+        let bridge_words = r
+            .bridge_text
+            .as_ref()
+            .map(|text| sentence_word_tokens(text).len())
+            .unwrap_or(0);
+        r.kept_word_count + bridge_words
+    });
+
+    Ok(word_timings
+        .into_iter()
+        .enumerate()
+        .map(|(index, word_timing)| {
+            let (start_secs, end_secs, quality_label) = match word_timing.quality {
+                bee_transcribe::zipa_align::AlignmentQuality::Aligned {
+                    start_secs,
+                    end_secs,
+                } => (Some(start_secs), Some(end_secs), "aligned"),
+                bee_transcribe::zipa_align::AlignmentQuality::NoWindow => (None, None, "no-window"),
+                bee_transcribe::zipa_align::AlignmentQuality::NoTiming => (None, None, "no-timing"),
+            };
+            SlidingWordPlacement {
+                text: word_timing.word.to_string(),
+                start_secs,
+                end_secs,
+                quality_label,
+                kept: index < kept_word_count,
+                bridge: index >= kept_word_count && index < replay_word_count,
+            }
+        })
+        .collect())
+}
+
 fn write_chunk_segment_merge_rollback_html(
     baseline_runs: &[ChunkRun],
     replay_runs: &[ChunkRun],
@@ -1731,7 +2613,7 @@ fn render_word_timeline_html(
     replay_words: &[WordPlacement],
 ) -> String {
     let width_px = 1400.0;
-    let row_height_px = 96.0;
+    let row_height_px = 132.0;
     let baseline_row = render_word_row(
         "Baseline",
         width_px,
@@ -1753,10 +2635,12 @@ fn render_word_timeline_html(
 body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f7f4ec;color:#1d1b19;padding:24px;}}\
 .timeline{{width:{width_px}px;border:1px solid #b9b09f;background:#fffdf8;position:relative;padding:12px 0;margin-bottom:28px;}}\
 .row-title{{font-weight:700;margin:0 0 8px 0;}}\
+.transcript-line{{width:{width_px}px;margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#3b352d;}}\
+.chunk-divider{{color:#8a7f6a;padding:0 6px;}}\
 .track{{position:relative;width:{width_px}px;height:{row_height_px}px;border-top:1px solid #d6cfbf;border-bottom:1px solid #d6cfbf;background:linear-gradient(180deg,#fffdf8,#f4efe3);overflow:hidden;}}\
-.word{{position:absolute;top:18px;height:28px;padding:4px 6px;border-radius:4px;border:1px solid #7a6d56;background:#efe2b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;line-height:18px;box-sizing:border-box;cursor:default;}}\
+.word{{text-align:center;vertical-align:middle;position:absolute;height:2em;padding:4px 2px;border-radius:4px;border:1px solid #7a6d56;background:#efe2b8;white-space:nowrap;overflow:visible;font-size:12px;box-sizing:border-box;cursor:default;font-family:\"SF Pro\", serif;}}\
 .word.chunk-0{{background:#e7d9a8;}} .word.chunk-1{{background:#cfdcc8;}} .word.chunk-2{{background:#d7d0ea;}}\
-.word.no-window,.word.no-timing{{background:#e7c2c2;border-color:#9f5d5d;top:54px;height:22px;font-size:11px;}}\
+.word.no-window,.word.no-timing{{background:#e7c2c2;border-color:#9f5d5d;height:22px;font-size:11px;}}\
 .boundary{{position:absolute;top:0;width:1px;height:{row_height_px}px;background:#9d9483;}}\
 .boundary-label{{position:absolute;top:2px;transform:translateX(4px);font-size:11px;color:#6d6457;}}\
 .axis{{display:flex;justify-content:space-between;font-size:12px;color:#6d6457;margin-top:6px;}}\
@@ -1774,6 +2658,11 @@ fn render_word_row(
     runs: &[ChunkRun],
     words: &[WordPlacement],
 ) -> String {
+    let transcript_line = runs
+        .iter()
+        .map(|chunk| html_escape(&chunk.transcript))
+        .collect::<Vec<_>>()
+        .join("<span class=\"chunk-divider\">|</span>");
     let mut boundaries = String::new();
     for run in runs {
         let x = ((run.end_sample as f64 / SAMPLE_RATE as f64) / duration_secs) * width_px;
@@ -1785,33 +2674,52 @@ fn render_word_row(
 
     let mut word_divs = String::new();
     let mut fallback_x = 0.0;
+    let mut lane_end_x = [0.0_f64; 3];
+    let lane_tops = [20.0_f64, 54.0_f64, 88.0_f64];
     for word in words {
         let class = format!(
             "word chunk-{} {}",
             word.chunk_index.min(2),
             word.quality_label
         );
-        let (left, width) = match (word.start_secs, word.end_secs) {
+        let (left, width, lane_index) = match (word.start_secs, word.end_secs) {
             (Some(start), Some(end)) => {
                 let left = (start / duration_secs) * width_px;
                 let width = ((end - start).max(0.08) / duration_secs) * width_px;
-                (left, width.max(36.0))
+                let width = width.max(36.0);
+                let mut lane_index = 0usize;
+                while lane_index + 1 < lane_end_x.len() && lane_end_x[lane_index] > left {
+                    lane_index += 1;
+                }
+                if lane_end_x[lane_index] > left && lane_index == lane_end_x.len() - 1 {
+                    let min_lane = lane_end_x
+                        .iter()
+                        .enumerate()
+                        .min_by(|a, b| a.1.total_cmp(b.1))
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(0);
+                    lane_index = min_lane;
+                }
+                lane_end_x[lane_index] = left + width + 6.0;
+                (left, width, lane_index)
             }
             _ => {
                 let left = fallback_x;
                 fallback_x += 90.0;
-                (left, 84.0)
+                (left, 84.0, 2)
             }
         };
+        let top = lane_tops[lane_index.min(lane_tops.len() - 1)];
         word_divs.push_str(&format!(
-            "<div class=\"{class}\" style=\"left:{left:.1}px;width:{width:.1}px\" title=\"{title}: {text}\" data-full-word=\"{text}\">{text}</div>",
+            "<div class=\"{class}\" style=\"left:{left:.1}px;top:{top:.1}px;width:{width:.1}px\" title=\"{title}: {text}\" data-full-word=\"{text}\">{text}</div>",
             text = html_escape(&word.text)
         ));
     }
 
     format!(
-        "<section><div class=\"row-title\">{}</div><div class=\"timeline\"><div class=\"track\">{}{}</div><div class=\"axis\"><span>0.00s</span><span>{:.2}s</span></div></div></section>",
+        "<section><div class=\"row-title\">{}</div><div class=\"transcript-line\">{}</div><div class=\"timeline\"><div class=\"track\">{}{}</div><div class=\"axis\"><span>0.00s</span><span>{:.2}s</span></div></div></section>",
         html_escape(title),
+        transcript_line,
         boundaries,
         word_divs,
         duration_secs
@@ -1823,6 +2731,25 @@ fn html_escape(text: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('\"', "&quot;")
+}
+
+fn file_url_for_path(path: &Path) -> Result<String> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::fs::canonicalize(path).with_context(|| format!("canonicalizing {}", path.display()))?
+    };
+    Ok(format!("file://{}", absolute.display()))
+}
+
+fn tokenize_prompt_text(tokenizer: &Tokenizer, text: &str) -> Result<Vec<i32>> {
+    tokenizer
+        .encode_fast(text, false)
+        .map_err(|e| anyhow::anyhow!("encoding prompt text: {e}"))?
+        .get_ids()
+        .iter()
+        .map(|&id| i32::try_from(id).context("prompt token id overflow"))
+        .collect()
 }
 
 fn build_transcript_alignment(transcript: &str, samples: &[f32]) -> Result<TranscriptAlignment> {
@@ -1892,4 +2819,154 @@ fn print_chunk_run(chunk: &ChunkRun) {
     );
     println!("{}", chunk.transcript);
     println!();
+}
+
+struct TimedGeneratedPrefix {
+    kept_word_count: usize,
+    kept_token_count: usize,
+    kept_text: String,
+}
+
+struct TimedGeneratedBridge {
+    kept_word_count: usize,
+    kept_token_count: usize,
+    kept_text: String,
+    bridge_text: String,
+}
+
+fn timed_generated_prefix_for_cut(
+    tokenizer: &Tokenizer,
+    chunk_run: &ChunkRun,
+    chunk_samples: &[f32],
+    keep_until_secs: f64,
+) -> Result<TimedGeneratedPrefix> {
+    let transcript = chunk_run.transcript.trim();
+    if transcript.is_empty() {
+        return Ok(TimedGeneratedPrefix {
+            kept_word_count: 0,
+            kept_token_count: 0,
+            kept_text: String::new(),
+        });
+    }
+
+    let alignment = build_transcript_alignment(transcript, chunk_samples)?;
+    let word_timings = alignment.word_timings();
+    let word_ranges = sentence_word_tokens(transcript);
+    let mut kept_word_count = 0usize;
+
+    for word_timing in &word_timings {
+        match word_timing.quality {
+            bee_transcribe::zipa_align::AlignmentQuality::Aligned { end_secs, .. }
+                if end_secs <= keep_until_secs =>
+            {
+                kept_word_count += 1;
+            }
+            _ => break,
+        }
+    }
+
+    let kept_text = if kept_word_count == 0 {
+        String::new()
+    } else {
+        let end = word_ranges
+            .get(kept_word_count - 1)
+            .map(|word| word.char_end)
+            .ok_or_else(|| anyhow::anyhow!("missing word range for kept prefix"))?;
+        transcript[..end].trim_end().to_string()
+    };
+
+    let kept_token_count = if kept_text.is_empty() {
+        0
+    } else {
+        tokenizer
+            .encode_fast(kept_text.as_str(), false)
+            .map_err(|e| anyhow::anyhow!("encoding kept prefix: {e}"))?
+            .len()
+    };
+
+    Ok(TimedGeneratedPrefix {
+        kept_word_count,
+        kept_token_count,
+        kept_text,
+    })
+}
+
+fn timed_generated_bridge_for_cuts(
+    tokenizer: &Tokenizer,
+    chunk_run: &ChunkRun,
+    chunk_samples: &[f32],
+    keep_until_secs: f64,
+    replay_until_secs: f64,
+) -> Result<TimedGeneratedBridge> {
+    let transcript = chunk_run.transcript.trim();
+    if transcript.is_empty() {
+        return Ok(TimedGeneratedBridge {
+            kept_word_count: 0,
+            kept_token_count: 0,
+            kept_text: String::new(),
+            bridge_text: String::new(),
+        });
+    }
+
+    let alignment = build_transcript_alignment(transcript, chunk_samples)?;
+    let word_timings = alignment.word_timings();
+    let word_ranges = sentence_word_tokens(transcript);
+    let mut kept_word_count = 0usize;
+    let mut replay_word_count = 0usize;
+
+    for word_timing in &word_timings {
+        match word_timing.quality {
+            bee_transcribe::zipa_align::AlignmentQuality::Aligned { end_secs, .. } => {
+                if end_secs <= keep_until_secs {
+                    kept_word_count += 1;
+                    replay_word_count += 1;
+                } else if end_secs <= replay_until_secs {
+                    replay_word_count += 1;
+                } else {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+
+    let kept_text = if kept_word_count == 0 {
+        String::new()
+    } else {
+        let end = word_ranges
+            .get(kept_word_count - 1)
+            .map(|word| word.char_end)
+            .ok_or_else(|| anyhow::anyhow!("missing kept word range"))?;
+        transcript[..end].trim_end().to_string()
+    };
+
+    let bridge_text = if replay_word_count <= kept_word_count {
+        String::new()
+    } else {
+        let start = word_ranges
+            .get(kept_word_count)
+            .map(|word| word.char_start)
+            .ok_or_else(|| anyhow::anyhow!("missing bridge word start"))?;
+        let end = word_ranges
+            .get(replay_word_count - 1)
+            .map(|word| word.char_end)
+            .ok_or_else(|| anyhow::anyhow!("missing bridge word end"))?;
+        transcript[start..end].trim().to_string()
+    };
+
+    let kept_token_count = if kept_text.is_empty() {
+        0
+    } else {
+        tokenizer
+            .encode_fast(kept_text.as_str(), false)
+            .map_err(|e| anyhow::anyhow!("encoding kept bridge prefix: {e}"))?
+            .len()
+    };
+
+    Ok(TimedGeneratedBridge {
+        kept_word_count,
+        kept_token_count,
+        kept_text,
+        bridge_text,
+    })
 }
