@@ -32,7 +32,7 @@ class BeeInputController: IMKInputController {
             beeInputLog(
                 "activateServer: entry senderID=\(senderId) frontmostPID=\(frontmostPID.map(String.init) ?? "nil") clientID=\(currClientIdentity) markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) inputContextCaptured=\(activeInputContext != nil) client=\(describeClient())"
             )
-            let isNew = bridge.activate(self, pid: frontmostPID, clientID: currClientIdentity)
+            let isNew = bridge.activate(self, pid: frontmostPID, clientID: currClientIdentity, inputContext: activeInputContext)
             if isNew {
                 BeeVoxIMEClient.shared.imeAttach()
             }
