@@ -15,50 +15,11 @@ final class BeeIMESession {
     var currentMarkedText: String = ""
     var lastCommittedText: String = ""
 
-    private static let heartbeatEmojis = ["🍎", "🍊", "🍋", "🍇", "🍓", "🫐", "🍑", "🍒", "🥝", "🍍"]
-    private var heartbeatTimer: Timer?
-    private var heartbeatIndex: Int = 0
-
     init(controller: BeeInputController, pid: pid_t?, clientID: String?, bundleID: String?) {
         self.controller = controller
         self.pid = pid
         self.clientID = clientID
         self.bundleID = bundleID
-    }
-
-    func startHeartbeat() {
-        stopHeartbeat()
-        heartbeatIndex = 0
-        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.heartbeatTick()
-            }
-        }
-        heartbeatTick() // fire immediately
-    }
-
-    func stopHeartbeat() {
-        heartbeatTimer?.invalidate()
-        heartbeatTimer = nil
-    }
-
-    private func heartbeatTick() {
-        guard let client = controller?.client() else {
-            beeInputLog("heartbeat: no client")
-            return
-        }
-        let emoji = Self.heartbeatEmojis[heartbeatIndex % Self.heartbeatEmojis.count]
-        heartbeatIndex += 1
-
-        let attributed = NSAttributedString(
-            string: emoji,
-            attributes: [.markedClauseSegment: 0])
-        client.setMarkedText(
-            attributed,
-            selectionRange: NSRange(location: emoji.utf16.count, length: 0),
-            replacementRange: NSRange(location: NSNotFound, length: 0)
-        )
-        beeInputLog("heartbeat: \(emoji) (#\(heartbeatIndex)) clientID=\(clientID ?? "nil") bundle=\(client.bundleIdentifier() ?? "?") markedRange(after)=\(NSStringFromRange(client.markedRange()))")
     }
 
     // MARK: - Text handling
@@ -148,14 +109,6 @@ final class BeeIMEBridgeState: NSObject {
 
     private(set) var state: State = .idle
 
-    /// When we deactivate with marked text still in the client, record it
-    /// so the next activate for the same bundle can attempt cleanup.
-    struct PendingCleanup {
-        let bundleID: String
-        let markedTextUTF16Length: Int
-    }
-    private(set) var pendingCleanup: PendingCleanup? = nil
-
     // MARK: - Queries
 
     var isDictating: Bool {
@@ -177,17 +130,15 @@ final class BeeIMEBridgeState: NSObject {
     /// Returns true if this is a fresh activation (not just a controller update).
     @discardableResult
     func activate(_ controller: BeeInputController, pid: pid_t?, clientID: String?) -> Bool {
-        // Check if we need to clean up marked text left behind in a previous session.
-        // Only fire when the proxy has reconnected (markedRange != NSNotFound) — F-015.
-        if let cleanup = pendingCleanup,
-           let client = controller.client() as? (any IMKTextInput & NSObjectProtocol),
-           client.bundleIdentifier() == cleanup.bundleID {
-            let markedBefore = client.markedRange()
-            let selectedBefore = client.selectedRange()
-
-            if markedBefore.location != NSNotFound {
+        // If there's stale marked text from a previous session, clean it up.
+        // Query the proxy directly (F-006: markedRange survives round-trip).
+        if case .idle = state,
+           let client = controller.client() as? (any IMKTextInput & NSObjectProtocol) {
+            let marked = client.markedRange()
+            if marked.location != NSNotFound && marked.length > 0 {
+                let markedText = client.attributedSubstring(from: marked)?.string
                 beeInputLog(
-                    "activate: attempting cleanup for \(cleanup.bundleID) len=\(cleanup.markedTextUTF16Length) markedRange=\(NSStringFromRange(markedBefore)) selectedRange=\(NSStringFromRange(selectedBefore))"
+                    "activate: stale marked text detected markedRange=\(NSStringFromRange(marked)) text=\(markedText?.prefix(80).debugDescription ?? "nil"), clearing"
                 )
 
                 let empty = NSAttributedString(string: "", attributes: [.markedClauseSegment: 0])
@@ -198,17 +149,9 @@ final class BeeIMEBridgeState: NSObject {
                 )
 
                 let markedAfter = client.markedRange()
-                let selectedAfter = client.selectedRange()
                 beeInputLog(
-                    "activate: cleanup result markedRange=\(NSStringFromRange(markedAfter)) selectedRange=\(NSStringFromRange(selectedAfter))"
+                    "activate: cleanup result markedRange=\(NSStringFromRange(markedAfter))"
                 )
-
-                pendingCleanup = nil
-            } else {
-                beeInputLog(
-                    "activate: cleanup deferred for \(cleanup.bundleID) (proxy not ready, markedRange=\(NSStringFromRange(markedBefore)))"
-                )
-                // Keep pendingCleanup — will retry on next activateServer
             }
         }
 
@@ -222,8 +165,6 @@ final class BeeIMEBridgeState: NSObject {
         let bundleID = (controller.client() as? (any IMKTextInput & NSObjectProtocol))?.bundleIdentifier()
         let session = BeeIMESession(controller: controller, pid: pid, clientID: clientID, bundleID: bundleID)
         state = .active(session, pendingText: nil)
-        // E-004: heartbeat disabled to isolate cleanup experiment
-        // session.startHeartbeat()
         beeInputLog(
             "state → active pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") bundle=\(bundleID ?? "nil")")
         return true
@@ -231,22 +172,8 @@ final class BeeIMEBridgeState: NSObject {
 
     func deactivate(_ controller: BeeInputController) {
         guard activeController === controller else { return }
-        let session = currentSession
-        session?.stopHeartbeat()
-
-        // If we're leaving marked text behind, record it for cleanup on reactivation
-        // Use the session's stored bundleID (captured at activation time), NOT
-        // controller.client() which may already point at the new app (F-013).
-        let markedLen = session?.currentMarkedText.utf16.count ?? 0
-        if markedLen > 0, let bundle = session?.bundleID {
-            pendingCleanup = PendingCleanup(bundleID: bundle, markedTextUTF16Length: markedLen)
-            beeInputLog("state → idle (pendingCleanup: bundle=\(bundle) len=\(markedLen))")
-        } else {
-            pendingCleanup = nil
-            beeInputLog("state → idle")
-        }
-
         state = .idle
+        beeInputLog("state → idle")
     }
 
     // MARK: - Text routing
