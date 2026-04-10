@@ -401,7 +401,7 @@ export function TranscribeDemoPanel({
           commit_token_count: 12n,
           max_tokens_streaming: 32n,
           max_tokens_final: 512n,
-          language: { 0: "" },
+          language: [""] as unknown as { 0: string },
           app_id: null,
           rotation_cut_strategy: {
             tag: "TargetCommittedTextTokens",
