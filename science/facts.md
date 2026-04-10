@@ -1,106 +1,121 @@
-# Established Facts
+# IME Facts (macOS InputMethodKit)
+
+These are empirically observed behaviors intended to be stable enough to build a working mental model of macOS IMEs.
+
+**Scope** (current evidence):
+- Experiments were run on 2026-04-10 using the test apps listed in [science/README.md](./README.md).
+- Evidence lives in `~/bearcove/bee-experiments/experiments/` and `~/bearcove/bee-experiments/logs/`.
+- Anything described as “normal macOS behavior” below means “observed with Apple’s built-in Japanese IME in these apps”, not “proven for all apps / all macOS versions”.
+
+**Terminology**:
+- “marked text” is the client-side composition UI (underline/highlight) managed through the `NSTextInputClient` contract.
+- “proxy” refers to what bee sees via InputMethodKit (e.g. `markedRange`, `selectedRange`, `attributedSubstring(from:)`).
+- Logs print `NSNotFound` as `{9223372036854775807, 9223372036854775807}`; the experiments write `{∅}` for readability.
 
 ## F-001-marked-text-persists-on-switch
 
-With stripped-down overrides (only init, activateServer, deactivateServer) + `super.cancelComposition()` in deactivateServer, marked text is NOT cleared on app switch in any of the five test apps. It persists as marked text in 4/5 apps.
+Switching apps does **not** automatically clear existing marked text in the previously-focused app. In the tested apps, the marked text remained visible after Cmd+Tab in all cases; in 4/5 apps it remained visibly marked (underline/highlight), while Codex committed it (see F-002/F-005).
 
-**Evidence**: [E-001-heartbeat-app-switch](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-001-heartbeat-app-switch.md)
-**Commit**: `c053ce6`
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-001-heartbeat-app-switch.md` (+ per-app logs)
 
 ## F-002-codex-commits-on-deactivate
 
-Codex (Electron/Chromium) commits marked text as real text on deactivate (no underline — the emoji becomes permanent text), while all other tested apps preserve it as marked text (with underline/highlight).
+**App-specific**: Codex (`com.openai.codex`, Electron/Chromium) commits marked text on focus loss (deactivate): the composing text becomes regular text (no marked UI).
 
-**Evidence**: [E-001-heartbeat-app-switch](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-001-heartbeat-app-switch.md)
-**Commit**: `c053ce6`
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-001-heartbeat-app-switch.md`
 
 ## F-003-super-cancel-composition-insufficient
 
-`super.cancelComposition()` called inside `deactivateServer` does not trigger IMK's internal cleanup that clears marked text on the client.
+Calling `cancelComposition()` from `deactivateServer` is not sufficient to ensure the client clears the visible marked text on app switch (in the tested apps).
 
-**Evidence**: [E-001-heartbeat-app-switch](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-001-heartbeat-app-switch.md)
-**Commit**: `c053ce6`
+This is intentionally scoped to the behavior we need to assume when implementing a robust IME: “don’t rely on deactivate-time cancel to clean up client UI”.
+
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-001-heartbeat-app-switch.md`
 
 ## F-004-marked-text-persists-is-normal
 
-Marked text persisting on app switch is **normal macOS behavior**. The built-in Japanese IME exhibits the same behavior as bee — marked text stays in all tested apps. This is not a bug in bee or in our IME implementation.
+In the tested apps, Apple’s built-in Japanese IME also leaves marked text visible across app switches. This strongly suggests that “marked text persisting across Cmd+Tab” is not a bee-specific bug.
 
-**Evidence**: [E-002-japanese-ime-app-switch](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-002-japanese-ime-app-switch.md)
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-002-japanese-ime-app-switch.md`
 
 ## F-005-codex-commits-all-imes
 
-Codex (Electron/Chromium) instantly commits marked text on deactivate regardless of which IME is active. This is an Electron bug, not an IME bug. Confirmed with both bee and the built-in Japanese IME.
+**App-specific**: Codex commits marked text on deactivate regardless of which IME is active (confirmed with bee and the built-in Japanese IME).
 
-**Evidence**: [E-001-heartbeat-app-switch](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-001-heartbeat-app-switch.md), [E-002-japanese-ime-app-switch](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-002-japanese-ime-app-switch.md)
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-001-heartbeat-app-switch.md`, `~/bearcove/bee-experiments/experiments/E-002-japanese-ime-app-switch.md`
 
-## F-006-marked-range-survives-round-trip
+## F-006-marked-range-survives-round-trip (ACTIVE COMPOSITION ONLY)
 
-On reactivation (Cmd+Tab back), all 5 apps report a valid `markedRange` via the IMK proxy — even Codex, which visually committed the text. The markedRange location matches where bee started composing. The IMK proxy remembers the marked range across deactivate/reactivate.
+While a composition is still “live” (the IME session stays active), switching away and back can yield a non-`NSNotFound` `markedRange` again in all tested apps.
 
-**Evidence**: [E-003-reactivation-state](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-003-reactivation-state.md)
+Important nuance:
+- This does **not** mean the proxy state is trustworthy (Codex can report a `markedRange` that refers to unrelated document text; see F-009).
+- This does **not** hold once the IME session is ended before returning (see F-018).
+
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-003-reactivation-state.md`
 
 ## F-007-full-text-probe-blocked
 
-`attributedSubstring(from:)` with a large range returns nil in all apps. The IMK proxy does not allow bulk text reads.
+`attributedSubstring(from:)` for a large range returned `nil` in all tested apps. Treat bulk text reads through the proxy as unavailable (design for zero context or small local windows only).
 
-**Evidence**: [E-003-reactivation-state](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-003-reactivation-state.md)
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-003-reactivation-state.md`
 
 ## F-008-selected-range-after-marked
 
-On reactivation, `selectedRange` position varies by app: Notes/Zed/Codex report cursor at end of marked region (loc+len), while ime-spy/Messages report cursor at start. App-dependent behavior.
+On reactivation, `selectedRange` position relative to `markedRange` varies by app (some report the caret at the start of the marked region, others at the end).
 
-**Evidence**: [E-003-reactivation-state](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-003-reactivation-state.md)
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-003-reactivation-state.md`
 
 ## F-009-codex-marked-range-lies
 
-Codex reports `markedRange={3, 2}` with `markedText="ba"` on reactivation — but the emoji was visually committed. The markedRange points at residual text from the document, not at bee's emoji. The proxy's markedRange is stale/wrong for Codex.
+**App-specific**: In Codex, the proxy-reported `markedRange`/`markedText` on reactivation can be stale or unrelated to the IME’s actual marked text. In the E-003 setup, Codex reported `markedText=\"ba\"` at `markedRange={3,2}` while the IME’s emoji had been visually committed.
 
-**Evidence**: [E-003-reactivation-state](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-003-reactivation-state.md)
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-003-reactivation-state.md`, `~/bearcove/bee-experiments/logs/E-003-reactivation-state-codex.txt`
 
 ## F-010-zed-double-activate
 
-Zed fires two `activateServer` calls on return: first showing the emoji in markedText, then showing underlying document text. Zed's text engine processes reactivation in two phases.
+**App-specific**: Zed can trigger multiple `activateServer` calls when returning to an app, with the proxy state changing between calls (“two-phase reactivation”).
 
-**Evidence**: [E-003-reactivation-state](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-003-reactivation-state.md)
-
-## F-011-cleanup-works-for-normal-apps (UNRELIABLE)
-
-`setMarkedText("")` on reactivation cleared leftover marked text in Messages in E-004 (user confirmed). However, E-006 with the same approach did NOT clear in Messages. This result is not reliably reproducible — may depend on timing of which `activateServer` call the cleanup fires on.
-
-**Evidence**: [E-004-cleanup-on-reactivation](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-004-cleanup-on-reactivation.md), [E-006-deferred-cleanup](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-006-deferred-cleanup.md)
-
-## F-012-cleanup-missed-codex-due-to-ordering
-
-Cleanup did not fire for Codex because the pendingCleanup recorded the wrong bundle ID (`dev.zed.Zed` instead of `com.openai.codex`). Root cause: `deactivate` reads the client's bundle from the controller, but by that time the controller's client already points at the new app (due to F-013).
-
-**Evidence**: [E-004-cleanup-on-reactivation](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-004-cleanup-on-reactivation.md)
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-003-reactivation-state.md`
 
 ## F-013-activate-before-deactivate-ordering
 
-`activateServer` for the new app fires BEFORE `deactivateServer` for the old app. Confirmed with timestamps: Zed's activateServer at 13:56:41.102 precedes Codex's deactivateServer at 13:56:41.121 (19ms later).
+On app switch, `activateServer` for the incoming app can run **before** `deactivateServer` for the outgoing app. IME code must not assume “deactivate happens first”.
 
-**Evidence**: [E-004-cleanup-on-reactivation](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-004-cleanup-on-reactivation.md)
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-004-cleanup-on-reactivation.md`, `~/bearcove/bee-experiments/logs/E-004-cleanup-on-reactivation-codex.txt`
 
-## F-014-cleanup-fires-too-early
+## F-014-first-activateServer-may-see-no-markedRange
 
-Cleanup fires on the first `activateServer` call, but the proxy's `markedRange` is still `{∅}` at that point. The `setMarkedText("")` goes to a proxy that hasn't reconnected to the real client, so it has no effect.
+On reactivation, the first `activateServer` call can have `markedRange == NSNotFound` / unavailable. Treat the first activation callback as “proxy may not be ready”.
 
-**Evidence**: [E-005-cleanup-with-stored-bundle](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-005-cleanup-with-stored-bundle.md)
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-005-cleanup-with-stored-bundle.md`
 
-## F-015-proxy-reconnects-on-second-activate
+## F-015-markedRange-can-appear-on-a-later-activateServer
 
-The IMK proxy doesn't expose valid markedRange on the first `activateServer` — it shows `{∅}`. A second `activateServer` follows shortly after with the real markedRange. Cleanup must be deferred until the proxy reports a valid markedRange.
+A later `activateServer` call shortly after the first can expose a valid `markedRange`. If you need to read proxy state, you may need to wait for a subsequent activation callback where the proxy is “connected enough” to report non-`NSNotFound` values.
 
-**Evidence**: [E-005-cleanup-with-stored-bundle](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-005-cleanup-with-stored-bundle.md)
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-005-cleanup-with-stored-bundle.md`
 
 ## F-016-setMarkedText-empty-does-not-clear
 
-`setMarkedText("")` on reactivation does NOT visually clear the marked text in either Messages or Codex, despite the proxy reporting `markedRange` going from `{3, N}` to `{3, 0}`. User confirmed: text unchanged in both apps.
+`setMarkedText(\"\")` during activation/reactivation is not a reliable “cleanup” mechanism: the proxy can report the range as cleared, while the client UI remains unchanged (Messages) or you get duplicated content (Codex).
 
-**Evidence**: [E-006-deferred-cleanup](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-006-deferred-cleanup.md)
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-006-deferred-cleanup.md`
 
-## F-017-proxy-lies-about-cleanup
+## F-017-proxy-is-not-authoritative
 
-The IMK proxy reports `markedRange={3, 0}` after `setMarkedText("")`, suggesting the marked range was cleared. This is a lie — the actual text in the client app is unaffected. The proxy's markedRange is not a reliable indicator of the client's actual state.
+The proxy’s post-action state (e.g. `markedRange={loc,0}` after `setMarkedText(\"\")`) is not a reliable indicator of what the client actually shows. Treat proxy reads as hints, not truth.
 
-**Evidence**: [E-006-deferred-cleanup](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-006-deferred-cleanup.md)
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-006-deferred-cleanup.md`
+
+## F-018-markedRange-may-be-unavailable-after-session-stop
+
+If the IME session is ended before returning to the app (stop bee session while the client still shows leftover marked text), the proxy may report `markedRange == NSNotFound` on *all* subsequent `activateServer` calls. That makes `markedRange` unusable for detecting and cleaning up stale leftovers after deactivation.
+
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-008-cleanup-every-activate.md`
+
+## Superseded / Not Universal
+
+Some earlier writeups were really “implementation postmortems” (bee’s own bookkeeping) rather than macOS/app behavior. Those should not be treated as universal facts:
+- Former “cleanup missed Codex due to ordering” is an app-switch ordering fact (kept as F-013) plus an implementation bug (moved out).
+- “cleanup works for normal apps” was not reproducible (superseded by F-016/F-018).
