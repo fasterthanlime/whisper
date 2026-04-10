@@ -17,9 +17,9 @@ from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCIENCE_DIR = REPO_ROOT / "science"
-EXPERIMENTS_DIR = SCIENCE_DIR / "experiments"
-LOGS_DIR = SCIENCE_DIR / "logs"
+EXPERIMENTS_REPO = Path.home() / "bearcove/bee-experiments"
+EXPERIMENTS_DIR = EXPERIMENTS_REPO / "experiments"
+LOGS_DIR = EXPERIMENTS_REPO / "logs"
 BEE_LOG = Path.home() / "Library/Group Containers/B2N6FSRTPV.group.fasterthanlime.bee/bee.log"
 
 TEST_APPS = [
