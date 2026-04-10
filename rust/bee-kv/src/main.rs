@@ -30,14 +30,32 @@ const DEFAULT_START_POSITION_FOR_FRESH_FOLLOWUP: usize = 0;
 const DEFAULT_CHUNK_MS: usize = 2_000;
 const DEFAULT_ROLLBACK_MS: usize = 1_000;
 const DEFAULT_BRIDGE_MS: usize = 1_000;
+const DEFAULT_STRIDE_MS: Option<usize> = None;
+const DEFAULT_KEEP_BOUNDARY_POLICY: KeepBoundaryPolicy = KeepBoundaryPolicy::Fixed;
 const DEFAULT_LANE_B_FIRST_CHUNK_MS: usize = 3_000;
 const DEFAULT_REPLAY_CHUNK_INDEX: usize = 1;
 const DEFAULT_TRUNCATE_TOKENS: usize = 4;
+const DEFAULT_MLX_CACHE_LIMIT_MB: Option<usize> = None;
+const KEEP_BOUNDARY_MAX_BACKTRACK_SECS: f64 = 0.150;
+const KEEP_BOUNDARY_MIN_KEPT_FRACTION: f64 = 0.75;
+const MAX_BRIDGE_WINDOWS: usize = 50;
 const BOUNDARY_SWEEP_OFFSETS: [isize; 13] =
     [-48, -44, -40, -36, -32, -28, -24, -20, -16, -12, -8, -4, 0];
 
 fn main() -> Result<()> {
     let args = Args::parse()?;
+    if let Some(limit_mb) = args.mlx_cache_limit_mb {
+        let limit_bytes = limit_mb
+            .checked_mul(1024 * 1024)
+            .ok_or_else(|| anyhow::anyhow!("mlx cache limit too large: {limit_mb}MB"))?;
+        let previous_bytes = bee_transcribe::set_mlx_cache_limit(limit_bytes)
+            .map_err(|e| anyhow::anyhow!("setting MLX cache limit: {e}"))?;
+        eprintln!(
+            "mlx cache limit: {}MB (previous {:.1}MB)",
+            limit_mb,
+            previous_bytes as f64 / (1024.0 * 1024.0)
+        );
+    }
 
     let config_path = args.model_dir.join("config.json");
     let config = AsrConfig::from_file(&config_path)
@@ -226,6 +244,8 @@ fn main() -> Result<()> {
                 args.max_new_tokens,
                 args.chunk_ms,
                 args.bridge_ms,
+                args.stride_ms,
+                args.keep_boundary_policy,
                 args.rollback_ms,
                 &args.wav_path,
             )?;
@@ -675,6 +695,8 @@ fn decode_sliding_window_timed_rollback(
             truncate_cache(&mut cache, rollback_position)?;
             start_position = rollback_position;
             Some(WindowRollbackDecision {
+                keep_boundary_policy: KeepBoundaryPolicy::Fixed,
+                target_keep_until_secs: keep_until_secs,
                 keep_until_secs,
                 replay_until_secs: None,
                 kept_word_count: keep.kept_word_count,
@@ -682,6 +704,12 @@ fn decode_sliding_window_timed_rollback(
                 kept_text: keep.kept_text,
                 bridge_text: None,
                 rollback_position,
+                keep_boundary_debug: KeepBoundaryDebug {
+                    earliest_candidate_secs: keep_until_secs,
+                    min_keep_secs: keep_until_secs,
+                    snapped: false,
+                    chosen_word: None,
+                },
             })
         } else {
             start_position = chunk_run.end_position;
@@ -792,6 +820,8 @@ fn decode_sliding_window_full_replay(
             truncate_cache(&mut cache, rollback_position)?;
             start_position = rollback_position;
             Some(WindowRollbackDecision {
+                keep_boundary_policy: KeepBoundaryPolicy::Fixed,
+                target_keep_until_secs: keep_until_secs,
                 keep_until_secs,
                 replay_until_secs: None,
                 kept_word_count: keep.kept_word_count,
@@ -799,6 +829,12 @@ fn decode_sliding_window_full_replay(
                 kept_text: keep.kept_text,
                 bridge_text: None,
                 rollback_position,
+                keep_boundary_debug: KeepBoundaryDebug {
+                    earliest_candidate_secs: keep_until_secs,
+                    min_keep_secs: keep_until_secs,
+                    snapped: false,
+                    chosen_word: None,
+                },
             })
         } else {
             start_position = chunk_run.end_position;
@@ -850,25 +886,51 @@ fn decode_sliding_window_bridge_replay(
     max_new_tokens: usize,
     chunk_ms: usize,
     bridge_ms: usize,
+    stride_ms: Option<usize>,
+    keep_boundary_policy: KeepBoundaryPolicy,
     rollback_ms: usize,
     wav_path: &Path,
 ) -> Result<SlidingWindowTimedRollbackExperimentResult> {
     let window_samples = ms_to_samples(chunk_ms)?;
-    let committed_samples = window_samples
-        .checked_sub(ms_to_samples(bridge_ms)? + ms_to_samples(rollback_ms)?)
-        .ok_or_else(|| anyhow::anyhow!("committed segment underflow"))?;
-    let bridge_samples = ms_to_samples(bridge_ms)?;
-    if committed_samples == 0 {
-        bail!(
-            "committed segment must be non-zero: bridge_ms={} rollback_ms={} chunk_ms={}",
-            bridge_ms,
-            rollback_ms,
-            chunk_ms
-        );
-    }
+    let rollback_samples = ms_to_samples(rollback_ms)?;
+    let (committed_samples, bridge_samples) = if let Some(stride_ms) = stride_ms {
+        let committed_samples = ms_to_samples(stride_ms)?;
+        let bridge_samples = window_samples
+            .checked_sub(committed_samples + rollback_samples)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "invalid bridge geometry: stride_ms={} rollback_ms={} chunk_ms={}",
+                    stride_ms,
+                    rollback_ms,
+                    chunk_ms
+                )
+            })?;
+        if bridge_samples == 0 {
+            bail!(
+                "bridge segment must be non-zero: stride_ms={} rollback_ms={} chunk_ms={}",
+                stride_ms,
+                rollback_ms,
+                chunk_ms
+            );
+        }
+        (committed_samples, bridge_samples)
+    } else {
+        let committed_samples = window_samples
+            .checked_sub(ms_to_samples(bridge_ms)? + rollback_samples)
+            .ok_or_else(|| anyhow::anyhow!("committed segment underflow"))?;
+        let bridge_samples = ms_to_samples(bridge_ms)?;
+        if committed_samples == 0 {
+            bail!(
+                "committed segment must be non-zero: bridge_ms={} rollback_ms={} chunk_ms={}",
+                bridge_ms,
+                rollback_ms,
+                chunk_ms
+            );
+        }
+        (committed_samples, bridge_samples)
+    };
 
     let stride_samples = committed_samples;
-    let window_plan = build_overlapping_window_plan(samples.len(), window_samples, stride_samples)?;
     let mel_extractor = MelExtractor::new(
         N_FFT,
         HOP_LENGTH,
@@ -882,8 +944,25 @@ fn decode_sliding_window_bridge_replay(
     let mut start_position = 0usize;
     let mut window_runs = Vec::new();
     let mut replay_prefix_for_next: Option<CarriedBridge> = None;
+    let mut next_window_start = 0usize;
+    let mut window_index = 0usize;
+    let mut unresolved_keep_samples = committed_samples;
 
-    for (window_index, window) in window_plan.iter().enumerate() {
+    while next_window_start < samples.len() {
+        if window_index >= MAX_BRIDGE_WINDOWS {
+            bail!(
+                "bridge replay reached {} windows, exceeding limit of {}; increase stride or chunk size",
+                window_index,
+                MAX_BRIDGE_WINDOWS
+            );
+        }
+
+        let current_window_samples = unresolved_keep_samples + bridge_samples + rollback_samples;
+        let window = ChunkPlanEntry {
+            chunk_index: window_index,
+            start_sample: next_window_start,
+            end_sample: (next_window_start + current_window_samples).min(samples.len()),
+        };
         let chunk_samples = &samples[window.start_sample..window.end_sample];
         let replayed_prefix = replay_prefix_for_next.clone();
         let chunk_run = decode_chunk_followup_step(
@@ -903,14 +982,26 @@ fn decode_sliding_window_bridge_replay(
             replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
         )?;
 
-        let rollback = if window_index + 1 < window_plan.len() {
-            let keep_until_sample = window.start_sample + committed_samples;
-            let replay_until_sample = keep_until_sample + bridge_samples;
-            let keep_until_secs =
-                (keep_until_sample.saturating_sub(window.start_sample)) as f64 / SAMPLE_RATE as f64;
-            let replay_until_secs = (replay_until_sample.saturating_sub(window.start_sample))
-                as f64
-                / SAMPLE_RATE as f64;
+        let has_next_window = window.end_sample < samples.len();
+        let rollback = if has_next_window {
+            let target_keep_until_secs = unresolved_keep_samples as f64 / SAMPLE_RATE as f64;
+            let replay_until_secs =
+                (unresolved_keep_samples + bridge_samples) as f64 / SAMPLE_RATE as f64;
+            let (candidate_keep_until_secs, keep_boundary_debug) = adjust_keep_boundary_secs(
+                keep_boundary_policy,
+                replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
+                &chunk_run,
+                chunk_samples,
+                target_keep_until_secs,
+                replay_until_secs,
+            )?;
+            let found_boundary =
+                keep_boundary_policy == KeepBoundaryPolicy::Fixed || keep_boundary_debug.snapped;
+            let keep_until_secs = if found_boundary {
+                candidate_keep_until_secs
+            } else {
+                0.0
+            };
             let split = timed_generated_bridge_for_cuts(
                 tokenizer,
                 replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
@@ -925,7 +1016,14 @@ fn decode_sliding_window_bridge_replay(
             start_position = rollback_position;
             replay_prefix_for_next =
                 (!split.bridge.text.is_empty()).then_some(split.bridge.clone());
+            unresolved_keep_samples = if found_boundary {
+                committed_samples
+            } else {
+                unresolved_keep_samples + committed_samples
+            };
             Some(WindowRollbackDecision {
+                keep_boundary_policy,
+                target_keep_until_secs,
                 keep_until_secs,
                 replay_until_secs: Some(replay_until_secs),
                 kept_word_count: split.kept_word_count,
@@ -933,6 +1031,7 @@ fn decode_sliding_window_bridge_replay(
                 kept_text: split.kept_text,
                 bridge_text: (!split.bridge.text.is_empty()).then_some(split.bridge.text.clone()),
                 rollback_position,
+                keep_boundary_debug,
             })
         } else {
             start_position = chunk_run.end_position;
@@ -945,6 +1044,11 @@ fn decode_sliding_window_bridge_replay(
             rollback,
             replayed_prefix,
         });
+        if !has_next_window {
+            break;
+        }
+        next_window_start = next_window_start.saturating_add(stride_samples);
+        window_index += 1;
     }
 
     let html_path = write_sliding_window_timed_rollback_html(
@@ -1553,11 +1657,14 @@ struct Args {
     mode: Mode,
     chunk_ms: usize,
     bridge_ms: usize,
+    stride_ms: Option<usize>,
+    keep_boundary_policy: KeepBoundaryPolicy,
     rollback_ms: usize,
     rollback_policy: RollbackPolicy,
     replay_chunk_index: usize,
     truncate_tokens: usize,
     lane_b_first_chunk_ms: usize,
+    mlx_cache_limit_mb: Option<usize>,
 }
 
 impl Args {
@@ -1567,11 +1674,14 @@ impl Args {
         let mut context = String::new();
         let mut chunk_ms = DEFAULT_CHUNK_MS;
         let mut bridge_ms = DEFAULT_BRIDGE_MS;
+        let mut stride_ms = DEFAULT_STRIDE_MS;
+        let mut keep_boundary_policy = DEFAULT_KEEP_BOUNDARY_POLICY;
         let mut rollback_ms = DEFAULT_ROLLBACK_MS;
         let mut rollback_policy = RollbackPolicy::TextSuffix;
         let mut replay_chunk_index = DEFAULT_REPLAY_CHUNK_INDEX;
         let mut truncate_tokens = DEFAULT_TRUNCATE_TOKENS;
         let mut lane_b_first_chunk_ms = DEFAULT_LANE_B_FIRST_CHUNK_MS;
+        let mut mlx_cache_limit_mb = DEFAULT_MLX_CACHE_LIMIT_MB;
 
         let mut args = env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -1630,6 +1740,36 @@ impl Args {
                     .with_context(|| format!("parsing --bridge-ms from '{value}'"))?;
                 continue;
             }
+            if let Some(value) = arg.strip_prefix("--stride-ms=") {
+                stride_ms = Some(
+                    value
+                        .parse::<usize>()
+                        .with_context(|| format!("parsing --stride-ms from '{value}'"))?,
+                );
+                continue;
+            }
+            if arg == "--stride-ms" {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--stride-ms requires a value"))?;
+                stride_ms = Some(
+                    value
+                        .parse::<usize>()
+                        .with_context(|| format!("parsing --stride-ms from '{value}'"))?,
+                );
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--keep-boundary=") {
+                keep_boundary_policy = KeepBoundaryPolicy::parse(value)?;
+                continue;
+            }
+            if arg == "--keep-boundary" {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--keep-boundary requires a value"))?;
+                keep_boundary_policy = KeepBoundaryPolicy::parse(&value)?;
+                continue;
+            }
             if let Some(value) = arg.strip_prefix("--rollback-ms=") {
                 rollback_ms = value
                     .parse::<usize>()
@@ -1643,6 +1783,25 @@ impl Args {
                 rollback_ms = value
                     .parse::<usize>()
                     .with_context(|| format!("parsing --rollback-ms from '{value}'"))?;
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--mlx-cache-limit-mb=") {
+                mlx_cache_limit_mb = Some(
+                    value
+                        .parse::<usize>()
+                        .with_context(|| format!("parsing --mlx-cache-limit-mb from '{value}'"))?,
+                );
+                continue;
+            }
+            if arg == "--mlx-cache-limit-mb" {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--mlx-cache-limit-mb requires a value"))?;
+                mlx_cache_limit_mb = Some(
+                    value
+                        .parse::<usize>()
+                        .with_context(|| format!("parsing --mlx-cache-limit-mb from '{value}'"))?,
+                );
                 continue;
             }
             if let Some(value) = arg.strip_prefix("--rollback-policy=") {
@@ -1744,11 +1903,14 @@ impl Args {
             mode,
             chunk_ms,
             bridge_ms,
+            stride_ms,
+            keep_boundary_policy,
             rollback_ms,
             rollback_policy,
             replay_chunk_index,
             truncate_tokens,
             lane_b_first_chunk_ms,
+            mlx_cache_limit_mb,
         })
     }
 }
@@ -1808,6 +1970,29 @@ impl RollbackPolicy {
         match self {
             Self::TextSuffix => "text-suffix",
             Self::ChunkSegment => "chunk-segment",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KeepBoundaryPolicy {
+    Fixed,
+    NearestWordEnd,
+}
+
+impl KeepBoundaryPolicy {
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "fixed" => Ok(Self::Fixed),
+            "nearest-word-end" => Ok(Self::NearestWordEnd),
+            _ => bail!("unknown keep boundary policy: {value}"),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Fixed => "fixed",
+            Self::NearestWordEnd => "nearest-word-end",
         }
     }
 }
@@ -1908,6 +2093,8 @@ struct TruncateReplayExperimentResult {
 }
 
 struct WindowRollbackDecision {
+    keep_boundary_policy: KeepBoundaryPolicy,
+    target_keep_until_secs: f64,
     keep_until_secs: f64,
     replay_until_secs: Option<f64>,
     kept_word_count: usize,
@@ -1915,6 +2102,7 @@ struct WindowRollbackDecision {
     kept_text: String,
     bridge_text: Option<String>,
     rollback_position: usize,
+    keep_boundary_debug: KeepBoundaryDebug,
 }
 
 #[derive(Clone)]
@@ -1944,6 +2132,21 @@ struct SlidingWindowTimedRollbackExperimentResult {
     window_runs: Vec<SlidingWindowRun>,
     html_path: PathBuf,
     committed_timeline_path: Option<PathBuf>,
+}
+
+#[derive(Clone)]
+struct BoundaryWordDebug {
+    text: String,
+    start_secs: f64,
+    end_secs: f64,
+}
+
+#[derive(Clone)]
+struct KeepBoundaryDebug {
+    earliest_candidate_secs: f64,
+    min_keep_secs: f64,
+    snapped: bool,
+    chosen_word: Option<BoundaryWordDebug>,
 }
 
 struct DualLaneFollowupExperimentResult {
@@ -2546,7 +2749,6 @@ fn render_committed_timeline_html(
             (Some(start), Some(end)) => {
                 let left = (start / duration_secs) * width_px;
                 let width = ((end - start).max(0.08) / duration_secs) * width_px;
-                let width = width.max(36.0);
                 let mut lane_index = 0usize;
                 while lane_index + 1 < lane_end_x.len() && lane_end_x[lane_index] > left {
                     lane_index += 1;
@@ -2652,6 +2854,11 @@ fn render_sliding_window_row(
             "<div class=\"cut\" style=\"left:{cut_x:.1}px\"></div><div class=\"cut-label\" style=\"left:{cut_x:.1}px\">cut @{:.2}s</div>",
             window_start_secs + rollback.keep_until_secs
         ));
+        let target_cut_x = (rollback.target_keep_until_secs / window_duration_secs) * width_px;
+        markers.push_str(&format!(
+            "<div class=\"cut\" style=\"left:{target_cut_x:.1}px;background:#5a5a5a;opacity:0.55\"></div><div class=\"cut-label\" style=\"left:{target_cut_x:.1}px;color:#5a5a5a\">target @{:.2}s</div>",
+            window_start_secs + rollback.target_keep_until_secs
+        ));
         if let Some(replay_until_secs) = rollback.replay_until_secs {
             let replay_x = (replay_until_secs / window_duration_secs) * width_px;
             markers.push_str(&format!(
@@ -2680,7 +2887,6 @@ fn render_sliding_window_row(
             (Some(start), Some(end)) => {
                 let left = (start / window_duration_secs) * width_px;
                 let width = ((end - start).max(0.08) / window_duration_secs) * width_px;
-                let width = width.max(36.0);
                 let mut lane_index = 0usize;
                 while lane_index + 1 < lane_end_x.len() && lane_end_x[lane_index] > left {
                     lane_index += 1;
@@ -2712,15 +2918,40 @@ fn render_sliding_window_row(
     }
 
     let meta = if let Some(rollback) = rollback {
+        let chosen_boundary = rollback
+            .keep_boundary_debug
+            .chosen_word
+            .as_ref()
+            .map(|word| {
+                format!(
+                    "{} [{:.2}-{:.2}s]",
+                    html_escape(&word.text),
+                    window_start_secs + word.start_secs,
+                    window_start_secs + word.end_secs
+                )
+            })
+            .unwrap_or_else(|| "none".to_string());
         format!(
-            "audio {:.2}s..{:.2}s | replayed_prefix={} | kept_text={} | bridge_text={} | kept_tokens={} | rollback_position={}",
+            "audio {:.2}s..{:.2}s | replayed_prefix={} | kept_text={} | bridge_text={} | kept_tokens={} | rollback_position={} | keep_policy={} | keep_target={:.2}s | keep_cut={:.2}s | keep_search=[{:.2}s..{:.2}s] | min_keep={:.2}s | snapped={} | keep_word={}",
             window_start_secs,
             window_end_secs,
             html_escape(replayed_prefix.map(|p| p.text.as_str()).unwrap_or("none")),
             html_escape(&rollback.kept_text),
             html_escape(rollback.bridge_text.as_deref().unwrap_or("none")),
             rollback.kept_token_count,
-            rollback.rollback_position
+            rollback.rollback_position,
+            rollback.keep_boundary_policy.as_str(),
+            window_start_secs + rollback.target_keep_until_secs,
+            window_start_secs + rollback.keep_until_secs,
+            window_start_secs + rollback.keep_boundary_debug.earliest_candidate_secs,
+            window_start_secs + rollback.target_keep_until_secs,
+            window_start_secs + rollback.keep_boundary_debug.min_keep_secs,
+            if rollback.keep_boundary_debug.snapped {
+                "yes"
+            } else {
+                "no"
+            },
+            chosen_boundary
         )
     } else {
         format!(
@@ -2918,7 +3149,6 @@ fn render_word_row(
             (Some(start), Some(end)) => {
                 let left = (start / duration_secs) * width_px;
                 let width = ((end - start).max(0.08) / duration_secs) * width_px;
-                let width = width.max(36.0);
                 let mut lane_index = 0usize;
                 while lane_index + 1 < lane_end_x.len() && lane_end_x[lane_index] > left {
                     lane_index += 1;
@@ -3153,6 +3383,7 @@ fn timed_generated_bridge_for_cuts(
     };
     let alignment = build_transcript_alignment(&combined_transcript, chunk_samples)?;
     let word_timings = alignment.word_timings();
+    let combined_word_ranges = sentence_word_tokens(&combined_transcript);
     let generated_word_ranges = sentence_word_tokens(generated_transcript);
     let carried_word_count = replayed_prefix
         .map(sentence_word_tokens)
@@ -3161,26 +3392,37 @@ fn timed_generated_bridge_for_cuts(
     let mut kept_word_count = 0usize;
     let mut bridge_word_count = 0usize;
     let mut bridge_words = Vec::new();
+    let mut effective_kept_end_word = None;
+    let mut effective_bridge_start_word = None;
+    let mut effective_bridge_end_word = None;
 
     for (index, word_timing) in word_timings.iter().enumerate() {
-        if index < carried_word_count {
-            continue;
-        }
         match word_timing.quality {
             bee_transcribe::zipa_align::AlignmentQuality::Aligned {
                 start_secs,
                 end_secs,
             } => {
-                if end_secs <= keep_until_secs {
-                    kept_word_count += 1;
-                } else if end_secs <= replay_until_secs {
-                    bridge_word_count += 1;
-                    bridge_words.push(CarriedBridgeWord {
-                        text: word_timing.word.to_string(),
-                        start_secs: (start_secs - keep_until_secs).max(0.0),
-                        end_secs: (end_secs - keep_until_secs).max(0.0),
-                    });
-                } else {
+                if start_secs < keep_until_secs {
+                    effective_kept_end_word = Some(index);
+                }
+                if end_secs > keep_until_secs && start_secs < replay_until_secs {
+                    effective_bridge_start_word.get_or_insert(index);
+                    effective_bridge_end_word = Some(index);
+                }
+                if index >= carried_word_count {
+                    if end_secs <= keep_until_secs {
+                        kept_word_count += 1;
+                    }
+                    if end_secs > keep_until_secs && start_secs < replay_until_secs {
+                        bridge_word_count += 1;
+                        bridge_words.push(CarriedBridgeWord {
+                            text: word_timing.word.to_string(),
+                            start_secs: (start_secs - keep_until_secs).max(0.0),
+                            end_secs: (end_secs - keep_until_secs).max(0.0),
+                        });
+                    }
+                }
+                if start_secs >= replay_until_secs {
                     break;
                 }
             }
@@ -3188,17 +3430,36 @@ fn timed_generated_bridge_for_cuts(
         }
     }
 
-    let kept_text = if kept_word_count == 0 {
-        String::new()
+    let kept_text = if let Some(end_word_index) = effective_kept_end_word {
+        let word = combined_word_ranges
+            .get(end_word_index)
+            .ok_or_else(|| anyhow::anyhow!("missing effective kept word range"))?;
+        combined_transcript[word.char_start..word.char_end]
+            .trim()
+            .to_string()
     } else {
-        let end = generated_word_ranges
-            .get(kept_word_count - 1)
-            .map(|word| word.char_end)
-            .ok_or_else(|| anyhow::anyhow!("missing kept word range"))?;
-        generated_transcript[..end].trim_end().to_string()
+        String::new()
     };
 
-    let bridge = if bridge_word_count == 0 {
+    let bridge = if let (Some(start_word_index), Some(end_word_index)) =
+        (effective_bridge_start_word, effective_bridge_end_word)
+    {
+        let start_word_index = effective_kept_end_word
+            .map(|kept_index| kept_index.min(start_word_index))
+            .unwrap_or(start_word_index);
+        let start = combined_word_ranges
+            .get(start_word_index)
+            .map(|word| word.char_start)
+            .ok_or_else(|| anyhow::anyhow!("missing effective bridge word start"))?;
+        let end = combined_word_ranges
+            .get(end_word_index)
+            .map(|word| word.char_end)
+            .ok_or_else(|| anyhow::anyhow!("missing effective bridge word end"))?;
+        CarriedBridge {
+            text: combined_transcript[start..end].trim().to_string(),
+            words: bridge_words,
+        }
+    } else if bridge_word_count == 0 {
         CarriedBridge {
             text: String::new(),
             words: Vec::new(),
@@ -3233,4 +3494,80 @@ fn timed_generated_bridge_for_cuts(
         kept_text,
         bridge,
     })
+}
+
+fn adjust_keep_boundary_secs(
+    policy: KeepBoundaryPolicy,
+    replayed_prefix_text: Option<&str>,
+    chunk_run: &ChunkRun,
+    chunk_samples: &[f32],
+    target_keep_until_secs: f64,
+    replay_until_secs: f64,
+) -> Result<(f64, KeepBoundaryDebug)> {
+    let fixed_debug = KeepBoundaryDebug {
+        earliest_candidate_secs: target_keep_until_secs,
+        min_keep_secs: target_keep_until_secs,
+        snapped: false,
+        chosen_word: None,
+    };
+    if policy == KeepBoundaryPolicy::Fixed {
+        return Ok((target_keep_until_secs, fixed_debug));
+    }
+
+    let generated_transcript = chunk_run.transcript.trim();
+    let replayed_prefix = replayed_prefix_text
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+    if generated_transcript.is_empty() {
+        return Ok((target_keep_until_secs, fixed_debug));
+    }
+
+    let combined_transcript = match replayed_prefix {
+        Some(prefix) => format!("{prefix} {generated_transcript}"),
+        None => generated_transcript.to_string(),
+    };
+    let alignment = build_transcript_alignment(&combined_transcript, chunk_samples)?;
+    let min_keep_secs = (target_keep_until_secs * KEEP_BOUNDARY_MIN_KEPT_FRACTION).max(0.0);
+    let earliest_candidate_secs =
+        (target_keep_until_secs - KEEP_BOUNDARY_MAX_BACKTRACK_SECS).max(min_keep_secs);
+    let mut best_candidate = None;
+    let mut best_distance = f64::INFINITY;
+
+    for word_timing in alignment.word_timings() {
+        if let bee_transcribe::zipa_align::AlignmentQuality::Aligned {
+            start_secs,
+            end_secs,
+        } = word_timing.quality
+        {
+            if end_secs <= 0.0 || end_secs >= replay_until_secs {
+                continue;
+            }
+            if end_secs > target_keep_until_secs || end_secs < earliest_candidate_secs {
+                continue;
+            }
+            let distance = (end_secs - target_keep_until_secs).abs();
+            if distance < best_distance {
+                best_distance = distance;
+                best_candidate = Some(BoundaryWordDebug {
+                    text: word_timing.word.to_string(),
+                    start_secs,
+                    end_secs,
+                });
+            }
+        }
+    }
+
+    let chosen_word = best_candidate;
+    let keep_until_secs = chosen_word
+        .as_ref()
+        .map(|word| word.end_secs)
+        .unwrap_or(target_keep_until_secs);
+    let debug = KeepBoundaryDebug {
+        earliest_candidate_secs,
+        min_keep_secs,
+        snapped: chosen_word.is_some(),
+        chosen_word,
+    };
+
+    Ok((keep_until_secs, debug))
 }

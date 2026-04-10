@@ -122,3 +122,65 @@ The target tradeoff is:
 In one sentence:
 
 keep the old prefix alive, reopen only the recent overlap, and advance through audio at constant cost.
+
+## What The First Bridge Run Showed
+
+The first useful bridge experiment was a three-way split inside each fixed-size window:
+
+- earliest third: kept in KV
+- middle third: replayed as prompt text in the next window
+- latest third: reopened and re-decoded
+
+For a `3s` window that means:
+
+- `0..1` committed
+- `1..2` replayed as prompt text
+- `2..3` reopened
+- next window is still a full `3s` window, shifted by `1s`
+
+So the sequence is:
+
+- decode `0..3`
+- carry `1..2`
+- decode `1..4`
+- carry `2..3`
+- decode `2..5`
+
+The crucial finding was that the replayed text cannot be computed from the newly generated suffix alone.
+
+That is wrong because once a chunk has non-empty kept generated text, the "middle third" of the effective row can span both:
+
+- generated words that will be kept
+- generated words that would otherwise be called "bridge"
+
+So the carry for the next row must be derived from the effective row transcript:
+
+- `replayed_prefix + newly_generated_text`
+
+and then aligned against that row's audio as one unit.
+
+If the split is computed too late, on the generated suffix only, the middle-third carry becomes too small and shifts left relative to what the model is actually doing.
+
+## Visualization Lessons
+
+The row-by-row view is still useful, but only if it respects the same transcript semantics as the experiment.
+
+The important rendering rules are:
+
+- carried prompt text must be shown separately from newly generated words
+- the row alignment must be computed on the effective transcript, not the generated suffix alone
+- a stitched transcript view should use the timings already assigned when segments survived, not re-align them a second time
+
+That stitched view turned out to be important because a run can look odd row-by-row while still producing a correct composed transcript.
+
+## Practical Conclusion
+
+The bridge experiment is more promising than the early broken visualizations suggested.
+
+The key requirements are now clearer:
+
+- fixed-size windows
+- fixed-size three-way split
+- replay prefix derived from the effective row transcript
+- full-width final window pinned to EOF rather than a short tail window
+- a stitched committed timeline that shows what transcript the strategy actually produces
