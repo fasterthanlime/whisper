@@ -2338,8 +2338,8 @@ body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f7f4ec
 .transcript-line{{width:{width_px}px;margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#3b352d;}}\
 .timeline{{width:{width_px}px;border:1px solid #b9b09f;background:#fffdf8;position:relative;padding:12px 0;margin-bottom:8px;}}\
 .track{{position:relative;width:{width_px}px;height:{row_height_px}px;border-top:1px solid #d6cfbf;border-bottom:1px solid #d6cfbf;background:linear-gradient(180deg,#fffdf8,#f4efe3);overflow:hidden;}}\
-.prefix-band{{position:absolute;top:4px;height:20px;padding:2px 8px;border-radius:999px;background:#efe2b8;border:1px solid #9a7b2f;color:#5f4b17;font-size:11px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box;}}\
 .word{{text-align:center;vertical-align:middle;position:absolute;height:2em;padding:4px 2px;border-radius:4px;border:1px solid #7a6d56;white-space:nowrap;overflow:visible;font-size:12px;box-sizing:border-box;cursor:default;font-family:\"SF Pro\", serif;}}\
+.word.carried{{background:#d8d0f0;border-color:#6f64a8;color:#30274f;}}\
 .word.kept{{background:#cfdcc8;border-color:#71846f;}}\
 .word.bridge{{background:#efe2b8;border-color:#9a7b2f;}}\
 .word.rolled{{background:#e7c2c2;border-color:#9f5d5d;}}\
@@ -2351,7 +2351,7 @@ body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f7f4ec
 .playhead{{position:absolute;top:0;width:2px;height:{row_height_px}px;background:#d97706;pointer-events:none;display:none;}}\
 .axis{{display:flex;justify-content:space-between;font-size:12px;color:#6d6457;margin-top:6px;}}\
 .word:hover::after{{content:attr(data-full-word);position:absolute;left:0;top:-28px;background:#1d1b19;color:#fffdf8;padding:2px 6px;border-radius:4px;white-space:nowrap;z-index:10;font-size:11px;line-height:16px;box-shadow:0 2px 6px rgba(0,0,0,0.18);}}\
-</style></head><body><h1>bee-kv {mode_label}</h1><div class=\"audio-panel\"><div class=\"audio-title\">Full Recording</div><div>Source: {audio_src}</div><audio id=\"master-audio\" class=\"audio-player\" controls preload=\"metadata\" src=\"{audio_src}\"></audio></div><p class=\"legend\">Each row is one decode window. The top yellow band is prompt text replayed into that row. Green words are KV-kept generated words. Yellow words are bridge-region generated words. Red words are re-decoded tail words. Blue line marks the keep cut. Brown line marks the bridge cut. Orange line is the current playhead.</p>{rows}<script>\
+</style></head><body><h1>bee-kv {mode_label}</h1><div class=\"audio-panel\"><div class=\"audio-title\">Full Recording</div><div>Source: {audio_src}</div><audio id=\"master-audio\" class=\"audio-player\" controls preload=\"metadata\" src=\"{audio_src}\"></audio></div><p class=\"legend\">Each row is one decode window. Purple words are prompt text replayed into that row. Green words are KV-kept generated words. Yellow words are bridge-region generated words. Red words are re-decoded tail words. Blue line marks the keep cut. Brown line marks the bridge cut. Orange line is the current playhead.</p>{rows}<script>\
 const masterAudio = document.getElementById('master-audio');\
 const chunkAudios = Array.from(document.querySelectorAll('audio[data-window-start]'));\
 const allAudios = [masterAudio, ...chunkAudios].filter(Boolean);\
@@ -2452,28 +2452,37 @@ fn render_sliding_window_row(
         }
     }
 
-    let prefix_band = if let Some(prefix) = replayed_prefix.filter(|prefix| !prefix.text.is_empty())
-    {
-        let mut prefix_words = String::new();
+    let mut word_divs = String::new();
+    let mut fallback_x = 0.0;
+    let mut lane_end_x = [0.0_f64; 3];
+    let lane_tops = [16.0_f64, 46.0_f64, 76.0_f64];
+    if let Some(prefix) = replayed_prefix.filter(|prefix| !prefix.text.is_empty()) {
         for word in &prefix.words {
             let left = (word.start_secs / window_duration_secs) * width_px;
             let width =
                 ((word.end_secs - word.start_secs).max(0.08) / window_duration_secs) * width_px;
             let width = width.max(36.0);
-            prefix_words.push_str(&format!(
-                "<div class=\"prefix-band\" style=\"left:{left:.1}px;width:{width:.1}px\" title=\"replayed prefix\">{}</div>",
-                html_escape(&word.text)
+            let mut lane_index = 0usize;
+            while lane_index + 1 < lane_end_x.len() && lane_end_x[lane_index] > left {
+                lane_index += 1;
+            }
+            if lane_end_x[lane_index] > left && lane_index == lane_end_x.len() - 1 {
+                lane_index = lane_end_x
+                    .iter()
+                    .enumerate()
+                    .min_by(|a, b| a.1.total_cmp(b.1))
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(0);
+            }
+            lane_end_x[lane_index] = left + width + 6.0;
+            let top = lane_tops[lane_index.min(lane_tops.len() - 1)];
+            let text = html_escape(&word.text);
+            word_divs.push_str(&format!(
+                "<div class=\"word carried\" style=\"left:{left:.1}px;top:{top:.1}px;width:{width:.1}px\" title=\"replayed prefix: {text}\" data-full-word=\"{text}\">{text}</div>"
             ));
         }
-        prefix_words
-    } else {
-        String::new()
-    };
+    }
 
-    let mut word_divs = String::new();
-    let mut fallback_x = 0.0;
-    let mut lane_end_x = [0.0_f64; 3];
-    let lane_tops = [16.0_f64, 46.0_f64, 76.0_f64];
     for word in words {
         let segment_class = if word.kept {
             "kept"
@@ -2537,7 +2546,7 @@ fn render_sliding_window_row(
     };
 
     format!(
-        "<section class=\"row\" data-row-start=\"{:.6}\" data-row-end=\"{:.6}\"><div class=\"row-title\">{}</div><div class=\"row-meta\">{}</div><div class=\"row-audio\"><span>Chunk Audio</span><audio id=\"chunk-audio-{}\" controls preload=\"metadata\" src=\"{}\" data-window-start=\"{:.6}\" data-window-end=\"{:.6}\"></audio></div><div class=\"transcript-line\">{}</div><div class=\"timeline\"><div class=\"track\">{}{}{}</div><div class=\"axis\"><span>0.00s</span><span>{:.2}s window</span><span>{:.2}s total</span></div></div></section>",
+        "<section class=\"row\" data-row-start=\"{:.6}\" data-row-end=\"{:.6}\"><div class=\"row-title\">{}</div><div class=\"row-meta\">{}</div><div class=\"row-audio\"><span>Chunk Audio</span><audio id=\"chunk-audio-{}\" controls preload=\"metadata\" src=\"{}\" data-window-start=\"{:.6}\" data-window-end=\"{:.6}\"></audio></div><div class=\"transcript-line\">{}</div><div class=\"timeline\"><div class=\"track\">{}{}</div><div class=\"axis\"><span>0.00s</span><span>{:.2}s window</span><span>{:.2}s total</span></div></div></section>",
         window_start_secs,
         window_end_secs,
         html_escape(&chunk.label),
@@ -2547,7 +2556,6 @@ fn render_sliding_window_row(
         window_start_secs,
         window_end_secs,
         transcript_line,
-        prefix_band,
         markers,
         word_divs,
         window_duration_secs,
