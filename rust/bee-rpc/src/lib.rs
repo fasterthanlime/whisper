@@ -4,7 +4,7 @@ use vox::service;
 
 #[derive(Debug, Clone, Facet)]
 #[repr(u8)]
-pub enum MarkedTextPresentation {
+pub enum ImePhase {
     Dictating,
     Finalizing,
 }
@@ -13,7 +13,10 @@ pub enum MarkedTextPresentation {
 #[service]
 pub trait Ime {
     /// App sends marked text to the IME for display.
-    async fn set_marked_text(&self, text: String, presentation: MarkedTextPresentation) -> bool;
+    async fn set_marked_text(&self, text: String) -> bool;
+
+    /// App updates the IME's presentation phase.
+    async fn set_phase(&self, phase: ImePhase) -> bool;
 
     /// App tells IME to commit text and end the session.
     async fn commit_text(&self, text: String) -> bool;

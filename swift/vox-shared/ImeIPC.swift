@@ -9,20 +9,21 @@ import VoxRuntime
 
 public enum ImeMethodId {
     public static let setMarkedText: UInt64 = 0x2d335085427db481
+    public static let setPhase: UInt64 = 0x1c47054b4cefbf9c
     public static let commitText: UInt64 = 0x5716af924e8ded0f
     public static let stopDictating: UInt64 = 0x68519c24d46321b4
 }
 
 // MARK: - Ime Types
 
-public enum MarkedTextPresentation: Codable, Sendable {
+public enum ImePhase: Codable, Sendable {
     case dictating
     case finalizing
 }
 
 // MARK: - Ime Encoders
 
-nonisolated internal func encodeMarkedTextPresentation(_ value: MarkedTextPresentation, into buffer: inout ByteBuffer) {
+nonisolated internal func encodeImePhase(_ value: ImePhase, into buffer: inout ByteBuffer) {
     switch value {
     case .dictating:
         encodeVarint(UInt64(0), into: &buffer)
@@ -35,7 +36,9 @@ nonisolated internal func encodeMarkedTextPresentation(_ value: MarkedTextPresen
 ///  Methods the IME exposes — app calls into IME.
 public protocol ImeCaller {
     ///  App sends marked text to the IME for display.
-    func setMarkedText(text: String, presentation: MarkedTextPresentation) async throws -> Bool
+    func setMarkedText(text: String) async throws -> Bool
+    ///  App updates the IME's presentation phase.
+    func setPhase(phase: ImePhase) async throws -> Bool
     ///  App tells IME to commit text and end the session.
     func commitText(text: String) async throws -> Bool
     ///  App tells IME to stop dictating (cancel/abort).
@@ -51,13 +54,24 @@ public final class ImeClient: ImeCaller, Sendable {
         self.timeout = timeout
     }
 
-    public func setMarkedText(text: String, presentation: MarkedTextPresentation) async throws -> Bool {
+    public func setMarkedText(text: String) async throws -> Bool {
         var buffer = ByteBufferAllocator().buffer(capacity: 64)
         encodeString(text, into: &buffer)
-        encodeMarkedTextPresentation(presentation, into: &buffer)
         let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
         let schemaInfo = ClientSchemaInfo(methodInfo: ime_method_schemas[0x2d335085427db481]!, schemaRegistry: ime_schema_registry)
         let response = try await connection.call(methodId: 0x2d335085427db481, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
+        return try decodeInfallibleResponse(response) { buf in
+            let result = try decodeBool(from: &buf)
+            return result
+        }
+    }
+
+    public func setPhase(phase: ImePhase) async throws -> Bool {
+        var buffer = ByteBufferAllocator().buffer(capacity: 64)
+        encodeImePhase(phase, into: &buffer)
+        let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
+        let schemaInfo = ClientSchemaInfo(methodInfo: ime_method_schemas[0x1c47054b4cefbf9c]!, schemaRegistry: ime_schema_registry)
+        let response = try await connection.call(methodId: 0x1c47054b4cefbf9c, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
         return try decodeInfallibleResponse(response) { buf in
             let result = try decodeBool(from: &buf)
             return result
@@ -92,7 +106,9 @@ public final class ImeClient: ImeCaller, Sendable {
 ///  Methods the IME exposes — app calls into IME.
 public protocol ImeHandler: Sendable {
     ///  App sends marked text to the IME for display.
-    func setMarkedText(text: String, presentation: MarkedTextPresentation) async throws -> Bool
+    func setMarkedText(text: String) async throws -> Bool
+    ///  App updates the IME's presentation phase.
+    func setPhase(phase: ImePhase) async throws -> Bool
     ///  App tells IME to commit text and end the session.
     func commitText(text: String) async throws -> Bool
     ///  App tells IME to stop dictating (cancel/abort).
@@ -117,6 +133,8 @@ public final class ImeDispatcher: ServiceDispatcher {
         switch methodId {
         case 0x2d335085427db481:
             await dispatch_setMarkedText(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
+        case 0x1c47054b4cefbf9c:
+            await dispatch_setPhase(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0x5716af924e8ded0f:
             await dispatch_commitText(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0x68519c24d46321b4:
@@ -129,6 +147,8 @@ public final class ImeDispatcher: ServiceDispatcher {
     public func retryPolicy(methodId: UInt64) -> RetryPolicy {
         switch methodId {
         case 0x2d335085427db481:
+            return .volatile
+        case 0x1c47054b4cefbf9c:
             return .volatile
         case 0x5716af924e8ded0f:
             return .volatile
@@ -159,18 +179,37 @@ public final class ImeDispatcher: ServiceDispatcher {
         let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
         do {
             let text = try decodeString(from: &buffer)
-            let _presentation_disc = try decodeVarint(from: &buffer)
-            let presentation: MarkedTextPresentation
-            switch _presentation_disc {
+            do {
+                let result = try await handler.setMarkedText(text: text)
+                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
+                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
+            } catch {
+                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
+            }
+        } catch {
+            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
+        }
+    }
+
+    private func dispatch_setPhase(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
+        guard let methodInfo = methodSchemas[methodId] else {
+            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
+            return
+        }
+        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
+        do {
+            let _phase_disc = try decodeVarint(from: &buffer)
+            let phase: ImePhase
+            switch _phase_disc {
             case 0:
-                presentation = .dictating
+                phase = .dictating
             case 1:
-                presentation = .finalizing
+                phase = .finalizing
             default:
                 throw VoxError.decodeError("unknown enum variant")
             }
             do {
-                let result = try await handler.setMarkedText(text: text, presentation: presentation)
+                let result = try await handler.setPhase(phase: phase)
                 let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
                 taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
@@ -225,7 +264,8 @@ public final class ImeDispatcher: ServiceDispatcher {
 // MARK: - Ime Schemas
 
 public let ime_schemas: [String: MethodBindingSchema] = [
-    "setMarkedText": MethodBindingSchema(args: [.string, .enum(variants: [("Dictating", []), ("Finalizing", [])])]),
+    "setMarkedText": MethodBindingSchema(args: [.string]),
+    "setPhase": MethodBindingSchema(args: [.enum(variants: [("Dictating", []), ("Finalizing", [])])]),
     "commitText": MethodBindingSchema(args: [.string]),
     "stopDictating": MethodBindingSchema(args: []),
 ]
@@ -236,19 +276,24 @@ nonisolated(unsafe) public let ime_schema_registry: [UInt64: Schema] = [
     0x281c5be4f2ee63b4: Schema(id: 0x281c5be4f2ee63b4, typeParams: [], kind: .primitive(.u32)),
     0x42046de663beeef0: Schema(id: 0x42046de663beeef0, typeParams: ["T", "E"], kind: .enum(name: "Result", variants: [VariantSchema(name: "Ok", index: 0, payload: .newtype(typeRef: .var(name: "T"))), VariantSchema(name: "Err", index: 1, payload: .newtype(typeRef: .var(name: "E")))])),
     0x4cf4b2aeb98a1939: Schema(id: 0x4cf4b2aeb98a1939, typeParams: ["E"], kind: .enum(name: "VoxError", variants: [VariantSchema(name: "User", index: 0, payload: .newtype(typeRef: .var(name: "E"))), VariantSchema(name: "UnknownMethod", index: 1, payload: .unit), VariantSchema(name: "InvalidPayload", index: 2, payload: .newtype(typeRef: .concrete(0x6d7dce914ee150e8))), VariantSchema(name: "Cancelled", index: 3, payload: .unit), VariantSchema(name: "ConnectionClosed", index: 4, payload: .unit), VariantSchema(name: "SessionShutdown", index: 5, payload: .unit), VariantSchema(name: "SendFailed", index: 6, payload: .unit), VariantSchema(name: "Indeterminate", index: 7, payload: .unit)])),
-    0x4e7e28e96e8eeb36: Schema(id: 0x4e7e28e96e8eeb36, typeParams: [], kind: .enum(name: "MarkedTextPresentation", variants: [VariantSchema(name: "Dictating", index: 0, payload: .unit), VariantSchema(name: "Finalizing", index: 1, payload: .unit)])),
     0x5db70a394660f3e6: Schema(id: 0x5db70a394660f3e6, typeParams: [], kind: .primitive(.never)),
     0x6847ab90feda71c1: Schema(id: 0x6847ab90feda71c1, typeParams: ["T0"], kind: .tuple(elements: [.var(name: "T0")])),
     0x6d7dce914ee150e8: Schema(id: 0x6d7dce914ee150e8, typeParams: [], kind: .primitive(.string)),
-    0xba0496aa8cee7a4c: Schema(id: 0xba0496aa8cee7a4c, typeParams: ["T0", "T1"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1")])),
+    0x7faf9c5b308fbdcf: Schema(id: 0x7faf9c5b308fbdcf, typeParams: [], kind: .enum(name: "ImePhase", variants: [VariantSchema(name: "Dictating", index: 0, payload: .unit), VariantSchema(name: "Finalizing", index: 1, payload: .unit)])),
     0xbc5c33249a2dc720: Schema(id: 0xbc5c33249a2dc720, typeParams: [], kind: .primitive(.unit)),
 ]
 
 /// Per-method schema information for wire protocol.
 nonisolated(unsafe) public let ime_method_schemas: [UInt64: MethodSchemaInfo] = [
     0x2d335085427db481: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0x4e7e28e96e8eeb36, 0xba0496aa8cee7a4c],
-        argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x4e7e28e96e8eeb36)]),
+        argsSchemaIds: [0x6d7dce914ee150e8, 0x6847ab90feda71c1],
+        argsRoot: .generic(0x6847ab90feda71c1, args: [.concrete(0x6d7dce914ee150e8)]),
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
+        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
+    ),
+    0x1c47054b4cefbf9c: MethodSchemaInfo(
+        argsSchemaIds: [0x7faf9c5b308fbdcf, 0x6847ab90feda71c1],
+        argsRoot: .generic(0x6847ab90feda71c1, args: [.concrete(0x7faf9c5b308fbdcf)]),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),

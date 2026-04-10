@@ -124,14 +124,25 @@ final class BeeIPCServer {
         }
     }
 
-    func setMarkedText(text: String, presentation: MarkedTextPresentation) async {
+    func setMarkedText(text: String) async {
         guard let client = imeClient else {
             return
         }
         do {
-            _ = try await client.setMarkedText(text: text, presentation: presentation)
+            _ = try await client.setMarkedText(text: text)
         } catch {
             beeLog("VOXIPC: setMarkedText failed: \(error)")
+        }
+    }
+
+    func setPhase(phase: ImePhase) async {
+        guard let client = imeClient else {
+            return
+        }
+        do {
+            _ = try await client.setPhase(phase: phase)
+        } catch {
+            beeLog("VOXIPC: setPhase failed: \(error)")
         }
     }
 

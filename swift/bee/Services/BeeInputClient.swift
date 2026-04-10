@@ -51,11 +51,12 @@ final class BeeInputClient: Sendable {
 
     // MARK: - IME Commands
 
-    func setMarkedText(_ text: String, presentation: MarkedTextPresentation) {
-        Task {
-            await BeeIPCServer.shared.setMarkedText(
-                text: text, presentation: presentation)
-        }
+    func setMarkedText(_ text: String) {
+        Task { await BeeIPCServer.shared.setMarkedText(text: text) }
+    }
+
+    func setPhase(_ phase: ImePhase) {
+        Task { await BeeIPCServer.shared.setPhase(phase: phase) }
     }
 
     func commitText(_ text: String) {
