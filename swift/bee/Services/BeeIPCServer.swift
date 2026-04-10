@@ -22,7 +22,8 @@ private final class AppImpl: AppHandler, @unchecked Sendable {
         await MainActor.run { [server] in server.onImeAttach() }
     }
     func imeActivationRevoked() async throws -> Bool {
-        beeLog("VOXIPC: imeActivationRevoked"); return true
+        beeLog("VOXIPC: imeActivationRevoked")
+        return true
     }
     func imeContextLost(hadMarkedText: Bool) async throws -> Bool {
         await MainActor.run { [server, hadMarkedText] in
@@ -94,13 +95,11 @@ final class BeeIPCServer {
     }
 
     func onImeContextLost(hadMarkedText: Bool) -> Bool {
-        beeLog("VOXIPC: imeContextLost hadMarkedText=\(hadMarkedText)")
         appState?.handleIMEContextLost(hadMarkedText: hadMarkedText)
         return true
     }
 
     func onImeKeyEvent(eventType: String, keyCode: UInt32, characters: String) -> Bool {
-        beeLog("VOXIPC: imeKeyEvent type=\(eventType) key=\(keyCode)")
         switch eventType {
         case "submit":
             appState?.handleIMESubmit()
@@ -118,10 +117,8 @@ final class BeeIPCServer {
 
     func waitForIMEReady() async -> Bool {
         if imeClient != nil {
-            beeLog("VOXIPC: waitForIMEReady immediate=true")
             return true
         }
-        beeLog("VOXIPC: waitForIMEReady waiting")
         return await withCheckedContinuation { continuation in
             imeReadyWaiters.append(continuation)
         }
@@ -129,10 +126,8 @@ final class BeeIPCServer {
 
     func setMarkedText(text: String) async {
         guard let client = imeClient else {
-            beeLog("VOXIPC: setMarkedText — IME not connected, dropping")
             return
         }
-        beeLog("VOXIPC: setMarkedText len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)")
         do {
             _ = try await client.setMarkedText(text: text)
         } catch {
@@ -145,7 +140,6 @@ final class BeeIPCServer {
             beeLog("VOXIPC: commitText — IME not connected, dropping")
             return
         }
-        beeLog("VOXIPC: commitText len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)")
         do {
             _ = try await client.commitText(text: text)
         } catch {

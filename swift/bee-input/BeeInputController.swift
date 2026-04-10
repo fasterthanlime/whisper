@@ -17,6 +17,7 @@ class BeeInputController: IMKInputController {
     nonisolated override func activateServer(_ sender: Any!) {
         let senderId = describeClient(sender)
 
+        var needsStaleClear = false
         MainActor.assumeIsolated {
             let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
             let currClientIdentity = currentClientIdentity()
@@ -29,7 +30,20 @@ class BeeInputController: IMKInputController {
             if isNew {
                 BeeVoxIMEClient.shared.imeAttach()
             }
+            needsStaleClear = bridge.isStaleClient(currClientIdentity)
         }
+
+        // Clear stale marked text from a previous dictation session
+        // that ended while this client was unreachable.
+        if needsStaleClear, let client = sender as? any IMKTextInput {
+            let empty = NSAttributedString(string: "", attributes: [.markedClauseSegment: 0])
+            client.setMarkedText(
+                empty,
+                selectionRange: NSRange(location: 0, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0)
+            )
+        }
+
         super.activateServer(sender)
     }
 
@@ -68,16 +82,9 @@ class BeeInputController: IMKInputController {
         guard let client = obj as? (any IMKTextInput & NSObjectProtocol) else {
             return "nil(\(obj.map { String(describing: type(of: $0)) } ?? "nil"))"
         }
-        var parts: [String] = []
+        var parts: [String] = [""]
         parts.append("id=\(client.uniqueClientIdentifierString() ?? "?")")
         parts.append("bundle=\(client.bundleIdentifier() ?? "?")")
-        let marked = client.markedRange()
-        parts.append("markedRange=\(NSStringFromRange(marked))")
-        parts.append("selectedRange=\(NSStringFromRange(client.selectedRange()))")
-        if marked.location != NSNotFound && marked.length > 0 {
-            let markedContent = client.attributedSubstring(from: marked)?.string ?? "?"
-            parts.append("markedText=\(markedContent.prefix(80).debugDescription)")
-        }
-        return parts.joined(separator: " ")
+        return parts.joined(separator: "\n  → ")
     }
 }

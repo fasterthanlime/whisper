@@ -119,6 +119,11 @@ final class BeeIMEBridgeState: NSObject {
     /// Used to clear marked text when canceling from a different app.
     private weak var dictationOriginClient: (any IMKTextInput)?
 
+    /// Client IDs whose dictation ended while we couldn't reach them directly
+    /// (e.g. weak ref released). On next `activate` for a matching client,
+    /// clear any lingering marked text.
+    private var staleOriginClientIDs: Set<String> = []
+
     // MARK: - Queries
 
     var isDictating: Bool {
@@ -161,6 +166,17 @@ final class BeeIMEBridgeState: NSObject {
         guard activeController === controller else { return }
         state = .idle
         beeInputLog("🔴 DEACTIVATE → idle")
+    }
+
+    /// Returns `true` if this client had a dictation session that ended while
+    /// unreachable. The caller should clear the client's marked text and
+    /// this method removes the client from the stale set.
+    func isStaleClient(_ clientID: String) -> Bool {
+        let wasStale = staleOriginClientIDs.remove(clientID) != nil
+        if wasStale {
+            beeInputLog("🧹 STALE client=\(clientID)")
+        }
+        return wasStale
     }
 
     // MARK: - Text routing
@@ -227,6 +243,11 @@ final class BeeIMEBridgeState: NSObject {
             return
         }
         session.handleCommitText(text, submit: submit)
+        // If weak ref was already gone, the origin client couldn't be cleared directly.
+        // Register it for cleanup on next activate.
+        if dictationOriginClient == nil, let cid = dictationOriginClientID {
+            staleOriginClientIDs.insert(cid)
+        }
         dictationOriginClientID = nil
         dictationOriginClient = nil
     }
@@ -248,6 +269,10 @@ final class BeeIMEBridgeState: NSObject {
                 replacementRange: NSRange(location: NSNotFound, length: 0)
             )
             beeInputLog("🧹 CLEAR  marked text in origin client=\(dictationOriginClientID ?? "-")")
+        } else if let cid = dictationOriginClientID {
+            // Weak ref is gone — queue for cleanup on next activate.
+            staleOriginClientIDs.insert(cid)
+            beeInputLog("🧹 QUEUED stale clear for client=\(cid)")
         }
         if session.clientID == dictationOriginClientID {
             session.currentMarkedText = ""
