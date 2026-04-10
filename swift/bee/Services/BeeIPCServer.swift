@@ -50,12 +50,7 @@ private final class AppImpl: AppHandler, @unchecked Sendable {
 final class BeeIPCServer {
     static let shared = BeeIPCServer()
 
-    private static let imeSubmitName = NSNotification.Name("fasterthanlime.bee.imeSubmit")
-    private static let imeCancelName = NSNotification.Name("fasterthanlime.bee.imeCancel")
-    private static let imeUserTypedName = NSNotification.Name("fasterthanlime.bee.imeUserTyped")
-    private static let imeContextLostName = NSNotification.Name("fasterthanlime.bee.imeContextLost")
-    private static let imeSessionStartedName = NSNotification.Name(
-        "fasterthanlime.bee.imeSessionStarted")
+    weak var appState: AppState?
 
     private var imeClient: ImeClient?
     private var pendingSessionId: String?
@@ -112,9 +107,7 @@ final class BeeIPCServer {
     func onImeAttach(sessionId: String) -> Bool {
         beeLog("VOXIPC: imeAttach session=\(sessionId.prefix(8))")
         activeSessionId = sessionId
-        NotificationCenter.default.post(
-            name: Self.imeSessionStartedName, object: nil,
-            userInfo: ["sessionID": sessionId])
+        appState?.handleIMESessionStarted()
         return true
     }
 
@@ -124,11 +117,7 @@ final class BeeIPCServer {
             "VOXIPC: imeContextLost hadMarkedText=\(hadMarkedText) session=\(sessionId?.prefix(8) ?? "nil")"
         )
         activeSessionId = nil
-        if let id = sessionId {
-            NotificationCenter.default.post(
-                name: Self.imeContextLostName, object: nil,
-                userInfo: ["sessionID": id, "hadMarkedText": hadMarkedText])
-        }
+        appState?.handleIMEContextLost(hadMarkedText: hadMarkedText)
         return true
     }
 
@@ -138,19 +127,11 @@ final class BeeIPCServer {
         beeLog("VOXIPC: imeKeyEvent type=\(eventType) key=\(keyCode) session=\(sessionId.prefix(8))")
         switch eventType {
         case "submit":
-            NotificationCenter.default.post(
-                name: Self.imeSubmitName, object: nil, userInfo: ["sessionID": sessionId])
+            appState?.handleIMESubmit()
         case "cancel":
-            NotificationCenter.default.post(
-                name: Self.imeCancelName, object: nil, userInfo: ["sessionID": sessionId])
+            appState?.handleIMECancel()
         default:
-            NotificationCenter.default.post(
-                name: Self.imeUserTypedName, object: nil,
-                userInfo: [
-                    "sessionID": sessionId,
-                    "keyCode": Int(keyCode),
-                    "characters": characters,
-                ])
+            appState?.handleIMEUserTyped()
         }
         return true
     }
