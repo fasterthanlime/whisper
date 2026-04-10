@@ -11,6 +11,17 @@ import InputMethodKit
 final class Bridge: NSObject {
     static let shared = Bridge()
 
+    enum ActivationEvent {
+        case none
+        case stickyRouteRestored
+        case delayedTerminalFlushed
+    }
+
+    enum DeactivationEvent {
+        case none
+        case stickyRouteUnavailable(hadMarkedText: Bool)
+    }
+
     private enum PendingTerminalAction {
         case commit(String)
         case clear
@@ -47,9 +58,9 @@ final class Bridge: NSObject {
 
     // MARK: - State transitions
 
-    /// Returns true when the route to the sticky owner became available.
-    @discardableResult
-    func activate(_ controller: BeeInputController, pid: pid_t?, clientID: String?) -> Bool {
+    func activate(_ controller: BeeInputController, pid: pid_t?, clientID: String?)
+        -> ActivationEvent
+    {
         self.controller = controller
 
         let normalizedClientID = Self.normalizeClientID(clientID)
@@ -60,28 +71,28 @@ final class Bridge: NSObject {
             beeInputLog(
                 "🟢 ACTIVATE idle pid=\(pid.map(String.init) ?? "nil") client=\(normalizedClientID) bundle=\(bundleID) waiting for sticky owner"
             )
-            return false
+            return .none
 
         case .live(let stickyClientID, let markedText):
             guard normalizedClientID == stickyClientID else {
                 beeInputLog(
                     "🚫 ACTIVATE ignored pid=\(pid.map(String.init) ?? "nil") client=\(normalizedClientID) bundle=\(bundleID) sticky=\(stickyClientID)"
                 )
-                return false
+                return .none
             }
 
             beeInputLog(
                 "🟡 ACTIVATE sticky restored pid=\(pid.map(String.init) ?? "nil") client=\(normalizedClientID) bundle=\(bundleID) replaying markedText"
             )
             replayMarkedText(markedText)
-            return true
+            return .stickyRouteRestored
 
         case .pendingTerminal(let stickyClientID, let action):
             guard normalizedClientID == stickyClientID else {
                 beeInputLog(
                     "🚫 ACTIVATE ignored pid=\(pid.map(String.init) ?? "nil") client=\(normalizedClientID) bundle=\(bundleID) sticky=\(stickyClientID) pending terminal action"
                 )
-                return false
+                return .none
             }
 
             switch action {
@@ -98,11 +109,11 @@ final class Bridge: NSObject {
                 deliverClearMarkedText()
                 state = .idle
             }
-            return true
+            return .delayedTerminalFlushed
         }
     }
 
-    func deactivate(_ controller: BeeInputController, clientID: String?) -> Bool {
+    func deactivate(_ controller: BeeInputController, clientID: String?) -> DeactivationEvent {
         let normalizedClientID = Self.normalizeClientID(clientID)
 
         switch state {
@@ -110,19 +121,19 @@ final class Bridge: NSObject {
             beeInputLog(
                 "⏭️ DEACTIVATE idle client=\(normalizedClientID)"
             )
-            return false
+            return .none
 
         case .live(let stickyClientID, let markedText):
             if normalizedClientID == stickyClientID {
                 beeInputLog(
                     "🟡 DEACTIVATE sticky client=\(normalizedClientID) markedTextLen=\((markedText as NSString).length) keeping route sticky"
                 )
-                return true
+                return .stickyRouteUnavailable(hadMarkedText: true)
             } else {
                 beeInputLog(
                     "🚫 DEACTIVATE ignored client=\(normalizedClientID) sticky=\(stickyClientID)"
                 )
-                return false
+                return .none
             }
 
         case .pendingTerminal(let stickyClientID, let action):
@@ -130,12 +141,12 @@ final class Bridge: NSObject {
                 beeInputLog(
                     "🟡 DEACTIVATE sticky client=\(normalizedClientID) pending=\(describe(action)) waiting to flush"
                 )
-                return true
+                return .stickyRouteUnavailable(hadMarkedText: false)
             } else {
                 beeInputLog(
                     "🚫 DEACTIVATE ignored client=\(normalizedClientID) sticky=\(stickyClientID) pending=\(describe(action))"
                 )
-                return false
+                return .none
             }
         }
     }
@@ -224,16 +235,22 @@ final class Bridge: NSObject {
             )
 
         case .live(let stickyClientID, _):
-            state = .pendingTerminal(stickyClientID: stickyClientID, action: .commit(text))
+            let action: PendingTerminalAction = text.isEmpty ? .clear : .commit(text)
+            state = .pendingTerminal(stickyClientID: stickyClientID, action: action)
             beeInputLog(
-                "🟢 commitText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) pending commit"
+                text.isEmpty
+                    ? "🟢 commitText empty client=\(normalizedCurrentClientID) sticky=\(stickyClientID) pending clear"
+                    : "🟢 commitText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) pending commit"
             )
             flushPendingTerminalIfPossible()
 
         case .pendingTerminal(let stickyClientID, _):
-            state = .pendingTerminal(stickyClientID: stickyClientID, action: .commit(text))
+            let action: PendingTerminalAction = text.isEmpty ? .clear : .commit(text)
+            state = .pendingTerminal(stickyClientID: stickyClientID, action: action)
             beeInputLog(
-                "🟢 commitText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) replacing pending terminal action with commit"
+                text.isEmpty
+                    ? "🟢 commitText empty client=\(normalizedCurrentClientID) sticky=\(stickyClientID) replacing pending terminal action with clear"
+                    : "🟢 commitText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) replacing pending terminal action with commit"
             )
             flushPendingTerminalIfPossible()
         }
