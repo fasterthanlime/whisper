@@ -43,20 +43,26 @@ class BeeInputController: IMKInputController {
     nonisolated override func deactivateServer(_ sender: Any!) {
         let senderId = describeClient(sender)
 
-        // guard let senderAsClient = sender as? (any IMKTextInput & NSObjectProtocol) else {
-        //     return
-        // }
-        // senderAsClient.setMarkedText(
-        //     "", selectionRange: NSRange(location: 0, length: 0),
-        //     replacementRange: NSRange(location: 0, length: 0))
+        var senderClearLog: String = ""
+        if let senderAsClient = sender as? (any IMKTextInput & NSObjectProtocol) {
+            let before = describeClient(sender)
+            senderAsClient.setMarkedText(
+                "", selectionRange: NSRange(location: 0, length: 0),
+                replacementRange: NSRange(location: 0, length: 0))
+            let after = describeClient(sender)
+            senderClearLog = "senderClear: before=[\(before)] after=[\(after)]"
+        }
 
         MainActor.assumeIsolated {
+            if !senderClearLog.isEmpty {
+                beeInputLog(senderClearLog)
+            }
             let bridge = BeeIMEBridgeState.shared
 
-            guard bridge.activeController === self else {
-                beeInputLog("deactivateServer: stale controller, ignoring")
-                return
-            }
+            // guard bridge.activeController === self else {
+            //     beeInputLog("deactivateServer: stale controller, ignoring")
+            //     return
+            // }
 
             let session = bridge.currentSession
             let isDictating = bridge.isDictating

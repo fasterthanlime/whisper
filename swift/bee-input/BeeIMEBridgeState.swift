@@ -11,6 +11,10 @@ final class BeeIMESession {
     let pid: pid_t?
     let clientID: String?
 
+    /// The last client we successfully set marked text on.
+    /// Stashed because by the time deactivateServer runs, controller.client() is already swapped.
+    var lastUsedClient: (any IMKTextInput & NSObjectProtocol)?
+
     var currentMarkedText: String = ""
     var lastCommittedText: String = ""
 
@@ -37,6 +41,7 @@ final class BeeIMESession {
             string: text,
             attributes: [.markedClauseSegment: 0])
 
+        lastUsedClient = client
         client.setMarkedText(
             attributed,
             selectionRange: NSRange(location: text.utf16.count, length: 0),
@@ -180,6 +185,16 @@ final class BeeIMEBridgeState: NSObject {
             beeInputLog(
                 "activate: already active, updating controller pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") pendingLen=\(pending?.utf16.count ?? 0)"
             )
+            // Clear marked text on the old client before it becomes unreachable
+            if !session.currentMarkedText.isEmpty, let oldClient = session.lastUsedClient {
+                beeInputLog("activate: clearing stale composition on old client")
+                oldClient.setMarkedText(
+                    "",
+                    selectionRange: NSRange(location: 0, length: 0),
+                    replacementRange: NSRange(location: NSNotFound, length: 0))
+                session.currentMarkedText = ""
+                session.lastUsedClient = nil
+            }
             session.controller = controller
             return false
         }
