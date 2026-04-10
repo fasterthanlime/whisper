@@ -100,6 +100,8 @@ A later `activateServer` call shortly after the first can expose a valid `marked
 
 `setMarkedText(\"\")` during activation/reactivation is not a reliable “cleanup” mechanism: the proxy can report the range as cleared, while the client UI remains unchanged (Messages) or you get duplicated content (Codex).
 
+**Note**: This was observed while `TISDeselectInputSource` was still being called. With TIS deselect removed (F-019), `setMarkedText("")` successfully cleared marked text in Messages (E-010). May need re-evaluation.
+
 **Evidence**: `~/bearcove/bee-experiments/experiments/E-006-deferred-cleanup.md`
 
 ## F-017-proxy-is-not-authoritative
@@ -112,7 +114,21 @@ The proxy’s post-action state (e.g. `markedRange={loc,0}` after `setMarkedText
 
 If the IME session is ended before returning to the app (stop bee session while the client still shows leftover marked text), the proxy may report `markedRange == NSNotFound` on *all* subsequent `activateServer` calls. That makes `markedRange` unusable for detecting and cleaning up stale leftovers after deactivation.
 
+**Note**: This was observed while `TISDeselectInputSource` was still being called. With TIS deselect removed (F-019), the proxy stays alive and markedRange may be available. Needs re-verification.
+
 **Evidence**: `~/bearcove/bee-experiments/experiments/E-008-cleanup-every-activate.md`
+
+## F-019-tis-deselect-kills-proxy
+
+Calling `TISDeselectInputSource` after ending a bee session destroys the proxy connection to the client app. Any subsequent `setMarkedText("")` (whether via `sender`, `self.client()`, or IPC) cannot reach the actual client — the text input channel is gone. Removing `TISDeselectInputSource` keeps the proxy alive, allowing cleanup calls to forward to the real client.
+
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-010-no-tis-deselect.md`
+
+## F-020-unconditional-clear-too-aggressive
+
+An unconditional `setMarkedText("")` on every `activateServer` (when not dictating) clears marked text in apps that were never bee targets. The clear must be scoped to only fire when the IME knows it left stale bee marked text in a specific app.
+
+**Evidence**: `~/bearcove/bee-experiments/experiments/E-010-no-tis-deselect.md`
 
 ## Superseded / Not Universal
 

@@ -109,6 +109,10 @@ final class BeeIMEBridgeState: NSObject {
 
     private(set) var state: State = .idle
 
+    /// Bundle IDs that had stale bee marked text when we deactivated.
+    /// On next activateServer for a matching bundle, clear the marked text.
+    var pendingCleanupBundles: Set<String> = []
+
     // MARK: - Queries
 
     var isDictating: Bool {
