@@ -9,7 +9,6 @@ import VoxRuntime
 
 public enum AppMethodId {
     public static let imeHello: UInt64 = 0x75699685b1a93d32
-    public static let claimSession: UInt64 = 0xa450881492adee30
     public static let imeAttach: UInt64 = 0x8a60f92280588cd0
     public static let imeActivationRevoked: UInt64 = 0x069f4682025f282c
     public static let imeContextLost: UInt64 = 0xf05b46d1538b1ac3
@@ -26,17 +25,14 @@ public enum AppMethodId {
 public protocol AppCaller {
     ///  IME says hello, returns app instance ID.
     func imeHello() async throws -> String
-    ///  IME claims the prepared session. Returns session ID if one
-    ///  was waiting, or empty string if none.
-    func claimSession() async throws -> String
-    ///  IME attached to the session (activateServer confirmed).
-    func imeAttach(sessionId: String) async throws -> Bool
+    ///  IME notifies app that it is now active (activateServer fired).
+    func imeAttach() async throws -> Bool
     ///  IME notifies app that activation was revoked (spurious deactivate).
     func imeActivationRevoked() async throws -> Bool
     ///  IME notifies app that it lost context (deactivateServer with no session).
     func imeContextLost(hadMarkedText: Bool) async throws -> Bool
     ///  IME notifies app of a key event (submit, cancel, user typed).
-    func imeKeyEvent(sessionId: String, eventType: String, keyCode: UInt32, characters: String) async throws -> Bool
+    func imeKeyEvent(eventType: String, keyCode: UInt32, characters: String) async throws -> Bool
 }
 
 public final class AppClient: AppCaller, Sendable {
@@ -58,20 +54,8 @@ public final class AppClient: AppCaller, Sendable {
         }
     }
 
-    public func claimSession() async throws -> String {
+    public func imeAttach() async throws -> Bool {
         let payload: [UInt8] = []
-        let schemaInfo = ClientSchemaInfo(methodInfo: app_method_schemas[0xa450881492adee30]!, schemaRegistry: app_schema_registry)
-        let response = try await connection.call(methodId: 0xa450881492adee30, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
-        return try decodeInfallibleResponse(response) { buf in
-            let result = try decodeString(from: &buf)
-            return result
-        }
-    }
-
-    public func imeAttach(sessionId: String) async throws -> Bool {
-        var buffer = ByteBufferAllocator().buffer(capacity: 64)
-        encodeString(sessionId, into: &buffer)
-        let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
         let schemaInfo = ClientSchemaInfo(methodInfo: app_method_schemas[0x8a60f92280588cd0]!, schemaRegistry: app_schema_registry)
         let response = try await connection.call(methodId: 0x8a60f92280588cd0, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
         return try decodeInfallibleResponse(response) { buf in
@@ -102,9 +86,8 @@ public final class AppClient: AppCaller, Sendable {
         }
     }
 
-    public func imeKeyEvent(sessionId: String, eventType: String, keyCode: UInt32, characters: String) async throws -> Bool {
+    public func imeKeyEvent(eventType: String, keyCode: UInt32, characters: String) async throws -> Bool {
         var buffer = ByteBufferAllocator().buffer(capacity: 64)
-        encodeString(sessionId, into: &buffer)
         encodeString(eventType, into: &buffer)
         encodeU32(keyCode, into: &buffer)
         encodeString(characters, into: &buffer)
@@ -124,17 +107,14 @@ public final class AppClient: AppCaller, Sendable {
 public protocol AppHandler: Sendable {
     ///  IME says hello, returns app instance ID.
     func imeHello() async throws -> String
-    ///  IME claims the prepared session. Returns session ID if one
-    ///  was waiting, or empty string if none.
-    func claimSession() async throws -> String
-    ///  IME attached to the session (activateServer confirmed).
-    func imeAttach(sessionId: String) async throws -> Bool
+    ///  IME notifies app that it is now active (activateServer fired).
+    func imeAttach() async throws -> Bool
     ///  IME notifies app that activation was revoked (spurious deactivate).
     func imeActivationRevoked() async throws -> Bool
     ///  IME notifies app that it lost context (deactivateServer with no session).
     func imeContextLost(hadMarkedText: Bool) async throws -> Bool
     ///  IME notifies app of a key event (submit, cancel, user typed).
-    func imeKeyEvent(sessionId: String, eventType: String, keyCode: UInt32, characters: String) async throws -> Bool
+    func imeKeyEvent(eventType: String, keyCode: UInt32, characters: String) async throws -> Bool
 }
 
 public final class AppDispatcher: ServiceDispatcher {
@@ -155,8 +135,6 @@ public final class AppDispatcher: ServiceDispatcher {
         switch methodId {
         case 0x75699685b1a93d32:
             await dispatch_imeHello(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
-        case 0xa450881492adee30:
-            await dispatch_claimSession(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0x8a60f92280588cd0:
             await dispatch_imeAttach(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0x069f4682025f282c:
@@ -173,8 +151,6 @@ public final class AppDispatcher: ServiceDispatcher {
     public func retryPolicy(methodId: UInt64) -> RetryPolicy {
         switch methodId {
         case 0x75699685b1a93d32:
-            return .volatile
-        case 0xa450881492adee30:
             return .volatile
         case 0x8a60f92280588cd0:
             return .volatile
@@ -220,25 +196,6 @@ public final class AppDispatcher: ServiceDispatcher {
         }
     }
 
-    private func dispatch_claimSession(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
-        guard let methodInfo = methodSchemas[methodId] else {
-            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
-            return
-        }
-        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-        do {
-            do {
-                let result = try await handler.claimSession()
-                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeString(val, into: &buf) })
-                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
-            } catch {
-                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
-            }
-        } catch {
-            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
-        }
-    }
-
     private func dispatch_imeAttach(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
         guard let methodInfo = methodSchemas[methodId] else {
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
@@ -246,9 +203,8 @@ public final class AppDispatcher: ServiceDispatcher {
         }
         let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
         do {
-            let sessionId = try decodeString(from: &buffer)
             do {
-                let result = try await handler.imeAttach(sessionId: sessionId)
+                let result = try await handler.imeAttach()
                 let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
                 taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
@@ -305,12 +261,11 @@ public final class AppDispatcher: ServiceDispatcher {
         }
         let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
         do {
-            let sessionId = try decodeString(from: &buffer)
             let eventType = try decodeString(from: &buffer)
             let keyCode = try decodeU32(from: &buffer)
             let characters = try decodeString(from: &buffer)
             do {
-                let result = try await handler.imeKeyEvent(sessionId: sessionId, eventType: eventType, keyCode: keyCode, characters: characters)
+                let result = try await handler.imeKeyEvent(eventType: eventType, keyCode: keyCode, characters: characters)
                 let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
                 taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
@@ -327,11 +282,10 @@ public final class AppDispatcher: ServiceDispatcher {
 
 public let app_schemas: [String: MethodBindingSchema] = [
     "imeHello": MethodBindingSchema(args: []),
-    "claimSession": MethodBindingSchema(args: []),
-    "imeAttach": MethodBindingSchema(args: [.string]),
+    "imeAttach": MethodBindingSchema(args: []),
     "imeActivationRevoked": MethodBindingSchema(args: []),
     "imeContextLost": MethodBindingSchema(args: [.bool]),
-    "imeKeyEvent": MethodBindingSchema(args: [.string, .string, .u32, .string]),
+    "imeKeyEvent": MethodBindingSchema(args: [.string, .u32, .string]),
 ]
 
 /// Global schema registry containing all schemas for this service.
@@ -343,7 +297,7 @@ nonisolated(unsafe) public let app_schema_registry: [UInt64: Schema] = [
     0x5db70a394660f3e6: Schema(id: 0x5db70a394660f3e6, typeParams: [], kind: .primitive(.never)),
     0x6847ab90feda71c1: Schema(id: 0x6847ab90feda71c1, typeParams: ["T0"], kind: .tuple(elements: [.var(name: "T0")])),
     0x6d7dce914ee150e8: Schema(id: 0x6d7dce914ee150e8, typeParams: [], kind: .primitive(.string)),
-    0x915c6fb5b64f270b: Schema(id: 0x915c6fb5b64f270b, typeParams: ["T0", "T1", "T2", "T3"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2"), .var(name: "T3")])),
+    0xaa510ab07d34f141: Schema(id: 0xaa510ab07d34f141, typeParams: ["T0", "T1", "T2"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2")])),
     0xbc5c33249a2dc720: Schema(id: 0xbc5c33249a2dc720, typeParams: [], kind: .primitive(.unit)),
 ]
 
@@ -355,15 +309,9 @@ nonisolated(unsafe) public let app_method_schemas: [UInt64: MethodSchemaInfo] = 
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6d7dce914ee150e8), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),
-    0xa450881492adee30: MethodSchemaInfo(
+    0x8a60f92280588cd0: MethodSchemaInfo(
         argsSchemaIds: [0xbc5c33249a2dc720],
         argsRoot: .concrete(0xbc5c33249a2dc720),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
-        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x6d7dce914ee150e8), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
-    ),
-    0x8a60f92280588cd0: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0x6847ab90feda71c1],
-        argsRoot: .generic(0x6847ab90feda71c1, args: [.concrete(0x6d7dce914ee150e8)]),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),
@@ -380,8 +328,8 @@ nonisolated(unsafe) public let app_method_schemas: [UInt64: MethodSchemaInfo] = 
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),
     0x70404de7bbc58de7: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0x281c5be4f2ee63b4, 0x915c6fb5b64f270b],
-        argsRoot: .generic(0x915c6fb5b64f270b, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8), .concrete(0x281c5be4f2ee63b4), .concrete(0x6d7dce914ee150e8)]),
+        argsSchemaIds: [0x6d7dce914ee150e8, 0x281c5be4f2ee63b4, 0xaa510ab07d34f141],
+        argsRoot: .generic(0xaa510ab07d34f141, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x281c5be4f2ee63b4), .concrete(0x6d7dce914ee150e8)]),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),

@@ -507,7 +507,7 @@ actor Session {
         beeLog(
             "SESSION: routeDidBecomeActive \(prevState)→active id=\(id.uuidString.prefix(8)) snapshotLen=\(snapshot.utf16.count) targetPID=\(targetApp.pid.map(String.init) ?? "nil")"
         )
-        inputClient.setMarkedText(Self.addCursor(snapshot), sessionID: id)
+        inputClient.setMarkedText(Self.addCursor(snapshot))
     }
 
     func routeDidBecomeInactive(reason: String) {
@@ -535,12 +535,12 @@ actor Session {
 
         let result: SessionResult
         if !text.isEmpty {
-            inputClient.commitText(text, sessionID: id)
+            inputClient.commitText(text)
             ime = .committed
             result = .committed(id: id, text: text, submitted: false, correction: correctionOutput)
         } else {
-            inputClient.clearMarkedText(sessionID: id)
-            inputClient.stopDictating(sessionID: id)
+            inputClient.clearMarkedText()
+            inputClient.stopDictating()
             ime = .cleared
             result = .cancelled(id: id, text: "")
         }
@@ -570,7 +570,7 @@ actor Session {
         asr = .done
 
         // IME: deactivate
-        inputClient.stopDictating(sessionID: id)
+        inputClient.stopDictating()
         await MainActor.run { inputClient.deactivate() }
         ime = .tornDown
 
@@ -694,7 +694,7 @@ actor Session {
         beeLog(
             "SESSION: render id=\(sessionID.uuidString.prefix(8)) ime=\(ime) len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)"
         )
-        inputClient.setMarkedText(text, sessionID: sessionID)
+        inputClient.setMarkedText(text)
     }
 
     // MARK: - Shortest Edit Script (LCS-based)
@@ -792,7 +792,7 @@ actor Session {
         switch mode {
         case .commit(let submit):
             if !text.isEmpty {
-                inputClient.commitText(text, sessionID: id)
+                inputClient.commitText(text)
                 ime = .committed
                 await bestEffortSleep(ms: 50, label: "finishIME commit")
                 await MainActor.run { inputClient.deactivate() }
@@ -803,14 +803,14 @@ actor Session {
                     inputClient.simulateReturn()
                 }
             } else {
-                inputClient.stopDictating(sessionID: id)
+                inputClient.stopDictating()
                 await MainActor.run { inputClient.deactivate() }
                 ime = .committed
             }
             emitCompletion(.committed(id: id, text: text, submitted: submit, correction: correctionOutput))
 
         case .cancel:
-            inputClient.clearMarkedText(sessionID: id)
+            inputClient.clearMarkedText()
             await MainActor.run { inputClient.deactivate() }
             ime = .cleared
             emitCompletion(.cancelled(id: id, text: text))

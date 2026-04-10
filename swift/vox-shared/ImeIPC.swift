@@ -11,7 +11,6 @@ public enum ImeMethodId {
     public static let setMarkedText: UInt64 = 0x2d335085427db481
     public static let commitText: UInt64 = 0x5716af924e8ded0f
     public static let stopDictating: UInt64 = 0x68519c24d46321b4
-    public static let prepareSession: UInt64 = 0x237826434890468a
     public static let replaceText: UInt64 = 0xc83b94fe5d68ec27
 }
 
@@ -24,16 +23,13 @@ public enum ImeMethodId {
 ///  Methods the IME exposes — app calls into IME.
 public protocol ImeCaller {
     ///  App sends marked text to the IME for display.
-    func setMarkedText(sessionId: String, text: String) async throws -> Bool
+    func setMarkedText(text: String) async throws -> Bool
     ///  App tells IME to commit text and end the session.
-    func commitText(sessionId: String, text: String) async throws -> Bool
+    func commitText(text: String) async throws -> Bool
     ///  App tells IME to stop dictating (cancel/abort).
-    func stopDictating(sessionId: String) async throws -> Bool
-    ///  App pushes a prepared session to the IME. IME should claim it
-    ///  when activateServer fires for the matching PID.
-    func prepareSession(sessionId: String, targetPid: Int32) async throws -> Bool
+    func stopDictating() async throws -> Bool
     ///  App asks IME to replace previously committed text.
-    func replaceText(sessionId: String, oldText: String, newText: String) async throws -> Bool
+    func replaceText(oldText: String, newText: String) async throws -> Bool
 }
 
 public final class ImeClient: ImeCaller, Sendable {
@@ -45,9 +41,8 @@ public final class ImeClient: ImeCaller, Sendable {
         self.timeout = timeout
     }
 
-    public func setMarkedText(sessionId: String, text: String) async throws -> Bool {
+    public func setMarkedText(text: String) async throws -> Bool {
         var buffer = ByteBufferAllocator().buffer(capacity: 64)
-        encodeString(sessionId, into: &buffer)
         encodeString(text, into: &buffer)
         let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
         let schemaInfo = ClientSchemaInfo(methodInfo: ime_method_schemas[0x2d335085427db481]!, schemaRegistry: ime_schema_registry)
@@ -58,9 +53,8 @@ public final class ImeClient: ImeCaller, Sendable {
         }
     }
 
-    public func commitText(sessionId: String, text: String) async throws -> Bool {
+    public func commitText(text: String) async throws -> Bool {
         var buffer = ByteBufferAllocator().buffer(capacity: 64)
-        encodeString(sessionId, into: &buffer)
         encodeString(text, into: &buffer)
         let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
         let schemaInfo = ClientSchemaInfo(methodInfo: ime_method_schemas[0x5716af924e8ded0f]!, schemaRegistry: ime_schema_registry)
@@ -71,10 +65,8 @@ public final class ImeClient: ImeCaller, Sendable {
         }
     }
 
-    public func stopDictating(sessionId: String) async throws -> Bool {
-        var buffer = ByteBufferAllocator().buffer(capacity: 64)
-        encodeString(sessionId, into: &buffer)
-        let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
+    public func stopDictating() async throws -> Bool {
+        let payload: [UInt8] = []
         let schemaInfo = ClientSchemaInfo(methodInfo: ime_method_schemas[0x68519c24d46321b4]!, schemaRegistry: ime_schema_registry)
         let response = try await connection.call(methodId: 0x68519c24d46321b4, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
         return try decodeInfallibleResponse(response) { buf in
@@ -83,22 +75,8 @@ public final class ImeClient: ImeCaller, Sendable {
         }
     }
 
-    public func prepareSession(sessionId: String, targetPid: Int32) async throws -> Bool {
+    public func replaceText(oldText: String, newText: String) async throws -> Bool {
         var buffer = ByteBufferAllocator().buffer(capacity: 64)
-        encodeString(sessionId, into: &buffer)
-        encodeI32(targetPid, into: &buffer)
-        let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
-        let schemaInfo = ClientSchemaInfo(methodInfo: ime_method_schemas[0x237826434890468a]!, schemaRegistry: ime_schema_registry)
-        let response = try await connection.call(methodId: 0x237826434890468a, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
-        return try decodeInfallibleResponse(response) { buf in
-            let result = try decodeBool(from: &buf)
-            return result
-        }
-    }
-
-    public func replaceText(sessionId: String, oldText: String, newText: String) async throws -> Bool {
-        var buffer = ByteBufferAllocator().buffer(capacity: 64)
-        encodeString(sessionId, into: &buffer)
         encodeString(oldText, into: &buffer)
         encodeString(newText, into: &buffer)
         let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
@@ -116,16 +94,13 @@ public final class ImeClient: ImeCaller, Sendable {
 ///  Methods the IME exposes — app calls into IME.
 public protocol ImeHandler: Sendable {
     ///  App sends marked text to the IME for display.
-    func setMarkedText(sessionId: String, text: String) async throws -> Bool
+    func setMarkedText(text: String) async throws -> Bool
     ///  App tells IME to commit text and end the session.
-    func commitText(sessionId: String, text: String) async throws -> Bool
+    func commitText(text: String) async throws -> Bool
     ///  App tells IME to stop dictating (cancel/abort).
-    func stopDictating(sessionId: String) async throws -> Bool
-    ///  App pushes a prepared session to the IME. IME should claim it
-    ///  when activateServer fires for the matching PID.
-    func prepareSession(sessionId: String, targetPid: Int32) async throws -> Bool
+    func stopDictating() async throws -> Bool
     ///  App asks IME to replace previously committed text.
-    func replaceText(sessionId: String, oldText: String, newText: String) async throws -> Bool
+    func replaceText(oldText: String, newText: String) async throws -> Bool
 }
 
 public final class ImeDispatcher: ServiceDispatcher {
@@ -150,8 +125,6 @@ public final class ImeDispatcher: ServiceDispatcher {
             await dispatch_commitText(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0x68519c24d46321b4:
             await dispatch_stopDictating(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
-        case 0x237826434890468a:
-            await dispatch_prepareSession(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0xc83b94fe5d68ec27:
             await dispatch_replaceText(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         default:
@@ -166,8 +139,6 @@ public final class ImeDispatcher: ServiceDispatcher {
         case 0x5716af924e8ded0f:
             return .volatile
         case 0x68519c24d46321b4:
-            return .volatile
-        case 0x237826434890468a:
             return .volatile
         case 0xc83b94fe5d68ec27:
             return .volatile
@@ -195,10 +166,9 @@ public final class ImeDispatcher: ServiceDispatcher {
         }
         let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
         do {
-            let sessionId = try decodeString(from: &buffer)
             let text = try decodeString(from: &buffer)
             do {
-                let result = try await handler.setMarkedText(sessionId: sessionId, text: text)
+                let result = try await handler.setMarkedText(text: text)
                 let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
                 taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
@@ -216,10 +186,9 @@ public final class ImeDispatcher: ServiceDispatcher {
         }
         let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
         do {
-            let sessionId = try decodeString(from: &buffer)
             let text = try decodeString(from: &buffer)
             do {
-                let result = try await handler.commitText(sessionId: sessionId, text: text)
+                let result = try await handler.commitText(text: text)
                 let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
                 taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
@@ -237,30 +206,8 @@ public final class ImeDispatcher: ServiceDispatcher {
         }
         let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
         do {
-            let sessionId = try decodeString(from: &buffer)
             do {
-                let result = try await handler.stopDictating(sessionId: sessionId)
-                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
-                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
-            } catch {
-                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
-            }
-        } catch {
-            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
-        }
-    }
-
-    private func dispatch_prepareSession(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
-        guard let methodInfo = methodSchemas[methodId] else {
-            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
-            return
-        }
-        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-        do {
-            let sessionId = try decodeString(from: &buffer)
-            let targetPid = try decodeI32(from: &buffer)
-            do {
-                let result = try await handler.prepareSession(sessionId: sessionId, targetPid: targetPid)
+                let result = try await handler.stopDictating()
                 let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
                 taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
@@ -278,11 +225,10 @@ public final class ImeDispatcher: ServiceDispatcher {
         }
         let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
         do {
-            let sessionId = try decodeString(from: &buffer)
             let oldText = try decodeString(from: &buffer)
             let newText = try decodeString(from: &buffer)
             do {
-                let result = try await handler.replaceText(sessionId: sessionId, oldText: oldText, newText: newText)
+                let result = try await handler.replaceText(oldText: oldText, newText: newText)
                 let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
                 taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
             } catch {
@@ -298,56 +244,48 @@ public final class ImeDispatcher: ServiceDispatcher {
 // MARK: - Ime Schemas
 
 public let ime_schemas: [String: MethodBindingSchema] = [
-    "setMarkedText": MethodBindingSchema(args: [.string, .string]),
-    "commitText": MethodBindingSchema(args: [.string, .string]),
-    "stopDictating": MethodBindingSchema(args: [.string]),
-    "prepareSession": MethodBindingSchema(args: [.string, .i32]),
-    "replaceText": MethodBindingSchema(args: [.string, .string, .string]),
+    "setMarkedText": MethodBindingSchema(args: [.string]),
+    "commitText": MethodBindingSchema(args: [.string]),
+    "stopDictating": MethodBindingSchema(args: []),
+    "replaceText": MethodBindingSchema(args: [.string, .string]),
 ]
 
 /// Global schema registry containing all schemas for this service.
 nonisolated(unsafe) public let ime_schema_registry: [UInt64: Schema] = [
     0x178367a87f66fb46: Schema(id: 0x178367a87f66fb46, typeParams: [], kind: .primitive(.bool)),
     0x281c5be4f2ee63b4: Schema(id: 0x281c5be4f2ee63b4, typeParams: [], kind: .primitive(.u32)),
-    0x361f4536eee9f991: Schema(id: 0x361f4536eee9f991, typeParams: [], kind: .primitive(.i32)),
     0x42046de663beeef0: Schema(id: 0x42046de663beeef0, typeParams: ["T", "E"], kind: .enum(name: "Result", variants: [VariantSchema(name: "Ok", index: 0, payload: .newtype(typeRef: .var(name: "T"))), VariantSchema(name: "Err", index: 1, payload: .newtype(typeRef: .var(name: "E")))])),
     0x4cf4b2aeb98a1939: Schema(id: 0x4cf4b2aeb98a1939, typeParams: ["E"], kind: .enum(name: "VoxError", variants: [VariantSchema(name: "User", index: 0, payload: .newtype(typeRef: .var(name: "E"))), VariantSchema(name: "UnknownMethod", index: 1, payload: .unit), VariantSchema(name: "InvalidPayload", index: 2, payload: .newtype(typeRef: .concrete(0x6d7dce914ee150e8))), VariantSchema(name: "Cancelled", index: 3, payload: .unit), VariantSchema(name: "ConnectionClosed", index: 4, payload: .unit), VariantSchema(name: "SessionShutdown", index: 5, payload: .unit), VariantSchema(name: "SendFailed", index: 6, payload: .unit), VariantSchema(name: "Indeterminate", index: 7, payload: .unit)])),
     0x5db70a394660f3e6: Schema(id: 0x5db70a394660f3e6, typeParams: [], kind: .primitive(.never)),
     0x6847ab90feda71c1: Schema(id: 0x6847ab90feda71c1, typeParams: ["T0"], kind: .tuple(elements: [.var(name: "T0")])),
     0x6d7dce914ee150e8: Schema(id: 0x6d7dce914ee150e8, typeParams: [], kind: .primitive(.string)),
-    0xaa510ab07d34f141: Schema(id: 0xaa510ab07d34f141, typeParams: ["T0", "T1", "T2"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2")])),
     0xba0496aa8cee7a4c: Schema(id: 0xba0496aa8cee7a4c, typeParams: ["T0", "T1"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1")])),
+    0xbc5c33249a2dc720: Schema(id: 0xbc5c33249a2dc720, typeParams: [], kind: .primitive(.unit)),
 ]
 
 /// Per-method schema information for wire protocol.
 nonisolated(unsafe) public let ime_method_schemas: [UInt64: MethodSchemaInfo] = [
     0x2d335085427db481: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0xba0496aa8cee7a4c],
-        argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8)]),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
-        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
-    ),
-    0x5716af924e8ded0f: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0xba0496aa8cee7a4c],
-        argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8)]),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
-        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
-    ),
-    0x68519c24d46321b4: MethodSchemaInfo(
         argsSchemaIds: [0x6d7dce914ee150e8, 0x6847ab90feda71c1],
         argsRoot: .generic(0x6847ab90feda71c1, args: [.concrete(0x6d7dce914ee150e8)]),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),
-    0x237826434890468a: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0x361f4536eee9f991, 0xba0496aa8cee7a4c],
-        argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x361f4536eee9f991)]),
+    0x5716af924e8ded0f: MethodSchemaInfo(
+        argsSchemaIds: [0x6d7dce914ee150e8, 0x6847ab90feda71c1],
+        argsRoot: .generic(0x6847ab90feda71c1, args: [.concrete(0x6d7dce914ee150e8)]),
+        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
+        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
+    ),
+    0x68519c24d46321b4: MethodSchemaInfo(
+        argsSchemaIds: [0xbc5c33249a2dc720],
+        argsRoot: .concrete(0xbc5c33249a2dc720),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),
     0xc83b94fe5d68ec27: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0xaa510ab07d34f141],
-        argsRoot: .generic(0xaa510ab07d34f141, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8)]),
+        argsSchemaIds: [0x6d7dce914ee150e8, 0xba0496aa8cee7a4c],
+        argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8)]),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),

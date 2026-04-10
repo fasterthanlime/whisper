@@ -18,12 +18,8 @@ private final class AppImpl: AppHandler, @unchecked Sendable {
     func imeHello() async throws -> String {
         await MainActor.run { [server] in server.onImeHello() }
     }
-    func prepareSession(sessionId: String, targetPid: Int32) async throws -> Bool { false }
-    func claimSession() async throws -> String {
-        await MainActor.run { [server] in server.onClaimSession() }
-    }
-    func imeAttach(sessionId: String) async throws -> Bool {
-        await MainActor.run { [server, sessionId] in server.onImeAttach(sessionId: sessionId) }
+    func imeAttach() async throws -> Bool {
+        await MainActor.run { [server] in server.onImeAttach() }
     }
     func imeActivationRevoked() async throws -> Bool {
         beeLog("VOXIPC: imeActivationRevoked"); return true
@@ -33,13 +29,9 @@ private final class AppImpl: AppHandler, @unchecked Sendable {
             server.onImeContextLost(hadMarkedText: hadMarkedText)
         }
     }
-    func imeKeyEvent(sessionId: String, eventType: String, keyCode: UInt32, characters: String)
-        async throws -> Bool
-    {
-        await MainActor.run { [server, sessionId, eventType, keyCode, characters] in
-            server.onImeKeyEvent(
-                sessionId: sessionId, eventType: eventType,
-                keyCode: keyCode, characters: characters)
+    func imeKeyEvent(eventType: String, keyCode: UInt32, characters: String) async throws -> Bool {
+        await MainActor.run { [server, eventType, keyCode, characters] in
+            server.onImeKeyEvent(eventType: eventType, keyCode: keyCode, characters: characters)
         }
     }
 }
@@ -53,8 +45,6 @@ final class BeeIPCServer {
     weak var appState: AppState?
 
     private var imeClient: ImeClient?
-    private var pendingSessionId: String?
-    private(set) var activeSessionId: String?
     private var imeReadyWaiters: [CheckedContinuation<Bool, Never>] = []
 
     private init() {}
@@ -97,34 +87,20 @@ final class BeeIPCServer {
         return "bee-app-\(ProcessInfo.processInfo.processIdentifier)"
     }
 
-    func onClaimSession() -> String {
-        let id = pendingSessionId
-        pendingSessionId = nil
-        beeLog("VOXIPC: claimSession → \(id?.prefix(8) ?? "nil")")
-        return id ?? ""
-    }
-
-    func onImeAttach(sessionId: String) -> Bool {
-        beeLog("VOXIPC: imeAttach session=\(sessionId.prefix(8))")
-        activeSessionId = sessionId
+    func onImeAttach() -> Bool {
+        beeLog("VOXIPC: imeAttach")
         appState?.handleIMESessionStarted()
         return true
     }
 
     func onImeContextLost(hadMarkedText: Bool) -> Bool {
-        let sessionId = activeSessionId
-        beeLog(
-            "VOXIPC: imeContextLost hadMarkedText=\(hadMarkedText) session=\(sessionId?.prefix(8) ?? "nil")"
-        )
-        activeSessionId = nil
+        beeLog("VOXIPC: imeContextLost hadMarkedText=\(hadMarkedText)")
         appState?.handleIMEContextLost(hadMarkedText: hadMarkedText)
         return true
     }
 
-    func onImeKeyEvent(sessionId: String, eventType: String, keyCode: UInt32, characters: String)
-        -> Bool
-    {
-        beeLog("VOXIPC: imeKeyEvent type=\(eventType) key=\(keyCode) session=\(sessionId.prefix(8))")
+    func onImeKeyEvent(eventType: String, keyCode: UInt32, characters: String) -> Bool {
+        beeLog("VOXIPC: imeKeyEvent type=\(eventType) key=\(keyCode)")
         switch eventType {
         case "submit":
             appState?.handleIMESubmit()
@@ -136,7 +112,7 @@ final class BeeIPCServer {
         return true
     }
 
-    // MARK: - Outbound to IME (called by BeeInputClient)
+    // MARK: - Outbound to IME
 
     var isIMEConnected: Bool { imeClient != nil }
 
@@ -151,75 +127,52 @@ final class BeeIPCServer {
         }
     }
 
-    func prepareDictationSession(sessionId: String, targetPid: Int32) async {
-        pendingSessionId = sessionId
-        beeLog(
-            "VOXIPC: prepareSession request session=\(sessionId.prefix(8)) targetPid=\(targetPid) connected=\(imeClient != nil)"
-        )
-        if let client = imeClient {
-            do {
-                _ = try await client.prepareSession(sessionId: sessionId, targetPid: targetPid)
-                beeLog("VOXIPC: prepareSession pushed to IME session=\(sessionId.prefix(8))")
-            } catch {
-                beeLog("VOXIPC: prepareSession to IME failed: \(error)")
-            }
-        } else {
-            beeLog("VOXIPC: IME not connected, stored pending session=\(sessionId.prefix(8))")
-        }
-    }
-
-    func setMarkedText(sessionId: String, text: String) async {
+    func setMarkedText(text: String) async {
         guard let client = imeClient else {
             beeLog("VOXIPC: setMarkedText — IME not connected, dropping")
             return
         }
-        beeLog(
-            "VOXIPC: setMarkedText session=\(sessionId.prefix(8)) len=\(text.utf16.count) activeSession=\(activeSessionId?.prefix(8) ?? "nil") text=\(text.prefix(80).debugDescription)"
-        )
+        beeLog("VOXIPC: setMarkedText len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)")
         do {
-            _ = try await client.setMarkedText(sessionId: sessionId, text: text)
+            _ = try await client.setMarkedText(text: text)
         } catch {
             beeLog("VOXIPC: setMarkedText failed: \(error)")
         }
     }
 
-    func commitText(sessionId: String, text: String) async {
+    func commitText(text: String) async {
         guard let client = imeClient else {
             beeLog("VOXIPC: commitText — IME not connected, dropping")
             return
         }
-        beeLog(
-            "VOXIPC: commitText session=\(sessionId.prefix(8)) len=\(text.utf16.count) activeSession=\(activeSessionId?.prefix(8) ?? "nil") text=\(text.prefix(80).debugDescription)"
-        )
+        beeLog("VOXIPC: commitText len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)")
         do {
-            _ = try await client.commitText(sessionId: sessionId, text: text)
+            _ = try await client.commitText(text: text)
         } catch {
             beeLog("VOXIPC: commitText failed: \(error)")
         }
     }
 
-    func stopDictating(sessionId: String) async {
+    func stopDictating() async {
         guard let client = imeClient else {
             beeLog("VOXIPC: stopDictating — IME not connected, dropping")
             return
         }
-        beeLog(
-            "VOXIPC: stopDictating session=\(sessionId.prefix(8)) activeSession=\(activeSessionId?.prefix(8) ?? "nil")"
-        )
+        beeLog("VOXIPC: stopDictating")
         do {
-            _ = try await client.stopDictating(sessionId: sessionId)
+            _ = try await client.stopDictating()
         } catch {
             beeLog("VOXIPC: stopDictating failed: \(error)")
         }
     }
 
-    func replaceText(sessionId: String, oldText: String, newText: String) async {
+    func replaceText(oldText: String, newText: String) async {
         guard let client = imeClient else {
             beeLog("VOXIPC: replaceText — IME not connected, dropping")
             return
         }
         do {
-            _ = try await client.replaceText(sessionId: sessionId, oldText: oldText, newText: newText)
+            _ = try await client.replaceText(oldText: oldText, newText: newText)
         } catch {
             beeLog("VOXIPC: replaceText failed: \(error)")
         }

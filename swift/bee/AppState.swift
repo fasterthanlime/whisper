@@ -126,27 +126,44 @@ final class AppState {
         didSet { UserDefaults.standard.set(chunkSizeSec, forKey: DefaultsKey.chunkSizeSec) }
     }
     var commitTokenCount: UInt32 = 12 {
-        didSet { UserDefaults.standard.set(Int(commitTokenCount), forKey: DefaultsKey.commitTokenCount) }
+        didSet {
+            UserDefaults.standard.set(Int(commitTokenCount), forKey: DefaultsKey.commitTokenCount)
+        }
     }
     var rollbackTokenNum: UInt32 = 5 {
-        didSet { UserDefaults.standard.set(Int(rollbackTokenNum), forKey: DefaultsKey.rollbackTokenNum) }
+        didSet {
+            UserDefaults.standard.set(Int(rollbackTokenNum), forKey: DefaultsKey.rollbackTokenNum)
+        }
     }
     var animationMorphSpeed: Float = 1.0 {
-        didSet { UserDefaults.standard.set(animationMorphSpeed, forKey: DefaultsKey.animationMorphSpeed) }
+        didSet {
+            UserDefaults.standard.set(animationMorphSpeed, forKey: DefaultsKey.animationMorphSpeed)
+        }
     }
     var animationAppendSpeed: Float = 1.0 {
-        didSet { UserDefaults.standard.set(animationAppendSpeed, forKey: DefaultsKey.animationAppendSpeed) }
+        didSet {
+            UserDefaults.standard.set(
+                animationAppendSpeed, forKey: DefaultsKey.animationAppendSpeed)
+        }
     }
 
     // Volume ducking
     var soundEffectsEnabled: Bool = true {
-        didSet { UserDefaults.standard.set(soundEffectsEnabled, forKey: DefaultsKey.soundEffectsEnabled) }
+        didSet {
+            UserDefaults.standard.set(soundEffectsEnabled, forKey: DefaultsKey.soundEffectsEnabled)
+        }
     }
     var lowerVolumeDuringDictation: Bool = false {
-        didSet { UserDefaults.standard.set(lowerVolumeDuringDictation, forKey: DefaultsKey.lowerVolumeDuringDictation) }
+        didSet {
+            UserDefaults.standard.set(
+                lowerVolumeDuringDictation, forKey: DefaultsKey.lowerVolumeDuringDictation)
+        }
     }
     var dictationVolumeLevel: Float = 0.25 {
-        didSet { UserDefaults.standard.set(dictationVolumeLevel, forKey: DefaultsKey.dictationVolumeLevel) }
+        didSet {
+            UserDefaults.standard.set(
+                dictationVolumeLevel, forKey: DefaultsKey.dictationVolumeLevel)
+        }
     }
     private var savedVolume: Float?
 
@@ -261,12 +278,13 @@ final class AppState {
         guard status2 == noErr else { return .unknown }
 
         // 0x63637764 = "ccwd" = Continuity Camera Wireless Device
-        let kTransportTypeContinuityCamera: UInt32 = 0x63637764
+        let kTransportTypeContinuityCamera: UInt32 = 0x6363_7764
 
         switch transportType {
         case kAudioDeviceTransportTypeBuiltIn: return .builtIn
         case kAudioDeviceTransportTypeUSB: return .usb
-        case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE: return .bluetooth
+        case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE:
+            return .bluetooth
         case kTransportTypeContinuityCamera: return .continuityCamera
         case kAudioDeviceTransportTypeVirtual: return .virtual
         case kAudioDeviceTransportTypeAggregate: return .aggregate
@@ -394,10 +412,12 @@ final class AppState {
         self.totalWords = defaults.integer(forKey: DefaultsKey.totalWords)
         self.totalCharacters = defaults.integer(forKey: DefaultsKey.totalCharacters)
         // soundEffectsEnabled defaults to true if key not set
-        self.soundEffectsEnabled = defaults.object(forKey: DefaultsKey.soundEffectsEnabled) == nil
+        self.soundEffectsEnabled =
+            defaults.object(forKey: DefaultsKey.soundEffectsEnabled) == nil
             ? true
             : defaults.bool(forKey: DefaultsKey.soundEffectsEnabled)
-        self.lowerVolumeDuringDictation = defaults.bool(forKey: DefaultsKey.lowerVolumeDuringDictation)
+        self.lowerVolumeDuringDictation = defaults.bool(
+            forKey: DefaultsKey.lowerVolumeDuringDictation)
         let savedLevel = defaults.float(forKey: DefaultsKey.dictationVolumeLevel)
         if savedLevel > 0 { self.dictationVolumeLevel = savedLevel }
         let savedChunk = defaults.float(forKey: DefaultsKey.chunkSizeSec)
@@ -449,7 +469,7 @@ final class AppState {
 
     enum IMESessionState {
         case inactive
-        case activating  // prepareSession done, waiting for IME confirmation
+        case activating  // IME input source selected, waiting for imeAttach confirmation
         case active  // IME confirmed, text can be routed
     }
 
@@ -485,7 +505,7 @@ final class AppState {
             // IME activation on MainActor — fires immediately, no actor hop
             Task { @MainActor in
                 beeLog("APP: IME activate Task started")
-                let ok = await inputClient.activate(sessionID: session.id, targetPID: target.pid)
+                let ok = await inputClient.activate()
                 if !ok {
                     beeLog("APP: IME activation failed")
                 }
@@ -493,7 +513,10 @@ final class AppState {
             // Audio/ASR pipeline on Session actor — runs in parallel
             Task {
                 beeLog("APP: Session Task started")
-                await session.start(language: config.language, asrConfig: config, animationMorphSpeed: animationMorphSpeed, animationAppendSpeed: animationAppendSpeed)
+                await session.start(
+                    language: config.language, asrConfig: config,
+                    animationMorphSpeed: animationMorphSpeed,
+                    animationAppendSpeed: animationAppendSpeed)
             }
             return false  // not swallowed
 
@@ -562,7 +585,8 @@ final class AppState {
             let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
             let targetPID = activeSessionTarget?.pid
             let shouldCancel =
-                optionHeld || (imeSessionState == .active && targetPID != nil && frontmostPID == targetPID)
+                optionHeld
+                || (imeSessionState == .active && targetPID != nil && frontmostPID == targetPID)
             guard shouldCancel else { return false }
             transitionToIdle()
             Task { await session.cancel() }
@@ -656,7 +680,9 @@ final class AppState {
                 self.pendingIMEAckWorkItem = nil
                 return
             }
-            beeLog("SESSION: IME confirm timeout id=\(sessionID.uuidString.prefix(8)) imeState=\(self.imeSessionState), showing overlay")
+            beeLog(
+                "SESSION: IME confirm timeout id=\(sessionID.uuidString.prefix(8)) imeState=\(self.imeSessionState), showing overlay"
+            )
             self.pendingTimer?.cancel()
             switch self.hotkeyState {
             case .held(let current) where current.id == sessionID:
@@ -887,7 +913,8 @@ final class AppState {
                 }
                 let repos = try await beeClient.requiredDownloads()
                 let cacheURL = URL(fileURLWithPath: cacheDir)
-                try FileManager.default.createDirectory(at: cacheURL, withIntermediateDirectories: true)
+                try FileManager.default.createDirectory(
+                    at: cacheURL, withIntermediateDirectories: true)
 
                 let downloaded = try await HFDownloader.downloadMissing(
                     repos: repos,
@@ -913,7 +940,9 @@ final class AppState {
                     forSecurityApplicationGroupIdentifier: "B2N6FSRTPV.group.fasterthanlime.bee"
                 ) {
                     let datasetDir = groupContainer.appendingPathComponent("phonetic-seed").path
-                    let eventsPath = groupContainer.appendingPathComponent("correction-events.jsonl").path
+                    let eventsPath = groupContainer.appendingPathComponent(
+                        "correction-events.jsonl"
+                    ).path
                     if FileManager.default.fileExists(atPath: datasetDir) {
                         do {
                             try await correctionService.load(
@@ -925,7 +954,9 @@ final class AppState {
                             beeLog("APP: correction engine failed to load: \(error)")
                         }
                     } else {
-                        beeLog("APP: phonetic-seed dataset not found at \(datasetDir) — run install-bee.sh to copy it")
+                        beeLog(
+                            "APP: phonetic-seed dataset not found at \(datasetDir) — run install-bee.sh to copy it"
+                        )
                     }
                 }
 
@@ -1089,7 +1120,9 @@ final class AppState {
     }
 
     private func transitionToIdle() {
-        beeLog("SESSION: transitionToIdle hotkey=\(String(describing: hotkeyState)) imeState=\(imeSessionState)")
+        beeLog(
+            "SESSION: transitionToIdle hotkey=\(String(describing: hotkeyState)) imeState=\(imeSessionState)"
+        )
         hotkeyState = .idle
         pendingTimer?.cancel()
         pendingIMEAckWorkItem?.cancel()
@@ -1145,7 +1178,8 @@ final class AppState {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        let s1 = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
+        let s1 = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
         guard s1 == noErr else { return nil }
 
         var volume: Float32 = 0
@@ -1164,7 +1198,8 @@ final class AppState {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        let s1 = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
+        let s1 = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
         guard s1 == noErr else { return }
 
         var vol = max(0, min(1, volume))
@@ -1175,7 +1210,8 @@ final class AppState {
     }
 
     private func showParkedOverlay(for session: Session) {
-        beeLog("OVERLAY: show session=\(session.id.uuidString.prefix(8)) imeState=\(imeSessionState)")
+        beeLog(
+            "OVERLAY: show session=\(session.id.uuidString.prefix(8)) imeState=\(imeSessionState)")
         if parkedOverlayPanel == nil {
             let panel = NSPanel(
                 contentRect: NSRect(x: 0, y: 0, width: 420, height: 118),
@@ -1286,7 +1322,10 @@ final class AppState {
     }
 
     private func restoreKnownDevices() {
-        guard let saved = UserDefaults.standard.array(forKey: DefaultsKey.knownDevices) as? [[String: String]] else { return }
+        guard
+            let saved = UserDefaults.standard.array(forKey: DefaultsKey.knownDevices)
+                as? [[String: String]]
+        else { return }
         for dict in saved {
             guard let uid = dict["uid"], let name = dict["name"] else { continue }
             let transport = AudioTransport(rawValue: dict["transport"] ?? "") ?? .unknown
@@ -1456,7 +1495,9 @@ final class AppState {
 
         let deviceChanged = previousUID != activeInputDeviceUID
         let needsRestart = topologyChanged || deviceChanged
-        beeLog("AUDIO: refreshInputDevices(\(reason)): count=\(info.count), prev=\(previousUID ?? "nil"), now=\(activeInputDeviceUID ?? "nil"), topologyChanged=\(topologyChanged), needsRestart=\(needsRestart)")
+        beeLog(
+            "AUDIO: refreshInputDevices(\(reason)): count=\(info.count), prev=\(previousUID ?? "nil"), now=\(activeInputDeviceUID ?? "nil"), topologyChanged=\(topologyChanged), needsRestart=\(needsRestart)"
+        )
 
         // Notify user when device auto-switches
         if deviceChanged, let newName = activeInputDeviceName {
@@ -1467,7 +1508,9 @@ final class AppState {
         reconfigureAudioEngineIfNeeded(forceRestart: needsRestart)
     }
 
-    private func sendDeviceSwitchNotification(from previousName: String, to newName: String, reason: String) {
+    private func sendDeviceSwitchNotification(
+        from previousName: String, to newName: String, reason: String
+    ) {
         beeLog("AUDIO: device switched from \(previousName) to \(newName) (\(reason))")
 
         let content = UNMutableNotificationContent()

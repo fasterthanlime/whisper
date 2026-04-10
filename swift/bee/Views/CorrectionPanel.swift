@@ -54,7 +54,6 @@ final class CorrectionPanel {
                     : Self.rebuildText(output: output, resolutions: vm.resolutions)
                 if finalText != output.bestText {
                     inputClient.replaceText(
-                        sessionId: output.sessionId,
                         oldText: output.bestText,
                         newText: finalText
                     )

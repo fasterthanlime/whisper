@@ -1,0 +1,10 @@
+{
+  "defaultWorkspaceType": "buildServer",
+  "buildSettingsTimeout": 20000,
+  "buildServerWorkspaceRequestsTimeout": 20000,
+  "backgroundIndexing": true,
+  "backgroundPreparationMode": "enabled",
+  "sourcekitdRequestTimeout": 10,
+  "semanticServiceRestartTimeout": 30,
+  "workDoneProgressDebounceDuration": 500
+}
