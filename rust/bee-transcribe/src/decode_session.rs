@@ -360,6 +360,7 @@ impl DecodeSession {
             );
             return Ok(None);
         };
+        let plan = prefer_clause_boundary_within_context_window(tokenizer, &entries, plan);
         log_phase_chunk("commit", "plan_rotation", chunk_index, plan_start);
 
         tracing::debug!(
@@ -380,6 +381,14 @@ impl DecodeSession {
 
         let trim_at = self.trim_time_for_plan(&aligned_full, plan, rotation_cut_strategy)?;
         let committed_word_count = aligned_full.word_count_before(plan.commit_end());
+        let rotation_debug_report = render_rotation_debug_report(
+            tokenizer,
+            self.text_tokens(),
+            &aligned_full,
+            plan,
+            trim_at,
+            self.start_time,
+        );
 
         let split_start = phase_start();
         let aligned_committed = aligned_full.split_off_front(plan.commit_end());
@@ -391,17 +400,7 @@ impl DecodeSession {
         );
 
         let rotate_start = phase_start();
-        tracing::info!(
-            "{}",
-            render_rotation_debug_report(
-                tokenizer,
-                self.text_tokens(),
-                &aligned_full,
-                plan,
-                trim_at,
-                self.start_time,
-            )
-        );
+        tracing::info!("{rotation_debug_report}");
         let new_start = self.start_time + trim_at;
         let (committed_audio, remaining) = self.audio.split_at(trim_at);
         let remaining_audio_for_sink = remaining.clone();
@@ -834,6 +833,68 @@ fn decode_entries(tokenizer: &Tokenizer, entries: &[TokenEntry]) -> String {
         .unwrap_or_else(|_| "<decode failed>".to_string())
 }
 
+fn prefer_clause_boundary_within_context_window(
+    tokenizer: &Tokenizer,
+    entries: &TextBuffer,
+    plan: RotationTextPlan,
+) -> RotationTextPlan {
+    let stable_fresh_tokens = plan
+        .stable_total_tokens
+        .saturating_sub(plan.old_context_tokens);
+    let max_extra_context = plan.next_context_tokens.0;
+    let min_commit_tokens = plan.commit_tokens.0.saturating_sub(max_extra_context);
+    let stable_fresh_entries = TextBuffer::from_entries(
+        entries.entries()[plan.old_context_tokens.0..plan.stable_end().0].to_vec(),
+    );
+
+    let mut seen = 0usize;
+    let mut preferred_commit_tokens = None;
+    for word in stable_fresh_entries.words() {
+        seen += word.len();
+        if seen > plan.commit_tokens.0 {
+            break;
+        }
+        if seen < min_commit_tokens {
+            continue;
+        }
+        if ends_with_clause_punctuation(&decode_entries(tokenizer, word)) {
+            preferred_commit_tokens = Some(TokenCount(seen));
+        }
+    }
+
+    let Some(commit_tokens) = preferred_commit_tokens else {
+        return plan;
+    };
+    if commit_tokens == plan.commit_tokens {
+        return plan;
+    }
+
+    let next_context_tokens = stable_fresh_tokens.saturating_sub(commit_tokens);
+    tracing::debug!(
+        old_commit_tokens = plan.commit_tokens.0,
+        new_commit_tokens = commit_tokens.0,
+        old_next_context_tokens = plan.next_context_tokens.0,
+        new_next_context_tokens = next_context_tokens.0,
+        "commit: preferred clause boundary within context window"
+    );
+
+    RotationTextPlan {
+        commit_tokens,
+        next_context_tokens,
+        ..plan
+    }
+}
+
+fn ends_with_clause_punctuation(text: &str) -> bool {
+    let trimmed = text
+        .trim_end()
+        .trim_end_matches(|ch: char| matches!(ch, '"' | '\'' | ')' | ']' | '}' | '”' | '’'));
+    matches!(
+        trimmed.chars().next_back(),
+        Some(',' | ':' | ';' | '.' | '?' | '!')
+    )
+}
+
 fn sanitize_debug_text(text: &str) -> String {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -871,4 +932,20 @@ fn first_word_after(tokenizer: &Tokenizer, buf: &TextBuffer, n: TokenCount) -> O
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::ends_with_clause_punctuation;
+
+    #[test]
+    fn clause_punctuation_detection_accepts_common_boundaries() {
+        assert!(ends_with_clause_punctuation(" checksum,"));
+        assert!(ends_with_clause_punctuation(" quaternion:"));
+        assert!(ends_with_clause_punctuation(" compiler."));
+        assert!(ends_with_clause_punctuation(" compiler.)"));
+    }
+
+    #[test]
+    fn clause_punctuation_detection_rejects_plain_words() {
+        assert!(!ends_with_clause_punctuation(" checksum"));
+        assert!(!ends_with_clause_punctuation(" hotswap"));
+    }
+}
