@@ -8,6 +8,14 @@ class SpyTextView: NSView, NSTextInputClient {
 
     override var acceptsFirstResponder: Bool { true }
 
+    private lazy var _inputContext: NSTextInputContext = {
+        NSTextInputContext(client: self)
+    }()
+
+    override var inputContext: NSTextInputContext? {
+        _inputContext
+    }
+
     override func becomeFirstResponder() -> Bool {
         spy("becomeFirstResponder")
         return true
@@ -119,6 +127,27 @@ class SpyTextView: NSView, NSTextInputClient {
     func characterIndex(for point: NSPoint) -> Int {
         spy("characterIndex(for: \(point))")
         return 0
+    }
+
+    // MARK: - Commands
+
+    override func doCommand(by selector: Selector) {
+        spy("doCommand(by: \(selector))")
+        switch selector {
+        case #selector(NSResponder.deleteBackward(_:)):
+            if markedRangeStorage.location != NSNotFound {
+                setMarkedText("", selectedRange: NSRange(location: 0, length: 0), replacementRange: markedRangeStorage)
+            } else if selectedRangeStorage.location > 0 {
+                let deleteRange = NSRange(location: selectedRangeStorage.location - 1, length: 1)
+                textStorage.deleteCharacters(in: deleteRange)
+                selectedRangeStorage = NSRange(location: deleteRange.location, length: 0)
+                needsDisplay = true
+            }
+        case #selector(NSResponder.insertNewline(_:)):
+            insertText("\n", replacementRange: NSRange(location: NSNotFound, length: 0))
+        default:
+            break
+        }
     }
 
     // MARK: - Drawing

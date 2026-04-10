@@ -38,4 +38,4 @@ ime-spy:
       rm -rf /Applications/ime-spy.app; \
       cp -R "$build_dir/ime-spy.app" /Applications/ime-spy.app; \
       echo "Installed to /Applications/ime-spy.app"
-    open /Applications/ime-spy.app
+    /Applications/ime-spy.app/Contents/MacOS/ime-spy
