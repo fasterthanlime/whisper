@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rotation + Persistent KV Model</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #ffffff;
+      --fg: #111111;
+      --muted: #666666;
+      --border: #d0d0d0;
+      --panel: #f7f7f7;
+      --audio: #dbeafe;
+      --commit: #c9f2d3;
+      --carry: #fde7b2;
+      --rollback: #f8caca;
+      --kv: #e9d5ff;
+      --bad: #fecaca;
+      --good: #bbf7d0;
+      --arrow: #444444;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111111;
+        --fg: #f5f5f5;
+        --muted: #b3b3b3;
+        --border: #3f3f46;
+        --panel: #18181b;
+        --audio: #1d3b63;
+        --commit: #1f5f38;
+        --carry: #6b4e16;
+        --rollback: #6b2222;
+        --kv: #4c1d95;
+        --bad: #7f1d1d;
+        --good: #14532d;
+        --arrow: #d4d4d8;
+      }
+    }
+
+    body {
+      margin: 32px;
+      background: var(--bg);
+      color: var(--fg);
+      font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    h1, h2 { margin: 0 0 12px; font-size: 20px; }
+    p { margin: 0 0 16px; color: var(--muted); max-width: 1040px; }
+
+    .panel {
+      margin: 0 0 28px;
+      padding: 18px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 12px;
+      width: fit-content;
+    }
+
+    .legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+    .legend-item { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+    .swatch { width: 18px; height: 18px; border: 1px solid var(--border); border-radius: 4px; }
+
+    ul { margin: 12px 0 0 20px; color: var(--muted); max-width: 1040px; }
+
+    .code-map {
+      margin: 18px 0 0;
+      padding: 14px 16px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--panel) 88%, transparent);
+      max-width: 1040px;
+    }
+
+    .code-map h3 { margin: 0 0 10px; font-size: 16px; }
+
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--fg); }
+  </style>
+</head>
+<body>
+  <h1>Rotation + Persistent Decoder KV</h1>
+  <p>
+    This document defines a coherent streaming model for persistent decoder KV in Bee.
+    It also calls out the invalid model explicitly: persistent KV without audio cuts.
+  </p>
+
+  <h2>Core Claim</h2>
+  <div class="panel">
+    <svg width="1020" height="280" viewBox="0 0 1020 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Validity claim for persistent KV">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Persistent decoder KV is valid only when stream position advances monotonically</text>
+
+      <rect x="40" y="56" width="440" height="74" rx="10" fill="var(--bad)" stroke="var(--border)" />
+      <text x="260" y="84" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">INVALID</text>
+      <text x="260" y="105" text-anchor="middle" fill="currentColor" font-size="13">full audio kept forever + persistent KV</text>
+
+      <rect x="540" y="56" width="440" height="74" rx="10" fill="var(--good)" stroke="var(--border)" />
+      <text x="760" y="84" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">VALID</text>
+      <text x="760" y="105" text-anchor="middle" fill="currentColor" font-size="13">aligned audio cuts + exact token/KV truncation</text>
+
+      <line x1="40" y1="162" x2="980" y2="162" stroke="var(--arrow)" stroke-width="1.5" />
+      <text x="40" y="190" fill="currentColor" font-size="14">Reason:</text>
+      <text x="100" y="190" fill="currentColor" font-size="14">decoder KV stores prefix history. Re-feeding old audio while preserving KV double-counts history and drifts.</text>
+      <text x="100" y="212" fill="currentColor" font-size="14">Therefore, each rotation cut must move all state frontiers together: text, audio, and decoder position.</text>
+      <text x="100" y="234" fill="currentColor" font-size="14">ZIPA alignment gives the authoritative cut boundary in time, then we map that to token/KV indices.</text>
+    </svg>
+  </div>
+
+  <h2>State Vectors</h2>
+  <div class="panel">
+    <svg width="1020" height="360" viewBox="0 0 1020 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="State vectors and synchronized cuts">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">All frontiers that must stay synchronized</text>
+
+      <text x="0" y="72" fill="currentColor" font-size="14" font-weight="600">Audio timeline</text>
+      <rect x="170" y="48" width="380" height="40" rx="8" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="550" y="48" width="180" height="40" rx="8" fill="var(--carry)" stroke="var(--border)" />
+      <rect x="730" y="48" width="210" height="40" rx="8" fill="var(--rollback)" stroke="var(--border)" />
+      <text x="360" y="73" text-anchor="middle" fill="currentColor" font-size="13">committed audio</text>
+      <text x="640" y="73" text-anchor="middle" fill="currentColor" font-size="13">carried audio</text>
+      <text x="835" y="73" text-anchor="middle" fill="currentColor" font-size="13">revisable tail</text>
+
+      <text x="0" y="132" fill="currentColor" font-size="14" font-weight="600">Text tokens</text>
+      <rect x="170" y="108" width="380" height="40" rx="8" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="550" y="108" width="180" height="40" rx="8" fill="var(--carry)" stroke="var(--border)" />
+      <rect x="730" y="108" width="210" height="40" rx="8" fill="var(--rollback)" stroke="var(--border)" />
+      <text x="360" y="133" text-anchor="middle" fill="currentColor" font-size="13">commit now</text>
+      <text x="640" y="133" text-anchor="middle" fill="currentColor" font-size="13">carry prefix</text>
+      <text x="835" y="133" text-anchor="middle" fill="currentColor" font-size="13">rollback N</text>
+
+      <text x="0" y="192" fill="currentColor" font-size="14" font-weight="600">Decoder KV positions</text>
+      <rect x="170" y="168" width="380" height="40" rx="8" fill="var(--kv)" stroke="var(--border)" />
+      <rect x="550" y="168" width="180" height="40" rx="8" fill="var(--kv)" stroke="var(--border)" />
+      <rect x="730" y="168" width="210" height="40" rx="8" fill="var(--kv)" stroke="var(--border)" />
+      <text x="550" y="232" text-anchor="middle" fill="currentColor" font-size="13">KV truncation/rebase boundary must match text cut boundary</text>
+
+      <line x1="550" y1="88" x2="550" y2="210" stroke="var(--arrow)" stroke-width="1.5" />
+      <line x1="730" y1="88" x2="730" y2="210" stroke="var(--arrow)" stroke-width="1.5" />
+
+      <text x="170" y="282" fill="currentColor" font-size="14">Invariant A:</text>
+      <text x="260" y="282" fill="currentColor" font-size="14">audio cut boundary = aligned token boundary = KV boundary</text>
+      <text x="170" y="306" fill="currentColor" font-size="14">Invariant B:</text>
+      <text x="260" y="306" fill="currentColor" font-size="14">next chunk adds only new audio beyond the committed audio frontier</text>
+    </svg>
+
+    <div class="legend">
+      <div class="legend-item"><span class="swatch" style="background: var(--commit)"></span> committed / finalized</div>
+      <div class="legend-item"><span class="swatch" style="background: var(--carry)"></span> retained stable context</div>
+      <div class="legend-item"><span class="swatch" style="background: var(--rollback)"></span> revisable rollback tail</div>
+      <div class="legend-item"><span class="swatch" style="background: var(--kv)"></span> decoder KV-visible positions</div>
+    </div>
+  </div>
+
+  <h2>Mechanism (Ordered)</h2>
+  <p>
+    This is the precise order for each commit/rotation cycle when persistent KV is enabled.
+  </p>
+  <ul>
+    <li>1. Decode chunks with persistent KV, but keep rollback window <code>N</code> revisable.</li>
+    <li>2. Build full current transcript (excluding metadata) and run ZIPA alignment on full current audio buffer.</li>
+    <li>3. Choose textual commit partition <code>[C][P][R]</code> (commit/carry/rollback), then snap to preferred boundary.</li>
+    <li>4. From alignment, derive <code>commit_end_time</code> for the end of <code>C</code>.</li>
+    <li>5. Cut audio at <code>commit_end_time</code>: <code>audio = committed_audio + remaining_audio</code>.</li>
+    <li>6. Compute exact token index mapping for kept text (<code>P + R</code>) and exact decoder position for that same kept prefix.</li>
+    <li>7. Truncate/rebase decoder KV to that exact position (or rebuild KV from kept tokens if truncation-only addressing is insufficient).</li>
+    <li>8. Start next sub-session from remaining audio + kept text/KV state. Never re-feed committed audio.</li>
+  </ul>
+
+  <h2>Step Diagrams</h2>
+  <p>
+    Each step below shows the exact state transition for one phase of the algorithm.
+  </p>
+
+  <div class="panel">
+    <svg width="1020" height="170" viewBox="0 0 1020 170" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Step 1 decode with persistent KV">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Step 1 — Decode with persistent KV, keep rollback tail revisable</text>
+      <rect x="40" y="50" width="520" height="40" rx="8" fill="var(--kv)" stroke="var(--border)" />
+      <rect x="560" y="50" width="120" height="40" rx="8" fill="var(--rollback)" stroke="var(--border)" />
+      <rect x="700" y="50" width="260" height="40" rx="8" fill="var(--audio)" stroke="var(--border)" />
+      <text x="300" y="75" text-anchor="middle" fill="currentColor" font-size="13">KV-visible stable prefix</text>
+      <text x="620" y="75" text-anchor="middle" fill="currentColor" font-size="13">rollback N</text>
+      <text x="830" y="75" text-anchor="middle" fill="currentColor" font-size="13">current audio buffer</text>
+      <text x="40" y="126" fill="currentColor" font-size="14">Output: new provisional transcript over full current state.</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <svg width="1020" height="190" viewBox="0 0 1020 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Step 2 run ZIPA alignment">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Step 2 — Run ZIPA alignment on full transcript vs full current audio</text>
+      <rect x="40" y="52" width="420" height="42" rx="8" fill="var(--carry)" stroke="var(--border)" />
+      <rect x="560" y="52" width="420" height="42" rx="8" fill="var(--audio)" stroke="var(--border)" />
+      <text x="250" y="78" text-anchor="middle" fill="currentColor" font-size="13">full transcript phones (G2P)</text>
+      <text x="770" y="78" text-anchor="middle" fill="currentColor" font-size="13">full audio phones (ZIPA)</text>
+      <line x1="460" y1="73" x2="560" y2="73" stroke="var(--arrow)" stroke-width="2" />
+      <polygon points="560,73 548,66 548,80" fill="var(--arrow)" />
+      <rect x="300" y="118" width="420" height="44" rx="8" fill="var(--panel)" stroke="var(--border)" />
+      <text x="510" y="145" text-anchor="middle" fill="currentColor" font-size="13">DP alignment -> timestamped mapping</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <svg width="1020" height="190" viewBox="0 0 1020 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Step 3 choose text partition">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Step 3 — Choose and snap text partition [C][P][R]</text>
+      <rect x="40" y="54" width="460" height="44" rx="8" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="500" y="54" width="220" height="44" rx="8" fill="var(--carry)" stroke="var(--border)" />
+      <rect x="720" y="54" width="220" height="44" rx="8" fill="var(--rollback)" stroke="var(--border)" />
+      <text x="270" y="81" text-anchor="middle" fill="currentColor" font-size="13">C: commit</text>
+      <text x="610" y="81" text-anchor="middle" fill="currentColor" font-size="13">P: carry</text>
+      <text x="830" y="81" text-anchor="middle" fill="currentColor" font-size="13">R: rollback</text>
+      <line x1="500" y1="104" x2="470" y2="134" stroke="var(--arrow)" stroke-width="2" />
+      <text x="40" y="156" fill="currentColor" font-size="14">Boundary may snap backward to sentence/clause/word-safe location before cut time is finalized.</text>
+    </svg>
+  </div>
+
+  <h2>Worked Example (Words + Tokens)</h2>
+  <p>
+    Concrete example using the phrase <code>turn on the kitchen lights please now</code>.
+    Each panel shows both word and token lanes so boundary movement is explicit.
+  </p>
+
+  <div class="panel">
+    <svg width="1020" height="280" viewBox="0 0 1020 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Example A full state">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Example A — Full current state before cut</text>
+
+      <text x="0" y="70" fill="currentColor" font-size="14" font-weight="600">Word lane</text>
+      <rect x="150" y="46" width="110" height="34" rx="7" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="260" y="46" width="80" height="34" rx="7" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="340" y="46" width="170" height="34" rx="7" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="510" y="46" width="150" height="34" rx="7" fill="var(--carry)" stroke="var(--border)" />
+      <rect x="660" y="46" width="130" height="34" rx="7" fill="var(--rollback)" stroke="var(--border)" />
+      <text x="205" y="68" text-anchor="middle" fill="currentColor" font-size="12">turn on</text>
+      <text x="300" y="68" text-anchor="middle" fill="currentColor" font-size="12">the</text>
+      <text x="425" y="68" text-anchor="middle" fill="currentColor" font-size="12">kitchen</text>
+      <text x="585" y="68" text-anchor="middle" fill="currentColor" font-size="12">lights please</text>
+      <text x="725" y="68" text-anchor="middle" fill="currentColor" font-size="12">now</text>
+
+      <text x="0" y="136" fill="currentColor" font-size="14" font-weight="600">Token lane</text>
+      <rect x="150" y="110" width="72" height="30" rx="6" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="222" y="110" width="38" height="30" rx="6" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="260" y="110" width="40" height="30" rx="6" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="300" y="110" width="40" height="30" rx="6" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="340" y="110" width="80" height="30" rx="6" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="420" y="110" width="90" height="30" rx="6" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="510" y="110" width="70" height="30" rx="6" fill="var(--carry)" stroke="var(--border)" />
+      <rect x="580" y="110" width="80" height="30" rx="6" fill="var(--carry)" stroke="var(--border)" />
+      <rect x="660" y="110" width="130" height="30" rx="6" fill="var(--rollback)" stroke="var(--border)" />
+      <text x="186" y="129" text-anchor="middle" fill="currentColor" font-size="11">turn</text>
+      <text x="241" y="129" text-anchor="middle" fill="currentColor" font-size="11">on</text>
+      <text x="280" y="129" text-anchor="middle" fill="currentColor" font-size="11">the</text>
+      <text x="320" y="129" text-anchor="middle" fill="currentColor" font-size="11">kit</text>
+      <text x="380" y="129" text-anchor="middle" fill="currentColor" font-size="11">chen</text>
+      <text x="465" y="129" text-anchor="middle" fill="currentColor" font-size="11">light</text>
+      <text x="545" y="129" text-anchor="middle" fill="currentColor" font-size="11">s</text>
+      <text x="620" y="129" text-anchor="middle" fill="currentColor" font-size="11">please</text>
+      <text x="725" y="129" text-anchor="middle" fill="currentColor" font-size="11">now</text>
+
+      <text x="150" y="182" fill="currentColor" font-size="13">C = green, P = yellow, R = red</text>
+      <text x="150" y="206" fill="currentColor" font-size="13">ZIPA alignment runs over full transcript/audio before finalizing cut.</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <svg width="1020" height="290" viewBox="0 0 1020 290" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Example B snapped boundary">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Example B — Snap commit boundary, then derive commit_end_time</text>
+
+      <text x="0" y="68" fill="currentColor" font-size="14" font-weight="600">Word lane</text>
+      <rect x="150" y="44" width="110" height="34" rx="7" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="260" y="44" width="80" height="34" rx="7" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="340" y="44" width="170" height="34" rx="7" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="510" y="44" width="150" height="34" rx="7" fill="var(--carry)" stroke="var(--border)" />
+      <rect x="660" y="44" width="130" height="34" rx="7" fill="var(--rollback)" stroke="var(--border)" />
+      <line x1="510" y1="38" x2="510" y2="86" stroke="var(--arrow)" stroke-width="2" />
+      <text x="510" y="100" text-anchor="middle" fill="currentColor" font-size="12">snapped C|P boundary</text>
+
+      <text x="0" y="136" fill="currentColor" font-size="14" font-weight="600">Token lane</text>
+      <rect x="150" y="110" width="72" height="30" rx="6" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="222" y="110" width="38" height="30" rx="6" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="260" y="110" width="40" height="30" rx="6" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="300" y="110" width="40" height="30" rx="6" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="340" y="110" width="80" height="30" rx="6" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="420" y="110" width="90" height="30" rx="6" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="510" y="110" width="70" height="30" rx="6" fill="var(--carry)" stroke="var(--border)" />
+      <rect x="580" y="110" width="80" height="30" rx="6" fill="var(--carry)" stroke="var(--border)" />
+      <rect x="660" y="110" width="130" height="30" rx="6" fill="var(--rollback)" stroke="var(--border)" />
+      <line x1="510" y1="106" x2="510" y2="144" stroke="var(--arrow)" stroke-width="2" />
+      <text x="510" y="162" text-anchor="middle" fill="currentColor" font-size="12">token_keep_start</text>
+
+      <rect x="150" y="194" width="640" height="36" rx="7" fill="var(--audio)" stroke="var(--border)" />
+      <line x1="510" y1="190" x2="510" y2="234" stroke="var(--arrow)" stroke-width="2" />
+      <text x="510" y="248" text-anchor="middle" fill="currentColor" font-size="12">commit_end_time from aligned end of C</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <svg width="1020" height="310" viewBox="0 0 1020 310" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Example C split and carry forward">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Example C — Split audio, truncate KV, carry P+R</text>
+
+      <text x="0" y="68" fill="currentColor" font-size="14" font-weight="600">Audio split</text>
+      <rect x="150" y="44" width="360" height="34" rx="7" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="510" y="44" width="280" height="34" rx="7" fill="var(--audio)" stroke="var(--border)" />
+      <text x="330" y="66" text-anchor="middle" fill="currentColor" font-size="12">committed_audio</text>
+      <text x="650" y="66" text-anchor="middle" fill="currentColor" font-size="12">remaining_audio</text>
+
+      <text x="0" y="132" fill="currentColor" font-size="14" font-weight="600">Token carry-over</text>
+      <rect x="510" y="108" width="150" height="34" rx="7" fill="var(--carry)" stroke="var(--border)" />
+      <rect x="660" y="108" width="130" height="34" rx="7" fill="var(--rollback)" stroke="var(--border)" />
+      <text x="585" y="130" text-anchor="middle" fill="currentColor" font-size="12">P</text>
+      <text x="725" y="130" text-anchor="middle" fill="currentColor" font-size="12">R</text>
+
+      <text x="0" y="196" fill="currentColor" font-size="14" font-weight="600">KV carry-over</text>
+      <rect x="510" y="172" width="280" height="34" rx="7" fill="var(--kv)" stroke="var(--border)" />
+      <text x="650" y="194" text-anchor="middle" fill="currentColor" font-size="12">KV truncated/rebased to match P+R</text>
+
+      <line x1="650" y1="206" x2="650" y2="240" stroke="var(--arrow)" stroke-width="2" />
+      <polygon points="650,252 642,238 658,238" fill="var(--arrow)" />
+      <rect x="360" y="252" width="580" height="40" rx="8" fill="var(--good)" stroke="var(--border)" />
+      <text x="650" y="277" text-anchor="middle" fill="currentColor" font-size="13">next sub-session input = remaining_audio + (P+R text) + matched KV</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <svg width="1020" height="180" viewBox="0 0 1020 180" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Step 4 derive commit end time">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Step 4 — Derive commit_end_time from aligned end of C</text>
+      <rect x="40" y="56" width="900" height="40" rx="8" fill="var(--audio)" stroke="var(--border)" />
+      <line x1="520" y1="52" x2="520" y2="118" stroke="var(--arrow)" stroke-width="2" />
+      <text x="520" y="132" text-anchor="middle" fill="currentColor" font-size="13">commit_end_time</text>
+      <text x="40" y="158" fill="currentColor" font-size="14">This timestamp is authoritative for audio trimming.</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <svg width="1020" height="190" viewBox="0 0 1020 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Step 5 trim audio">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Step 5 — Split audio at commit_end_time</text>
+      <rect x="40" y="56" width="480" height="42" rx="8" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="520" y="56" width="420" height="42" rx="8" fill="var(--audio)" stroke="var(--border)" />
+      <text x="280" y="82" text-anchor="middle" fill="currentColor" font-size="13">committed_audio (drop from future decode)</text>
+      <text x="730" y="82" text-anchor="middle" fill="currentColor" font-size="13">remaining_audio (next session input)</text>
+      <text x="40" y="146" fill="currentColor" font-size="14">This prevents re-feeding committed history.</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <svg width="1020" height="190" viewBox="0 0 1020 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Step 6 compute kept token boundary">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Step 6 — Compute exact kept token boundary (P + R)</text>
+      <rect x="40" y="56" width="460" height="42" rx="8" fill="var(--commit)" stroke="var(--border)" />
+      <rect x="500" y="56" width="440" height="42" rx="8" fill="var(--carry)" stroke="var(--border)" />
+      <line x1="500" y1="52" x2="500" y2="120" stroke="var(--arrow)" stroke-width="2" />
+      <text x="500" y="134" text-anchor="middle" fill="currentColor" font-size="13">token_keep_start (exact index)</text>
+      <text x="40" y="160" fill="currentColor" font-size="14">Everything before token_keep_start is finalized and removed from live decode state.</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <svg width="1020" height="200" viewBox="0 0 1020 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Step 7 truncate or rebase kv">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Step 7 — Truncate/rebase KV to match kept token state</text>
+      <rect x="40" y="56" width="900" height="42" rx="8" fill="var(--kv)" stroke="var(--border)" />
+      <line x1="500" y1="52" x2="500" y2="118" stroke="var(--arrow)" stroke-width="2" />
+      <text x="500" y="132" text-anchor="middle" fill="currentColor" font-size="13">KV keep boundary == token keep boundary</text>
+      <text x="40" y="160" fill="currentColor" font-size="14">If suffix-only retention is representable: truncate. If not: rebuild KV from kept tokens.</text>
+      <text x="40" y="182" fill="currentColor" font-size="14">Any mismatch here corrupts history.</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <svg width="1020" height="190" viewBox="0 0 1020 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Step 8 next sub-session">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">Step 8 — Start next sub-session from synchronized remainder</text>
+      <rect x="40" y="56" width="300" height="44" rx="8" fill="var(--audio)" stroke="var(--border)" />
+      <rect x="360" y="56" width="280" height="44" rx="8" fill="var(--carry)" stroke="var(--border)" />
+      <rect x="660" y="56" width="280" height="44" rx="8" fill="var(--kv)" stroke="var(--border)" />
+      <text x="190" y="83" text-anchor="middle" fill="currentColor" font-size="13">remaining audio</text>
+      <text x="500" y="83" text-anchor="middle" fill="currentColor" font-size="13">kept text (P+R)</text>
+      <text x="800" y="83" text-anchor="middle" fill="currentColor" font-size="13">kept/rebased KV</text>
+      <text x="40" y="146" fill="currentColor" font-size="14">Now decode continues with only truly new audio appended.</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <svg width="1020" height="420" viewBox="0 0 1020 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ordered mechanism diagram">
+      <text x="0" y="24" fill="currentColor" font-size="16" font-weight="600">One full cycle</text>
+
+      <rect x="40" y="44" width="300" height="54" rx="8" fill="var(--audio)" stroke="var(--border)" />
+      <text x="190" y="76" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">decode with persistent KV</text>
+
+      <line x1="340" y1="71" x2="390" y2="71" stroke="var(--arrow)" stroke-width="2" />
+      <polygon points="390,71 378,64 378,78" fill="var(--arrow)" />
+
+      <rect x="390" y="44" width="290" height="54" rx="8" fill="var(--panel)" stroke="var(--border)" />
+      <text x="535" y="76" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">ZIPA align full transcript vs full audio</text>
+
+      <line x1="680" y1="71" x2="730" y2="71" stroke="var(--arrow)" stroke-width="2" />
+      <polygon points="730,71 718,64 718,78" fill="var(--arrow)" />
+
+      <rect x="730" y="44" width="250" height="54" rx="8" fill="var(--commit)" stroke="var(--border)" />
+      <text x="855" y="68" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">derive commit_end_time</text>
+      <text x="855" y="86" text-anchor="middle" fill="currentColor" font-size="13">and token boundary</text>
+
+      <rect x="40" y="142" width="420" height="54" rx="8" fill="var(--audio)" stroke="var(--border)" />
+      <text x="250" y="174" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">cut audio at commit_end_time</text>
+
+      <rect x="500" y="142" width="480" height="54" rx="8" fill="var(--kv)" stroke="var(--border)" />
+      <text x="740" y="174" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">truncate/rebase KV at matching token boundary</text>
+
+      <line x1="250" y1="196" x2="250" y2="250" stroke="var(--arrow)" stroke-width="2" />
+      <line x1="740" y1="196" x2="740" y2="250" stroke="var(--arrow)" stroke-width="2" />
+      <polygon points="250,250 242,238 258,238" fill="var(--arrow)" />
+      <polygon points="740,250 732,238 748,238" fill="var(--arrow)" />
+
+      <rect x="200" y="250" width="640" height="60" rx="10" fill="var(--good)" stroke="var(--border)" />
+      <text x="520" y="278" text-anchor="middle" fill="currentColor" font-size="15" font-weight="600">next sub-session starts from remaining_audio + kept_text + kept/rebased_KV</text>
+      <text x="520" y="298" text-anchor="middle" fill="currentColor" font-size="13">no committed audio is fed again</text>
+
+      <rect x="40" y="334" width="940" height="56" rx="10" fill="var(--bad)" stroke="var(--border)" />
+      <text x="510" y="358" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">Rejected path: keep full audio forever, only truncate text/KV tail</text>
+      <text x="510" y="378" text-anchor="middle" fill="currentColor" font-size="13">This grows compute and produces semantically inconsistent history.</text>
+    </svg>
+  </div>
+
+  <h2>Why It Works</h2>
+  <ul>
+    <li>ZIPA provides a time-grounded boundary, so audio trimming is physically meaningful.</li>
+    <li>Token ownership over aligned phones lets that same boundary map back to text/token indices.</li>
+    <li>Decoder KV truncation/rebase at the same boundary preserves decoder history consistency.</li>
+    <li>All frontiers move together; no duplicated committed history is reintroduced.</li>
+  </ul>
+
+  <h2>Failure Modes</h2>
+  <ul>
+    <li>If token-boundary mapping is approximate (not exact), KV can desynchronize from text and drift.</li>
+    <li>If audio is not cut at the aligned boundary, persistent KV becomes invalid for streaming.</li>
+    <li>If boundary snapping changes text partition after timing is chosen, boundary must be recomputed from the snapped plan.</li>
+    <li>If we cannot express KV as suffix-retained state after cut, we must rebuild KV from kept tokens explicitly.</li>
+  </ul>
+
+  <h2>Code Map</h2>
+  <div class="code-map">
+    <h3>Implementation Surface in Bee</h3>
+    <ul>
+      <li><code>rust/bee-transcribe/src/decode_session.rs</code>: decode state machine, commit path, and persistent KV mode branch.</li>
+      <li><code>rust/bee-transcribe/src/session.rs</code>: commit scheduling and rotation orchestration.</li>
+      <li><code>rust/bee-transcribe/src/zipa_align.rs</code>: transcript-phone to ZIPA-phone alignment and range mapping.</li>
+      <li><code>rust/bee-qwen3-asr/src/decoder.rs</code>: <code>KVCache::truncate(seq_len)</code> primitive.</li>
+      <li><code>rust/bee-qwen3-asr/src/generate.rs</code>: prompt construction and prefill/decode with <code>start_position</code>.</li>
+      <li><code>notes/rotation.html</code>: base rotation mental model this document extends.</li>
+    </ul>
+  </div>
+
+  <h2>Verdict</h2>
+  <p>
+    Persistent decoder KV can work in Bee, but only in a synchronized rotation model:
+    <code>ZIPA cut time -> audio trim -> exact token boundary -> KV truncate/rebase</code>.
+    Persistent KV without aligned audio cutting is not a valid streaming design.
+  </p>
+</body>
+</html>
