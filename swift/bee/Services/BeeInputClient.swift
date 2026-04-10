@@ -67,10 +67,6 @@ final class BeeInputClient: Sendable {
         Task { await BeeIPCServer.shared.stopDictating() }
     }
 
-    func replaceText(oldText: String, newText: String) {
-        Task { await BeeIPCServer.shared.replaceText(oldText: oldText, newText: newText) }
-    }
-
     func simulateReturn() {
         let src = CGEventSource(stateID: .hidSystemState)
         if let down = CGEvent(keyboardEventSource: src, virtualKey: 0x24, keyDown: true),

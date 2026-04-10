@@ -3,7 +3,7 @@ import VoxRuntime
 
 // MARK: - IME-side handler (handles calls FROM app)
 
-private final class ImeImpl: ImeHandler, @unchecked Sendable {
+final class ImeImpl: ImeHandler, @unchecked Sendable {
     func setMarkedText(text: String) async throws -> Bool {
         beeInputLog("VOXIPC: setMarkedText \(text)")
         await MainActor.run { Bridge.shared.setMarkedText(text) }

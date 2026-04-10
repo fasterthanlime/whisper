@@ -44,19 +44,21 @@ final class CorrectionPanel {
                 // Send teaching signals for model edits
                 let teachData = vm.resolutions.map { (editId: $0.key, accepted: $0.value) }
                 Task {
-                    await correctionService.teach(sessionId: output.sessionId, resolutions: teachData)
+                    await correctionService.teach(
+                        sessionId: output.sessionId, resolutions: teachData)
                     await correctionService.save()
                 }
 
                 // Use manual text if user edited, otherwise rebuild from resolutions
-                let finalText = vm.isEditing
+                let finalText =
+                    vm.isEditing
                     ? vm.editableText
                     : Self.rebuildText(output: output, resolutions: vm.resolutions)
                 if finalText != output.bestText {
-                    inputClient.replaceText(
-                        oldText: output.bestText,
-                        newText: finalText
-                    )
+                    // inputClient.replaceText(
+                    //     oldText: output.bestText,
+                    //     newText: finalText
+                    // )
                 }
 
                 self?.dismiss()
@@ -71,7 +73,8 @@ final class CorrectionPanel {
         panel.makeKeyAndOrderFront(nil)
 
         // Close on click outside
-        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self, weak panel] event in
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) {
+            [weak self, weak panel] event in
             guard let panel, let self else { return event }
             if !NSMouseInRect(NSEvent.mouseLocation, panel.frame, false) {
                 self.dismiss()
@@ -104,7 +107,8 @@ final class CorrectionPanel {
 
             // 1-9 → toggle edit
             if let chars = event.charactersIgnoringModifiers,
-               let digit = Int(chars), digit >= 1, digit <= 9 {
+                let digit = Int(chars), digit >= 1, digit <= 9
+            {
                 withAnimation(.spring(response: 0.3)) {
                     vm.toggleEdit(at: digit - 1)
                 }
