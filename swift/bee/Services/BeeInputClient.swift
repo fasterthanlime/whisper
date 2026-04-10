@@ -11,7 +11,8 @@ final class BeeInputClient: Sendable {
     /// so we derive the real Library path from the group container URL instead.
     static var installedIMEURL: URL? {
         FileManager.default
-            .containerURL(forSecurityApplicationGroupIdentifier: "B2N6FSRTPV.group.fasterthanlime.bee")?
+            .containerURL(
+                forSecurityApplicationGroupIdentifier: "B2N6FSRTPV.group.fasterthanlime.bee")?
             .deletingLastPathComponent()  // Group Containers/<id> → Group Containers
             .deletingLastPathComponent()  // Group Containers → Library
             .appendingPathComponent("Input Methods/beeInput.app")
@@ -45,7 +46,7 @@ final class BeeInputClient: Sendable {
     }
 
     func deactivate(caller: String = #function, file: String = #fileID, line: Int = #line) {
-        beeLog("IME DEACTIVATE called from \(file):\(line) \(caller)")
+        // beeLog("IME DEACTIVATE called from \(file):\(line) \(caller)")
         // Historical: used to call TISDeselectInputSource here when bee was
         // a keyboard IME. Now bee is palette-type — no need to deselect,
         // and doing so kills the proxy (can't clear marked text after).
@@ -58,22 +59,18 @@ final class BeeInputClient: Sendable {
     // MARK: - IME Commands
 
     func setMarkedText(_ text: String) {
-        beeLog("IME CMD: setMarkedText len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)")
         Task { await BeeIPCServer.shared.setMarkedText(text: text) }
     }
 
     func commitText(_ text: String) {
-        beeLog("IME CMD: commitText len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)")
         Task { await BeeIPCServer.shared.commitText(text: text) }
     }
 
     func clearMarkedText() {
-        beeLog("IME CMD: clearMarkedText")
         Task { await BeeIPCServer.shared.stopDictating() }
     }
 
     func stopDictating() {
-        beeLog("IME CMD: stopDictating")
         Task { await BeeIPCServer.shared.stopDictating() }
     }
 
@@ -115,15 +112,18 @@ final class BeeInputClient: Sendable {
 
         for (i, source) in allSources.enumerated() {
             let sid = inputSourceID(source)
-            let enabled = TISGetInputSourceProperty(source, kTISPropertyInputSourceIsEnabled)
+            let enabled =
+                TISGetInputSourceProperty(source, kTISPropertyInputSourceIsEnabled)
                 .map { Unmanaged<CFNumber>.fromOpaque($0).takeUnretainedValue() as! Bool } ?? false
-            let selected = TISGetInputSourceProperty(source, kTISPropertyInputSourceIsSelected)
+            let selected =
+                TISGetInputSourceProperty(source, kTISPropertyInputSourceIsSelected)
                 .map { Unmanaged<CFNumber>.fromOpaque($0).takeUnretainedValue() as! Bool } ?? false
             beeLog("IME REGISTER:   [\(i)] id=\(sid) enabled=\(enabled) selected=\(selected)")
         }
 
         if let source = allSources.first {
-            let enabled = TISGetInputSourceProperty(source, kTISPropertyInputSourceIsEnabled)
+            let enabled =
+                TISGetInputSourceProperty(source, kTISPropertyInputSourceIsEnabled)
                 .map { Unmanaged<CFNumber>.fromOpaque($0).takeUnretainedValue() as! Bool } ?? false
             if !enabled {
                 beeLog("IME REGISTER: enabling source")
@@ -134,7 +134,9 @@ final class BeeInputClient: Sendable {
             return true
         }
 
-        beeLog("IME REGISTER: no sources found, calling TISRegisterInputSource url=\(installedIME.path)")
+        beeLog(
+            "IME REGISTER: no sources found, calling TISRegisterInputSource url=\(installedIME.path)"
+        )
         let status = TISRegisterInputSource(installedIME as CFURL)
         beeLog("IME REGISTER: TISRegisterInputSource result=\(status)")
         guard status == noErr else { return false }
