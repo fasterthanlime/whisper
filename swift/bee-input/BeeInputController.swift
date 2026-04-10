@@ -25,6 +25,29 @@ class BeeInputController: IMKInputController {
             beeInputLog(
                 "activateServer: senderID=\(senderId) frontmostPID=\(frontmostPID.map(String.init) ?? "nil") clientID=\(currClientIdentity)"
             )
+
+            // E-003: log detailed client state on reactivation
+            if let client = self.client() as? (any IMKTextInput & NSObjectProtocol) {
+                let marked = client.markedRange()
+                let selected = client.selectedRange()
+                var details: [String] = []
+                details.append("markedRange=\(NSStringFromRange(marked))")
+                details.append("selectedRange=\(NSStringFromRange(selected))")
+                if marked.location != NSNotFound && marked.length > 0 {
+                    let markedStr = client.attributedSubstring(from: marked)?.string ?? "(nil)"
+                    details.append("markedText=\(markedStr.prefix(120).debugDescription)")
+                }
+                // Dump the entire document text
+                let fullRange = NSRange(location: 0, length: 100_000)
+                let fullText = client.attributedSubstring(from: fullRange)?.string
+                if let fullText = fullText {
+                    details.append("fullText=\(fullText.debugDescription)")
+                } else {
+                    details.append("fullText=(nil)")
+                }
+                beeInputLog("activateServer-probe: \(details.joined(separator: " "))")
+            }
+
             let isNew = bridge.activate(self, pid: frontmostPID, clientID: currClientIdentity)
             if isNew {
                 BeeVoxIMEClient.shared.imeAttach()
