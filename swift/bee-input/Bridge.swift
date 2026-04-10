@@ -29,7 +29,11 @@ final class Bridge: NSObject {
 
     private enum DictationRouteState {
         case idle
-        case live(stickyClientID: String, markedText: String)
+        case live(
+            stickyClientID: String,
+            markedText: String,
+            presentation: MarkedTextPresentation
+        )
         case pendingTerminal(stickyClientID: String, action: PendingTerminalAction)
     }
 
@@ -44,7 +48,7 @@ final class Bridge: NSObject {
         switch state {
         case .idle:
             return nil
-        case .live(let stickyClientID, _):
+        case .live(let stickyClientID, _, _):
             return stickyClientID
         case .pendingTerminal(let stickyClientID, _):
             return stickyClientID
@@ -52,8 +56,13 @@ final class Bridge: NSObject {
     }
 
     private var currentMarkedText: String? {
-        guard case .live(_, let markedText) = state else { return nil }
+        guard case .live(_, let markedText, _) = state else { return nil }
         return markedText
+    }
+
+    private var currentPresentation: MarkedTextPresentation? {
+        guard case .live(_, _, let presentation) = state else { return nil }
+        return presentation
     }
 
     // MARK: - State transitions
@@ -73,7 +82,7 @@ final class Bridge: NSObject {
             )
             return .none
 
-        case .live(let stickyClientID, let markedText):
+        case .live(let stickyClientID, let markedText, let presentation):
             guard normalizedClientID == stickyClientID else {
                 beeInputLog(
                     "🚫 ACTIVATE ignored pid=\(pid.map(String.init) ?? "nil") client=\(normalizedClientID) bundle=\(bundleID) sticky=\(stickyClientID)"
@@ -84,7 +93,7 @@ final class Bridge: NSObject {
             beeInputLog(
                 "🟡 ACTIVATE sticky restored pid=\(pid.map(String.init) ?? "nil") client=\(normalizedClientID) bundle=\(bundleID) replaying markedText"
             )
-            replayMarkedText(markedText)
+            replayMarkedText(markedText, presentation: presentation)
             return .stickyRouteRestored
 
         case .pendingTerminal(let stickyClientID, let action):
@@ -123,7 +132,7 @@ final class Bridge: NSObject {
             )
             return .none
 
-        case .live(let stickyClientID, let markedText):
+        case .live(let stickyClientID, let markedText, _):
             if normalizedClientID == stickyClientID {
                 beeInputLog(
                     "🟡 DEACTIVATE sticky client=\(normalizedClientID) markedTextLen=\((markedText as NSString).length) keeping route sticky"
@@ -153,7 +162,7 @@ final class Bridge: NSObject {
 
     // MARK: - Text routing
 
-    func setMarkedText(_ text: String) {
+    func setMarkedText(_ text: String, presentation: MarkedTextPresentation) {
         let normalizedCurrentClientID = activeClientID()
 
         if text.isEmpty {
@@ -163,7 +172,7 @@ final class Bridge: NSObject {
                     "⏭️ setMarkedText empty ignored client=\(normalizedCurrentClientID) state=idle"
                 )
 
-            case .live(let stickyClientID, _):
+            case .live(let stickyClientID, _, _):
                 state = .pendingTerminal(stickyClientID: stickyClientID, action: .clear)
                 beeInputLog(
                     "🟡 setMarkedText empty client=\(normalizedCurrentClientID) sticky=\(stickyClientID) pending clear"
@@ -189,37 +198,57 @@ final class Bridge: NSObject {
                 return
             }
 
-            state = .live(stickyClientID: normalizedCurrentClientID, markedText: text)
-            beeInputLog(
-                "🟢 setMarkedText text=\(text) sticky claimed client=\(normalizedCurrentClientID)"
+            state = .live(
+                stickyClientID: normalizedCurrentClientID,
+                markedText: text,
+                presentation: presentation
             )
-            replayMarkedText(text)
+            beeInputLog(
+                "🟢 setMarkedText text=\(text) sticky claimed client=\(normalizedCurrentClientID) presentation=\(presentation)"
+            )
+            replayMarkedText(text, presentation: presentation)
 
-        case .live(let stickyClientID, _):
+        case .live(let stickyClientID, _, _):
             if normalizedCurrentClientID == stickyClientID {
-                state = .live(stickyClientID: stickyClientID, markedText: text)
-                beeInputLog(
-                    "🟡 setMarkedText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID)"
+                state = .live(
+                    stickyClientID: stickyClientID,
+                    markedText: text,
+                    presentation: presentation
                 )
-                replayMarkedText(text)
-            } else {
-                state = .live(stickyClientID: stickyClientID, markedText: text)
                 beeInputLog(
-                    "🟡 setMarkedText text=\(text) sticky=\(stickyClientID) currentClient=\(normalizedCurrentClientID) route unavailable, storing for replay"
+                    "🟡 setMarkedText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) presentation=\(presentation)"
+                )
+                replayMarkedText(text, presentation: presentation)
+            } else {
+                state = .live(
+                    stickyClientID: stickyClientID,
+                    markedText: text,
+                    presentation: presentation
+                )
+                beeInputLog(
+                    "🟡 setMarkedText text=\(text) sticky=\(stickyClientID) currentClient=\(normalizedCurrentClientID) presentation=\(presentation) route unavailable, storing for replay"
                 )
             }
 
         case .pendingTerminal(let stickyClientID, _):
             if normalizedCurrentClientID == stickyClientID {
-                state = .live(stickyClientID: stickyClientID, markedText: text)
-                beeInputLog(
-                    "🟡 setMarkedText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) resuming live dictation"
+                state = .live(
+                    stickyClientID: stickyClientID,
+                    markedText: text,
+                    presentation: presentation
                 )
-                replayMarkedText(text)
-            } else {
-                state = .live(stickyClientID: stickyClientID, markedText: text)
                 beeInputLog(
-                    "🟡 setMarkedText text=\(text) sticky=\(stickyClientID) currentClient=\(normalizedCurrentClientID) revived live dictation, waiting for sticky route"
+                    "🟡 setMarkedText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) presentation=\(presentation) resuming live dictation"
+                )
+                replayMarkedText(text, presentation: presentation)
+            } else {
+                state = .live(
+                    stickyClientID: stickyClientID,
+                    markedText: text,
+                    presentation: presentation
+                )
+                beeInputLog(
+                    "🟡 setMarkedText text=\(text) sticky=\(stickyClientID) currentClient=\(normalizedCurrentClientID) presentation=\(presentation) revived live dictation, waiting for sticky route"
                 )
             }
         }
@@ -234,7 +263,7 @@ final class Bridge: NSObject {
                 "⏭️ commitText ignored text=\(text) client=\(normalizedCurrentClientID) state=idle"
             )
 
-        case .live(let stickyClientID, _):
+        case .live(let stickyClientID, _, _):
             let action: PendingTerminalAction = text.isEmpty ? .clear : .commit(text)
             state = .pendingTerminal(stickyClientID: stickyClientID, action: action)
             beeInputLog(
@@ -267,7 +296,7 @@ final class Bridge: NSObject {
         return clientID
     }
 
-    private func replayMarkedText(_ text: String) {
+    private func replayMarkedText(_ text: String, presentation: MarkedTextPresentation) {
         guard activeClientID() == stickyClientID else {
             beeInputLog(
                 "🚫 BLOCKED replayMarkedText client=\(activeClientID()) sticky=\(stickyClientID ?? Self.noClientID)"
@@ -275,10 +304,11 @@ final class Bridge: NSObject {
             return
         }
 
-        beeInputLog("🟡 replayMarkedText text=\(text)")
+        let renderedText = adorn(text, presentation: presentation)
+        beeInputLog("🟡 replayMarkedText presentation=\(presentation) text=\(renderedText)")
         controller?.client().setMarkedText(
-            text,
-            selectionRange: NSRange(location: 0, length: (text as NSString).length),
+            renderedText,
+            selectionRange: NSRange(location: 0, length: (renderedText as NSString).length),
             replacementRange: NSRange(location: NSNotFound, length: 0)
         )
     }
@@ -334,6 +364,17 @@ final class Bridge: NSObject {
 
         case .idle, .live:
             break
+        }
+    }
+
+    private func adorn(_ text: String, presentation: MarkedTextPresentation) -> String {
+        switch presentation {
+        case .dictating:
+            return text.isEmpty ? "🐝" : "\(text) 🐝"
+        case .finalizing:
+            return text.isEmpty ? "⠋" : "\(text) ⠋"
+        @unknown default:
+            return text
         }
     }
 
