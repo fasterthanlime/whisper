@@ -92,3 +92,15 @@ Cleanup fires on the first `activateServer` call, but the proxy's `markedRange` 
 The IMK proxy doesn't expose valid markedRange on the first `activateServer` — it shows `{∅}`. A second `activateServer` follows shortly after with the real markedRange. Cleanup must be deferred until the proxy reports a valid markedRange.
 
 **Evidence**: [E-005-cleanup-with-stored-bundle](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-005-cleanup-with-stored-bundle.md)
+
+## F-016-cleanup-clears-then-app-overwrites
+
+Deferred cleanup successfully clears marked text (proxy reports markedRange going to `{N, 0}`). But the app-side bee session is still running and immediately pushes new `setMarkedText` with current dictation, overwriting the cleanup within milliseconds. Cleanup is invisible to the user.
+
+**Evidence**: [E-006-deferred-cleanup](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-006-deferred-cleanup.md)
+
+## F-017-cleanup-requires-app-coordination
+
+For cleanup to work, the app side must stop pushing text before the IME attempts cleanup. `imeContextLost` fires on deactivate but the app session continues rendering until it processes the context loss — by which time the cleanup window has passed.
+
+**Evidence**: [E-006-deferred-cleanup](https://github.com/fasterthanlime/bee-experiments/blob/main/experiments/E-006-deferred-cleanup.md)
