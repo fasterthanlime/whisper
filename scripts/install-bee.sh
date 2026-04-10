@@ -3,7 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BUILD_DIR="$PROJECT_ROOT/build-bee-release"
+BEE_CONFIGURATION="${BEE_CONFIGURATION:-Release}"
+BUILD_DIR="$PROJECT_ROOT/build-bee-$(echo "$BEE_CONFIGURATION" | tr '[:upper:]' '[:lower:]')"
 INPUT_METHOD_DIR="$HOME/Library/Input Methods"
 
 SWIFT_DIR="$PROJECT_ROOT/swift"
@@ -84,13 +85,13 @@ fi
 if [[ "${BEE_REGEN:-}" == "1" ]]; then
   run_step "Generating Xcode project" "cd \"$SWIFT_DIR\" && xcodegen generate --spec \"$XCODE_SPEC\""
 fi
-banner "Building bee (+ embedded beeInput) (Release)"
+banner "Building bee (+ embedded beeInput) ($BEE_CONFIGURATION)"
 mkdir -p "$BUILD_DIR"
 # beeInput is a dependency of bee and gets embedded automatically; no separate scheme needed.
 xcodebuild_args=(
   -project "$XCODE_PROJECT"
   -scheme bee
-  -configuration Release
+  -configuration "$BEE_CONFIGURATION"
   CONFIGURATION_BUILD_DIR="$BUILD_DIR"
   -derivedDataPath "$BUILD_DIR/DerivedData"
   -clonedSourcePackagesDirPath "$BUILD_DIR/SourcePackages"

@@ -73,6 +73,15 @@ class BeeInputController: IMKInputController {
         super.deactivateServer(sender)
     }
 
+    nonisolated override func commitComposition(_ sender: Any!) {
+        MainActor.assumeIsolated {
+            beeInputLog(
+                "commitComposition: entry clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) -> cancel"
+            )
+        }
+        cancelComposition()
+    }
+
     nonisolated override func cancelComposition() {
         MainActor.assumeIsolated {
             beeInputLog(
@@ -90,15 +99,6 @@ class BeeInputController: IMKInputController {
             discardMarkedTextFromCapturedContext(reason: "cancelComposition")
             BeeIMEBridgeState.shared.didCancelComposition(on: self)
         }
-    }
-
-    nonisolated override func commitComposition(_ sender: Any!) {
-        MainActor.assumeIsolated {
-            beeInputLog(
-                "commitComposition: entry clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) -> cancel"
-            )
-        }
-        cancelComposition()
     }
 
     nonisolated override func updateComposition() {
