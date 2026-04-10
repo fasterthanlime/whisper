@@ -177,32 +177,39 @@ final class BeeIMEBridgeState: NSObject {
     /// Returns true if this is a fresh activation (not just a controller update).
     @discardableResult
     func activate(_ controller: BeeInputController, pid: pid_t?, clientID: String?) -> Bool {
-        // Check if we need to clean up marked text left behind in a previous session
+        // Check if we need to clean up marked text left behind in a previous session.
+        // Only fire when the proxy has reconnected (markedRange != NSNotFound) — F-015.
         if let cleanup = pendingCleanup,
            let client = controller.client() as? (any IMKTextInput & NSObjectProtocol),
            client.bundleIdentifier() == cleanup.bundleID {
             let markedBefore = client.markedRange()
             let selectedBefore = client.selectedRange()
 
-            beeInputLog(
-                "activate: attempting cleanup for \(cleanup.bundleID) len=\(cleanup.markedTextUTF16Length) markedRange=\(NSStringFromRange(markedBefore)) selectedRange=\(NSStringFromRange(selectedBefore))"
-            )
+            if markedBefore.location != NSNotFound {
+                beeInputLog(
+                    "activate: attempting cleanup for \(cleanup.bundleID) len=\(cleanup.markedTextUTF16Length) markedRange=\(NSStringFromRange(markedBefore)) selectedRange=\(NSStringFromRange(selectedBefore))"
+                )
 
-            // Try to clear via setMarkedText("")
-            let empty = NSAttributedString(string: "", attributes: [.markedClauseSegment: 0])
-            client.setMarkedText(
-                empty,
-                selectionRange: NSRange(location: 0, length: 0),
-                replacementRange: NSRange(location: NSNotFound, length: 0)
-            )
+                let empty = NSAttributedString(string: "", attributes: [.markedClauseSegment: 0])
+                client.setMarkedText(
+                    empty,
+                    selectionRange: NSRange(location: 0, length: 0),
+                    replacementRange: NSRange(location: NSNotFound, length: 0)
+                )
 
-            let markedAfter = client.markedRange()
-            let selectedAfter = client.selectedRange()
-            beeInputLog(
-                "activate: cleanup result markedRange=\(NSStringFromRange(markedAfter)) selectedRange=\(NSStringFromRange(selectedAfter))"
-            )
+                let markedAfter = client.markedRange()
+                let selectedAfter = client.selectedRange()
+                beeInputLog(
+                    "activate: cleanup result markedRange=\(NSStringFromRange(markedAfter)) selectedRange=\(NSStringFromRange(selectedAfter))"
+                )
 
-            pendingCleanup = nil
+                pendingCleanup = nil
+            } else {
+                beeInputLog(
+                    "activate: cleanup deferred for \(cleanup.bundleID) (proxy not ready, markedRange=\(NSStringFromRange(markedBefore)))"
+                )
+                // Keep pendingCleanup — will retry on next activateServer
+            }
         }
 
         if case .active(let session, let pending) = state {
