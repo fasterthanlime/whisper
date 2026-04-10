@@ -191,8 +191,9 @@ class BeeInputController: IMKInputController {
     }
 
     nonisolated override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
+        let eventDesc = String(describing: event)
         MainActor.assumeIsolated {
-            beeInputLog("handleEvent! event=\(String(describing: event))")
+            beeInputLog("handleEvent! event=\(eventDesc)")
         }
 
         guard let event, event.type == .keyDown else {
@@ -289,10 +290,10 @@ class BeeInputController: IMKInputController {
     nonisolated override func doCommand(
         by aSelector: Selector!, command infoDictionary: [AnyHashable: Any]!
     ) {
+        let selectorDesc = String(describing: aSelector)
+        let dictDesc = String(describing: infoDictionary)
         MainActor.assumeIsolated {
-            beeInputLog(
-                "doCommand(by: \(String(describing: aSelector)), command: \(String(describing: infoDictionary)))"
-            )
+            beeInputLog("doCommand(by: \(selectorDesc), command: \(dictDesc))")
         }
         super.doCommand(by: aSelector, command: infoDictionary)
     }
@@ -319,8 +320,9 @@ class BeeInputController: IMKInputController {
     }
 
     nonisolated override func setDelegate(_ newDelegate: Any!) {
+        let desc = String(describing: newDelegate)
         MainActor.assumeIsolated {
-            beeInputLog("setDelegate: \(String(describing: newDelegate))")
+            beeInputLog("setDelegate: \(desc)")
         }
         super.setDelegate(newDelegate)
     }
@@ -348,24 +350,26 @@ class BeeInputController: IMKInputController {
     nonisolated override func annotationSelected(
         _ annotationString: NSAttributedString!, forCandidate candidateString: NSAttributedString!
     ) {
+        let annDesc = String(describing: annotationString)
+        let candDesc = String(describing: candidateString)
         MainActor.assumeIsolated {
-            beeInputLog(
-                "annotationSelected: \(String(describing: annotationString)) forCandidate: \(String(describing: candidateString))"
-            )
+            beeInputLog("annotationSelected: \(annDesc) forCandidate: \(candDesc)")
         }
         super.annotationSelected(annotationString, forCandidate: candidateString)
     }
 
     nonisolated override func candidateSelectionChanged(_ candidateString: NSAttributedString!) {
+        let desc = String(describing: candidateString)
         MainActor.assumeIsolated {
-            beeInputLog("candidateSelectionChanged: \(String(describing: candidateString))")
+            beeInputLog("candidateSelectionChanged: \(desc)")
         }
         super.candidateSelectionChanged(candidateString)
     }
 
     nonisolated override func candidateSelected(_ candidateString: NSAttributedString!) {
+        let desc = String(describing: candidateString)
         MainActor.assumeIsolated {
-            beeInputLog("candidateSelected: \(String(describing: candidateString))")
+            beeInputLog("candidateSelected: \(desc)")
         }
         super.candidateSelected(candidateString)
     }
