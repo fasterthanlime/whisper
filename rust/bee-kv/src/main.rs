@@ -25,6 +25,8 @@ const DEFAULT_CHUNK_MS: usize = 2_000;
 const DEFAULT_LANE_B_FIRST_CHUNK_MS: usize = 3_000;
 const DEFAULT_REPLAY_CHUNK_INDEX: usize = 1;
 const DEFAULT_TRUNCATE_TOKENS: usize = 4;
+const BOUNDARY_SWEEP_OFFSETS: [isize; 13] =
+    [-48, -44, -40, -36, -32, -28, -24, -20, -16, -12, -8, -4, 0];
 
 fn main() -> Result<()> {
     let args = Args::parse()?;
@@ -201,6 +203,20 @@ fn main() -> Result<()> {
             )?;
             print_summary(&summary);
             print_chunk_segment_merge_rollback_experiment(&experiment);
+        }
+        Mode::ChunkSegmentMergeBoundarySweep => {
+            let experiment = decode_chunk_segment_merge_boundary_sweep(
+                &model,
+                &tokenizer,
+                &samples,
+                &thinker,
+                &args.language,
+                &args.context,
+                args.max_new_tokens,
+                args.chunk_ms,
+            )?;
+            print_summary(&summary);
+            print_chunk_segment_merge_boundary_sweep_experiment(&experiment);
         }
     }
 
@@ -631,6 +647,125 @@ fn decode_chunk_segment_merge_rollback(
         baseline_runs,
         replay_chunk0,
         merged_chunk,
+    })
+}
+
+fn decode_chunk_segment_merge_boundary_sweep(
+    model: &Qwen3ASRModel,
+    tokenizer: &Tokenizer,
+    samples: &[f32],
+    thinker: &bee_qwen3_asr::config::ThinkerConfig,
+    language: &str,
+    context: &str,
+    max_new_tokens: usize,
+    chunk_ms: usize,
+) -> Result<ChunkSegmentMergeBoundarySweepExperimentResult> {
+    let chunk_size_samples = ms_to_samples(chunk_ms)?;
+    let chunk_plan = build_chunk_plan(samples.len(), chunk_size_samples, chunk_size_samples)?;
+    if chunk_plan.len() < 3 {
+        bail!(
+            "chunk-segment-merge-boundary-sweep needs at least 3 chunks; got {}",
+            chunk_plan.len()
+        );
+    }
+
+    let baseline_runs = run_chunked_followup_sequence(
+        model,
+        tokenizer,
+        samples,
+        thinker,
+        language,
+        context,
+        max_new_tokens,
+        &chunk_plan[..3],
+        None,
+    )?;
+
+    let mel_extractor = MelExtractor::new(
+        N_FFT,
+        HOP_LENGTH,
+        thinker.audio_config.num_mel_bins,
+        SAMPLE_RATE,
+    );
+    let probe_ids = Array::from_slice(&[0_i32], &[1, 1]);
+    let embed_dtype = model.model.embed_tokens.forward(&probe_ids)?.dtype();
+
+    let chunk0 = &chunk_plan[0];
+    let chunk1 = &chunk_plan[1];
+    let chunk2 = &chunk_plan[2];
+
+    let mut sweep_results = Vec::new();
+    let exact_boundary = baseline_runs[0].end_position;
+    for offset in BOUNDARY_SWEEP_OFFSETS {
+        let mut cache = None;
+
+        let replay_chunk0 = decode_chunk_followup_step(
+            model,
+            tokenizer,
+            &mel_extractor,
+            embed_dtype,
+            &samples[chunk0.start_sample..chunk0.end_sample],
+            0,
+            language,
+            context,
+            max_new_tokens,
+            &mut cache,
+            0,
+            chunk0.start_sample,
+            chunk0.end_sample,
+        )?;
+
+        let _chunk1 = decode_chunk_followup_step(
+            model,
+            tokenizer,
+            &mel_extractor,
+            embed_dtype,
+            &samples[chunk1.start_sample..chunk1.end_sample],
+            1,
+            language,
+            context,
+            max_new_tokens,
+            &mut cache,
+            replay_chunk0.end_position,
+            chunk1.start_sample,
+            chunk1.end_sample,
+        )?;
+
+        let rollback_position = if offset.is_negative() {
+            exact_boundary.saturating_sub(offset.unsigned_abs())
+        } else {
+            exact_boundary.saturating_add(offset as usize)
+        };
+        truncate_cache(&mut cache, rollback_position)?;
+
+        let merged_chunk = decode_chunk_followup_step(
+            model,
+            tokenizer,
+            &mel_extractor,
+            embed_dtype,
+            &samples[chunk1.start_sample..chunk2.end_sample],
+            1,
+            language,
+            context,
+            max_new_tokens,
+            &mut cache,
+            rollback_position,
+            chunk1.start_sample,
+            chunk2.end_sample,
+        )?;
+
+        sweep_results.push(BoundarySweepResult {
+            offset,
+            rollback_position,
+            merged_chunk,
+        });
+    }
+
+    Ok(ChunkSegmentMergeBoundarySweepExperimentResult {
+        chunk_ms,
+        exact_boundary,
+        baseline_runs,
+        sweep_results,
     })
 }
 
@@ -1104,6 +1239,7 @@ enum Mode {
     TruncateReplay,
     DualLaneFollowup,
     ChunkSegmentMergeRollback,
+    ChunkSegmentMergeBoundarySweep,
 }
 
 impl Mode {
@@ -1117,6 +1253,7 @@ impl Mode {
             "truncate-replay" => Ok(Self::TruncateReplay),
             "dual-lane-followup" => Ok(Self::DualLaneFollowup),
             "chunk-segment-merge-rollback" => Ok(Self::ChunkSegmentMergeRollback),
+            "chunk-segment-merge-boundary-sweep" => Ok(Self::ChunkSegmentMergeBoundarySweep),
             _ => bail!("unknown mode: {value}"),
         }
     }
@@ -1254,6 +1391,19 @@ struct ChunkSegmentMergeRollbackExperimentResult {
     merged_chunk: ChunkRun,
 }
 
+struct BoundarySweepResult {
+    offset: isize,
+    rollback_position: usize,
+    merged_chunk: ChunkRun,
+}
+
+struct ChunkSegmentMergeBoundarySweepExperimentResult {
+    chunk_ms: usize,
+    exact_boundary: usize,
+    baseline_runs: Vec<ChunkRun>,
+    sweep_results: Vec<BoundarySweepResult>,
+}
+
 fn env_path(name: &str) -> Result<PathBuf> {
     let value = env::var(name).with_context(|| format!("{name} is not set"))?;
     Ok(PathBuf::from(value))
@@ -1281,6 +1431,7 @@ fn print_usage() {
            truncate-replay\n\
            dual-lane-followup\n\
            chunk-segment-merge-rollback\n\
+           chunk-segment-merge-boundary-sweep\n\
          rollback policies for truncate-replay:\n\
            text-suffix\n\
            chunk-segment\n\
@@ -1406,6 +1557,29 @@ fn print_chunk_segment_merge_rollback_experiment(
             clone_chunk_run(&experiment.merged_chunk),
         ])
     );
+    println!();
+}
+
+fn print_chunk_segment_merge_boundary_sweep_experiment(
+    experiment: &ChunkSegmentMergeBoundarySweepExperimentResult,
+) {
+    println!("=== chunk-segment-merge-boundary-sweep ===");
+    println!("chunk_ms={}", experiment.chunk_ms);
+    println!("exact_boundary={}", experiment.exact_boundary);
+    println!(
+        "baseline_bracketed={}",
+        bracketed_chunks(&experiment.baseline_runs)
+    );
+    println!();
+    for result in &experiment.sweep_results {
+        println!(
+            "offset={:+} rollback_position={} replay_bracketed=[{}] [{}]",
+            result.offset,
+            result.rollback_position,
+            experiment.baseline_runs[0].transcript,
+            result.merged_chunk.transcript
+        );
+    }
     println!();
 }
 
