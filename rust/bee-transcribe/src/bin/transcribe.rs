@@ -311,7 +311,7 @@ fn run_mode(
     samples: &[f32],
     cut_mode: RotationCutStrategy,
     label: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<(String, Vec<bee_transcribe::CutEvent>)> {
     println!("--- Running {label} ---");
     let mut options = SessionOptions::default();
     // For uncut, use a very large chunk so it processes as one pass
@@ -320,7 +320,13 @@ fn run_mode(
     }
     options.rotation_cut_strategy = cut_mode;
     let chunk_samples = (options.chunk_duration * 16000.0) as usize;
-    let mut session = engine.session(options)?;
+
+    let cuts = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let cuts_sink = cuts.clone();
+    let sink: bee_transcribe::CutSink = Box::new(move |event: bee_transcribe::CutEvent| {
+        cuts_sink.borrow_mut().push(event);
+    });
+    let mut session = engine.session_with_sink(options, Some(sink))?;
     let mut offset = 0;
     while offset < samples.len() {
         let end = (offset + chunk_samples).min(samples.len());
@@ -329,8 +335,9 @@ fn run_mode(
     }
     let result = session.finish()?;
     let text = result.snapshot.full_text.clone();
-    println!("  {label}: {:?}", text);
-    Ok(text)
+    let cuts = std::rc::Rc::try_unwrap(cuts).ok().unwrap().into_inner();
+    println!("  {label}: {:?} ({} cuts)", text, cuts.len());
+    Ok((text, cuts))
 }
 
 fn normalize_word(w: &str) -> String {
@@ -429,16 +436,16 @@ fn cmd_compare(audio_path: &str, out_path: Option<&Path>) -> anyhow::Result<()> 
         ("zipa", RotationCutStrategy::Zipa),
     ];
 
-    let mut transcripts: Vec<(&str, String)> = Vec::new();
+    let mut transcripts: Vec<(&str, String, Vec<bee_transcribe::CutEvent>)> = Vec::new();
     for (label, cut_mode) in modes {
-        let text = run_mode(&engine, &samples, cut_mode.clone(), label)?;
-        transcripts.push((label, text));
+        let (text, cuts) = run_mode(&engine, &samples, cut_mode.clone(), label)?;
+        transcripts.push((label, text, cuts));
     }
 
     // LCS 3-way alignment on normalized words
     let words: Vec<Vec<String>> = transcripts
         .iter()
-        .map(|(_, t)| t.split_whitespace().map(|w| w.to_string()).collect())
+        .map(|(_, t, _)| t.split_whitespace().map(|w| w.to_string()).collect())
         .collect();
     let norm: Vec<Vec<String>> = words
         .iter()
@@ -459,25 +466,54 @@ fn cmd_compare(audio_path: &str, out_path: Option<&Path>) -> anyhow::Result<()> 
     let gn0e = expand_gaps(&gn0, &gc);
     let gn1e = expand_gaps(&gn1, &gc);
 
-    // Map norm gaps back to original words
-    fn resolve_words(norm_seq: &[Option<String>], orig: &[String]) -> Vec<Option<String>> {
+    // Map norm gaps back to original words, also returning col index per original word.
+    fn resolve_words(
+        norm_seq: &[Option<String>],
+        orig: &[String],
+    ) -> (Vec<Option<String>>, Vec<usize>) {
         let mut it = orig.iter();
-        norm_seq
+        let mut word_to_col = Vec::new();
+        let aligned = norm_seq
             .iter()
-            .map(|n| {
+            .enumerate()
+            .map(|(col, n)| {
                 if n.is_none() {
                     None
                 } else {
+                    word_to_col.push(col);
                     Some(it.next().unwrap().clone())
                 }
             })
-            .collect()
+            .collect();
+        (aligned, word_to_col)
     }
-    let aligned = [
-        resolve_words(&gn0e, &words[0]),
-        resolve_words(&gn1e, &words[1]),
-        resolve_words(&gn2, &words[2]),
-    ];
+    let (al0, w2c0) = resolve_words(&gn0e, &words[0]);
+    let (al1, w2c1) = resolve_words(&gn1e, &words[1]);
+    let (al2, w2c2) = resolve_words(&gn2, &words[2]);
+    let aligned = [al0, al1, al2];
+    let word_to_col = [w2c0, w2c1, w2c2];
+
+    // Compute cut-after column sets: after the last word of each CutEvent.
+    let cut_after_cols: Vec<std::collections::HashSet<usize>> = transcripts
+        .iter()
+        .enumerate()
+        .map(|(row, (_, _, cuts))| {
+            let mut set = std::collections::HashSet::new();
+            let mut word_idx: usize = 0;
+            for cut in cuts {
+                word_idx += cut.committed_words.len();
+                // word_idx is now the index of the first word AFTER this cut;
+                // the last word before the cut is word_idx - 1.
+                if word_idx > 0 {
+                    let last = word_idx - 1;
+                    if let Some(&col) = word_to_col[row].get(last) {
+                        set.insert(col);
+                    }
+                }
+            }
+            set
+        })
+        .collect();
 
     let ncols = aligned[0].len();
 
@@ -517,17 +553,23 @@ fn cmd_compare(audio_path: &str, out_path: Option<&Path>) -> anyhow::Result<()> 
             body.push_str(&format!("<td class=\"idx\">{i}</td>"));
         }
         body.push_str("</tr>\n");
-        for (row_idx, (label, _)) in transcripts.iter().enumerate() {
+        for (row_idx, (label, _, _)) in transcripts.iter().enumerate() {
             body.push_str(&format!(
                 "<tr><td class=\"label\">{}</td>",
                 label.to_uppercase()
             ));
             for i in chunk_start..chunk_end {
+                let is_cut = cut_after_cols[row_idx].contains(&i);
+                let cut_style = if is_cut {
+                    " style=\"border-right: 2px solid #cba6f7;\""
+                } else {
+                    ""
+                };
                 match &aligned[row_idx][i] {
-                    None => body.push_str("<td class=\"gap\">·</td>"),
+                    None => body.push_str(&format!("<td class=\"gap\"{cut_style}>·</td>")),
                     Some(w) => {
                         let cls = cell_classes[i];
-                        body.push_str(&format!("<td class=\"{cls}\">{w}</td>"));
+                        body.push_str(&format!("<td class=\"{cls}\"{cut_style}>{w}</td>"));
                     }
                 }
             }

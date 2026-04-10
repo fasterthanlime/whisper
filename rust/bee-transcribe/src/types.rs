@@ -50,6 +50,15 @@ impl Default for RotationCutStrategy {
     }
 }
 
+/// Event fired each time the session commits a rotation cut.
+pub struct CutEvent {
+    /// The words that were just committed at this cut point.
+    pub committed_words: Vec<AlignedWord>,
+}
+
+/// A sink that receives cut events during a transcription session.
+pub type CutSink = Box<dyn FnMut(CutEvent)>;
+
 /// Configuration for a transcription session.
 #[derive(Debug, Clone, Facet)]
 pub struct SessionOptions {

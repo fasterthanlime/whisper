@@ -20,8 +20,8 @@ use crate::decode_session::DecodeSession;
 use crate::text_buffer::{self, TextBuffer, TokenCount, TokenEntry, TokenId};
 use crate::timing::{log_phase, log_phase_chunk, phase_start};
 use crate::types::{
-    PendingToken, RotationCutStrategy, SessionAmbiguitySummary, SessionOptions, SessionSnapshot,
-    TokenAlternative,
+    CutEvent, CutSink, PendingToken, RotationCutStrategy, SessionAmbiguitySummary, SessionOptions,
+    SessionSnapshot, TokenAlternative,
 };
 use crate::{FinishResult, SharedCorrectionEngine};
 
@@ -61,6 +61,7 @@ pub struct Session<'a> {
     chunk_size_samples: usize,
     revision: u64,
     session_audio: AudioBuffer,
+    cut_sink: Option<CutSink>,
 }
 
 impl<'a> Session<'a> {
@@ -72,6 +73,7 @@ impl<'a> Session<'a> {
         vad: SileroVad,
         options: SessionOptions,
         correction: Option<(SharedCorrectionEngine, Corrector)>,
+        cut_sink: Option<CutSink>,
     ) -> Self {
         let chunk_size_samples = (options.chunk_duration * 16000.0) as usize;
         assert!(chunk_size_samples > 0, "chunk_duration too small");
@@ -98,6 +100,7 @@ impl<'a> Session<'a> {
             chunk_size_samples,
             revision: 0,
             session_audio: AudioBuffer::empty(SampleRate::HZ_16000),
+            cut_sink,
         }
     }
 
@@ -432,6 +435,11 @@ impl<'a> Session<'a> {
                     remaining_audio_samples = self.decode.audio_len(),
                     "rotation complete: committed words"
                 );
+                if let Some(sink) = self.cut_sink.as_mut() {
+                    sink(CutEvent {
+                        committed_words: new_words.clone(),
+                    });
+                }
 
                 // Lock language on first rotation (auto-detect mode only).
                 // We wait for a full committed segment before trusting the
