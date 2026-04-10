@@ -198,10 +198,14 @@ function PhoneticTimingTimeline({
   wordAlignments,
   phoneSpans,
   onPlayRange,
+  zoom,
+  onZoomChange,
 }: {
   wordAlignments: PhoneticWordAlignment[];
   phoneSpans: PhoneticRescueTrace["utteranceZipaPhoneSpans"];
   onPlayRange: (startSec: number, endSec: number) => void;
+  zoom: number;
+  onZoomChange: (zoom: number) => void;
 }) {
   const qwenBars = wordAlignments.map<TimelineBar>((word) => ({
     label: word.wordText,
@@ -233,15 +237,34 @@ function PhoneticTimingTimeline({
   if (duration <= 0) {
     return null;
   }
+  const widthPx = Math.max(920, Math.ceil(duration * 240 * zoom));
+  const zoomOptions = [0.75, 1, 1.5, 2, 3, 4];
 
   return (
     <div className="phonetic-timeline-card">
       <div className="phonetic-timeline-header">
-        <strong>Timing</strong>
-        <span>Qwen word timings, ZIPA projected word windows, and raw ZIPA phone spans on one axis.</span>
+        <div className="phonetic-timeline-header-top">
+          <strong>Timing</strong>
+          <div className="phonetic-timeline-zoom-group">
+            <span className="phonetic-timeline-zoom-label">zoom</span>
+            {zoomOptions.map((option) => (
+              <button
+                key={`timeline-zoom-${option}`}
+                type="button"
+                className={`phonetic-timeline-zoom-button${Math.abs(option - zoom) < 0.01 ? " is-active" : ""}`}
+                onClick={() => onZoomChange(option)}
+              >
+                {option}x
+              </button>
+            ))}
+          </div>
+        </div>
+        <span>
+          Qwen word timings, ZIPA projected word windows, and raw ZIPA phone spans on one axis.
+        </span>
       </div>
       <div className="phonetic-timeline-scroll">
-        <div className="phonetic-timeline-inner">
+        <div className="phonetic-timeline-inner" style={{ width: `${widthPx}px` }}>
           <div className="phonetic-timeline-ruler">
             <div className="phonetic-timeline-lane-label">time</div>
             <div className="phonetic-timeline-ruler-track">
@@ -610,6 +633,7 @@ export function PhoneticRescuePanel({
   const [selectedCutTokenEnd, setSelectedCutTokenEnd] = useState<number | null>(null);
   const [simulatingCut, setSimulatingCut] = useState(false);
   const [simulateCutError, setSimulateCutError] = useState<string | null>(null);
+  const [timelineZoom, setTimelineZoom] = useState(2);
   const audioContextRef = useRef<AudioContext | null>(null);
   const playingSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const sessionBufferRef = useRef<AudioBuffer | null>(null);
@@ -964,6 +988,8 @@ export function PhoneticRescuePanel({
             wordAlignments={wordAlignments}
             phoneSpans={trace.utteranceZipaPhoneSpans}
             onPlayRange={(startSec, endSec) => void playOriginalRange(startSec, endSec)}
+            zoom={timelineZoom}
+            onZoomChange={setTimelineZoom}
           />
 
           {controlError && (

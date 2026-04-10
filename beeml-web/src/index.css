@@ -406,6 +406,14 @@ textarea:focus {
   gap: 0.1rem;
 }
 
+.phonetic-timeline-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .phonetic-timeline-header strong {
   font-size: 0.8rem;
 }
@@ -415,6 +423,43 @@ textarea:focus {
   color: var(--text-dim);
 }
 
+.phonetic-timeline-zoom-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.24rem;
+  flex-wrap: wrap;
+}
+
+.phonetic-timeline-zoom-label {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.phonetic-timeline-zoom-button {
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  color: var(--text-muted);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0.2rem 0.38rem;
+}
+
+.phonetic-timeline-zoom-button:hover {
+  border-color: color-mix(in srgb, var(--accent) 56%, var(--border));
+  color: var(--text);
+}
+
+.phonetic-timeline-zoom-button.is-active {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
+}
+
 .phonetic-timeline-scroll {
   overflow-x: auto;
   padding-bottom: 0.1rem;
@@ -422,7 +467,7 @@ textarea:focus {
 
 .phonetic-timeline-inner {
   min-width: 100%;
-  width: max(100%, 56rem);
+  width: max-content;
   display: grid;
   gap: 0.28rem;
 }
@@ -503,7 +548,9 @@ textarea:focus {
 }
 
 .word-group-card {
-  min-width: 9.8rem;
+  min-width: 0;
+  width: max-content;
+  flex: 0 0 auto;
   display: grid;
   gap: 0.18rem;
   align-content: start;
@@ -571,7 +618,7 @@ textarea:focus {
 
 .word-group-inline-lane {
   display: grid;
-  grid-template-columns: 2rem minmax(0, 1fr);
+  grid-template-columns: 2rem auto;
   align-items: center;
   gap: 0.28rem;
 }
@@ -587,7 +634,7 @@ textarea:focus {
 
 .word-group-copy-row {
   appearance: none;
-  width: 100%;
+  width: auto;
   padding: 0 0 0.1rem;
   border: none;
   border-radius: 0;
