@@ -86,8 +86,6 @@ actor Session {
     private var onFinalizing: (@Sendable (EndMode) -> Void)?
     private var didComplete = false
 
-    // Cursor symbol — 🐝 during recording, spinner frames during finalization
-    private var cursorSymbol = "🐝"
     private var shouldRenderMarkedText = true
 
     // Correction output — set by ASR task, read by AppState after completion
@@ -461,7 +459,7 @@ actor Session {
                             displayedText = String(chars)
                             textSnapshot.set(displayedText)
                             await self.renderMarkedTextIfActive(
-                                Self.addCursor(displayedText, symbol: self.cursorSymbol),
+                                displayedText,
                                 inputClient: ic,
                                 sessionID: sessionID
                             )
@@ -479,7 +477,7 @@ actor Session {
                         displayedText = targetText
                         textSnapshot.set(displayedText)
                         await self.renderMarkedTextIfActive(
-                            Self.addCursor(displayedText, symbol: self.cursorSymbol),
+                            displayedText,
                             inputClient: ic,
                             sessionID: sessionID
                         )
@@ -508,7 +506,7 @@ actor Session {
         guard shouldRenderMarkedText else { return }
         let snapshot = textSnapshot.get()
         let presentation: MarkedTextPresentation = capture == .draining ? .finalizing : .dictating
-        inputClient.setMarkedText(Self.addCursor(snapshot), presentation: presentation)
+        inputClient.setMarkedText(snapshot, presentation: presentation)
     }
 
     func routeDidBecomeInactive(reason: String) {
@@ -571,29 +569,8 @@ actor Session {
         beginDrain(mode: mode)
         onFinalizing?(mode)
 
-        // Animate a spinner in place of the bee cursor while finalizing
-        let spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-        let ic = inputClient
-        let sid = id
-        var frameIndex = 0
-        let spinnerTask = Task {
-            while !Task.isCancelled {
-                cursorSymbol = spinnerFrames[frameIndex % spinnerFrames.count]
-                frameIndex += 1
-                let text = textSnapshot.get()
-                await renderMarkedTextIfActive(
-                    Self.addCursor(text, symbol: cursorSymbol),
-                    inputClient: ic,
-                    sessionID: sid
-                )
-                do { try await Task.sleep(for: .milliseconds(80)) } catch { break }
-            }
-        }
-
         // Wait for the consumer task — it exits when it sees .done on Channel 2
         await consumerTask?.value
-        spinnerTask.cancel()
-        cursorSymbol = "🐝"
         consumerTask = nil
 
         // Also wait for the other tasks to clean up
@@ -634,14 +611,6 @@ actor Session {
     }
 
     // MARK: - Helpers
-
-    static func addCursor(_ text: String, symbol: String = "🐝") -> String {
-        var t = text
-        if t.hasSuffix(".") || t.hasSuffix("。") {
-            t = String(t.dropLast())
-        }
-        return t.isEmpty ? symbol : "\(t) \(symbol)"
-    }
 
     private func renderMarkedTextIfActive(
         _ text: String, inputClient: BeeInputClient, sessionID: UUID

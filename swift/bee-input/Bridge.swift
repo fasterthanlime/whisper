@@ -38,9 +38,11 @@ final class Bridge: NSObject {
     }
 
     static let noClientID = "-"
+    private static let finalizingSpinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     private var state: DictationRouteState = .idle
     private weak var controller: BeeInputController?
+    private var finalizingSpinnerFrameIndex = 0
 
     // MARK: - Derived state
 
@@ -198,6 +200,9 @@ final class Bridge: NSObject {
                 return
             }
 
+            if presentation == .finalizing {
+                finalizingSpinnerFrameIndex = 0
+            }
             state = .live(
                 stickyClientID: normalizedCurrentClientID,
                 markedText: text,
@@ -208,7 +213,10 @@ final class Bridge: NSObject {
             )
             replayMarkedText(text, presentation: presentation)
 
-        case .live(let stickyClientID, _, _):
+        case .live(let stickyClientID, _, let previousPresentation):
+            if presentation == .finalizing && previousPresentation != .finalizing {
+                finalizingSpinnerFrameIndex = 0
+            }
             if normalizedCurrentClientID == stickyClientID {
                 state = .live(
                     stickyClientID: stickyClientID,
@@ -231,6 +239,9 @@ final class Bridge: NSObject {
             }
 
         case .pendingTerminal(let stickyClientID, _):
+            if presentation == .finalizing {
+                finalizingSpinnerFrameIndex = 0
+            }
             if normalizedCurrentClientID == stickyClientID {
                 state = .live(
                     stickyClientID: stickyClientID,
@@ -372,7 +383,11 @@ final class Bridge: NSObject {
         case .dictating:
             return text.isEmpty ? "🐝" : "\(text) 🐝"
         case .finalizing:
-            return text.isEmpty ? "⠋" : "\(text) ⠋"
+            let frame = Self.finalizingSpinnerFrames[
+                finalizingSpinnerFrameIndex % Self.finalizingSpinnerFrames.count
+            ]
+            finalizingSpinnerFrameIndex += 1
+            return text.isEmpty ? frame : "\(text) \(frame)"
         @unknown default:
             return text
         }
