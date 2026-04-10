@@ -565,19 +565,41 @@ impl BeeMlService {
         bucket_filter: Option<&str>,
         prompt_id_filter: Option<&str>,
     ) -> Result<Vec<(CorpusCapturePrompt, beeml::rpc::CorpusCaptureRecording)>, String> {
+        let recordings =
+            load_corpus_recordings(&self.inner.corpus_dir).map_err(|e| e.to_string())?;
+
         let prompts = self.corpus_capture_prompts();
-        let prompt_map = prompts
+        let mut prompt_map = prompts
             .into_iter()
             .filter(|prompt| bucket_filter.is_none_or(|bucket| prompt.bucket == bucket))
             .filter(|prompt| prompt_id_filter.is_none_or(|prompt_id| prompt.prompt_id == prompt_id))
             .map(|prompt| (prompt.prompt_id.clone(), prompt))
             .collect::<std::collections::HashMap<_, _>>();
 
+        if prompt_map.is_empty() {
+            for recording in &recordings {
+                if bucket_filter.is_some_and(|bucket| recording.bucket != bucket) {
+                    continue;
+                }
+                if prompt_id_filter.is_some_and(|prompt_id| recording.prompt_id != prompt_id) {
+                    continue;
+                }
+                prompt_map
+                    .entry(recording.prompt_id.clone())
+                    .or_insert_with(|| CorpusCapturePrompt {
+                        prompt_id: recording.prompt_id.clone(),
+                        ordinal: recording.ordinal,
+                        bucket: recording.bucket.clone(),
+                        term: recording.term.clone(),
+                        text: recording.text.clone(),
+                        prompt_notes: recording.prompt_notes.clone(),
+                    });
+            }
+        }
+
         let mut latest =
             std::collections::HashMap::<String, beeml::rpc::CorpusCaptureRecording>::new();
-        for recording in
-            load_corpus_recordings(&self.inner.corpus_dir).map_err(|e| e.to_string())?
-        {
+        for recording in recordings {
             if !prompt_map.contains_key(&recording.prompt_id) {
                 continue;
             }
@@ -616,6 +638,7 @@ impl BeeMlService {
         randomize: bool,
         prompt_id_filter: Option<&str>,
     ) -> Result<CorpusAlignmentEvalResult, String> {
+        let env_cut_strategy = corpus_eval_rotation_cut_strategy_from_env()?;
         let mut recordings = self.latest_corpus_recordings(bucket_filter, prompt_id_filter)?;
         if randomize {
             let mut rng = rand::thread_rng();
@@ -630,6 +653,9 @@ impl BeeMlService {
 
             let mut options = bee_transcribe::SessionOptions::default();
             options.language = bee_transcribe::Language("English".to_string());
+            if let Some(strategy) = env_cut_strategy.clone() {
+                options.rotation_cut_strategy = strategy;
+            }
             let (result, snapshots) =
                 self.transcribe_samples_with_options_and_history(&samples, options)?;
             let audio = AudioBuffer {
@@ -1810,6 +1836,34 @@ impl BeeMlService {
             first_failure,
         })
     }
+}
+
+fn corpus_eval_rotation_cut_strategy_from_env()
+-> Result<Option<bee_transcribe::RotationCutStrategy>, String> {
+    let Some(raw_mode) = std::env::var("BEE_ROTATION_CUT_MODE").ok() else {
+        return Ok(None);
+    };
+
+    let mode = raw_mode.to_ascii_lowercase();
+    let strategy = match mode.as_str() {
+        "uncut" | "never" => bee_transcribe::RotationCutStrategy::Uncut,
+        "qwen3" | "qwen" => bee_transcribe::RotationCutStrategy::Qwen3,
+        "zipa" => bee_transcribe::RotationCutStrategy::Zipa,
+        "manual" => {
+            let target = std::env::var("BEE_ROTATION_TARGET_COMMITTED_TOKENS")
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(12);
+            bee_transcribe::RotationCutStrategy::ManualTargetCommittedTextTokens(target)
+        }
+        _ => {
+            return Err(format!(
+                "invalid BEE_ROTATION_CUT_MODE={raw_mode}; expected one of: uncut|qwen3|zipa|manual"
+            ));
+        }
+    };
+
+    Ok(Some(strategy))
 }
 
 fn kokoro_model_path() -> Result<PathBuf, String> {
