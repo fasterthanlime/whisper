@@ -1176,6 +1176,13 @@ fn zipa_word_alignments(
         .map(|t| t.token.clone())
         .collect::<Vec<_>>();
 
+    tracing::debug!(
+        phone_spans = phone_spans.len(),
+        zipa_tokens = zipa_norm.len(),
+        transcript = %transcript.trim(),
+        "zipa_word_alignments: inferred"
+    );
+
     let word_raw_ranges = zipa_align::transcript_word_raw_ranges(g2p, transcript)?;
     let word_norm_ranges = word_raw_ranges
         .iter()
@@ -1190,6 +1197,15 @@ fn zipa_word_alignments(
         .enumerate()
         .flat_map(|(wi, (_, tokens))| std::iter::repeat_n(wi, tokens.len()))
         .collect::<Vec<_>>();
+
+    tracing::debug!(
+        words = word_norm_ranges.len(),
+        transcript_phones = transcript_norm.len(),
+        transcript_norm = %transcript_norm.join(" "),
+        zipa_norm = %zipa_norm.join(" "),
+        "zipa_word_alignments: phoneme sequences"
+    );
+
     let alignment =
         align_token_sequences_with_left_word_boundaries(&transcript_norm, &zipa_norm, &word_ids);
 
@@ -1216,19 +1232,33 @@ fn zipa_word_alignments(
         };
         let window = match word_windows.get(wi).and_then(|w| w.as_ref()) {
             Some(w) => w,
-            None => continue,
+            None => {
+                tracing::debug!(word = %word_text, word_index = wi, "zipa_word_alignments: no window for word");
+                continue;
+            }
         };
         let timed = timed_range_for_normalized_range(
             &zipa_norm_with_spans,
             &phone_spans,
             window.zipa_norm_range.clone(),
         );
-        if let Some(t) = timed {
-            items.push(AlignmentItem {
-                word: word_text,
-                start: Seconds(t.start_time_secs),
-                end: Seconds(t.end_time_secs),
-            });
+        match timed {
+            Some(t) => {
+                tracing::debug!(
+                    word = %word_text,
+                    start = t.start_time_secs,
+                    end = t.end_time_secs,
+                    "zipa_word_alignments: aligned"
+                );
+                items.push(AlignmentItem {
+                    word: word_text,
+                    start: Seconds(t.start_time_secs),
+                    end: Seconds(t.end_time_secs),
+                });
+            }
+            None => {
+                tracing::debug!(word = %word_text, word_index = wi, "zipa_word_alignments: no timing for word");
+            }
         }
     }
     Ok(items)
