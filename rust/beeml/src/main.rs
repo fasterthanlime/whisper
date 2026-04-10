@@ -10,9 +10,9 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use bee_phonetic::SeedDataset;
+use bee_transcribe::g2p::CachedEspeakG2p;
 use bee_transcribe::{Engine, EngineConfig};
 use bee_zipa_mlx::infer::ZipaInference;
-use beeml::g2p::CachedEspeakG2p;
 use beeml::judge::OnlineJudge;
 use beeml::rpc::{BeeMl, OfflineJudgeEvalRequest};
 use service::{BeeMlService, BeemlServiceInner};

@@ -7,7 +7,7 @@ use bee_phonetic::{
     TranscriptSpan, enumerate_transcript_spans_with, feature_tokens_for_ipa, query_index,
     score_shortlist,
 };
-use beeml::g2p::CachedEspeakG2p;
+use bee_transcribe::g2p::CachedEspeakG2p;
 
 #[derive(Debug, Clone)]
 struct Config {

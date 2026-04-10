@@ -230,7 +230,6 @@ name = "beeml"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bee-correct",
  "bee-phonetic",
  "bee-qwen3-asr",
  "bee-transcribe",

@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use bee_correct::g2p::CachedEspeakG2p;
+use crate::g2p::CachedEspeakG2p;
 use bee_phonetic::{
     AlignmentOp, TokenAlignment, align_token_sequences, feature_similarity,
     normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans, phoneme_similarity,

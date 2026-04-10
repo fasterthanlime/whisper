@@ -9,7 +9,7 @@ use bee_phonetic::{
     TranscriptSpan, VerifiedCandidate, enumerate_transcript_spans_with, query_index,
     score_shortlist,
 };
-use beeml::g2p::CachedEspeakG2p;
+use bee_transcribe::g2p::CachedEspeakG2p;
 use facet::Facet;
 use rayon::prelude::*;
 

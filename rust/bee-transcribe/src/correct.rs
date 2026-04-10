@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use bee_correct::g2p::CachedEspeakG2p;
+use crate::g2p::CachedEspeakG2p;
 use bee_correct::judge::{CorrectionEventSink, TwoStageJudge};
 use bee_phonetic::phonetic_verify::CandidateFeatureRow;
 use bee_phonetic::{PhoneticIndex, SeedDataset};

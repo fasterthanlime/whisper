@@ -27,7 +27,6 @@ name = "regen-corpus"
 path = "src/bin/regen-corpus.rs"
 
 [dependencies]
-bee-correct = { path = "../bee-correct" }
 bee-phonetic = { path = "../bee-phonetic" }
 bee-qwen3-asr = { path = "../bee-qwen3-asr" }
 bee-zipa-mlx = { path = "../bee-zipa-mlx" }
