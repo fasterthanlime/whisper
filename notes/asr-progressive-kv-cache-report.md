@@ -440,4 +440,36 @@ The key split to analyze is:
 - prompt-local chat framing and audio placeholder segments
 - how those interact at the rollback boundary
 
+## Additional Experiment Idea: Alternating Overlap Lanes
+
+There is another experiment direction worth preserving because it attacks the seam problem from a different angle than rollback.
+
+The idea is to run two progressive transcription lanes with staggered chunk boundaries rather than one lane with a single repeated seam.
+
+A concrete example would be:
+
+- lane A decodes `0.0s..1.0s`
+- lane B decodes `0.0s..1.5s`
+- lane A advances to `0.0s..2.0s`
+- lane B advances to `0.5s..2.5s` or another offset that straddles the next seam
+- the process continues with alternating updates
+
+The motivation is that lane A may have a bad seam at exactly `1.0s`, but lane B has acoustic context on both sides of that same region. That means the system may be able to repair the seam in one lane by matching against the overlapping transcript from the other lane.
+
+This is not the same as the rollback experiment.
+
+- rollback asks whether one evolving transcript can revise its own recent suffix while preserving useful cache state
+- alternating lanes asks whether two offset hypotheses can take turns supplying better local context around each other's seam
+
+The interesting claim here is not that both lanes should be shown directly to the user. The interesting claim is that one lane can be used to patch the unstable boundary in the other lane because their weak points occur at different timestamps.
+
+If this is tested later, the experiment should measure at least:
+
+- whether offset seams are actually less correlated than single-lane seams
+- whether token matching across the overlap is stable enough to identify a replaceable seam span
+- whether the repaired transcript is cleaner than either raw lane by itself
+- whether the added complexity beats a simpler rollback-only design
+
+This should be treated as a separate experiment track, not as proof that rollback is unnecessary.
+
 That is the technical center of gravity for the next phase of the discussion.
