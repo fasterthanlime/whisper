@@ -136,7 +136,10 @@ name = "bee-kv"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bee-phonetic",
  "bee-qwen3-asr",
+ "bee-transcribe",
+ "bee-zipa-mlx",
 ]
 
 [[package]]

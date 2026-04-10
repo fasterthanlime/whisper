@@ -1,7 +1,9 @@
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use bee_phonetic::sentence_word_tokens;
 use bee_qwen3_asr::config::AsrConfig;
 use bee_qwen3_asr::generate::{
     ConfidenceMode, build_followup_prompt, build_initial_prompt, prefill_and_decode,
@@ -13,6 +15,10 @@ use bee_qwen3_asr::mlx_rs::module::{Module, ModuleParametersExt};
 use bee_qwen3_asr::mlx_rs::ops;
 use bee_qwen3_asr::model::Qwen3ASRModel;
 use bee_qwen3_asr::tokenizers::Tokenizer;
+use bee_transcribe::g2p::CachedEspeakG2p;
+use bee_transcribe::zipa_align::{SpanTiming, TranscriptAlignment};
+use bee_zipa_mlx::audio::AudioBuffer as ZipaAudioBuffer;
+use bee_zipa_mlx::infer::ZipaInference;
 
 const DEFAULT_LANGUAGE: &str = "English";
 const DEFAULT_MAX_NEW_TOKENS: usize = 256;
@@ -642,11 +648,31 @@ fn decode_chunk_segment_merge_rollback(
         chunk2.end_sample,
     )?;
 
+    let baseline_annotated = annotate_chunk_runs(&baseline_runs, samples)?;
+    let replay_annotated = annotate_chunk_runs(
+        &[
+            clone_chunk_run(&replay_chunk0),
+            clone_chunk_run(&merged_chunk),
+        ],
+        samples,
+    )?;
+    let html_path = write_chunk_segment_merge_rollback_html(
+        &baseline_runs,
+        &[
+            clone_chunk_run(&replay_chunk0),
+            clone_chunk_run(&merged_chunk),
+        ],
+        samples,
+    )?;
+
     Ok(ChunkSegmentMergeRollbackExperimentResult {
         chunk_ms,
         baseline_runs,
         replay_chunk0,
         merged_chunk,
+        baseline_annotated,
+        replay_annotated,
+        html_path,
     })
 }
 
@@ -1389,6 +1415,9 @@ struct ChunkSegmentMergeRollbackExperimentResult {
     baseline_runs: Vec<ChunkRun>,
     replay_chunk0: ChunkRun,
     merged_chunk: ChunkRun,
+    baseline_annotated: String,
+    replay_annotated: String,
+    html_path: PathBuf,
 }
 
 struct BoundarySweepResult {
@@ -1545,6 +1574,7 @@ fn print_chunk_segment_merge_rollback_experiment(
         "baseline_bracketed={}",
         bracketed_chunks(&experiment.baseline_runs)
     );
+    println!("baseline_annotated={}", experiment.baseline_annotated);
     println!();
 
     println!("=== replay after rollback ===");
@@ -1557,6 +1587,8 @@ fn print_chunk_segment_merge_rollback_experiment(
             clone_chunk_run(&experiment.merged_chunk),
         ])
     );
+    println!("replay_annotated={}", experiment.replay_annotated);
+    println!("html_path={}", experiment.html_path.display());
     println!();
 }
 
@@ -1603,6 +1635,236 @@ fn bracketed_chunks(chunks: &[ChunkRun]) -> String {
         .map(|chunk| format!("[{}]", chunk.transcript))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn annotate_chunk_runs(chunks: &[ChunkRun], samples: &[f32]) -> Result<String> {
+    let combined_transcript = combine_transcripts(chunks);
+    let alignment = build_transcript_alignment(&combined_transcript, samples)?;
+    let mut word_start = 0usize;
+    let mut annotated = Vec::with_capacity(chunks.len());
+
+    for chunk in chunks {
+        let word_count = sentence_word_tokens(&chunk.transcript).len();
+        let word_end = word_start + word_count;
+        annotated.push(format!(
+            "[{}]{}",
+            chunk.transcript,
+            format_span_timing(alignment.span_timing(word_start, word_end))
+        ));
+        word_start = word_end;
+    }
+
+    Ok(annotated.join(" "))
+}
+
+#[derive(Clone)]
+struct WordPlacement {
+    text: String,
+    chunk_index: usize,
+    start_secs: Option<f64>,
+    end_secs: Option<f64>,
+    quality_label: &'static str,
+}
+
+fn build_word_placements(chunks: &[ChunkRun], samples: &[f32]) -> Result<Vec<WordPlacement>> {
+    let combined_transcript = combine_transcripts(chunks);
+    let alignment = build_transcript_alignment(&combined_transcript, samples)?;
+    let word_timings = alignment.word_timings();
+    let mut next_word = 0usize;
+    let mut placements = Vec::new();
+
+    for (chunk_index, chunk) in chunks.iter().enumerate() {
+        let chunk_words = sentence_word_tokens(&chunk.transcript);
+        for _ in chunk_words {
+            let word_timing = word_timings
+                .get(next_word)
+                .ok_or_else(|| anyhow::anyhow!("missing word timing at index {next_word}"))?;
+            let (start_secs, end_secs, quality_label) = match &word_timing.quality {
+                bee_transcribe::zipa_align::AlignmentQuality::Aligned {
+                    start_secs,
+                    end_secs,
+                } => (Some(*start_secs), Some(*end_secs), "aligned"),
+                bee_transcribe::zipa_align::AlignmentQuality::NoWindow => (None, None, "no-window"),
+                bee_transcribe::zipa_align::AlignmentQuality::NoTiming => (None, None, "no-timing"),
+            };
+            placements.push(WordPlacement {
+                text: word_timing.word.to_string(),
+                chunk_index,
+                start_secs,
+                end_secs,
+                quality_label,
+            });
+            next_word += 1;
+        }
+    }
+
+    Ok(placements)
+}
+
+fn write_chunk_segment_merge_rollback_html(
+    baseline_runs: &[ChunkRun],
+    replay_runs: &[ChunkRun],
+    samples: &[f32],
+) -> Result<PathBuf> {
+    let baseline_words = build_word_placements(baseline_runs, samples)?;
+    let replay_words = build_word_placements(replay_runs, samples)?;
+    let duration_secs = samples.len() as f64 / SAMPLE_RATE as f64;
+    let out_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.artifacts/bee-kv");
+    fs::create_dir_all(&out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+    let out_path = out_dir.join("chunk-segment-merge-rollback.html");
+    let html = render_word_timeline_html(
+        duration_secs,
+        baseline_runs,
+        replay_runs,
+        &baseline_words,
+        &replay_words,
+    );
+    fs::write(&out_path, html).with_context(|| format!("writing {}", out_path.display()))?;
+    Ok(out_path)
+}
+
+fn render_word_timeline_html(
+    duration_secs: f64,
+    baseline_runs: &[ChunkRun],
+    replay_runs: &[ChunkRun],
+    baseline_words: &[WordPlacement],
+    replay_words: &[WordPlacement],
+) -> String {
+    let width_px = 1400.0;
+    let row_height_px = 96.0;
+    let baseline_row = render_word_row(
+        "Baseline",
+        width_px,
+        row_height_px,
+        duration_secs,
+        baseline_runs,
+        baseline_words,
+    );
+    let replay_row = render_word_row(
+        "Replay",
+        width_px,
+        row_height_px,
+        duration_secs,
+        replay_runs,
+        replay_words,
+    );
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>bee-kv rollback word timeline</title><style>\
+body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f7f4ec;color:#1d1b19;padding:24px;}}\
+.timeline{{width:{width_px}px;border:1px solid #b9b09f;background:#fffdf8;position:relative;padding:12px 0;margin-bottom:28px;}}\
+.row-title{{font-weight:700;margin:0 0 8px 0;}}\
+.track{{position:relative;width:{width_px}px;height:{row_height_px}px;border-top:1px solid #d6cfbf;border-bottom:1px solid #d6cfbf;background:linear-gradient(180deg,#fffdf8,#f4efe3);overflow:hidden;}}\
+.word{{position:absolute;top:18px;height:28px;padding:4px 6px;border-radius:4px;border:1px solid #7a6d56;background:#efe2b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;line-height:18px;box-sizing:border-box;cursor:default;}}\
+.word.chunk-0{{background:#e7d9a8;}} .word.chunk-1{{background:#cfdcc8;}} .word.chunk-2{{background:#d7d0ea;}}\
+.word.no-window,.word.no-timing{{background:#e7c2c2;border-color:#9f5d5d;top:54px;height:22px;font-size:11px;}}\
+.boundary{{position:absolute;top:0;width:1px;height:{row_height_px}px;background:#9d9483;}}\
+.boundary-label{{position:absolute;top:2px;transform:translateX(4px);font-size:11px;color:#6d6457;}}\
+.axis{{display:flex;justify-content:space-between;font-size:12px;color:#6d6457;margin-top:6px;}}\
+.legend{{margin-bottom:16px;font-size:13px;color:#514a41;}}\
+.word:hover::after{{content:attr(data-full-word);position:absolute;left:0;top:-28px;background:#1d1b19;color:#fffdf8;padding:2px 6px;border-radius:4px;white-space:nowrap;z-index:10;font-size:11px;line-height:16px;box-shadow:0 2px 6px rgba(0,0,0,0.18);}}\
+</style></head><body><h1>bee-kv rollback word timeline</h1><p class=\"legend\">Word boxes are positioned by ZIPA-derived word timings. Vertical lines mark chunk ends.</p>{baseline_row}{replay_row}</body></html>"
+    )
+}
+
+fn render_word_row(
+    title: &str,
+    width_px: f64,
+    _row_height_px: f64,
+    duration_secs: f64,
+    runs: &[ChunkRun],
+    words: &[WordPlacement],
+) -> String {
+    let mut boundaries = String::new();
+    for run in runs {
+        let x = ((run.end_sample as f64 / SAMPLE_RATE as f64) / duration_secs) * width_px;
+        let ms = (run.end_sample * 1000) / SAMPLE_RATE as usize;
+        boundaries.push_str(&format!(
+            "<div class=\"boundary\" style=\"left:{x:.1}px\"></div><div class=\"boundary-label\" style=\"left:{x:.1}px\">{ms}ms</div>"
+        ));
+    }
+
+    let mut word_divs = String::new();
+    let mut fallback_x = 0.0;
+    for word in words {
+        let class = format!(
+            "word chunk-{} {}",
+            word.chunk_index.min(2),
+            word.quality_label
+        );
+        let (left, width) = match (word.start_secs, word.end_secs) {
+            (Some(start), Some(end)) => {
+                let left = (start / duration_secs) * width_px;
+                let width = ((end - start).max(0.08) / duration_secs) * width_px;
+                (left, width.max(36.0))
+            }
+            _ => {
+                let left = fallback_x;
+                fallback_x += 90.0;
+                (left, 84.0)
+            }
+        };
+        word_divs.push_str(&format!(
+            "<div class=\"{class}\" style=\"left:{left:.1}px;width:{width:.1}px\" title=\"{title}: {text}\" data-full-word=\"{text}\">{text}</div>",
+            text = html_escape(&word.text)
+        ));
+    }
+
+    format!(
+        "<section><div class=\"row-title\">{}</div><div class=\"timeline\"><div class=\"track\">{}{}</div><div class=\"axis\"><span>0.00s</span><span>{:.2}s</span></div></div></section>",
+        html_escape(title),
+        boundaries,
+        word_divs,
+        duration_secs
+    )
+}
+
+fn html_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\"', "&quot;")
+}
+
+fn build_transcript_alignment(transcript: &str, samples: &[f32]) -> Result<TranscriptAlignment> {
+    let zipa_audio = ZipaAudioBuffer {
+        samples: samples.to_vec(),
+        sample_rate_hz: SAMPLE_RATE,
+    };
+
+    let mut g2p = CachedEspeakG2p::english(&g2p_base_dir()).context("initializing g2p engine")?;
+    let zipa = ZipaInference::load_quantized_bundle_dir(&zipa_bundle_dir()?)
+        .context("loading ZIPA bundle")?;
+
+    TranscriptAlignment::build(transcript, &zipa_audio, &mut g2p, &zipa)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+}
+
+fn format_span_timing(span_timing: SpanTiming) -> String {
+    match span_timing {
+        SpanTiming::Aligned {
+            start_secs,
+            end_secs,
+        } => format!("{{{start_secs:.2}-{end_secs:.2}s}}"),
+        SpanTiming::PartialGap {
+            start_secs,
+            end_secs,
+        } => format!("{{partial {start_secs:.2}-{end_secs:.2}s}}"),
+        SpanTiming::NoAlignedWords => "{no-aligned-words}".to_string(),
+        SpanTiming::NoTiming => "{no-timing}".to_string(),
+    }
+}
+
+fn g2p_base_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target")
+}
+
+fn zipa_bundle_dir() -> Result<PathBuf> {
+    if let Ok(path) = env::var("BEE_ZIPA_BUNDLE_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+
+    let home = env::var("HOME").context("HOME is not set for ZIPA fallback path")?;
+    Ok(PathBuf::from(home).join("bearcove/zipa-mlx-hf"))
 }
 
 fn print_lane_row(label: &str, chunks: &[ChunkRun]) {
