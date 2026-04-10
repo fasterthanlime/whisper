@@ -395,6 +395,17 @@ impl DecodeSession {
         );
 
         let rotate_start = phase_start();
+        tracing::info!(
+            "{}",
+            render_rotation_debug_report(
+                tokenizer,
+                self.text_tokens(),
+                &aligned_full,
+                plan,
+                trim_at,
+                self.start_time,
+            )
+        );
         let new_start = self.start_time + trim_at;
         let (committed_audio, remaining) = self.audio.split_at(trim_at);
         let remaining_audio_for_sink = remaining.clone();
@@ -749,6 +760,110 @@ fn zipa_word_alignments(
         }
     }
     Ok(items)
+}
+
+fn render_rotation_debug_report(
+    tokenizer: &Tokenizer,
+    text_tokens: &[AsrToken],
+    aligned_full: &TextBuffer,
+    plan: RotationTextPlan,
+    trim_at: Seconds,
+    start_time: Seconds,
+) -> String {
+    let total = text_tokens.len();
+    let old_ctx_end = plan.old_context_tokens.0.min(total);
+    let drain_end = plan.drain_count().0.min(total);
+    let stable_end = plan.stable_end().0.min(total);
+
+    let full_text = decode_token_slice(tokenizer, text_tokens);
+    let old_context_text = decode_token_slice(tokenizer, &text_tokens[..old_ctx_end]);
+    let commit_text = decode_token_slice(tokenizer, &text_tokens[old_ctx_end..drain_end]);
+    let next_prefix_text = decode_token_slice(tokenizer, &text_tokens[drain_end..stable_end]);
+    let rollback_text = decode_token_slice(tokenizer, &text_tokens[stable_end..]);
+    let remaining_text = decode_token_slice(tokenizer, &text_tokens[drain_end..]);
+
+    let audio_cut_word = last_word_before(tokenizer, aligned_full, plan.commit_end())
+        .unwrap_or_else(|| "<none>".to_string());
+    let first_kept_word = first_word_after(tokenizer, aligned_full, plan.drain_count())
+        .unwrap_or_else(|| "<none>".to_string());
+
+    format!(
+        concat!(
+            "\n🔪 Rotation boundary\n",
+            "  📝 full         : {full}\n",
+            "  📦 old context  : {old_context}\n",
+            "  ✅ commit       : {commit}\n",
+            "  ↪️ next prefix  : {next_prefix}\n",
+            "  🔁 rollback     : {rollback}\n",
+            "  🧵 remaining    : {remaining}\n",
+            "  🎯 audio cut    : +{trim:.3}s / @{absolute:.3}s\n",
+            "  🔤 cut word     : {audio_cut_word}\n",
+            "  ⏭️ first kept    : {first_kept_word}\n"
+        ),
+        full = sanitize_debug_text(&full_text),
+        old_context = sanitize_debug_text(&old_context_text),
+        commit = sanitize_debug_text(&commit_text),
+        next_prefix = sanitize_debug_text(&next_prefix_text),
+        rollback = sanitize_debug_text(&rollback_text),
+        remaining = sanitize_debug_text(&remaining_text),
+        trim = trim_at.0,
+        absolute = (start_time + trim_at).0,
+        audio_cut_word = sanitize_debug_text(&audio_cut_word),
+        first_kept_word = sanitize_debug_text(&first_kept_word),
+    )
+}
+
+fn decode_token_slice(tokenizer: &Tokenizer, tokens: &[AsrToken]) -> String {
+    let ids = tokens.iter().map(|token| token.id).collect::<Vec<_>>();
+    tokenizer
+        .decode(&ids, true)
+        .unwrap_or_else(|_| "<decode failed>".to_string())
+}
+
+fn decode_entries(tokenizer: &Tokenizer, entries: &[TokenEntry]) -> String {
+    let ids = entries
+        .iter()
+        .map(|entry| entry.token.id)
+        .collect::<Vec<_>>();
+    tokenizer
+        .decode(&ids, true)
+        .unwrap_or_else(|_| "<decode failed>".to_string())
+}
+
+fn sanitize_debug_text(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        "∅".to_string()
+    } else {
+        trimmed.replace('\n', " ↩ ")
+    }
+}
+
+fn last_word_before(tokenizer: &Tokenizer, buf: &TextBuffer, n: TokenCount) -> Option<String> {
+    let limit = n.0.min(buf.entries().len());
+    let mut seen = 0usize;
+    let mut result = None;
+    for word in buf.words() {
+        seen += word.len();
+        if seen > limit {
+            break;
+        }
+        result = Some(decode_entries(tokenizer, word));
+    }
+    result
+}
+
+fn first_word_after(tokenizer: &Tokenizer, buf: &TextBuffer, n: TokenCount) -> Option<String> {
+    let limit = n.0.min(buf.entries().len());
+    let mut seen = 0usize;
+    for word in buf.words() {
+        let word_start = seen;
+        seen += word.len();
+        if word_start >= limit {
+            return Some(decode_entries(tokenizer, word));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
