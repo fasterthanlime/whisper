@@ -33,16 +33,20 @@ impl Language {
 #[repr(u8)]
 #[derive(Debug, Clone, Facet)]
 pub enum RotationCutStrategy {
-    /// Existing behavior: choose a compatible checkpoint automatically.
-    Automatic,
-    /// External behavior: commit at the latest compatible checkpoint whose
+    /// Never rotate during streaming; commit only once at finish().
+    Uncut,
+    /// Automatic checkpoint-based rotation using Qwen/aligner timing.
+    Qwen3,
+    /// Automatic checkpoint-based rotation using ZIPA-derived cut timing.
+    Zipa,
+    /// Manual behavior: commit at the latest compatible checkpoint whose
     /// text-token length is at most this target.
-    TargetCommittedTextTokens(u32),
+    ManualTargetCommittedTextTokens(u32),
 }
 
 impl Default for RotationCutStrategy {
     fn default() -> Self {
-        Self::Automatic
+        Self::Qwen3
     }
 }
 
@@ -95,7 +99,7 @@ impl Default for SessionOptions {
             max_tokens_final: 512,
             language: Language::default(),
             app_id: None,
-            rotation_cut_strategy: RotationCutStrategy::Automatic,
+            rotation_cut_strategy: RotationCutStrategy::Qwen3,
         }
     }
 }

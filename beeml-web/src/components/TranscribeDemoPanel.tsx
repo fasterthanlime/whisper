@@ -404,7 +404,7 @@ export function TranscribeDemoPanel({
           language: [""] as unknown as { 0: string },
           app_id: null,
           rotation_cut_strategy: {
-            tag: "TargetCommittedTextTokens",
+            tag: "ManualTargetCommittedTextTokens",
             value: targetCommittedTokens,
           },
         },

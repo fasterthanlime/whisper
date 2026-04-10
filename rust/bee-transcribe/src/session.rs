@@ -291,21 +291,25 @@ impl<'a> Session<'a> {
     }
 
     fn effective_commit_threshold(&self) -> usize {
-        if let RotationCutStrategy::TargetCommittedTextTokens(target) =
-            self.options.rotation_cut_strategy
-        {
-            return target.max(1) as usize;
+        match self.options.rotation_cut_strategy {
+            RotationCutStrategy::Uncut => usize::MAX,
+            RotationCutStrategy::ManualTargetCommittedTextTokens(target) => target.max(1) as usize,
+            RotationCutStrategy::Qwen3 | RotationCutStrategy::Zipa => {
+                compute_effective_commit_threshold(
+                    self.has_committed_context(),
+                    self.options.commit_token_count,
+                )
+            }
         }
-        compute_effective_commit_threshold(
-            self.has_committed_context(),
-            self.options.commit_token_count,
-        )
     }
 
     fn requested_commit_tokens(&self) -> TokenCount {
         match self.options.rotation_cut_strategy {
-            RotationCutStrategy::Automatic => TokenCount(self.options.commit_token_count),
-            RotationCutStrategy::TargetCommittedTextTokens(target) => {
+            RotationCutStrategy::Uncut => TokenCount(usize::MAX),
+            RotationCutStrategy::Qwen3 | RotationCutStrategy::Zipa => {
+                TokenCount(self.options.commit_token_count)
+            }
+            RotationCutStrategy::ManualTargetCommittedTextTokens(target) => {
                 TokenCount(target.max(1) as usize)
             }
         }

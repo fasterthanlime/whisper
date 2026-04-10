@@ -110,9 +110,28 @@ fn main() -> anyhow::Result<()> {
     if let Ok(v) = std::env::var("BEE_MAX_TOKENS_FINAL") {
         options.max_tokens_final = v.parse().unwrap();
     }
-    if let Ok(v) = std::env::var("BEE_ROTATION_TARGET_COMMITTED_TOKENS") {
+    if let Ok(v) = std::env::var("BEE_ROTATION_CUT_MODE") {
+        options.rotation_cut_strategy = match v.to_ascii_lowercase().as_str() {
+            "uncut" | "never" => RotationCutStrategy::Uncut,
+            "qwen3" | "qwen" => RotationCutStrategy::Qwen3,
+            "zipa" => RotationCutStrategy::Zipa,
+            "manual" => {
+                let target: u32 = std::env::var("BEE_ROTATION_TARGET_COMMITTED_TOKENS")
+                    .unwrap_or_else(|_| "12".to_string())
+                    .parse()
+                    .unwrap();
+                RotationCutStrategy::ManualTargetCommittedTextTokens(target)
+            }
+            other => {
+                anyhow::bail!(
+                    "invalid BEE_ROTATION_CUT_MODE={other}; expected one of: uncut|qwen3|zipa|manual"
+                );
+            }
+        };
+    } else if let Ok(v) = std::env::var("BEE_ROTATION_TARGET_COMMITTED_TOKENS") {
         let target: u32 = v.parse().unwrap();
-        options.rotation_cut_strategy = RotationCutStrategy::TargetCommittedTextTokens(target);
+        options.rotation_cut_strategy =
+            RotationCutStrategy::ManualTargetCommittedTextTokens(target);
     }
     let chunk_samples = (options.chunk_duration * 16000.0) as usize;
 

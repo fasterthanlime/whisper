@@ -486,7 +486,8 @@ impl DecodeSession {
             return Ok(None);
         }
 
-        self.log_zipa_cut_report(zipa, &align_audio, &items, &commit_text)?;
+        let zipa_nearest_cut =
+            self.log_zipa_cut_report(zipa, &align_audio, &items, &commit_text)?;
 
         // Build AlignmentItems and align the buffer (pure function)
         let align_buffer_start = phase_start();
@@ -512,7 +513,15 @@ impl DecodeSession {
         // so the model doesn't think it's starting a new utterance).
         let rotate_start = phase_start();
         let last_end = Seconds(items.last().unwrap().end_time as f64);
-        let trim_at = align_prefix_end;
+        let trim_at = match rotation_cut_strategy {
+            RotationCutStrategy::Zipa => {
+                let raw = zipa_nearest_cut.unwrap_or(align_prefix_end);
+                Seconds(raw.0.clamp(0.0, align_prefix_end.0))
+            }
+            RotationCutStrategy::Qwen3
+            | RotationCutStrategy::ManualTargetCommittedTextTokens(_) => align_prefix_end,
+            RotationCutStrategy::Uncut => align_prefix_end,
+        };
         let new_start = self.start_time + trim_at;
         let (committed_audio, remaining) = self.audio.split_at(trim_at);
         let remaining_token_ids: Vec<TokenId> = self.text_tokens()[safe_n.0..]
@@ -612,7 +621,7 @@ impl DecodeSession {
             return Ok(None);
         }
 
-        self.log_zipa_cut_report(zipa, &align_audio, &items, &commit_text)?;
+        let _ = self.log_zipa_cut_report(zipa, &align_audio, &items, &commit_text)?;
 
         let align_buffer_start = phase_start();
         let alignment_items: Vec<AlignmentItem> = items
@@ -824,25 +833,27 @@ impl DecodeSession {
             .collect::<Vec<_>>();
 
         let selected_index = match rotation_cut_strategy {
-            RotationCutStrategy::Automatic => match compatible_indices.as_slice() {
-                [] => panic!(
-                    "no compatible checkpoint with enough tail audio: current_text={current_text}; checkpoints={}; min_tail_samples={min_tail_samples}",
-                    self.checkpoints.len(),
-                ),
-                [only] if *only == self.checkpoints.len().saturating_sub(1) => panic!(
-                    "only latest checkpoint is compatible: current_text={current_text}; latest_index={only}"
-                ),
-                [only] => *only,
-                many => {
-                    let earlier = many[..many.len() - 1].last().copied();
-                    earlier.unwrap_or_else(|| {
+            RotationCutStrategy::Qwen3 | RotationCutStrategy::Zipa => {
+                match compatible_indices.as_slice() {
+                    [] => panic!(
+                        "no compatible checkpoint with enough tail audio: current_text={current_text}; checkpoints={}; min_tail_samples={min_tail_samples}",
+                        self.checkpoints.len(),
+                    ),
+                    [only] if *only == self.checkpoints.len().saturating_sub(1) => panic!(
+                        "only latest checkpoint is compatible: current_text={current_text}; latest_index={only}"
+                    ),
+                    [only] => *only,
+                    many => {
+                        let earlier = many[..many.len() - 1].last().copied();
+                        earlier.unwrap_or_else(|| {
                         panic!(
                             "compatible checkpoints only contained latest/current: current_text={current_text}; compatible={many:?}"
                         )
                     })
+                    }
                 }
-            },
-            RotationCutStrategy::TargetCommittedTextTokens(target) => {
+            }
+            RotationCutStrategy::ManualTargetCommittedTextTokens(target) => {
                 let target = *target as usize;
                 let capped = compatible_indices
                     .iter()
@@ -858,6 +869,9 @@ impl DecodeSession {
                         "no compatible checkpoint at-or-before target: current_text={current_text}; target={target}; compatible={compatible_indices:?}"
                     ),
                 }
+            }
+            RotationCutStrategy::Uncut => {
+                panic!("select_rotation_checkpoint called in Uncut mode")
             }
         };
 
@@ -972,7 +986,7 @@ impl DecodeSession {
         align_audio: &AudioBuffer,
         items: &[ForcedAlignItem],
         commit_text: &str,
-    ) -> Result<(), Exception> {
+    ) -> Result<Option<Seconds>, Exception> {
         let zipa_audio = ZipaAudioBuffer {
             samples: align_audio.samples().to_vec(),
             sample_rate_hz: align_audio.sample_rate().0,
@@ -987,7 +1001,7 @@ impl DecodeSession {
                 commit_text = %commit_text.trim(),
                 "zipa: no frames available for cut analysis"
             );
-            return Ok(());
+            return Ok(None);
         }
 
         let shape = output.log_probs.shape();
@@ -997,7 +1011,7 @@ impl DecodeSession {
                 commit_text = %commit_text.trim(),
                 "zipa: empty vocab in log_probs"
             );
-            return Ok(());
+            return Ok(None);
         }
         let flat = output.log_probs.as_slice::<f32>();
         let blank_id = 0usize;
@@ -1044,7 +1058,7 @@ impl DecodeSession {
                 zipa_tokens = output.tokens.join(" "),
                 "zipa: no blank-run cut candidates"
             );
-            return Ok(());
+            return Ok(None);
         }
 
         let aligned_end = Seconds(items.last().unwrap().end_time as f64);
@@ -1112,7 +1126,7 @@ impl DecodeSession {
             "zipa cut report"
         );
 
-        Ok(())
+        Ok(Some(nearest.cut_time))
     }
 }
 
