@@ -43,6 +43,12 @@ for mode in "${MODES[@]}"; do
     export BEE_DISABLE_CORRECTION=1
     export BEE_ROTATION_CUT_MODE="$mode"
     export RUST_LOG="bee_transcribe::session=info,bee_transcribe::decode_session=info"
+    # For uncut mode, process as a single feed so logs are concise.
+    if [[ "$mode" == "uncut" ]]; then
+      export BEE_CHUNK_DURATION=600
+    else
+      unset BEE_CHUNK_DURATION || true
+    fi
     cargo run -q -p bee-transcribe --bin transcribe -- "$WAV_PATH"
   ) 2>&1 | tee "$log_file"
   cmd_status=${PIPESTATUS[0]}

@@ -46,6 +46,7 @@ training/data/
 training/adapters/
 scripts/__pycache__/
 .artifacts
+.playwright-mcp
 
 # env vars
 .env

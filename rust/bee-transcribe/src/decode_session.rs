@@ -832,25 +832,40 @@ impl DecodeSession {
             .map(|(index, _, _, _, _, _, _, _, _, _)| *index)
             .collect::<Vec<_>>();
 
+        let latest_index = self.checkpoints.len().saturating_sub(1);
         let selected_index = match rotation_cut_strategy {
             RotationCutStrategy::Qwen3 | RotationCutStrategy::Zipa => {
                 match compatible_indices.as_slice() {
-                    [] => panic!(
-                        "no compatible checkpoint with enough tail audio: current_text={current_text}; checkpoints={}; min_tail_samples={min_tail_samples}",
-                        self.checkpoints.len(),
-                    ),
-                    [only] if *only == self.checkpoints.len().saturating_sub(1) => panic!(
-                        "only latest checkpoint is compatible: current_text={current_text}; latest_index={only}"
-                    ),
-                    [only] => *only,
-                    many => {
-                        let earlier = many[..many.len() - 1].last().copied();
-                        earlier.unwrap_or_else(|| {
-                        panic!(
-                            "compatible checkpoints only contained latest/current: current_text={current_text}; compatible={many:?}"
-                        )
-                    })
+                    [] => {
+                        tracing::warn!(
+                            checkpoints = self.checkpoints.len(),
+                            min_tail_samples,
+                            current_text = %current_text,
+                            "no compatible checkpoint with enough tail audio; deferring rotation"
+                        );
+                        return None;
                     }
+                    [only] if *only == latest_index => {
+                        tracing::warn!(
+                            latest_index = *only,
+                            checkpoints = self.checkpoints.len(),
+                            current_text = %current_text,
+                            "only latest checkpoint is compatible; deferring rotation"
+                        );
+                        return None;
+                    }
+                    [only] => *only,
+                    many => match many[..many.len() - 1].last().copied() {
+                        Some(earlier) => earlier,
+                        None => {
+                            tracing::warn!(
+                                compatible = ?many,
+                                current_text = %current_text,
+                                "compatible set had no non-latest checkpoint; deferring rotation"
+                            );
+                            return None;
+                        }
+                    },
                 }
             }
             RotationCutStrategy::ManualTargetCommittedTextTokens(target) => {
@@ -861,17 +876,31 @@ impl DecodeSession {
                     .filter(|&index| self.checkpoints[index].text_token_ids.len() <= target)
                     .collect::<Vec<_>>();
                 match capped.last().copied() {
-                    Some(index) if index == self.checkpoints.len().saturating_sub(1) => panic!(
-                        "target strategy resolved to latest checkpoint: current_text={current_text}; target={target}; index={index}"
-                    ),
+                    Some(index) if index == latest_index => {
+                        tracing::warn!(
+                            target,
+                            index,
+                            current_text = %current_text,
+                            "manual target resolved to latest checkpoint; deferring rotation"
+                        );
+                        return None;
+                    }
                     Some(index) => index,
-                    None => panic!(
-                        "no compatible checkpoint at-or-before target: current_text={current_text}; target={target}; compatible={compatible_indices:?}"
-                    ),
+                    None => {
+                        tracing::warn!(
+                            target,
+                            compatible = ?compatible_indices,
+                            checkpoints = self.checkpoints.len(),
+                            current_text = %current_text,
+                            "no compatible checkpoint at-or-before manual target; deferring rotation"
+                        );
+                        return None;
+                    }
                 }
             }
             RotationCutStrategy::Uncut => {
-                panic!("select_rotation_checkpoint called in Uncut mode")
+                tracing::warn!("select_rotation_checkpoint called in Uncut mode");
+                return None;
             }
         };
 
