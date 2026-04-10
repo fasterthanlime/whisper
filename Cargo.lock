@@ -132,6 +132,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bee-kv"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bee-qwen3-asr",
+]
+
+[[package]]
 name = "bee-phonetic"
 version = "0.1.0"
 dependencies = [
