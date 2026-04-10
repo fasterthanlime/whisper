@@ -2234,6 +2234,7 @@ struct SlidingWordPlacement {
     start_secs: Option<f64>,
     end_secs: Option<f64>,
     quality_label: &'static str,
+    carried: bool,
     kept: bool,
     bridge: bool,
 }
@@ -2456,35 +2457,10 @@ fn render_sliding_window_row(
     let mut fallback_x = 0.0;
     let mut lane_end_x = [0.0_f64; 3];
     let lane_tops = [16.0_f64, 46.0_f64, 76.0_f64];
-    if let Some(prefix) = replayed_prefix.filter(|prefix| !prefix.text.is_empty()) {
-        for word in &prefix.words {
-            let left = (word.start_secs / window_duration_secs) * width_px;
-            let width =
-                ((word.end_secs - word.start_secs).max(0.08) / window_duration_secs) * width_px;
-            let width = width.max(36.0);
-            let mut lane_index = 0usize;
-            while lane_index + 1 < lane_end_x.len() && lane_end_x[lane_index] > left {
-                lane_index += 1;
-            }
-            if lane_end_x[lane_index] > left && lane_index == lane_end_x.len() - 1 {
-                lane_index = lane_end_x
-                    .iter()
-                    .enumerate()
-                    .min_by(|a, b| a.1.total_cmp(b.1))
-                    .map(|(idx, _)| idx)
-                    .unwrap_or(0);
-            }
-            lane_end_x[lane_index] = left + width + 6.0;
-            let top = lane_tops[lane_index.min(lane_tops.len() - 1)];
-            let text = html_escape(&word.text);
-            word_divs.push_str(&format!(
-                "<div class=\"word carried\" style=\"left:{left:.1}px;top:{top:.1}px;width:{width:.1}px\" title=\"replayed prefix: {text}\" data-full-word=\"{text}\">{text}</div>"
-            ));
-        }
-    }
-
     for word in words {
-        let segment_class = if word.kept {
+        let segment_class = if word.carried {
+            "carried"
+        } else if word.kept {
             "kept"
         } else if word.bridge {
             "bridge"
@@ -2567,13 +2543,28 @@ fn build_window_word_placements(
     run: &SlidingWindowRun,
     chunk_samples: &[f32],
 ) -> Result<Vec<SlidingWordPlacement>> {
-    let transcript = run.chunk_run.transcript.trim();
-    if transcript.is_empty() {
+    let generated_transcript = run.chunk_run.transcript.trim();
+    let replayed_prefix = run
+        .replayed_prefix
+        .as_ref()
+        .map(|prefix| prefix.text.trim())
+        .filter(|text| !text.is_empty());
+    if generated_transcript.is_empty() && replayed_prefix.is_none() {
         return Ok(Vec::new());
     }
 
-    let alignment = build_transcript_alignment(transcript, chunk_samples)?;
+    let combined_transcript = match (replayed_prefix, generated_transcript.is_empty()) {
+        (Some(prefix), false) => format!("{prefix} {generated_transcript}"),
+        (Some(prefix), true) => prefix.to_string(),
+        (None, false) => generated_transcript.to_string(),
+        (None, true) => String::new(),
+    };
+    let alignment = build_transcript_alignment(&combined_transcript, chunk_samples)?;
     let word_timings = alignment.word_timings();
+    let carried_word_count = replayed_prefix
+        .map(sentence_word_tokens)
+        .map(|words| words.len())
+        .unwrap_or(0);
     let kept_word_count = run
         .rollback
         .as_ref()
@@ -2599,13 +2590,18 @@ fn build_window_word_placements(
                 bee_transcribe::zipa_align::AlignmentQuality::NoWindow => (None, None, "no-window"),
                 bee_transcribe::zipa_align::AlignmentQuality::NoTiming => (None, None, "no-timing"),
             };
+            let generated_index = index.saturating_sub(carried_word_count);
+            let carried = index < carried_word_count;
             SlidingWordPlacement {
                 text: word_timing.word.to_string(),
                 start_secs,
                 end_secs,
                 quality_label,
-                kept: index < kept_word_count,
-                bridge: index >= kept_word_count && index < replay_word_count,
+                carried,
+                kept: !carried && generated_index < kept_word_count,
+                bridge: !carried
+                    && generated_index >= kept_word_count
+                    && generated_index < replay_word_count,
             }
         })
         .collect())
