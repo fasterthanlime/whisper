@@ -17,25 +17,52 @@ fn main() -> anyhow::Result<()> {
     // Subcommand: transcribe compare <audio.wav> [--out <path>]
     if args.get(1).map(|s| s.as_str()) == Some("compare") {
         let rest = &args[2..];
-        let out_path = rest
-            .windows(2)
-            .find(|w| w[0] == "--out")
-            .map(|w| PathBuf::from(&w[1]));
+
+        fn flag_val<'a>(rest: &'a [String], flag: &str) -> Option<&'a str> {
+            rest.windows(2)
+                .find(|w| w[0] == flag)
+                .map(|w| w[1].as_str())
+        }
+        let out_path = flag_val(rest, "--out").map(PathBuf::from);
+        let chunk_ms: f32 = flag_val(rest, "--chunk-ms")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(400.0);
+        let commit_tokens: usize = flag_val(rest, "--commit-tokens")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(SessionOptions::default().commit_token_count);
+        let rollback_tokens: usize = flag_val(rest, "--rollback-tokens")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(SessionOptions::default().rollback_tokens);
+
+        let known_flags = [
+            "--out",
+            "--chunk-ms",
+            "--commit-tokens",
+            "--rollback-tokens",
+        ];
         let positional: Vec<&str> = rest
             .iter()
             .filter(|a| {
-                !a.starts_with("--")
-                    && !rest
-                        .windows(2)
-                        .any(|w| w[0] == "--out" && &w[1] == a.as_str())
+                if a.starts_with("--") {
+                    return false;
+                }
+                !known_flags
+                    .iter()
+                    .any(|f| flag_val(rest, f) == Some(a.as_str()))
             })
             .map(|s| s.as_str())
             .collect();
         if positional.is_empty() {
-            eprintln!("Usage: transcribe compare <audio.wav> [--out report.html]");
+            eprintln!(
+                "Usage: transcribe compare <audio.wav> [--out report.html] [--chunk-ms 400] [--commit-tokens 12] [--rollback-tokens 5]"
+            );
             std::process::exit(1);
         }
-        return cmd_compare(positional[0], out_path.as_deref());
+        let mut base_options = SessionOptions::default();
+        base_options.chunk_duration = chunk_ms / 1000.0;
+        base_options.commit_token_count = commit_tokens;
+        base_options.rollback_tokens = rollback_tokens;
+        return cmd_compare(positional[0], out_path.as_deref(), base_options);
     }
 
     let show_alts = args.iter().any(|a| a == "--alternatives" || a == "--alts");
@@ -311,9 +338,10 @@ fn run_mode(
     samples: &[f32],
     cut_mode: RotationCutStrategy,
     label: &str,
+    base_options: SessionOptions,
 ) -> anyhow::Result<(String, Vec<bee_transcribe::CutEvent>)> {
     println!("--- Running {label} ---");
-    let mut options = SessionOptions::default();
+    let mut options = base_options;
     // For uncut, use a very large chunk so it processes as one pass
     if matches!(cut_mode, RotationCutStrategy::Uncut) {
         options.chunk_duration = 600.0;
@@ -358,10 +386,14 @@ fn align_pair<T: Clone + Eq + std::hash::Hash + Ord>(
     let mut gb: Vec<Option<T>> = Vec::new();
     for op in ops {
         match op {
-            DiffOp::Equal { old_index, len, .. } => {
+            DiffOp::Equal {
+                old_index,
+                new_index,
+                len,
+            } => {
                 for i in 0..len {
                     ga.push(Some(a[old_index + i].clone()));
-                    gb.push(Some(b[old_index + i].clone()));
+                    gb.push(Some(b[new_index + i].clone()));
                 }
             }
             DiffOp::Delete {
@@ -409,7 +441,10 @@ fn align_pair<T: Clone + Eq + std::hash::Hash + Ord>(
 }
 
 fn expand_gaps(gapped: &[Option<String>], mask: &[Option<String>]) -> Vec<Option<String>> {
-    let mut src = gapped.iter().filter(|v| v.is_some());
+    // mask has one non-None entry per element of gapped (in order).
+    // For each non-None in mask, emit the next element of gapped (which may itself be None).
+    // For each None in mask, emit None (new gap introduced by the third alignment pass).
+    let mut src = gapped.iter();
     mask.iter()
         .map(|m| {
             if m.is_none() {
@@ -421,7 +456,11 @@ fn expand_gaps(gapped: &[Option<String>], mask: &[Option<String>]) -> Vec<Option
         .collect()
 }
 
-fn cmd_compare(audio_path: &str, out_path: Option<&Path>) -> anyhow::Result<()> {
+fn cmd_compare(
+    audio_path: &str,
+    out_path: Option<&Path>,
+    base_options: SessionOptions,
+) -> anyhow::Result<()> {
     let t0 = Instant::now();
     let engine = load_engine(true)?;
     println!("Engine loaded in {:.0}ms", t0.elapsed().as_millis());
@@ -438,7 +477,13 @@ fn cmd_compare(audio_path: &str, out_path: Option<&Path>) -> anyhow::Result<()> 
 
     let mut transcripts: Vec<(&str, String, Vec<bee_transcribe::CutEvent>)> = Vec::new();
     for (label, cut_mode) in modes {
-        let (text, cuts) = run_mode(&engine, &samples, cut_mode.clone(), label)?;
+        let (text, cuts) = run_mode(
+            &engine,
+            &samples,
+            cut_mode.clone(),
+            label,
+            base_options.clone(),
+        )?;
         transcripts.push((label, text, cuts));
     }
 
@@ -582,6 +627,9 @@ fn cmd_compare(audio_path: &str, out_path: Option<&Path>) -> anyhow::Result<()> 
         .file_name()
         .unwrap_or_default()
         .to_string_lossy();
+    let chunk_ms = (base_options.chunk_duration * 1000.0).round() as u32;
+    let commit_tokens = base_options.commit_token_count;
+    let rollback_tokens = base_options.rollback_tokens;
     let html = format!(
         r#"<!DOCTYPE html>
 <html>
@@ -591,7 +639,9 @@ fn cmd_compare(audio_path: &str, out_path: Option<&Path>) -> anyhow::Result<()> 
 <style>
   body {{ font-family: monospace; background: #1e1e2e; color: #cdd6f4; padding: 2em; font-size: 13px; }}
   h1 {{ color: #cba6f7; margin-bottom: 0.2em; }}
-  p.subtitle {{ color: #6c7086; margin-top: 0; margin-bottom: 1.5em; }}
+  p.subtitle {{ color: #6c7086; margin-top: 0; margin-bottom: 1em; }}
+  .settings {{ color: #6c7086; margin-bottom: 1.5em; font-size: 0.9em; }}
+  .settings span {{ color: #a6e3a1; margin-right: 1.5em; }}
   .legend {{ display: flex; gap: 1.5em; margin-bottom: 1.5em; }}
   .legend-item {{ display: flex; align-items: center; gap: 0.5em; }}
   .swatch {{ display: inline-block; width: 12px; height: 12px; border-radius: 2px; }}
@@ -608,7 +658,12 @@ fn cmd_compare(audio_path: &str, out_path: Option<&Path>) -> anyhow::Result<()> 
 </head>
 <body>
 <h1>Cut Mode Comparison — {wav_name}</h1>
-<p class="subtitle">LCS-aligned. 15 word positions per block. Gaps (·) where a mode has no word.</p>
+<p class="subtitle">LCS-aligned · 15 word positions per block · gaps (·) where a mode has no word · purple border = cut point</p>
+<p class="settings">
+  <span>chunk {chunk_ms}ms</span>
+  <span>commit-tokens {commit_tokens}</span>
+  <span>rollback-tokens {rollback_tokens}</span>
+</p>
 <div class="legend">
   <div class="legend-item"><span class="swatch" style="background:#2a2a3e;border:1px solid #45475a"></span> All agree</div>
   <div class="legend-item"><span class="swatch" style="background:#3a2f10"></span> Two agree</div>
