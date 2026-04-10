@@ -382,11 +382,7 @@ impl DecodeSession {
         let committed_word_count = aligned_full.word_count_before(plan.commit_end());
 
         let split_start = phase_start();
-        let mut committed_and_context = aligned_full.split_off_front(plan.commit_end());
-        if plan.old_context_tokens.0 > 0 {
-            let _ = committed_and_context.split_off_front(plan.old_context_tokens);
-        }
-        let aligned_committed = committed_and_context;
+        let aligned_committed = aligned_full.split_off_front(plan.commit_end());
         log_phase_chunk(
             "commit",
             "extract_committed_buffer",
@@ -469,21 +465,13 @@ impl DecodeSession {
 
         let align_start = phase_start();
         let entries = TextBuffer::from_entries(self.pending_entries(tokenizer));
-        let mut aligned =
+        let aligned =
             self.align_current_text(&entries, aligner, forced_aligner, zipa, tokenizer, g2p)?;
         log_phase_chunk("commit_all", "align_current_text", chunk_index, align_start);
 
-        let strip_start = phase_start();
-        // Strip any context tokens carried into this session — already in transcript.
-        let old_ctx = self.context_token_count;
-        if old_ctx > 0 {
-            let _ctx_front = aligned.split_off_front(TokenCount(old_ctx));
-        }
-        log_phase_chunk("commit_all", "strip_old_context", chunk_index, strip_start);
-
         tracing::info!(
             committed_tokens = self.text_tokens().len(),
-            old_ctx,
+            old_ctx = self.context_token_count,
             audio_samples = self.audio.len(),
             aligned_words = aligned.words().count(),
             "commit_all: final commit without rotation"
