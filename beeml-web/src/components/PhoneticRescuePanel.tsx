@@ -781,6 +781,13 @@ export function PhoneticRescuePanel({
     kind: "transcript" | "zipa",
     phonemes: string[],
   ) => {
+    if (
+      activeControl?.tokenStart === word.tokenStart &&
+      activeControl.kind === kind
+    ) {
+      stopPlayback();
+      return;
+    }
     if (!wsUrl) return;
     try {
       setControlError(null);
@@ -795,6 +802,13 @@ export function PhoneticRescuePanel({
   };
 
   const playOriginalWord = async (word: PhoneticWordAlignment) => {
+    if (
+      activeControl?.tokenStart === word.tokenStart &&
+      activeControl.kind === "original"
+    ) {
+      stopPlayback();
+      return;
+    }
     try {
       setControlError(null);
       setActiveGlobalControl(null);
@@ -821,6 +835,10 @@ export function PhoneticRescuePanel({
   };
 
   const playLaneSequence = async (kind: "original" | "transcript" | "zipa") => {
+    if (activeGlobalControl?.kind === kind) {
+      stopPlayback();
+      return;
+    }
     try {
       setControlError(null);
       stopPlayback();
