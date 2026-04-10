@@ -88,6 +88,7 @@ actor Session {
 
     // Cursor symbol — 🐝 during recording, spinner frames during finalization
     private var cursorSymbol = "🐝"
+    private var shouldRenderMarkedText = true
 
     // Correction output — set by ASR task, read by AppState after completion
     private let correctionOutputRef = CorrectionOutputRef()
@@ -487,13 +488,8 @@ actor Session {
                         let finalText = text.isEmpty ? targetText : text
                         diag.update { $0.finalText = finalText }
                         textSnapshot.set(finalText)
+                        shouldRenderMarkedText = false
 
-                        // Snap to final text (no cursor)
-                        await self.renderMarkedTextIfActive(
-                            finalText,
-                            inputClient: ic,
-                            sessionID: sessionID
-                        )
                         await self.finishIME(text: finalText, mode: mode)
                         return
                     }
@@ -509,6 +505,7 @@ actor Session {
     func routeDidBecomeActive() {
         guard ime == .inactive || ime == .activating else { return }
         ime = .active
+        guard shouldRenderMarkedText else { return }
         let snapshot = textSnapshot.get()
         inputClient.setMarkedText(Self.addCursor(snapshot))
     }
@@ -565,6 +562,7 @@ actor Session {
             $0.endedAt = Date()
             $0.ending = modeLabel
         }
+        shouldRenderMarkedText = true
         capture = .draining
 
         // Begin drain: the capture task will monitor VAD, then send
@@ -647,13 +645,7 @@ actor Session {
     private func renderMarkedTextIfActive(
         _ text: String, inputClient: BeeInputClient, sessionID: UUID
     ) async {
-        // guard ime == .active else {
-        //     beeLog(
-        //         "SESSION: render skipped id=\(sessionID.uuidString.prefix(8)) ime=\(ime) len=\(text.utf16.count)"
-        //     )
-        //     return
-        // }
-        // DO NOT RE-ADD LOGGING HERE
+        guard shouldRenderMarkedText else { return }
         inputClient.setMarkedText(text)
     }
 
@@ -753,6 +745,8 @@ actor Session {
         beeLog(
             "SESSION: finishIME start id=\(id.uuidString.prefix(8)) mode=\(modeLabel) len=\(text.utf16.count) ime=\(ime)"
         )
+        shouldRenderMarkedText = false
+
         switch mode {
         case .commit(let submit):
             if !text.isEmpty {
