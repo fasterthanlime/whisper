@@ -21,15 +21,18 @@ class BeeInputController: IMKInputController {
     }
 
     nonisolated override func activateServer(_ sender: Any!) {
+        let senderId = describeClient(sender)
+
         MainActor.assumeIsolated {
             activeInputContext = NSTextInputContext.current
             let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-            let clientIdentity = currentClientIdentity()
+
+            let currClientIdentity = currentClientIdentity()
             let bridge = BeeIMEBridgeState.shared
             beeInputLog(
-                "activateServer: entry frontmostPID=\(frontmostPID.map(String.init) ?? "nil") clientID=\(clientIdentity ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) inputContextCaptured=\(activeInputContext != nil) client=\(describeClient())"
+                "activateServer: entry senderID=\(senderId) frontmostPID=\(frontmostPID.map(String.init) ?? "nil") clientID=\(currClientIdentity) markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) inputContextCaptured=\(activeInputContext != nil) client=\(describeClient())"
             )
-            let isNew = bridge.activate(self, pid: frontmostPID, clientID: clientIdentity)
+            let isNew = bridge.activate(self, pid: frontmostPID, clientID: currClientIdentity)
             if isNew {
                 BeeVoxIMEClient.shared.imeAttach()
             }
@@ -38,6 +41,15 @@ class BeeInputController: IMKInputController {
     }
 
     nonisolated override func deactivateServer(_ sender: Any!) {
+        let senderId = describeClient(sender)
+
+        // guard let senderAsClient = sender as? (any IMKTextInput & NSObjectProtocol) else {
+        //     return
+        // }
+        // senderAsClient.setMarkedText(
+        //     "", selectionRange: NSRange(location: 0, length: 0),
+        //     replacementRange: NSRange(location: 0, length: 0))
+
         MainActor.assumeIsolated {
             let bridge = BeeIMEBridgeState.shared
 
@@ -57,7 +69,7 @@ class BeeInputController: IMKInputController {
 
             let hadMarkedText = !(session?.currentMarkedText.isEmpty ?? true)
             beeInputLog(
-                "deactivateServer: hadMarkedText=\(hadMarkedText) clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) client=\(describeClient())"
+                "deactivateServer: hadMarkedText=\(hadMarkedText) senderID=\(senderId) self.client()ID=\(currentClientIdentity()) markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription())"
             )
 
             if hadMarkedText || clientHasMarked {
@@ -78,7 +90,7 @@ class BeeInputController: IMKInputController {
     nonisolated override func commitComposition(_ sender: Any!) {
         MainActor.assumeIsolated {
             beeInputLog(
-                "commitComposition: entry clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) -> cancel"
+                "commitComposition: entry clientID=\(currentClientIdentity()) markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) -> cancel"
             )
         }
         cancelComposition()
@@ -87,7 +99,7 @@ class BeeInputController: IMKInputController {
     nonisolated override func cancelComposition() {
         MainActor.assumeIsolated {
             beeInputLog(
-                "cancelComposition: entry clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) reentrant=\(isHandlingCancelComposition)"
+                "cancelComposition: entry clientID=\(currentClientIdentity()) markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) reentrant=\(isHandlingCancelComposition)"
             )
 
             guard !isHandlingCancelComposition else {
@@ -110,13 +122,13 @@ class BeeInputController: IMKInputController {
                 (self.composedString(nil) as? String)
                 ?? String(describing: self.composedString(nil) ?? "nil")
             beeInputLog(
-                "updateComposition: entry clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) composed=\(composed.prefix(80).debugDescription)"
+                "updateComposition: entry clientID=\(currentClientIdentity()) markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) composed=\(composed.prefix(80).debugDescription)"
             )
         }
         super.updateComposition()
         MainActor.assumeIsolated {
             beeInputLog(
-                "updateComposition: exit clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription())"
+                "updateComposition: exit clientID=\(currentClientIdentity()) markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription())"
             )
         }
     }
@@ -174,7 +186,7 @@ class BeeInputController: IMKInputController {
             } ?? ""
         MainActor.assumeIsolated {
             beeInputLog(
-                "composedString: returning text=\(text.prefix(80).debugDescription) clientID=\(self.currentClientIdentity() ?? "nil") markedRange=\(self.currentMarkedRangeDescription()) selectedRange=\(self.currentSelectedRangeDescription())"
+                "composedString: returning text=\(text.prefix(80).debugDescription) clientID=\(self.currentClientIdentity()) markedRange=\(self.currentMarkedRangeDescription()) selectedRange=\(self.currentSelectedRangeDescription())"
             )
         }
         return text as NSString
@@ -186,7 +198,7 @@ class BeeInputController: IMKInputController {
         let attr = NSAttributedString(string: "")
         MainActor.assumeIsolated {
             beeInputLog(
-                "originalString: returning empty attributed string clientID=\(self.currentClientIdentity() ?? "nil") markedRange=\(self.currentMarkedRangeDescription()) selectedRange=\(self.currentSelectedRangeDescription())"
+                "originalString: returning empty attributed string clientID=\(self.currentClientIdentity()) markedRange=\(self.currentMarkedRangeDescription()) selectedRange=\(self.currentSelectedRangeDescription())"
             )
         }
         return attr
@@ -210,18 +222,23 @@ class BeeInputController: IMKInputController {
 
             switch Int(keyCode) {
             case kVK_Return, kVK_ANSI_KeypadEnter:
-                BeeVoxIMEClient.shared.imeKeyEvent(eventType: "submit", keyCode: UInt32(keyCode), characters: "")
+                BeeVoxIMEClient.shared.imeKeyEvent(
+                    eventType: "submit", keyCode: UInt32(keyCode), characters: "")
                 beeInputLog("handle(keyDown): submit")
                 return true
 
             case kVK_Escape:
-                BeeVoxIMEClient.shared.imeKeyEvent(eventType: "cancel", keyCode: UInt32(keyCode), characters: "")
+                BeeVoxIMEClient.shared.imeKeyEvent(
+                    eventType: "cancel", keyCode: UInt32(keyCode), characters: "")
                 beeInputLog("handle(keyDown): cancel")
                 return true
 
             default:
-                BeeVoxIMEClient.shared.imeKeyEvent(eventType: "typed", keyCode: UInt32(keyCode), characters: characters ?? "")
-                beeInputLog("handle(keyDown): typed keyCode=\(keyCode) chars=\((characters ?? "").debugDescription)")
+                BeeVoxIMEClient.shared.imeKeyEvent(
+                    eventType: "typed", keyCode: UInt32(keyCode), characters: characters ?? "")
+                beeInputLog(
+                    "handle(keyDown): typed keyCode=\(keyCode) chars=\((characters ?? "").debugDescription)"
+                )
                 return false
             }
         }
@@ -231,7 +248,7 @@ class BeeInputController: IMKInputController {
     private func discardMarkedTextFromCapturedContext(reason: String) {
         guard let inputContext = activeInputContext ?? NSTextInputContext.current else {
             beeInputLog(
-                "discardMarkedText[\(reason)]: no captured/current input context clientID=\(currentClientIdentity() ?? "nil") client=\(describeClient())"
+                "discardMarkedText[\(reason)]: no captured/current input context clientID=\(currentClientIdentity()) client=\(describeClient())"
             )
             return
         }
@@ -239,7 +256,7 @@ class BeeInputController: IMKInputController {
         let contextClientDescription = String(describing: type(of: inputContext.client))
 
         beeInputLog(
-            "discardMarkedText[\(reason)]: via NSTextInputContext clientID=\(currentClientIdentity() ?? "nil") markedRange(before)=\(currentMarkedRangeDescription()) selectedRange(before)=\(currentSelectedRangeDescription()) contextClient=\(contextClientDescription)"
+            "discardMarkedText[\(reason)]: via NSTextInputContext clientID=\(currentClientIdentity()) markedRange(before)=\(currentMarkedRangeDescription()) selectedRange(before)=\(currentSelectedRangeDescription()) contextClient=\(contextClientDescription)"
         )
         inputContext.discardMarkedText()
         beeInputLog(
@@ -368,11 +385,8 @@ class BeeInputController: IMKInputController {
 
     // MARK: - Utilities
 
-    private func currentClientIdentity() -> String? {
-        guard let client = self.client() as? NSObject else { return nil }
-        let selector = NSSelectorFromString("uniqueClientIdentifierString")
-        guard client.responds(to: selector) else { return nil }
-        return client.perform(selector)?.takeUnretainedValue() as? String
+    private func currentClientIdentity() -> String {
+        describeClient(self.client())
     }
 
     private func currentMarkedRangeDescription() -> String {
@@ -388,5 +402,30 @@ class BeeInputController: IMKInputController {
     private func describeClient() -> String {
         guard let client = self.client() else { return "nil" }
         return String(describing: type(of: client))
+    }
+
+    nonisolated private func describeClient(_ obj: Any!) -> String {
+        guard let client = obj as? (any IMKTextInput & NSObjectProtocol) else {
+            return "nil(\(obj.map { String(describing: type(of: $0)) } ?? "nil"))"
+        }
+        var parts: [String] = []
+        parts.append("id=\(client.uniqueClientIdentifierString() ?? "?")")
+        parts.append("bundle=\(client.bundleIdentifier() ?? "?")")
+        parts.append("type=\(String(describing: type(of: client)))")
+        let marked = client.markedRange()
+        parts.append("markedRange=\(NSStringFromRange(marked))")
+        parts.append("selectedRange=\(NSStringFromRange(client.selectedRange()))")
+        if marked.location != NSNotFound && marked.length > 0 {
+            let markedContent = client.attributedSubstring(from: marked)?.string ?? "?"
+            parts.append("markedText=\(markedContent.prefix(80).debugDescription)")
+        }
+        parts.append("length=\(client.length())")
+        parts.append("windowLevel=\(client.windowLevel())")
+        parts.append("supportsUnicode=\(client.supportsUnicode())")
+        parts.append("isProxy=\(client.isProxy())")
+        if let validAttrs = client.validAttributesForMarkedText() {
+            parts.append("validMarkedAttrs=\(validAttrs)")
+        }
+        return parts.joined(separator: " ")
     }
 }

@@ -15,5 +15,6 @@
 	"workspace": "/Users/amos/.codex/worktrees/7f93/bee/swift/bee.xcodeproj/project.xcworkspace",
 	"build_root": "/Users/amos/Library/Developer/Xcode/DerivedData/bee-axynameabqdzmedvbimdmrmfhsrs",
 	"scheme": "bee",
-	"kind": "xcode"
+	"kind": "manual",
+	"indexStorePath": "/Users/amos/Library/Developer/Xcode/DerivedData/bee-axynameabqdzmedvbimdmrmfhsrs/Index.noindex/DataStore"
 }
