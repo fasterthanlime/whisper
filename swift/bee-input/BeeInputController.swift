@@ -17,21 +17,27 @@ class BeeInputController: IMKInputController {
 
     nonisolated override func activateServer(_ sender: Any!) {
         let senderId = describeClient(sender)
-        let selfClientId = describeClient(self.client())
 
-        // Unconditionally clear via sender before MainActor work.
-        // sender is the proxy for this activation — use it directly.
-        if let senderClient = sender as? (any IMKTextInput & NSObjectProtocol) {
-            let beforeDesc = describeClient(sender)
-            let empty = NSAttributedString(string: "", attributes: [.markedClauseSegment: 0])
-            senderClient.setMarkedText(
-                empty,
-                selectionRange: NSRange(location: 0, length: 0),
-                replacementRange: NSRange(location: NSNotFound, length: 0)
-            )
-            let afterDesc = describeClient(sender)
-            MainActor.assumeIsolated {
-                beeInputLog("activateServer: clear via sender before=\(beforeDesc) after=\(afterDesc) self.client=\(selfClientId)")
+        // Check if this app needs stale bee marked text cleaned up.
+        // Only clear if we previously recorded this bundle as needing cleanup.
+        if let senderClient = sender as? (any IMKTextInput & NSObjectProtocol),
+           let senderBundle = senderClient.bundleIdentifier()
+        {
+            let shouldClean = MainActor.assumeIsolated {
+                BeeIMEBridgeState.shared.pendingCleanupBundles.remove(senderBundle) != nil
+            }
+            if shouldClean {
+                let beforeDesc = describeClient(sender)
+                let empty = NSAttributedString(string: "", attributes: [.markedClauseSegment: 0])
+                senderClient.setMarkedText(
+                    empty,
+                    selectionRange: NSRange(location: 0, length: 0),
+                    replacementRange: NSRange(location: NSNotFound, length: 0)
+                )
+                let afterDesc = describeClient(sender)
+                MainActor.assumeIsolated {
+                    beeInputLog("activateServer: SCOPED CLEAR for bundle=\(senderBundle) before=\(beforeDesc) after=\(afterDesc)")
+                }
             }
         }
 
@@ -63,6 +69,12 @@ class BeeInputController: IMKInputController {
             beeInputLog(
                 "deactivateServer: hadMarkedText=\(hadMarkedText) senderID=\(senderId) clientID=\(currentClientIdentity())"
             )
+
+            // If we had marked text, record this bundle for cleanup on next activate.
+            if hadMarkedText, let bundleID = session?.bundleID {
+                bridge.pendingCleanupBundles.insert(bundleID)
+                beeInputLog("deactivateServer: queued cleanup for bundle=\(bundleID)")
+            }
 
             bridge.deactivate(self)
 
