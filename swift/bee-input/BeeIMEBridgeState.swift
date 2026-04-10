@@ -113,6 +113,10 @@ final class BeeIMEBridgeState: NSObject {
     /// On next activateServer for a matching bundle, clear the marked text.
     var pendingCleanupBundles: Set<String> = []
 
+    /// The `uniqueClientIdentifierString` of the client where dictation started.
+    /// We only deliver `setMarkedText` to this client to prevent leakage when switching apps.
+    private var dictationOriginClientID: String?
+
     // MARK: - Queries
 
     var isDictating: Bool {
@@ -141,11 +145,14 @@ final class BeeIMEBridgeState: NSObject {
             session.controller = controller
             return false
         }
-        let bundleID = (controller.client() as? (any IMKTextInput & NSObjectProtocol))?.bundleIdentifier()
-        let session = BeeIMESession(controller: controller, pid: pid, clientID: clientID, bundleID: bundleID)
+        let bundleID = (controller.client() as? (any IMKTextInput & NSObjectProtocol))?
+            .bundleIdentifier()
+        let session = BeeIMESession(
+            controller: controller, pid: pid, clientID: clientID, bundleID: bundleID)
         state = .active(session, pendingText: nil)
         beeInputLog(
-            "state → active pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") bundle=\(bundleID ?? "nil")")
+            "state → active pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") bundle=\(bundleID ?? "nil")"
+        )
         return true
     }
 
@@ -159,6 +166,14 @@ final class BeeIMEBridgeState: NSObject {
 
     func flushPending() {
         guard case .active(let session, let text?) = state else { return }
+        // Only deliver to the original client to prevent text leakage
+        // into apps we switched into during dictation.
+        guard session.clientID == dictationOriginClientID else {
+            beeInputLog(
+                "flushPending: client mismatch, dropping (origin=\(dictationOriginClientID ?? "nil") current=\(session.clientID ?? "nil"))"
+            )
+            return
+        }
         beeInputLog(
             "flushPending: delivering len=\(text.utf16.count) text=\(text.prefix(60).debugDescription)"
         )
@@ -171,6 +186,21 @@ final class BeeIMEBridgeState: NSObject {
             beeInputLog("setMarkedText: not active, dropping")
             return
         }
+
+        // Capture origin on first setMarkedText of a dictation session
+        if dictationOriginClientID == nil {
+            dictationOriginClientID = session.clientID
+            beeInputLog("setMarkedText: captured origin clientID=\(session.clientID ?? "nil")")
+        }
+
+        // Only deliver to the original client
+        if session.clientID != dictationOriginClientID {
+            beeInputLog(
+                "setMarkedText: client mismatch, dropping (origin=\(dictationOriginClientID ?? "nil") current=\(session.clientID ?? "nil"))"
+            )
+            return
+        }
+
         if session.controller != nil {
             session.handleSetMarkedText(text)
         } else {
@@ -184,24 +214,49 @@ final class BeeIMEBridgeState: NSObject {
     func commitText(_ text: String, submit: Bool = false) {
         guard case .active(let session, _) = state else {
             beeInputLog("commitText: not active, dropping")
+            dictationOriginClientID = nil
+            return
+        }
+        // Only commit text to the original client to prevent
+        // injecting text into apps we switched into during dictation.
+        guard session.clientID == dictationOriginClientID else {
+            beeInputLog(
+                "commitText: client mismatch, dropping (origin=\(dictationOriginClientID ?? "nil") current=\(session.clientID ?? "nil"))"
+            )
+            dictationOriginClientID = nil
             return
         }
         session.handleCommitText(text, submit: submit)
+        dictationOriginClientID = nil
     }
 
     func cancelInput() {
         guard case .active(let session, _) = state else {
             beeInputLog("cancelInput: not active, dropping")
+            dictationOriginClientID = nil
             return
         }
-        session.currentMarkedText = ""
-        session.handleSetMarkedText("")
-        beeInputLog("cancelInput: done")
+        // Only clear marked text in the original client to avoid
+        // touching unrelated composition in apps we switched into.
+        if session.clientID == dictationOriginClientID {
+            session.currentMarkedText = ""
+            session.handleSetMarkedText("")
+        }
+        dictationOriginClientID = nil
+        beeInputLog("cancelInput: done, cleared origin")
     }
 
     func replaceText(oldText: String, newText: String) {
         guard let session = currentSession else {
             beeInputLog("replaceText: no active session, dropping")
+            return
+        }
+        // Only deliver to the original client to prevent text replacement
+        // in apps we switched into during dictation.
+        guard session.clientID == dictationOriginClientID else {
+            beeInputLog(
+                "replaceText: client mismatch, dropping (origin=\(dictationOriginClientID ?? "nil") current=\(session.clientID ?? "nil"))"
+            )
             return
         }
         session.handleReplaceText(oldText: oldText, newText: newText)
