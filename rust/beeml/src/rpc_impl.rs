@@ -15,7 +15,7 @@ use beeml::rpc::{
     SaveCorpusRecordingRequest, SaveCorpusRecordingResult, SynthesizePhonemesRequest,
     SynthesizePhonemesResult, TeachRetrievalPrototypeJudgeRequest, TermAliasView,
     TermInspectionRequest, TermInspectionResult, ThresholdRow, TimingBreakdown,
-    TranscribeWavResult, TwoStageGridPoint, TwoStageResult,
+    TranscribeWavResult, TranscribeWavWithOptionsRequest, TwoStageGridPoint, TwoStageResult,
 };
 use tracing::info;
 use vox::{Rx, Tx};
@@ -26,11 +26,20 @@ use crate::util::*;
 
 impl BeeMl for BeeMlService {
     async fn transcribe_wav(&self, wav_bytes: Vec<u8>) -> Result<TranscribeWavResult, String> {
-        let samples = bee_transcribe::decode_wav(&wav_bytes).map_err(|e| e.to_string())?;
-        let (result, snapshots) = self.transcribe_samples_with_options_and_history(
-            &samples,
-            bee_transcribe::SessionOptions::default(),
-        )?;
+        self.transcribe_wav_with_options(TranscribeWavWithOptionsRequest {
+            wav_bytes,
+            options: bee_transcribe::SessionOptions::default(),
+        })
+        .await
+    }
+
+    async fn transcribe_wav_with_options(
+        &self,
+        request: TranscribeWavWithOptionsRequest,
+    ) -> Result<TranscribeWavResult, String> {
+        let samples = bee_transcribe::decode_wav(&request.wav_bytes).map_err(|e| e.to_string())?;
+        let (result, snapshots) =
+            self.transcribe_samples_with_options_and_history(&samples, request.options)?;
         let audio = AudioBuffer {
             samples: result.session_audio.samples().to_vec(),
             sample_rate_hz: result.session_audio.sample_rate().0 as u32,

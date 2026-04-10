@@ -20,7 +20,8 @@ use crate::decode_session::DecodeSession;
 use crate::text_buffer::{self, TextBuffer, TokenCount, TokenEntry, TokenId};
 use crate::timing::{log_phase, log_phase_chunk, phase_start};
 use crate::types::{
-    PendingToken, SessionAmbiguitySummary, SessionOptions, SessionSnapshot, TokenAlternative,
+    PendingToken, RotationCutStrategy, SessionAmbiguitySummary, SessionOptions, SessionSnapshot,
+    TokenAlternative,
 };
 use crate::{FinishResult, SharedCorrectionEngine};
 
@@ -290,10 +291,24 @@ impl<'a> Session<'a> {
     }
 
     fn effective_commit_threshold(&self) -> usize {
+        if let RotationCutStrategy::TargetCommittedTextTokens(target) =
+            self.options.rotation_cut_strategy
+        {
+            return target.max(1) as usize;
+        }
         compute_effective_commit_threshold(
             self.has_committed_context(),
             self.options.commit_token_count,
         )
+    }
+
+    fn requested_commit_tokens(&self) -> TokenCount {
+        match self.options.rotation_cut_strategy {
+            RotationCutStrategy::Automatic => TokenCount(self.options.commit_token_count),
+            RotationCutStrategy::TargetCommittedTextTokens(target) => {
+                TokenCount(target.max(1) as usize)
+            }
+        }
     }
 
     fn has_committed_context(&self) -> bool {
@@ -359,16 +374,17 @@ impl<'a> Session<'a> {
         );
 
         if fixed >= commit_threshold {
+            let requested_commit_tokens = self.requested_commit_tokens();
             tracing::info!(
-                commit_n = self.options.commit_token_count,
+                commit_n = requested_commit_tokens.0,
                 text_tokens = text_count,
                 threshold = commit_threshold,
+                rotation_cut_strategy = ?self.options.rotation_cut_strategy,
                 "rotating: committing tokens and starting fresh decode"
             );
-            let commit_n = self.decode.committable_text_tokens(
-                self.tokenizer,
-                TokenCount(self.options.commit_token_count),
-            );
+            let commit_n = self
+                .decode
+                .committable_text_tokens(self.tokenizer, requested_commit_tokens);
             if commit_n.0 > 0 {
                 let refresh_start = phase_start();
                 self.decode.refresh_text_confidence(
@@ -388,7 +404,8 @@ impl<'a> Session<'a> {
             }
             let commit_start = phase_start();
             if let Some(aligned) = self.decode.commit(
-                TokenCount(self.options.commit_token_count),
+                requested_commit_tokens,
+                &self.options.rotation_cut_strategy,
                 self.forced_aligner,
                 self.zipa,
                 self.tokenizer,

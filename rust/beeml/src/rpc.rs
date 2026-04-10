@@ -1,13 +1,19 @@
 use facet::Facet;
 use vox::{Rx, Tx};
 
-use bee_transcribe::{AlignedWord, SessionAmbiguitySummary, SessionSnapshot};
+use bee_transcribe::{AlignedWord, SessionAmbiguitySummary, SessionOptions, SessionSnapshot};
 
 #[derive(Clone, Debug, Facet)]
 pub struct TranscribeWavResult {
     pub transcript: String,
     pub words: Vec<AlignedWord>,
     pub phonetic_trace: Option<TranscribePhoneticTrace>,
+}
+
+#[derive(Clone, Debug, Facet)]
+pub struct TranscribeWavWithOptionsRequest {
+    pub wav_bytes: Vec<u8>,
+    pub options: SessionOptions,
 }
 
 #[derive(Clone, Debug, Facet)]
@@ -939,6 +945,10 @@ pub struct CorpusAlignmentEvalJob {
 #[vox::service]
 pub trait BeeMl {
     async fn transcribe_wav(&self, wav_bytes: Vec<u8>) -> Result<TranscribeWavResult, String>;
+    async fn transcribe_wav_with_options(
+        &self,
+        request: TranscribeWavWithOptionsRequest,
+    ) -> Result<TranscribeWavResult, String>;
 
     /// Stream audio chunks (16kHz mono f32) and receive incremental transcription updates.
     async fn stream_transcribe(

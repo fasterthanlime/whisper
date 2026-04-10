@@ -29,6 +29,23 @@ impl Language {
     }
 }
 
+/// Strategy for choosing rotation cut points inside a decode session.
+#[repr(u8)]
+#[derive(Debug, Clone, Facet)]
+pub enum RotationCutStrategy {
+    /// Existing behavior: choose a compatible checkpoint automatically.
+    Automatic,
+    /// External behavior: commit at the latest compatible checkpoint whose
+    /// text-token length is at most this target.
+    TargetCommittedTextTokens(u32),
+}
+
+impl Default for RotationCutStrategy {
+    fn default() -> Self {
+        Self::Automatic
+    }
+}
+
 /// Configuration for a transcription session.
 #[derive(Debug, Clone, Facet)]
 pub struct SessionOptions {
@@ -62,6 +79,9 @@ pub struct SessionOptions {
 
     /// App bundle ID for correction context features.
     pub app_id: Option<String>,
+
+    /// How rotation cut points are selected.
+    pub rotation_cut_strategy: RotationCutStrategy,
 }
 
 impl Default for SessionOptions {
@@ -75,6 +95,7 @@ impl Default for SessionOptions {
             max_tokens_final: 512,
             language: Language::default(),
             app_id: None,
+            rotation_cut_strategy: RotationCutStrategy::Automatic,
         }
     }
 }

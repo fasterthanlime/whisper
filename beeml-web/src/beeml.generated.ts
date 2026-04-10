@@ -185,6 +185,31 @@ export interface TranscribeWavResult {
   phonetic_trace: TranscribePhoneticTrace | null;
 }
 
+export interface Language {
+  0: string;
+}
+
+export type RotationCutStrategy =
+  | { tag: 'Automatic' }
+  | { tag: 'TargetCommittedTextTokens'; value: number };
+
+export interface SessionOptions {
+  chunk_duration: number;
+  vad_threshold: number;
+  rollback_tokens: bigint;
+  commit_token_count: bigint;
+  max_tokens_streaming: bigint;
+  max_tokens_final: bigint;
+  language: Language;
+  app_id: string | null;
+  rotation_cut_strategy: RotationCutStrategy;
+}
+
+export interface TranscribeWavWithOptionsRequest {
+  wav_bytes: Uint8Array;
+  options: SessionOptions;
+}
+
 export interface TokenAlternative {
   token_id: number;
   text: string;
@@ -868,6 +893,8 @@ export interface CorpusAlignmentEvalJob {
 export type TranscribeWavRequest = [Uint8Array];
 export type TranscribeWavResponse = { ok: true; value: TranscribeWavResult } | { ok: false; error: string };
 
+export type TranscribeWavWithOptionsResponse = { ok: true; value: TranscribeWavResult } | { ok: false; error: string };
+
 export type StreamTranscribeRequest = [
   Rx<number[]>, // audio_in
   Tx<SessionSnapshot>, // updates_out
@@ -926,6 +953,7 @@ export type GetCorpusAlignmentEvalJobResponse = { ok: true; value: CorpusAlignme
 // Caller interface for BeeMl
 export interface BeeMlCaller {
   transcribeWav(wavBytes: Uint8Array): Promise<{ ok: true; value: TranscribeWavResult } | { ok: false; error: string }>;
+  transcribeWavWithOptions(request: TranscribeWavWithOptionsRequest): Promise<{ ok: true; value: TranscribeWavResult } | { ok: false; error: string }>;
   /** Stream audio chunks (16kHz mono f32) and receive incremental transcription updates. */
   streamTranscribe(audioIn: Rx<number[]>, updatesOut: Tx<SessionSnapshot>): Promise<{ ok: true; value: void } | { ok: false; error: string }>;
   correctTranscript(request: CorrectionRequest): Promise<{ ok: true; value: CorrectionResult } | { ok: false; error: string }>;
@@ -962,6 +990,25 @@ export class BeeMlClient implements BeeMlCaller {
         const value = await this.caller.call({
           method: "BeeMl.transcribeWav",
           args: { wavBytes },
+          descriptor,
+          sendSchemas,
+        });
+        return { ok: true, value } as { ok: true; value: TranscribeWavResult } | { ok: false; error: string };
+      } catch (e: any) {
+        if (e instanceof RpcError && e.isUserError()) {
+          return { ok: false, error: e.userError } as { ok: true; value: TranscribeWavResult } | { ok: false; error: string };
+        }
+        throw e;
+      }
+  }
+
+  async transcribeWavWithOptions(request: TranscribeWavWithOptionsRequest): Promise<{ ok: true; value: TranscribeWavResult } | { ok: false; error: string }> {
+    const descriptor = beeMl_transcribeWavWithOptions_method;
+    const sendSchemas = beeMl_descriptor.send_schemas;
+      try {
+        const value = await this.caller.call({
+          method: "BeeMl.transcribeWavWithOptions",
+          args: { request },
           descriptor,
           sendSchemas,
         });
@@ -1367,6 +1414,7 @@ export async function connectBeeMl(
 // Handler interface for BeeMl
 export interface BeeMlHandler {
   transcribeWav(wavBytes: Uint8Array): Promise<{ ok: true; value: TranscribeWavResult } | { ok: false; error: string }> | { ok: true; value: TranscribeWavResult } | { ok: false; error: string };
+  transcribeWavWithOptions(request: TranscribeWavWithOptionsRequest): Promise<{ ok: true; value: TranscribeWavResult } | { ok: false; error: string }> | { ok: true; value: TranscribeWavResult } | { ok: false; error: string };
   streamTranscribe(audioIn: Rx<number[]>, updatesOut: Tx<SessionSnapshot>): Promise<{ ok: true; value: void } | { ok: false; error: string }> | { ok: true; value: void } | { ok: false; error: string };
   correctTranscript(request: CorrectionRequest): Promise<{ ok: true; value: CorrectionResult } | { ok: false; error: string }> | { ok: true; value: CorrectionResult } | { ok: false; error: string };
   debugCorrection(request: CorrectionRequest): Promise<{ ok: true; value: CorrectionDebugResult } | { ok: false; error: string }> | { ok: true; value: CorrectionDebugResult } | { ok: false; error: string };
@@ -1403,6 +1451,13 @@ export class BeeMlDispatcher implements Dispatcher {
     if (method.id === 0x5769301e350ea60bn) {
       try {
         const result = await this.handler.transcribeWav(args[0] as Uint8Array);
+        if (result.ok) call.reply(result.value); else call.replyErr(result.error);
+      } catch (error) {
+        call.replyInternalError(error instanceof Error ? error.message : String(error));
+      }
+    } else if (method.id === 0x7d68f5c6eee78c18n) {
+      try {
+        const result = await this.handler.transcribeWavWithOptions(args[0] as TranscribeWavWithOptionsRequest);
         if (result.ok) call.reply(result.value); else call.replyErr(result.error);
       } catch (error) {
         call.replyInternalError(error instanceof Error ? error.message : String(error));
@@ -1573,6 +1628,10 @@ export const beeMl_send_schemas: import("@bearcove/vox-core").ServiceSendSchemas
     [0xc5a5653d0d3b6472n, { id: 0xc5a5653d0d3b6472n, type_params: [], kind: { tag: 'struct', name: 'TranscribePhoneticSpan', fields: [{ name: 'span_text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'token_start', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'token_end', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'start_sec', type_ref: { tag: 'concrete', type_id: 0x3f2e589db81e95bfn, args: [] }, required: true }, { name: 'end_sec', type_ref: { tag: 'concrete', type_id: 0x3f2e589db81e95bfn, args: [] }, required: true }, { name: 'zipa_norm_start', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'zipa_norm_end', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'zipa_raw', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'zipa_normalized', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'transcript_normalized', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'transcript_phone_count', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'chosen_zipa_phone_count', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'transcript_similarity', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'transcript_feature_similarity', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'projected_alignment_score', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'chosen_alignment_score', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'second_best_alignment_score', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'alignment_score_gap', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'alignment_source', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'anchor_confidence', type_ref: { tag: 'concrete', type_id: 0xb1be2fd216bf9a6cn, args: [] }, required: true }, { name: 'span_usefulness', type_ref: { tag: 'concrete', type_id: 0x27c28ada137e7ea7n, args: [] }, required: true }, { name: 'span_class', type_ref: { tag: 'concrete', type_id: 0x8cce1c30d22a3da5n, args: [] }, required: true }, { name: 'zipa_rescue_eligible', type_ref: { tag: 'concrete', type_id: 0x178367a87f66fb46n, args: [] }, required: true }, { name: 'alignment', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x628e3090bbf58b77n, args: [] }] }, required: true }, { name: 'candidates', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x5c0a1469d9ee41e1n, args: [] }] }, required: true }] } }],
     [0xf2a49a6e5fbba180n, { id: 0xf2a49a6e5fbba180n, type_params: [], kind: { tag: 'struct', name: 'TranscribePhoneticTrace', fields: [{ name: 'snapshot_revision', type_ref: { tag: 'concrete', type_id: 0xd9356298b81639acn, args: [] }, required: true }, { name: 'aligned_transcript', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'pending_text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'full_transcript', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'session_audio_f32', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'session_audio_sample_rate_hz', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'tail_ambiguity', type_ref: { tag: 'concrete', type_id: 0x1ab1256ee5bb2ecen, args: [] }, required: true }, { name: 'worst_raw_span_index', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }] }, required: true }, { name: 'worst_contentful_span_index', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }] }, required: true }, { name: 'best_rescue_span_index', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }] }, required: true }, { name: 'utterance_zipa_raw', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'utterance_zipa_phone_spans', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x23fcc4d252bc76fbn, args: [] }] }, required: true }, { name: 'utterance_zipa_normalized', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'utterance_transcript_normalized', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'utterance_similarity', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'utterance_feature_similarity', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }, required: true }, { name: 'utterance_alignment', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x628e3090bbf58b77n, args: [] }] }, required: true }, { name: 'asr_alternatives', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x02c0774b24ecc733n, args: [] }] }, required: true }, { name: 'word_alignments', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x7e5852e1316d5310n, args: [] }] }, required: true }, { name: 'spans', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0xc5a5653d0d3b6472n, args: [] }] }, required: true }] } }],
     [0xaf7f2538613d8b71n, { id: 0xaf7f2538613d8b71n, type_params: [], kind: { tag: 'struct', name: 'TranscribeWavResult', fields: [{ name: 'transcript', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'words', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0xb3b757451de582d3n, args: [] }] }, required: true }, { name: 'phonetic_trace', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0xf2a49a6e5fbba180n, args: [] }] }, required: true }] } }],
+    [0x8f4461eb06ae1d0an, { id: 0x8f4461eb06ae1d0an, type_params: [], kind: { tag: 'tuple', elements: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] } }],
+    [0x8d898afa7d741b03n, { id: 0x8d898afa7d741b03n, type_params: [], kind: { tag: 'enum', name: 'RotationCutStrategy', variants: [{ name: 'Automatic', index: 0, payload: { tag: 'unit' } }, { name: 'TargetCommittedTextTokens', index: 1, payload: { tag: 'newtype', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] } } }] } }],
+    [0x90791bc3cc2bb9b3n, { id: 0x90791bc3cc2bb9b3n, type_params: [], kind: { tag: 'struct', name: 'SessionOptions', fields: [{ name: 'chunk_duration', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }, { name: 'vad_threshold', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }, { name: 'rollback_tokens', type_ref: { tag: 'concrete', type_id: 0xd9356298b81639acn, args: [] }, required: true }, { name: 'commit_token_count', type_ref: { tag: 'concrete', type_id: 0xd9356298b81639acn, args: [] }, required: true }, { name: 'max_tokens_streaming', type_ref: { tag: 'concrete', type_id: 0xd9356298b81639acn, args: [] }, required: true }, { name: 'max_tokens_final', type_ref: { tag: 'concrete', type_id: 0xd9356298b81639acn, args: [] }, required: true }, { name: 'language', type_ref: { tag: 'concrete', type_id: 0x8f4461eb06ae1d0an, args: [] }, required: true }, { name: 'app_id', type_ref: { tag: 'concrete', type_id: 0xdcafd4de6b7969bbn, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }, required: true }, { name: 'rotation_cut_strategy', type_ref: { tag: 'concrete', type_id: 0x8d898afa7d741b03n, args: [] }, required: true }] } }],
+    [0xd4d0192498cc5000n, { id: 0xd4d0192498cc5000n, type_params: [], kind: { tag: 'struct', name: 'TranscribeWavWithOptionsRequest', fields: [{ name: 'wav_bytes', type_ref: { tag: 'concrete', type_id: 0xba8125876d6388b4n, args: [] }, required: true }, { name: 'options', type_ref: { tag: 'concrete', type_id: 0x90791bc3cc2bb9b3n, args: [] }, required: true }] } }],
     [0x967a48ac345e2f5en, { id: 0x967a48ac345e2f5en, type_params: ['T'], kind: { tag: 'channel', direction: 'rx', element: { tag: 'var', name: 'T' } } }],
     [0x590dbab706191533n, { id: 0x590dbab706191533n, type_params: [], kind: { tag: 'struct', name: 'TokenAlternative', fields: [{ name: 'token_id', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'logit', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }] } }],
     [0x0474bae4b8eee308n, { id: 0x0474bae4b8eee308n, type_params: [], kind: { tag: 'struct', name: 'PendingToken', fields: [{ name: 'token_id', type_ref: { tag: 'concrete', type_id: 0x281c5be4f2ee63b4n, args: [] }, required: true }, { name: 'text', type_ref: { tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }, required: true }, { name: 'concentration', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }, { name: 'margin', type_ref: { tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }, required: true }, { name: 'alternatives', type_ref: { tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x590dbab706191533n, args: [] }] }, required: true }] } }],
@@ -1655,6 +1714,7 @@ export const beeMl_send_schemas: import("@bearcove/vox-core").ServiceSendSchemas
   ]),
   methods: new Map<bigint, import("@bearcove/vox-core").MethodSendSchemas>([
     [0x5769301e350ea60bn, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xba8125876d6388b4n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xaf7f2538613d8b71n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
+    [0x7d68f5c6eee78c18n, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0xd4d0192498cc5000n, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xaf7f2538613d8b71n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
     [0xfe3e747dc31b0b64n, { argsRootRef: { tag: 'concrete', type_id: 0xba0496aa8cee7a4cn, args: [{ tag: 'concrete', type_id: 0x967a48ac345e2f5en, args: [{ tag: 'concrete', type_id: 0x0a96b404b4d79d67n, args: [{ tag: 'concrete', type_id: 0x8e02f623d1b2310cn, args: [] }] }] }, { tag: 'concrete', type_id: 0xc886545a493d06ebn, args: [{ tag: 'concrete', type_id: 0x64fcc0c1da5b4b5fn, args: [] }] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xbc5c33249a2dc720n, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
     [0x8f72a9b158960cb7n, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0x35dac1c69c84bb2dn, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xde239f251f44c0aan, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
     [0x4b0c0068b927eaa5n, { argsRootRef: { tag: 'concrete', type_id: 0x6847ab90feda71c1n, args: [{ tag: 'concrete', type_id: 0x35dac1c69c84bb2dn, args: [] }] }, responseRootRef: { tag: 'concrete', type_id: 0x42046de663beeef0n, args: [{ tag: 'concrete', type_id: 0xda3d655bd111c0aan, args: [] }, { tag: 'concrete', type_id: 0x4cf4b2aeb98a1939n, args: [{ tag: 'concrete', type_id: 0x6d7dce914ee150e8n, args: [] }] }] } }],
@@ -1679,6 +1739,12 @@ export const beeMl_send_schemas: import("@bearcove/vox-core").ServiceSendSchemas
 export const beeMl_transcribeWav_method: MethodDescriptor = {
   name: 'transcribeWav',
   id: 0x5769301e350ea60bn,
+  retry: { persist: false, idem: false },
+};
+
+export const beeMl_transcribeWavWithOptions_method: MethodDescriptor = {
+  name: 'transcribeWavWithOptions',
+  id: 0x7d68f5c6eee78c18n,
   retry: { persist: false, idem: false },
 };
 
@@ -1796,6 +1862,7 @@ export const beeMl_descriptor: ServiceDescriptor = {
   send_schemas: beeMl_send_schemas,
   methods: new Map<bigint, MethodDescriptor>([
     [beeMl_transcribeWav_method.id, beeMl_transcribeWav_method],
+    [beeMl_transcribeWavWithOptions_method.id, beeMl_transcribeWavWithOptions_method],
     [beeMl_streamTranscribe_method.id, beeMl_streamTranscribe_method],
     [beeMl_correctTranscript_method.id, beeMl_correctTranscript_method],
     [beeMl_debugCorrection_method.id, beeMl_debugCorrection_method],

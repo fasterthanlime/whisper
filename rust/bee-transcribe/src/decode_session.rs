@@ -25,6 +25,7 @@ use crate::text_buffer::{
     self, AlignmentItem, AsrToken, TextBuffer, TokenCount, TokenEntry, TokenId, WordStart,
 };
 use crate::timing::{log_phase, log_phase_chunk, phase_start};
+use crate::types::RotationCutStrategy;
 
 /// A decode sub-session. Replaced wholesale on rotation.
 pub struct DecodeSession {
@@ -399,6 +400,7 @@ impl DecodeSession {
     pub fn commit(
         &mut self,
         n: TokenCount,
+        rotation_cut_strategy: &RotationCutStrategy,
         forced_aligner: &ForcedAligner,
         zipa: &ZipaInference,
         tokenizer: &Tokenizer,
@@ -407,11 +409,14 @@ impl DecodeSession {
         let chunk_index = self.chunk_count;
         // Build entries from text tokens, snap to word boundary
         let boundary_start = phase_start();
-        let Some(selected_checkpoint) = self.select_rotation_checkpoint(tokenizer) else {
+        let Some(selected_checkpoint) =
+            self.select_rotation_checkpoint(tokenizer, n, rotation_cut_strategy)
+        else {
             tracing::warn!(
                 requested_tokens = n.0,
                 total_text_tokens = self.text_tokens().len(),
                 checkpoints = self.checkpoints.len(),
+                rotation_cut_strategy = ?rotation_cut_strategy,
                 "commit: no compatible token checkpoint for rotation cutoff"
             );
             return Ok(None);
@@ -709,7 +714,12 @@ impl DecodeSession {
             .unwrap_or(0);
     }
 
-    fn select_rotation_checkpoint(&self, tokenizer: &Tokenizer) -> Option<SelectedCheckpoint> {
+    fn select_rotation_checkpoint(
+        &self,
+        tokenizer: &Tokenizer,
+        requested_tokens: TokenCount,
+        rotation_cut_strategy: &RotationCutStrategy,
+    ) -> Option<SelectedCheckpoint> {
         let current: Vec<TokenId> = self.text_tokens().iter().map(|token| token.id).collect();
         if current.is_empty() {
             return None;
@@ -783,6 +793,8 @@ impl DecodeSession {
         tracing::info!(
             rollback_tokens = self.rollback_tokens.0,
             current_tokens = current.len(),
+            requested_tokens = requested_tokens.0,
+            rotation_cut_strategy = ?rotation_cut_strategy,
             current_text = %current_text,
             min_tail_audio_secs = MIN_ROTATION_TAIL_AUDIO.0,
             checkpoint_candidates = %candidates
@@ -811,22 +823,41 @@ impl DecodeSession {
             .map(|(index, _, _, _, _, _, _, _, _, _)| *index)
             .collect::<Vec<_>>();
 
-        let selected_index = match compatible_indices.as_slice() {
-            [] => panic!(
-                "no compatible checkpoint with enough tail audio: current_text={current_text}; checkpoints={}; min_tail_samples={min_tail_samples}",
-                self.checkpoints.len(),
-            ),
-            [only] if *only == self.checkpoints.len().saturating_sub(1) => panic!(
-                "only latest checkpoint is compatible: current_text={current_text}; latest_index={only}"
-            ),
-            [only] => *only,
-            many => {
-                let earlier = many[..many.len() - 1].last().copied();
-                earlier.unwrap_or_else(|| {
-                    panic!(
-                        "compatible checkpoints only contained latest/current: current_text={current_text}; compatible={many:?}"
-                    )
-                })
+        let selected_index = match rotation_cut_strategy {
+            RotationCutStrategy::Automatic => match compatible_indices.as_slice() {
+                [] => panic!(
+                    "no compatible checkpoint with enough tail audio: current_text={current_text}; checkpoints={}; min_tail_samples={min_tail_samples}",
+                    self.checkpoints.len(),
+                ),
+                [only] if *only == self.checkpoints.len().saturating_sub(1) => panic!(
+                    "only latest checkpoint is compatible: current_text={current_text}; latest_index={only}"
+                ),
+                [only] => *only,
+                many => {
+                    let earlier = many[..many.len() - 1].last().copied();
+                    earlier.unwrap_or_else(|| {
+                        panic!(
+                            "compatible checkpoints only contained latest/current: current_text={current_text}; compatible={many:?}"
+                        )
+                    })
+                }
+            },
+            RotationCutStrategy::TargetCommittedTextTokens(target) => {
+                let target = *target as usize;
+                let capped = compatible_indices
+                    .iter()
+                    .copied()
+                    .filter(|&index| self.checkpoints[index].text_token_ids.len() <= target)
+                    .collect::<Vec<_>>();
+                match capped.last().copied() {
+                    Some(index) if index == self.checkpoints.len().saturating_sub(1) => panic!(
+                        "target strategy resolved to latest checkpoint: current_text={current_text}; target={target}; index={index}"
+                    ),
+                    Some(index) => index,
+                    None => panic!(
+                        "no compatible checkpoint at-or-before target: current_text={current_text}; target={target}; compatible={compatible_indices:?}"
+                    ),
+                }
             }
         };
 

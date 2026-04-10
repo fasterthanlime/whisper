@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use bee_transcribe::text_buffer::TokenEntry;
-use bee_transcribe::{EngineConfig, SessionOptions, SessionSnapshot};
+use bee_transcribe::{EngineConfig, RotationCutStrategy, SessionOptions, SessionSnapshot};
 use tokenizers::Tokenizer;
 use tracing_subscriber::EnvFilter;
 
@@ -109,6 +109,10 @@ fn main() -> anyhow::Result<()> {
     }
     if let Ok(v) = std::env::var("BEE_MAX_TOKENS_FINAL") {
         options.max_tokens_final = v.parse().unwrap();
+    }
+    if let Ok(v) = std::env::var("BEE_ROTATION_TARGET_COMMITTED_TOKENS") {
+        let target: u32 = v.parse().unwrap();
+        options.rotation_cut_strategy = RotationCutStrategy::TargetCommittedTextTokens(target);
     }
     let chunk_samples = (options.chunk_duration * 16000.0) as usize;
 
