@@ -507,7 +507,8 @@ actor Session {
         ime = .active
         guard shouldRenderMarkedText else { return }
         let snapshot = textSnapshot.get()
-        inputClient.setMarkedText(Self.addCursor(snapshot))
+        let presentation: MarkedTextPresentation = capture == .draining ? .finalizing : .dictating
+        inputClient.setMarkedText(Self.addCursor(snapshot), presentation: presentation)
     }
 
     func routeDidBecomeInactive(reason: String) {
@@ -646,7 +647,8 @@ actor Session {
         _ text: String, inputClient: BeeInputClient, sessionID: UUID
     ) async {
         guard shouldRenderMarkedText else { return }
-        inputClient.setMarkedText(text)
+        let presentation: MarkedTextPresentation = capture == .draining ? .finalizing : .dictating
+        inputClient.setMarkedText(text, presentation: presentation)
     }
 
     // MARK: - Shortest Edit Script (LCS-based)

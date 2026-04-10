@@ -2,11 +2,18 @@ use bee_types::AlignedWord;
 use facet::Facet;
 use vox::service;
 
+#[derive(Debug, Clone, Facet)]
+#[repr(u8)]
+pub enum MarkedTextPresentation {
+    Dictating,
+    Finalizing,
+}
+
 /// Methods the IME exposes — app calls into IME.
 #[service]
 pub trait Ime {
     /// App sends marked text to the IME for display.
-    async fn set_marked_text(&self, text: String) -> bool;
+    async fn set_marked_text(&self, text: String, presentation: MarkedTextPresentation) -> bool;
 
     /// App tells IME to commit text and end the session.
     async fn commit_text(&self, text: String) -> bool;
