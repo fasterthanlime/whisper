@@ -8,6 +8,9 @@ gen:
 install:
     scripts/install-bee.sh
 
+install-debug:
+    BEE_CONFIGURATION=debug scripts/install-bee.sh
+
 verbose:
     scripts/debug-bee.sh
 
