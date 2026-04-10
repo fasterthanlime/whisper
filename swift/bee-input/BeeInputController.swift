@@ -26,26 +26,26 @@ class BeeInputController: IMKInputController {
                 "activateServer: senderID=\(senderId) frontmostPID=\(frontmostPID.map(String.init) ?? "nil") clientID=\(currClientIdentity)"
             )
 
-            // E-003: log detailed client state on reactivation
+            // On every activateServer: if proxy reports stale marked text
+            // and we're not actively dictating, clear it.
             if let client = self.client() as? (any IMKTextInput & NSObjectProtocol) {
                 let marked = client.markedRange()
-                let selected = client.selectedRange()
-                var details: [String] = []
-                details.append("markedRange=\(NSStringFromRange(marked))")
-                details.append("selectedRange=\(NSStringFromRange(selected))")
-                if marked.location != NSNotFound && marked.length > 0 {
-                    let markedStr = client.attributedSubstring(from: marked)?.string ?? "(nil)"
-                    details.append("markedText=\(markedStr.prefix(120).debugDescription)")
+                if marked.location != NSNotFound && marked.length > 0 && !bridge.isDictating {
+                    let markedText = client.attributedSubstring(from: marked)?.string
+                    beeInputLog(
+                        "activateServer: stale marked text markedRange=\(NSStringFromRange(marked)) text=\(markedText?.prefix(80).debugDescription ?? "nil"), clearing"
+                    )
+                    let empty = NSAttributedString(string: "", attributes: [.markedClauseSegment: 0])
+                    client.setMarkedText(
+                        empty,
+                        selectionRange: NSRange(location: 0, length: 0),
+                        replacementRange: NSRange(location: NSNotFound, length: 0)
+                    )
+                    let markedAfter = client.markedRange()
+                    beeInputLog(
+                        "activateServer: cleanup result markedRange=\(NSStringFromRange(markedAfter))"
+                    )
                 }
-                // Dump the entire document text
-                let fullRange = NSRange(location: 0, length: 100_000)
-                let fullText = client.attributedSubstring(from: fullRange)?.string
-                if let fullText = fullText {
-                    details.append("fullText=\(fullText.debugDescription)")
-                } else {
-                    details.append("fullText=(nil)")
-                }
-                beeInputLog("activateServer-probe: \(details.joined(separator: " "))")
             }
 
             let isNew = bridge.activate(self, pid: frontmostPID, clientID: currClientIdentity)
