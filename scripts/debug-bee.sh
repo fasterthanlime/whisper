@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export RUST_LOG=debug
+if [[ -z "${RUST_LOG:-}" ]]; then
+  export RUST_LOG=debug
+fi
 
 if [[ "${1:-}" == "--lldb" ]]; then
   shift
