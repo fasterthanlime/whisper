@@ -43,6 +43,7 @@ final class Bridge: NSObject {
     private var state: DictationRouteState = .idle
     private weak var controller: BeeInputController?
     private var finalizingSpinnerFrameIndex = 0
+    private var spinnerTask: Task<Void, Never>?
 
     // MARK: - Derived state
 
@@ -96,6 +97,7 @@ final class Bridge: NSObject {
                 "🟡 ACTIVATE sticky restored pid=\(pid.map(String.init) ?? "nil") client=\(normalizedClientID) bundle=\(bundleID) replaying markedText"
             )
             replayMarkedText(markedText, presentation: presentation)
+            startSpinnerIfNeeded()
             return .stickyRouteRestored
 
         case .pendingTerminal(let stickyClientID, let action):
@@ -111,12 +113,14 @@ final class Bridge: NSObject {
                 beeInputLog(
                     "🟢 ACTIVATE sticky restored pid=\(pid.map(String.init) ?? "nil") client=\(normalizedClientID) bundle=\(bundleID) flushing delayed commit"
                 )
+                stopSpinner()
                 deliverCommitText(text)
                 state = .idle
             case .clear:
                 beeInputLog(
                     "🟢 ACTIVATE sticky restored pid=\(pid.map(String.init) ?? "nil") client=\(normalizedClientID) bundle=\(bundleID) flushing delayed clear"
                 )
+                stopSpinner()
                 deliverClearMarkedText()
                 state = .idle
             }
@@ -179,6 +183,7 @@ final class Bridge: NSObject {
                 beeInputLog(
                     "🟡 setMarkedText empty client=\(normalizedCurrentClientID) sticky=\(stickyClientID) pending clear"
                 )
+                stopSpinner()
                 flushPendingTerminalIfPossible()
 
             case .pendingTerminal(let stickyClientID, _):
@@ -186,6 +191,7 @@ final class Bridge: NSObject {
                 beeInputLog(
                     "🟡 setMarkedText empty client=\(normalizedCurrentClientID) sticky=\(stickyClientID) replacing pending action with clear"
                 )
+                stopSpinner()
                 flushPendingTerminalIfPossible()
             }
             return
@@ -212,6 +218,7 @@ final class Bridge: NSObject {
                 "🟢 setMarkedText text=\(text) sticky claimed client=\(normalizedCurrentClientID) presentation=\(presentation)"
             )
             replayMarkedText(text, presentation: presentation)
+            startSpinnerIfNeeded()
 
         case .live(let stickyClientID, _, let previousPresentation):
             if presentation == .finalizing && previousPresentation != .finalizing {
@@ -227,6 +234,7 @@ final class Bridge: NSObject {
                     "🟡 setMarkedText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) presentation=\(presentation)"
                 )
                 replayMarkedText(text, presentation: presentation)
+                startSpinnerIfNeeded()
             } else {
                 state = .live(
                     stickyClientID: stickyClientID,
@@ -236,6 +244,7 @@ final class Bridge: NSObject {
                 beeInputLog(
                     "🟡 setMarkedText text=\(text) sticky=\(stickyClientID) currentClient=\(normalizedCurrentClientID) presentation=\(presentation) route unavailable, storing for replay"
                 )
+                startSpinnerIfNeeded()
             }
 
         case .pendingTerminal(let stickyClientID, _):
@@ -252,6 +261,7 @@ final class Bridge: NSObject {
                     "🟡 setMarkedText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) presentation=\(presentation) resuming live dictation"
                 )
                 replayMarkedText(text, presentation: presentation)
+                startSpinnerIfNeeded()
             } else {
                 state = .live(
                     stickyClientID: stickyClientID,
@@ -261,6 +271,7 @@ final class Bridge: NSObject {
                 beeInputLog(
                     "🟡 setMarkedText text=\(text) sticky=\(stickyClientID) currentClient=\(normalizedCurrentClientID) presentation=\(presentation) revived live dictation, waiting for sticky route"
                 )
+                startSpinnerIfNeeded()
             }
         }
     }
@@ -282,6 +293,7 @@ final class Bridge: NSObject {
                     ? "🟢 commitText empty client=\(normalizedCurrentClientID) sticky=\(stickyClientID) pending clear"
                     : "🟢 commitText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) pending commit"
             )
+            stopSpinner()
             flushPendingTerminalIfPossible()
 
         case .pendingTerminal(let stickyClientID, _):
@@ -292,6 +304,7 @@ final class Bridge: NSObject {
                     ? "🟢 commitText empty client=\(normalizedCurrentClientID) sticky=\(stickyClientID) replacing pending terminal action with clear"
                     : "🟢 commitText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) replacing pending terminal action with commit"
             )
+            stopSpinner()
             flushPendingTerminalIfPossible()
         }
     }
@@ -322,6 +335,44 @@ final class Bridge: NSObject {
             selectionRange: NSRange(location: 0, length: (renderedText as NSString).length),
             replacementRange: NSRange(location: NSNotFound, length: 0)
         )
+    }
+
+    private func startSpinnerIfNeeded() {
+        guard case .live(_, let markedText, let presentation) = state else {
+            stopSpinner()
+            return
+        }
+        guard presentation == .finalizing else {
+            stopSpinner()
+            return
+        }
+        guard spinnerTask == nil else { return }
+
+        spinnerTask = Task { @MainActor [weak self] in
+            while let self, !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(80))
+                } catch {
+                    break
+                }
+
+                guard case .live(_, let currentMarkedText, let currentPresentation) = self.state
+                else {
+                    break
+                }
+                guard currentPresentation == .finalizing else { break }
+                guard self.activeClientID() == self.stickyClientID else { continue }
+
+                self.replayMarkedText(currentMarkedText, presentation: .finalizing)
+            }
+
+            self?.spinnerTask = nil
+        }
+    }
+
+    private func stopSpinner() {
+        spinnerTask?.cancel()
+        spinnerTask = nil
     }
 
     private func deliverCommitText(_ text: String) {
@@ -372,6 +423,7 @@ final class Bridge: NSObject {
                 deliverClearMarkedText()
             }
             state = .idle
+            stopSpinner()
 
         case .idle, .live:
             break
