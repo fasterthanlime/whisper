@@ -29,7 +29,10 @@ class BeeInputController: IMKInputController {
             beeInputLog(
                 "activateServer: entry frontmostPID=\(frontmostPID.map(String.init) ?? "nil") clientID=\(clientIdentity ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) inputContextCaptured=\(activeInputContext != nil) client=\(describeClient())"
             )
-            bridge.activate(self, pid: frontmostPID, clientID: clientIdentity)
+            let isNew = bridge.activate(self, pid: frontmostPID, clientID: clientIdentity)
+            if isNew {
+                BeeVoxIMEClient.shared.imeAttach()
+            }
         }
         super.activateServer(sender)
     }
@@ -45,7 +48,6 @@ class BeeInputController: IMKInputController {
 
             let session = bridge.currentSession
             let isDictating = bridge.isDictating
-            let sessionID = bridge.activeSessionID
 
             let client = self.client()
             let clientMarkedRange =
@@ -55,11 +57,11 @@ class BeeInputController: IMKInputController {
 
             let hadMarkedText = !(session?.currentMarkedText.isEmpty ?? true)
             beeInputLog(
-                "deactivateServer: session=\(sessionID?.uuidString.prefix(8) ?? "none") hadMarkedText=\(hadMarkedText) clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) client=\(describeClient())"
+                "deactivateServer: hadMarkedText=\(hadMarkedText) clientID=\(currentClientIdentity() ?? "nil") markedRange=\(currentMarkedRangeDescription()) selectedRange=\(currentSelectedRangeDescription()) client=\(describeClient())"
             )
 
             if hadMarkedText || clientHasMarked {
-                bridge.setMarkedText("", sessionID: sessionID!)
+                bridge.setMarkedText("")
                 bridge.didCancelComposition(on: self)
             }
 
@@ -202,34 +204,24 @@ class BeeInputController: IMKInputController {
         let keyCode = event.keyCode
         let characters = event.characters
         return MainActor.assumeIsolated {
-            let bridge = BeeIMEBridgeState.shared
-            guard let sessionID = bridge.activeSessionID else {
+            guard BeeIMEBridgeState.shared.isDictating else {
                 return false
             }
-            let sessionIdStr = sessionID.uuidString
 
             switch Int(keyCode) {
             case kVK_Return, kVK_ANSI_KeypadEnter:
-                BeeVoxIMEClient.shared.imeKeyEvent(
-                    sessionId: sessionIdStr, eventType: "submit",
-                    keyCode: UInt32(keyCode), characters: "")
-                beeInputLog("handle(keyDown): submit session=\(sessionIdStr.prefix(8))")
+                BeeVoxIMEClient.shared.imeKeyEvent(eventType: "submit", keyCode: UInt32(keyCode), characters: "")
+                beeInputLog("handle(keyDown): submit")
                 return true
 
             case kVK_Escape:
-                BeeVoxIMEClient.shared.imeKeyEvent(
-                    sessionId: sessionIdStr, eventType: "cancel",
-                    keyCode: UInt32(keyCode), characters: "")
-                beeInputLog("handle(keyDown): cancel session=\(sessionIdStr.prefix(8))")
+                BeeVoxIMEClient.shared.imeKeyEvent(eventType: "cancel", keyCode: UInt32(keyCode), characters: "")
+                beeInputLog("handle(keyDown): cancel")
                 return true
 
             default:
-                BeeVoxIMEClient.shared.imeKeyEvent(
-                    sessionId: sessionIdStr, eventType: "typed",
-                    keyCode: UInt32(keyCode), characters: characters ?? "")
-                beeInputLog(
-                    "handle(keyDown): typed session=\(sessionIdStr.prefix(8)) keyCode=\(keyCode) chars=\((characters ?? "").debugDescription)"
-                )
+                BeeVoxIMEClient.shared.imeKeyEvent(eventType: "typed", keyCode: UInt32(keyCode), characters: characters ?? "")
+                beeInputLog("handle(keyDown): typed keyCode=\(keyCode) chars=\((characters ?? "").debugDescription)")
                 return false
             }
         }

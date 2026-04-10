@@ -24,41 +24,24 @@ final class BeeInputClient: Sendable {
     // MARK: - Input Source Switching
 
     @discardableResult
-    func activate(sessionID: UUID, targetPID: pid_t?) async -> Bool {
+    func activate() async -> Bool {
         let isConnected = await MainActor.run(body: { BeeIPCServer.shared.isIMEConnected })
-        beeLog(
-            "IME ACTIVATE: prepareSession start id=\(sessionID.uuidString.prefix(8)) targetPID=\(targetPID.map(String.init) ?? "nil") connected=\(isConnected)"
-        )
-        await BeeIPCServer.shared.prepareDictationSession(
-            sessionId: sessionID.uuidString,
-            targetPid: Int32(targetPID ?? 0)
-        )
+        beeLog("IME ACTIVATE: start connected=\(isConnected)")
 
-        if await !MainActor.run(body: { BeeIPCServer.shared.isIMEConnected }) {
+        if !isConnected {
             guard let installedIME = Self.installedIMEURL else { return false }
             await Self.launchBeeInputIfNeeded(at: installedIME)
         }
 
-        beeLog("IME ACTIVATE: TIS SELECT start id=\(sessionID.uuidString.prefix(8))")
+        beeLog("IME ACTIVATE: TIS SELECT start")
         let selected = await Self.selectBeeInputSource()
         guard selected else {
-            beeLog("IME ACTIVATE: TIS SELECT failed id=\(sessionID.uuidString.prefix(8))")
+            beeLog("IME ACTIVATE: TIS SELECT failed")
             return false
         }
 
-        beeLog("IME ACTIVATE: done id=\(sessionID.uuidString.prefix(8)), waiting for imeAttach")
+        beeLog("IME ACTIVATE: done")
         return true
-    }
-
-    @MainActor
-    private static func selectBeeInputSource() async -> Bool {
-        guard let beeSource = findBeeInputSource() else {
-            beeLog("IME ACTIVATE: bee input source NOT FOUND")
-            return false
-        }
-        let result = TISSelectInputSource(beeSource)
-        beeLog("TIS SELECT: \(inputSourceID(beeSource)) result=\(result)")
-        return result == noErr
     }
 
     func deactivate(caller: String = #function, file: String = #fileID, line: Int = #line) {
@@ -75,33 +58,28 @@ final class BeeInputClient: Sendable {
 
     // MARK: - IME Commands
 
-    func setMarkedText(_ text: String, sessionID: UUID) {
-        beeLog("IME CMD: setMarkedText id=\(sessionID.uuidString.prefix(8)) len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)")
-        Task { await BeeIPCServer.shared.setMarkedText(sessionId: sessionID.uuidString, text: text) }
+    func setMarkedText(_ text: String) {
+        beeLog("IME CMD: setMarkedText len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)")
+        Task { await BeeIPCServer.shared.setMarkedText(text: text) }
     }
 
-    func logSetMarkedText(_ text: String, sessionID: UUID) {
-        beeLog("IME setMarkedText: \(text.prefix(60).debugDescription)")
-        setMarkedText(text, sessionID: sessionID)
+    func commitText(_ text: String) {
+        beeLog("IME CMD: commitText len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)")
+        Task { await BeeIPCServer.shared.commitText(text: text) }
     }
 
-    func commitText(_ text: String, sessionID: UUID) {
-        beeLog("IME CMD: commitText id=\(sessionID.uuidString.prefix(8)) len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)")
-        Task { await BeeIPCServer.shared.commitText(sessionId: sessionID.uuidString, text: text) }
+    func clearMarkedText() {
+        beeLog("IME CMD: clearMarkedText")
+        Task { await BeeIPCServer.shared.stopDictating() }
     }
 
-    func clearMarkedText(sessionID: UUID) {
-        beeLog("IME CMD: clearMarkedText id=\(sessionID.uuidString.prefix(8))")
-        Task { await BeeIPCServer.shared.stopDictating(sessionId: sessionID.uuidString) }
+    func stopDictating() {
+        beeLog("IME CMD: stopDictating")
+        Task { await BeeIPCServer.shared.stopDictating() }
     }
 
-    func stopDictating(sessionID: UUID) {
-        beeLog("IME CMD: stopDictating id=\(sessionID.uuidString.prefix(8))")
-        Task { await BeeIPCServer.shared.stopDictating(sessionId: sessionID.uuidString) }
-    }
-
-    func replaceText(sessionId: String, oldText: String, newText: String) {
-        Task { await BeeIPCServer.shared.replaceText(sessionId: sessionId, oldText: oldText, newText: newText) }
+    func replaceText(oldText: String, newText: String) {
+        Task { await BeeIPCServer.shared.replaceText(oldText: oldText, newText: newText) }
     }
 
     func simulateReturn() {
@@ -174,6 +152,17 @@ final class BeeInputClient: Sendable {
         }
         beeLog("IME REGISTER: FAILED — no sources even after TISRegisterInputSource")
         return false
+    }
+
+    @MainActor
+    private static func selectBeeInputSource() async -> Bool {
+        guard let beeSource = findBeeInputSource() else {
+            beeLog("IME ACTIVATE: bee input source NOT FOUND")
+            return false
+        }
+        let result = TISSelectInputSource(beeSource)
+        beeLog("TIS SELECT: \(inputSourceID(beeSource)) result=\(result)")
+        return result == noErr
     }
 
     private static func launchBeeInputIfNeeded(at url: URL) async {

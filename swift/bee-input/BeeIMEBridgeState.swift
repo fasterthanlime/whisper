@@ -82,9 +82,6 @@ final class BeeIMESession {
             beeInputLog("handleReplaceText: no client, dropping")
             return
         }
-        // The old text (with trailing space) was just committed.
-        // Cursor should be right after it. Use selectedRange to find where we are,
-        // then compute the replacement range by looking back.
         let sel = client.selectedRange()
         let oldWithSpace = oldText + " "
         let oldLen = oldWithSpace.utf16.count
@@ -112,26 +109,16 @@ final class BeeIMEBridgeState: NSObject {
 
     enum State {
         case idle
-        case activated(BeeIMESession)
-        case serving(BeeIMESession, sessionID: UUID, pendingText: String?)
+        case active(BeeIMESession, pendingText: String?)
     }
 
     private(set) var state: State = .idle
 
-    /// Retained after deactivation so post-session replaceText can still reach the client.
-    private var lastSession: BeeIMESession?
-    private var lastSessionID: UUID?
-
     // MARK: - Queries
 
     var isDictating: Bool {
-        if case .serving = state { return true }
+        if case .active = state { return true }
         return false
-    }
-
-    var activeSessionID: UUID? {
-        if case .serving(_, let sessionID, _) = state { return sessionID }
-        return nil
     }
 
     var activeController: BeeInputController? {
@@ -139,11 +126,8 @@ final class BeeIMEBridgeState: NSObject {
     }
 
     var currentSession: BeeIMESession? {
-        switch state {
-        case .idle: return nil
-        case .activated(let session): return session
-        case .serving(let session, _, _): return session
-        }
+        if case .active(let session, _) = state { return session }
+        return nil
     }
 
     func discardMarkedText(on client: AnyObject?, reason: String) {
@@ -161,228 +145,113 @@ final class BeeIMEBridgeState: NSObject {
         let markedRange = client.markedRange()
         let hasMarked = markedRange.location != NSNotFound && markedRange.length > 0
 
+        // Clear composition by setting an empty marked string and then unmarking.
         if hasMarked {
             beeInputLog(
-                "discardMarkedText[\(reason)]: cancel-style clear (no insertText) client=\(String(describing: type(of: client))) markedRange(before)=\(NSStringFromRange(markedRange)) selectedRange(before)=\(NSStringFromRange(client.selectedRange()))"
-            )
-            // IMPORTANT: Do not call insertText here — many hosts treat it as a commit.
-            // Previous attempt (via insertText) caused marked text to be finalized on focus change.
-            // Keep this note for future reference:
-            //   // client.insertText("", replacementRange: markedRange)
-
-            // Clear composition by setting an empty marked string and then unmarking.
-            client.setMarkedText(
-                "",
-                selectionRange: NSRange(location: 0, length: 0),
-                replacementRange: NSRange(location: NSNotFound, length: 0)
-            )
-            // Some hosts require an explicit unmark to drop composition state without committing.
-            if client.responds(to: Selector(("unmarkText"))) {
-                (client as AnyObject).perform(Selector(("unmarkText")))
-            }
-            beeInputLog(
-                "discardMarkedText[\(reason)]: markedRange(after)=\(NSStringFromRange(client.markedRange())) selectedRange(after)=\(NSStringFromRange(client.selectedRange()))"
+                "discardMarkedText[\(reason)]: cancel-style clear client=\(String(describing: type(of: client))) markedRange(before)=\(NSStringFromRange(markedRange)) selectedRange(before)=\(NSStringFromRange(client.selectedRange()))"
             )
         } else {
-            // No marked range; ensure the composition state is cleared anyway at the caret.
             beeInputLog(
-                "discardMarkedText[\(reason)]: no marked range; clear via empty setMarkedText at caret (no insertText)"
+                "discardMarkedText[\(reason)]: no marked range; clear via empty setMarkedText at caret"
             )
-            client.setMarkedText(
-                "",
-                selectionRange: NSRange(location: 0, length: 0),
-                replacementRange: NSRange(location: NSNotFound, length: 0)
-            )
-            if client.responds(to: Selector(("unmarkText"))) {
-                (client as AnyObject).perform(Selector(("unmarkText")))
-            }
         }
+
+        // IMPORTANT: Do not call insertText here — many hosts treat it as a commit.
+        client.setMarkedText(
+            "",
+            selectionRange: NSRange(location: 0, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        // Some hosts require an explicit unmark to drop composition state without committing.
+        if client.responds(to: Selector(("unmarkText"))) {
+            (client as AnyObject).perform(Selector(("unmarkText")))
+        }
+        beeInputLog(
+            "discardMarkedText[\(reason)]: markedRange(after)=\(NSStringFromRange(client.markedRange())) selectedRange(after)=\(NSStringFromRange(client.selectedRange()))"
+        )
     }
 
     // MARK: - State transitions
 
-    func activate(_ controller: BeeInputController, pid: pid_t?, clientID: String?) {
-        if case .serving(let session, let sessionID, let pending) = state {
+    /// Returns true if this is a fresh activation (not just a controller update).
+    @discardableResult
+    func activate(_ controller: BeeInputController, pid: pid_t?, clientID: String?) -> Bool {
+        if case .active(let session, let pending) = state {
             beeInputLog(
-                "activate: already serving session=\(sessionID.uuidString.prefix(8)), updating controller pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") pendingLen=\(pending?.utf16.count ?? 0)"
+                "activate: already active, updating controller pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") pendingLen=\(pending?.utf16.count ?? 0)"
             )
             session.controller = controller
-            state = .serving(session, sessionID: sessionID, pendingText: pending)
-            return
+            return false
         }
-        lastSession = nil
-        lastSessionID = nil
         let session = BeeIMESession(controller: controller, pid: pid, clientID: clientID)
-        state = .activated(session)
+        state = .active(session, pendingText: nil)
         beeInputLog(
-            "state → activated pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil")")
-        Task { await self.performAsyncClaim() }
+            "state → active pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil")")
+        return true
     }
 
     func deactivate(_ controller: BeeInputController) {
         guard activeController === controller else { return }
-        switch state {
-        case .idle:
-            lastSession = nil
-            lastSessionID = nil
-        case .activated(let session):
-            lastSession = session
-            lastSessionID = nil
-        case .serving(let session, let sessionID, _):
-            lastSession = session
-            lastSessionID = sessionID
-        }
         state = .idle
-        beeInputLog(
-            "state → idle lastSessionID=\(lastSessionID?.uuidString.prefix(8) ?? "nil") lastClientID=\(lastSession?.clientID ?? "nil")"
-        )
-    }
-
-    func attachSession(sessionID: UUID) {
-        guard let session = currentSession else {
-            beeInputLog("attachSession: ignored (idle, no controller)")
-            return
-        }
-        state = .serving(session, sessionID: sessionID, pendingText: nil)
-        beeInputLog(
-            "state → serving session=\(sessionID.uuidString.prefix(8)) pid=\(session.pid.map(String.init) ?? "nil") clientID=\(session.clientID ?? "nil")"
-        )
-    }
-
-    func clearSessionIfMatching(sessionID: UUID) {
-        guard case .serving(let session, let currentID, _) = state, currentID == sessionID else {
-            return
-        }
-        state = .activated(session)
-        beeInputLog("state → activated (session \(sessionID.uuidString.prefix(8)) cleared)")
-    }
-
-    // MARK: - Session claim (async — called via Task from activate, or pushed by BeeVoxIMEClient)
-
-    func performAsyncClaim() async {
-        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
-        let expectedPID = BeeVoxIMEClient.shared.expectedTargetPID
-
-        if expectedPID != 0 && frontmostPID != pid_t(expectedPID) {
-            beeInputLog(
-                "performAsyncClaim: PID mismatch (frontmost=\(frontmostPID) expected=\(expectedPID)), skipping"
-            )
-            return
-        }
-
-        beeInputLog(
-            "performAsyncClaim: claimSession start frontmostPID=\(frontmostPID) expectedPID=\(expectedPID)"
-        )
-        guard let sessionIDString = await BeeVoxIMEClient.shared.claimSession() else {
-            beeInputLog("performAsyncClaim: no session (palette mode or not ready)")
-            return
-        }
-        guard let sessionID = UUID(uuidString: sessionIDString) else {
-            beeInputLog("performAsyncClaim: invalid session ID: \(sessionIDString)")
-            return
-        }
-
-        // Check we're still in activated state (could have been deactivated while waiting)
-        guard currentSession != nil else {
-            beeInputLog(
-                "performAsyncClaim: deactivated while waiting for claim, dropping session=\(sessionID.uuidString.prefix(8))"
-            )
-            return
-        }
-
-        beeInputLog(
-            "performAsyncClaim: claimed session=\(sessionID.uuidString.prefix(8)) pid=\(frontmostPID)"
-        )
-        attachSession(sessionID: sessionID)
-        flushPending()
-        BeeVoxIMEClient.shared.imeAttach(sessionId: sessionID.uuidString)
+        beeInputLog("state → idle")
     }
 
     // MARK: - Text routing
 
     func flushPending() {
-        guard case .serving(let session, let sessionID, let text?) = state else { return }
+        guard case .active(let session, let text?) = state else { return }
         beeInputLog(
-            "flushPending: session=\(sessionID.uuidString.prefix(8)) delivering len=\(text.utf16.count) text=\(text.prefix(60).debugDescription)"
+            "flushPending: delivering len=\(text.utf16.count) text=\(text.prefix(60).debugDescription)"
         )
-        state = .serving(session, sessionID: sessionID, pendingText: nil)
+        state = .active(session, pendingText: nil)
         session.handleSetMarkedText(text)
     }
 
-    func setMarkedText(_ text: String, sessionID: UUID) {
-        guard case .serving(let session, let currentID, _) = state, currentID == sessionID else {
-            beeInputLog("setMarkedText: stale session=\(sessionID.uuidString.prefix(8)), dropping")
+    func setMarkedText(_ text: String) {
+        guard case .active(let session, _) = state else {
+            beeInputLog("setMarkedText: not active, dropping")
             return
         }
         if session.controller != nil {
             beeInputLog(
-                "setMarkedText: delivering session=\(sessionID.uuidString.prefix(8)) clientID=\(session.clientID ?? "nil") len=\(text.utf16.count)"
+                "setMarkedText: delivering clientID=\(session.clientID ?? "nil") len=\(text.utf16.count)"
             )
             session.handleSetMarkedText(text)
         } else {
             beeInputLog(
-                "setMarkedText: controller lost, queuing session=\(sessionID.uuidString.prefix(8)) clientID=\(session.clientID ?? "nil") len=\(text.utf16.count)"
+                "setMarkedText: controller lost, queuing clientID=\(session.clientID ?? "nil") len=\(text.utf16.count)"
             )
-            state = .serving(session, sessionID: sessionID, pendingText: text)
+            state = .active(session, pendingText: text)
         }
     }
 
-    func commitText(_ text: String, submit: Bool, sessionID: UUID) {
-        guard case .serving(let session, let currentID, _) = state, currentID == sessionID else {
-            beeInputLog("commitText: stale session=\(sessionID.uuidString.prefix(8)), dropping")
+    func commitText(_ text: String, submit: Bool = false) {
+        guard case .active(let session, _) = state else {
+            beeInputLog("commitText: not active, dropping")
             return
         }
         beeInputLog(
-            "commitText: session=\(sessionID.uuidString.prefix(8)) clientID=\(session.clientID ?? "nil") submit=\(submit) len=\(text.utf16.count)"
+            "commitText: clientID=\(session.clientID ?? "nil") submit=\(submit) len=\(text.utf16.count)"
         )
-        state = .activated(session)
         session.handleCommitText(text, submit: submit)
     }
 
-    func cancelInput(sessionID: UUID) {
-        if case .serving(let session, let currentID, _) = state, currentID == sessionID {
-            if let client = session.controller?.client() {
-                beeInputLog(
-                    "cancelInput: discardMarkedText session=\(sessionID.uuidString.prefix(8)) clientID=\(session.clientID ?? "nil")"
-                )
-                discardMarkedText(on: client as AnyObject, reason: "cancel")
-            } else {
-                session.currentMarkedText = ""
-            }
-            session.currentMarkedText = ""
-            state = .activated(session)
-            beeInputLog("cancelInput: state → activated session=\(sessionID.uuidString.prefix(8))")
+    func cancelInput() {
+        guard case .active(let session, _) = state else {
+            beeInputLog("cancelInput: not active, dropping")
             return
         }
-
-        guard let session = lastSession, lastSessionID == sessionID else {
-            beeInputLog("cancelInput: stale session=\(sessionID.uuidString.prefix(8)), dropping")
-            return
+        if let client = session.controller?.client() {
+            beeInputLog("cancelInput: discardMarkedText clientID=\(session.clientID ?? "nil")")
+            discardMarkedText(on: client as AnyObject, reason: "cancel")
         }
         session.currentMarkedText = ""
-        lastSessionID = nil
+        beeInputLog("cancelInput: done")
     }
 
-    func stopDictating(sessionID: UUID) {
-        if case .serving(let session, let currentID, _) = state, currentID == sessionID {
-            beeInputLog(
-                "stopDictating: state serving → activated session=\(sessionID.uuidString.prefix(8)) clientID=\(session.clientID ?? "nil")"
-            )
-            state = .activated(session)
-            return
-        }
-
-        guard lastSessionID == sessionID else {
-            beeInputLog("stopDictating: stale session=\(sessionID.uuidString.prefix(8)), dropping")
-            return
-        }
-        lastSessionID = nil
-    }
-
-    func replaceText(oldText: String, newText: String, sessionID: UUID) {
-        // Try current session first, fall back to lastSession for post-dictation corrections
-        guard let session = currentSession ?? lastSession else {
-            beeInputLog("replaceText: no session (current or last), dropping")
+    func replaceText(oldText: String, newText: String) {
+        guard let session = currentSession else {
+            beeInputLog("replaceText: no active session, dropping")
             return
         }
         session.handleReplaceText(oldText: oldText, newText: newText)
@@ -396,4 +265,3 @@ final class BeeIMEBridgeState: NSObject {
         session.currentMarkedText = ""
     }
 }
-
