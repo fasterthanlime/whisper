@@ -3,8 +3,12 @@
 //! Rotation = throw away the old DecodeSession and create a new one.
 //! The start_time tracks where this sub-session begins in the timeline.
 
+use bee_phonetic::{
+    align_token_sequences_with_left_word_boundaries, normalize_ipa_for_comparison,
+    normalize_ipa_for_comparison_with_spans, sentence_word_tokens,
+};
 use bee_qwen3_asr::encoder::EncoderCache;
-use bee_qwen3_asr::forced_aligner::{ForcedAlignItem, ForcedAligner};
+use bee_qwen3_asr::forced_aligner::ForcedAligner;
 use bee_qwen3_asr::generate::{self, ConfidenceMode, TOP_K, TokenConfidence};
 use bee_qwen3_asr::mel::MelExtractor;
 use bee_qwen3_asr::model::Qwen3ASRModel;
@@ -20,12 +24,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokenizers::Tokenizer;
 
 use crate::audio_buffer::{AudioBuffer, Seconds};
+use crate::g2p::CachedEspeakG2p;
 use crate::mlx_stuff::clear_mlx_cache;
 use crate::text_buffer::{
     self, AlignmentItem, AsrToken, TextBuffer, TokenCount, TokenEntry, TokenId, WordStart,
 };
 use crate::timing::{log_phase, log_phase_chunk, phase_start};
-use crate::types::RotationCutStrategy;
+use crate::types::{Aligner, RotationCutStrategy};
+use crate::zipa_align::{self, timed_range_for_normalized_range};
 
 /// A decode sub-session. Replaced wholesale on rotation.
 pub struct DecodeSession {
@@ -415,9 +421,11 @@ impl DecodeSession {
         n: TokenCount,
         context_tokens: usize,
         rotation_cut_strategy: &RotationCutStrategy,
+        aligner: &Aligner,
         forced_aligner: &ForcedAligner,
         zipa: &ZipaInference,
         tokenizer: &Tokenizer,
+        g2p: Option<&mut CachedEspeakG2p>,
     ) -> Result<Option<(TextBuffer, AudioBuffer, AudioBuffer)>, Exception> {
         let commit_total_start = phase_start();
         let chunk_index = self.chunk_count;
@@ -515,30 +523,84 @@ impl DecodeSession {
             align_prefix_end,
         ));
 
-        // Run forced alignment against our audio
+        // Run word alignment to get per-word timing.
+        // Use ZIPA when requested (and G2P is available), otherwise fall back to forced aligner.
         let align_start = phase_start();
-        let items = forced_aligner
-            .align(align_audio.samples(), &commit_text)
-            .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
-        log_phase_chunk("commit", "forced_align", chunk_index, align_start);
-        if items.is_empty() {
-            tracing::warn!("commit: forced aligner returned no items");
+        let alignment_items: Vec<AlignmentItem> = if let (Aligner::Zipa, Some(g2p)) = (aligner, g2p)
+        {
+            match zipa_word_alignments(zipa, &align_audio, &commit_text, g2p) {
+                Ok(items) if !items.is_empty() => {
+                    log_phase_chunk("commit", "zipa_align", chunk_index, align_start);
+                    items
+                }
+                Ok(_) => {
+                    tracing::warn!(
+                        "commit: zipa alignment returned no items, falling back to forced aligner"
+                    );
+                    let fa_items = forced_aligner
+                        .align(align_audio.samples(), &commit_text)
+                        .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
+                    log_phase_chunk("commit", "forced_align_fallback", chunk_index, align_start);
+                    if fa_items.is_empty() {
+                        tracing::warn!("commit: forced aligner fallback also returned no items");
+                        return Ok(None);
+                    }
+                    fa_items
+                        .iter()
+                        .map(|i| AlignmentItem {
+                            word: i.word.clone(),
+                            start: Seconds(i.start_time as f64),
+                            end: Seconds(i.end_time as f64),
+                        })
+                        .collect()
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "commit: zipa alignment error: {e}, falling back to forced aligner"
+                    );
+                    let fa_items = forced_aligner
+                        .align(align_audio.samples(), &commit_text)
+                        .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
+                    log_phase_chunk("commit", "forced_align_fallback", chunk_index, align_start);
+                    if fa_items.is_empty() {
+                        tracing::warn!("commit: forced aligner fallback also returned no items");
+                        return Ok(None);
+                    }
+                    fa_items
+                        .iter()
+                        .map(|i| AlignmentItem {
+                            word: i.word.clone(),
+                            start: Seconds(i.start_time as f64),
+                            end: Seconds(i.end_time as f64),
+                        })
+                        .collect()
+                }
+            }
+        } else {
+            let fa_items = forced_aligner
+                .align(align_audio.samples(), &commit_text)
+                .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
+            log_phase_chunk("commit", "forced_align", chunk_index, align_start);
+            if fa_items.is_empty() {
+                tracing::warn!("commit: forced aligner returned no items");
+                return Ok(None);
+            }
+            fa_items
+                .iter()
+                .map(|i| AlignmentItem {
+                    word: i.word.clone(),
+                    start: Seconds(i.start_time as f64),
+                    end: Seconds(i.end_time as f64),
+                })
+                .collect()
+        };
+
+        if alignment_items.is_empty() {
             return Ok(None);
         }
 
-        let zipa_nearest_cut =
-            self.log_zipa_cut_report(zipa, &align_audio, &items, &commit_text)?;
-
-        // Build AlignmentItems and align the buffer (pure function)
+        // Build aligned buffer (pure function)
         let align_buffer_start = phase_start();
-        let alignment_items: Vec<AlignmentItem> = items
-            .iter()
-            .map(|item| AlignmentItem {
-                word: item.word.clone(),
-                start: Seconds(item.start_time as f64),
-                end: Seconds(item.end_time as f64),
-            })
-            .collect();
         let mut aligned =
             text_buffer::align(to_commit, &alignment_items, &align_audio, self.start_time);
 
@@ -557,7 +619,7 @@ impl DecodeSession {
                 .count();
             old_ctx_word_count + fresh_drain_word_count
         } else {
-            items.len() // all words drained, no context kept
+            alignment_items.len() // all words drained, no context kept
         };
 
         // Strip old context tokens — they're already in the transcript from the previous rotation.
@@ -578,22 +640,23 @@ impl DecodeSession {
         // so the fresh context tokens (new_ctx_n) keep their audio in `remaining`.
         // Otherwise use the strategy-determined cut point.
         let rotate_start = phase_start();
-        let last_end = Seconds(items.last().unwrap().end_time as f64);
+        let last_end = alignment_items.last().unwrap().end;
 
-        let trim_at = if new_ctx_n > 0 && drain_word_count > 0 && drain_word_count <= items.len() {
-            // Cut audio at the end of the last drained word, leaving context-token audio in remaining.
-            Seconds(items[drain_word_count - 1].end_time as f64)
-        } else {
-            match rotation_cut_strategy {
-                RotationCutStrategy::Zipa => {
-                    let raw = zipa_nearest_cut.unwrap_or(align_prefix_end);
-                    Seconds(raw.0.clamp(0.0, align_prefix_end.0))
+        let trim_at =
+            if new_ctx_n > 0 && drain_word_count > 0 && drain_word_count <= alignment_items.len() {
+                // Cut audio at the end of the last drained word, leaving context-token audio in remaining.
+                alignment_items[drain_word_count - 1].end
+            } else {
+                match rotation_cut_strategy {
+                    RotationCutStrategy::Zipa => {
+                        // Cut at the end of the last aligned word, clamped to checkpoint audio boundary.
+                        Seconds(last_end.0.clamp(0.0, align_prefix_end.0))
+                    }
+                    RotationCutStrategy::Qwen3
+                    | RotationCutStrategy::ManualTargetCommittedTextTokens(_)
+                    | RotationCutStrategy::Uncut => align_prefix_end,
                 }
-                RotationCutStrategy::Qwen3
-                | RotationCutStrategy::ManualTargetCommittedTextTokens(_) => align_prefix_end,
-                RotationCutStrategy::Uncut => align_prefix_end,
-            }
-        };
+            };
         let new_start = self.start_time + trim_at;
         let (committed_audio, remaining) = self.audio.split_at(trim_at);
         let remaining_token_ids: Vec<TokenId> = self.text_tokens()[drain_count..]
@@ -630,7 +693,7 @@ impl DecodeSession {
             trim_at = %format!("{:.3}s", trim_at.0),
             audio_before = self.audio.len(),
             audio_after = remaining.len(),
-            aligned_words = items.len(),
+            aligned_words = alignment_items.len(),
             "commit: rotation"
         );
 
@@ -660,9 +723,11 @@ impl DecodeSession {
     /// Commit all text tokens. Same as `commit` but without a token limit.
     pub fn commit_all(
         &mut self,
+        aligner: &Aligner,
         forced_aligner: &ForcedAligner,
         zipa: &ZipaInference,
         tokenizer: &Tokenizer,
+        g2p: Option<&mut CachedEspeakG2p>,
     ) -> Result<Option<TextBuffer>, Exception> {
         let commit_total_start = phase_start();
         let chunk_index = self.chunk_count;
@@ -689,26 +754,61 @@ impl DecodeSession {
 
         let align_audio = self.audio.clone();
         let align_start = phase_start();
-        let items = forced_aligner
-            .align(align_audio.samples(), &commit_text)
-            .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
-        log_phase_chunk("commit_all", "forced_align", chunk_index, align_start);
-        if items.is_empty() {
-            tracing::warn!("commit_all: forced aligner returned no items");
+        let alignment_items: Vec<AlignmentItem> = if let (Aligner::Zipa, Some(g2p)) = (aligner, g2p)
+        {
+            match zipa_word_alignments(zipa, &align_audio, &commit_text, g2p) {
+                Ok(items) if !items.is_empty() => {
+                    log_phase_chunk("commit_all", "zipa_align", chunk_index, align_start);
+                    items
+                }
+                Ok(_) | Err(_) => {
+                    let fa_items = forced_aligner
+                        .align(align_audio.samples(), &commit_text)
+                        .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
+                    log_phase_chunk(
+                        "commit_all",
+                        "forced_align_fallback",
+                        chunk_index,
+                        align_start,
+                    );
+                    if fa_items.is_empty() {
+                        tracing::warn!("commit_all: aligner returned no items");
+                        return Ok(None);
+                    }
+                    fa_items
+                        .iter()
+                        .map(|i| AlignmentItem {
+                            word: i.word.clone(),
+                            start: Seconds(i.start_time as f64),
+                            end: Seconds(i.end_time as f64),
+                        })
+                        .collect()
+                }
+            }
+        } else {
+            let fa_items = forced_aligner
+                .align(align_audio.samples(), &commit_text)
+                .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
+            log_phase_chunk("commit_all", "forced_align", chunk_index, align_start);
+            if fa_items.is_empty() {
+                tracing::warn!("commit_all: forced aligner returned no items");
+                return Ok(None);
+            }
+            fa_items
+                .iter()
+                .map(|i| AlignmentItem {
+                    word: i.word.clone(),
+                    start: Seconds(i.start_time as f64),
+                    end: Seconds(i.end_time as f64),
+                })
+                .collect()
+        };
+
+        if alignment_items.is_empty() {
             return Ok(None);
         }
 
-        let _ = self.log_zipa_cut_report(zipa, &align_audio, &items, &commit_text)?;
-
         let align_buffer_start = phase_start();
-        let alignment_items: Vec<AlignmentItem> = items
-            .iter()
-            .map(|item| AlignmentItem {
-                word: item.word.clone(),
-                start: Seconds(item.start_time as f64),
-                end: Seconds(item.end_time as f64),
-            })
-            .collect();
         let mut aligned =
             text_buffer::align(to_commit, &alignment_items, &align_audio, self.start_time);
         // Strip any context tokens carried into this session — already in transcript.
@@ -727,7 +827,7 @@ impl DecodeSession {
             committed_tokens = self.text_tokens().len(),
             old_ctx,
             audio_samples = self.audio.len(),
-            aligned_words = items.len(),
+            aligned_words = alignment_items.len(),
             "commit_all: final commit without checkpoint rotation"
         );
 
@@ -1091,155 +1191,99 @@ impl DecodeSession {
             .collect::<Vec<_>>()
             .join("\n")
     }
+}
 
-    fn log_zipa_cut_report(
-        &self,
-        zipa: &ZipaInference,
-        align_audio: &AudioBuffer,
-        items: &[ForcedAlignItem],
-        commit_text: &str,
-    ) -> Result<Option<Seconds>, Exception> {
-        let zipa_audio = ZipaAudioBuffer {
-            samples: align_audio.samples().to_vec(),
-            sample_rate_hz: align_audio.sample_rate().0,
+/// Derive per-word timing from ZIPA inference + G2P phoneme alignment.
+///
+/// Returns `AlignmentItem` per word with ZIPA-derived start/end times.
+/// Falls back to an empty vec (caller should use forced aligner) when
+/// G2P or ZIPA alignment produces no usable output.
+fn zipa_word_alignments(
+    zipa: &ZipaInference,
+    audio: &AudioBuffer,
+    transcript: &str,
+    g2p: &mut CachedEspeakG2p,
+) -> Result<Vec<AlignmentItem>, String> {
+    let zipa_audio = ZipaAudioBuffer {
+        samples: audio.samples().to_vec(),
+        sample_rate_hz: audio.sample_rate().0,
+    };
+    let utterance = zipa.infer_audio(&zipa_audio).map_err(|e| e.to_string())?;
+    let duration = audio.duration().0;
+
+    let phone_spans = utterance
+        .derive_phone_spans(&zipa.tokens, duration, 0)
+        .into_iter()
+        .filter(|s| s.token != "▁")
+        .collect::<Vec<_>>();
+
+    let zipa_raw = utterance
+        .tokens
+        .into_iter()
+        .filter(|t| t != "▁")
+        .collect::<Vec<_>>();
+    let zipa_norm_with_spans = normalize_ipa_for_comparison_with_spans(&zipa_raw);
+    let zipa_norm = zipa_norm_with_spans
+        .iter()
+        .map(|t| t.token.clone())
+        .collect::<Vec<_>>();
+
+    let word_raw_ranges = zipa_align::transcript_word_raw_ranges(g2p, transcript)?;
+    let word_norm_ranges = word_raw_ranges
+        .iter()
+        .map(|(range, raw)| (range.clone(), normalize_ipa_for_comparison(raw)))
+        .collect::<Vec<_>>();
+    let transcript_norm = word_norm_ranges
+        .iter()
+        .flat_map(|(_, tokens)| tokens.iter().cloned())
+        .collect::<Vec<_>>();
+    let word_ids = word_norm_ranges
+        .iter()
+        .enumerate()
+        .flat_map(|(wi, (_, tokens))| std::iter::repeat_n(wi, tokens.len()))
+        .collect::<Vec<_>>();
+    let alignment =
+        align_token_sequences_with_left_word_boundaries(&transcript_norm, &zipa_norm, &word_ids);
+
+    let transcript_words = sentence_word_tokens(transcript);
+    let token_ranges = (0..word_norm_ranges.len())
+        .map(|wi| zipa_align::transcript_token_range_for_span(&word_norm_ranges, wi, wi + 1))
+        .collect::<Vec<_>>();
+    let word_tokens = word_norm_ranges
+        .iter()
+        .map(|(_, tokens)| tokens.clone())
+        .collect::<Vec<_>>();
+    let word_windows = zipa_align::select_segmental_word_windows(
+        &word_tokens,
+        &token_ranges,
+        &zipa_norm,
+        &alignment,
+    );
+
+    let mut items = Vec::new();
+    for (wi, _) in word_norm_ranges.iter().enumerate() {
+        let word_text = match transcript_words.get(wi) {
+            Some(w) => w.text.clone(),
+            None => continue,
         };
-        let output = zipa
-            .infer_audio(&zipa_audio)
-            .map_err(|e| Exception::custom(format!("zipa inference: {e}")))?;
-
-        let frame_count = output.log_probs_len;
-        if frame_count == 0 || output.token_ids.is_empty() {
-            tracing::info!(
-                commit_text = %commit_text.trim(),
-                "zipa: no frames available for cut analysis"
-            );
-            return Ok(None);
-        }
-
-        let shape = output.log_probs.shape();
-        let vocab_size = *shape.last().unwrap_or(&0) as usize;
-        if vocab_size == 0 {
-            tracing::info!(
-                commit_text = %commit_text.trim(),
-                "zipa: empty vocab in log_probs"
-            );
-            return Ok(None);
-        }
-        let flat = output.log_probs.as_slice::<f32>();
-        let blank_id = 0usize;
-        let seconds_per_frame = align_audio.duration().0 / frame_count as f64;
-        let phone_spans =
-            output.derive_phone_spans(&zipa.tokens, align_audio.duration().0, blank_id);
-
-        let mut runs = Vec::new();
-        let mut frame = 0usize;
-        while frame < output.token_ids.len() {
-            if output.token_ids[frame] != blank_id {
-                frame += 1;
-                continue;
-            }
-            let start = frame;
-            let mut max_blank = 0.0f32;
-            let mut blank_sum = 0.0f32;
-            while frame < output.token_ids.len() && output.token_ids[frame] == blank_id {
-                let blank_log_prob = flat[frame * vocab_size + blank_id];
-                let blank_prob = blank_log_prob.exp();
-                max_blank = max_blank.max(blank_prob);
-                blank_sum += blank_prob;
-                frame += 1;
-            }
-            let end = frame;
-            let len = end - start;
-            if len >= 2 {
-                let mean_blank = blank_sum / len as f32;
-                let cut_time = Seconds((start + end) as f64 * 0.5 * seconds_per_frame);
-                runs.push(ZipaCutRun {
-                    start_frame: start,
-                    end_frame: end,
-                    cut_time,
-                    mean_blank,
-                    max_blank,
-                });
-            }
-        }
-
-        if runs.is_empty() {
-            tracing::info!(
-                commit_text = %commit_text.trim(),
-                zipa_frames = frame_count,
-                zipa_tokens = output.tokens.join(" "),
-                "zipa: no blank-run cut candidates"
-            );
-            return Ok(None);
-        }
-
-        let aligned_end = Seconds(items.last().unwrap().end_time as f64);
-        let nearest = runs
-            .iter()
-            .min_by(|a, b| {
-                let da = (a.cut_time.0 - aligned_end.0).abs();
-                let db = (b.cut_time.0 - aligned_end.0).abs();
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .unwrap();
-
-        let mut strongest = runs.clone();
-        strongest.sort_by(|a, b| {
-            b.mean_blank
-                .partial_cmp(&a.mean_blank)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    b.max_blank
-                        .partial_cmp(&a.max_blank)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-        });
-        let strongest_summary = strongest
-            .iter()
-            .take(5)
-            .map(|run| {
-                format!(
-                    "{:.3}s[f{}..{} mean={:.2} max={:.2}]",
-                    run.cut_time.0, run.start_frame, run.end_frame, run.mean_blank, run.max_blank
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        let phone_spans_near_end = phone_spans
-            .iter()
-            .filter(|span| {
-                let center = (span.start_time_secs + span.end_time_secs) * 0.5;
-                (center - aligned_end.0).abs() <= 0.5
-            })
-            .map(|span| {
-                format!(
-                    "{}[{:.3}-{:.3}s f{}..{}]",
-                    span.token,
-                    span.start_time_secs,
-                    span.end_time_secs,
-                    span.start_frame,
-                    span.end_frame
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        tracing::info!(
-            commit_text = %commit_text.trim(),
-            zipa_frames = frame_count,
-            zipa_frame_ms = seconds_per_frame * 1000.0,
-            zipa_phone_count = output.tokens.len(),
-            zipa_phone_spans = phone_spans.len(),
-            zipa_aligned_end = aligned_end.0,
-            zipa_nearest_cut = nearest.cut_time.0,
-            zipa_nearest_cut_delta_ms = (nearest.cut_time.0 - aligned_end.0) * 1000.0,
-            zipa_strongest_blank_runs = %strongest_summary,
-            zipa_phone_spans_near_end = %phone_spans_near_end,
-            "zipa cut report"
+        let window = match word_windows.get(wi).and_then(|w| w.as_ref()) {
+            Some(w) => w,
+            None => continue,
+        };
+        let timed = timed_range_for_normalized_range(
+            &zipa_norm_with_spans,
+            &phone_spans,
+            window.zipa_norm_range.clone(),
         );
-
-        Ok(Some(nearest.cut_time))
+        if let Some(t) = timed {
+            items.push(AlignmentItem {
+                word: word_text,
+                start: Seconds(t.start_time_secs),
+                end: Seconds(t.end_time_secs),
+            });
+        }
     }
+    Ok(items)
 }
 
 fn common_prefix_len(left: &[TokenId], right: &[TokenId]) -> usize {
@@ -1303,16 +1347,6 @@ fn write_wav_file(path: &Path, audio: &AudioBuffer) -> Result<(), Exception> {
         .map_err(|e| Exception::custom(format!("finalize wav {}: {e}", path.display())))?;
     Ok(())
 }
-
-#[derive(Clone)]
-struct ZipaCutRun {
-    start_frame: usize,
-    end_frame: usize,
-    cut_time: Seconds,
-    mean_blank: f32,
-    max_blank: f32,
-}
-
 #[cfg(test)]
 mod tests {
     use super::common_prefix_len;

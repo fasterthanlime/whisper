@@ -17,6 +17,7 @@ use crate::audio_buffer::{AudioBuffer, SampleRate, Seconds};
 use crate::audio_filter::{self, AudioFilterChain};
 use crate::corrector::Corrector;
 use crate::decode_session::DecodeSession;
+use crate::g2p::CachedEspeakG2p;
 use crate::text_buffer::{self, TextBuffer, TokenCount, TokenEntry, TokenId};
 use crate::timing::{log_phase, log_phase_chunk, phase_start};
 use crate::types::{
@@ -63,6 +64,7 @@ pub struct Session<'a> {
     session_audio: AudioBuffer,
     cut_sink: Option<CutSink>,
     chunk_sink: Option<ChunkSink>,
+    g2p: Option<CachedEspeakG2p>,
 }
 
 impl<'a> Session<'a> {
@@ -76,6 +78,7 @@ impl<'a> Session<'a> {
         correction: Option<(SharedCorrectionEngine, Corrector)>,
         cut_sink: Option<CutSink>,
         chunk_sink: Option<ChunkSink>,
+        g2p: Option<CachedEspeakG2p>,
     ) -> Self {
         let chunk_size_samples = (options.chunk_duration * 16000.0) as usize;
         assert!(chunk_size_samples > 0, "chunk_duration too small");
@@ -108,6 +111,7 @@ impl<'a> Session<'a> {
             session_audio: AudioBuffer::empty(SampleRate::HZ_16000),
             cut_sink,
             chunk_sink,
+            g2p,
         }
     }
 
@@ -222,10 +226,13 @@ impl<'a> Session<'a> {
             );
             if self.decode.has_audio() {
                 let commit_all_start = phase_start();
-                if let Some(aligned) =
-                    self.decode
-                        .commit_all(self.forced_aligner, self.zipa, self.tokenizer)?
-                {
+                if let Some(aligned) = self.decode.commit_all(
+                    &self.options.aligner,
+                    self.forced_aligner,
+                    self.zipa,
+                    self.tokenizer,
+                    self.g2p.as_mut(),
+                )? {
                     log_phase("finish", "commit_all", commit_all_start);
                     let final_words: Vec<AlignedWord> = aligned
                         .words()
@@ -439,9 +446,11 @@ impl<'a> Session<'a> {
                 requested_commit_tokens,
                 self.options.context_tokens,
                 &self.options.rotation_cut_strategy,
+                &self.options.aligner,
                 self.forced_aligner,
                 self.zipa,
                 self.tokenizer,
+                self.g2p.as_mut(),
             )? {
                 log_phase_chunk(
                     "decode_and_maybe_commit",

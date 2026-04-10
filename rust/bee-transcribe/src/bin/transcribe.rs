@@ -3,7 +3,7 @@ use std::time::Instant;
 use std::{env, io::IsTerminal};
 
 use bee_transcribe::text_buffer::TokenEntry;
-use bee_transcribe::{EngineConfig, RotationCutStrategy, SessionOptions, SessionSnapshot};
+use bee_transcribe::{Aligner, EngineConfig, RotationCutStrategy, SessionOptions, SessionSnapshot};
 use tokenizers::Tokenizer;
 use tracing_subscriber::EnvFilter;
 
@@ -353,6 +353,7 @@ fn run_mode(
     samples: &[f32],
     cut_mode: RotationCutStrategy,
     bypass_audio_filters: bool,
+    word_aligner: Aligner,
     label: &str,
     base_options: SessionOptions,
 ) -> anyhow::Result<(
@@ -368,6 +369,7 @@ fn run_mode(
     }
     options.rotation_cut_strategy = cut_mode;
     options.bypass_audio_filters = bypass_audio_filters;
+    options.aligner = word_aligner;
     let chunk_samples = (options.chunk_duration * 16000.0) as usize;
 
     let cuts = std::rc::Rc::new(std::cell::RefCell::new(
@@ -583,24 +585,23 @@ fn cmd_compare(
     let duration = samples.len() as f64 / 16000.0;
     println!("Audio: {:.1}s ({} samples)\n", duration, samples.len());
 
-    // (label, cut_strategy, bypass_audio_filters)
-    let all_modes: &[(&str, RotationCutStrategy, bool)] = &[
-        ("uncut", RotationCutStrategy::Uncut, false),
-        ("qwen3", RotationCutStrategy::Qwen3, false),
-        ("zipa", RotationCutStrategy::Zipa, false),
-        ("raw", RotationCutStrategy::Uncut, true),
+    // (label, cut_strategy, bypass_audio_filters, word_aligner)
+    let all_modes: Vec<(&str, RotationCutStrategy, bool, Aligner)> = vec![
+        ("uncut", RotationCutStrategy::Uncut, false, Aligner::Qwen),
+        ("qwen3", RotationCutStrategy::Qwen3, false, Aligner::Qwen),
+        ("zipa", RotationCutStrategy::Zipa, false, Aligner::Zipa),
+        ("raw", RotationCutStrategy::Uncut, true, Aligner::Qwen),
     ];
-    let modes: Vec<(&str, RotationCutStrategy, bool)> = all_modes
-        .iter()
-        .filter(|(label, _, _)| {
+    let modes: Vec<(&str, RotationCutStrategy, bool, Aligner)> = all_modes
+        .into_iter()
+        .filter(|(label, _, _, _)| {
             modes_filter
                 .map(|f| f.iter().any(|m| m == label))
                 .unwrap_or(true)
         })
-        .cloned()
         .collect();
     if modes.is_empty() {
-        let valid: Vec<&str> = all_modes.iter().map(|(l, _, _)| *l).collect();
+        let valid = ["uncut", "qwen3", "zipa", "raw"];
         anyhow::bail!(
             "--modes filter matched nothing; valid: {}",
             valid.join(", ")
@@ -613,12 +614,13 @@ fn cmd_compare(
         Vec<bee_transcribe::CutEvent>,
         Vec<bee_transcribe::ChunkEvent>,
     )> = Vec::new();
-    for (label, cut_mode, bypass) in modes {
+    for (label, cut_mode, bypass, word_aligner) in modes {
         let (text, cuts, chunks) = run_mode(
             &engine,
             &samples,
-            cut_mode.clone(),
+            cut_mode,
             bypass,
+            word_aligner,
             label,
             base_options.clone(),
         )?;

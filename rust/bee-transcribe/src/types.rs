@@ -29,6 +29,22 @@ impl Language {
     }
 }
 
+/// Source used for word-level timing (alignment).
+#[repr(u8)]
+#[derive(Debug, Clone, Facet)]
+pub enum Aligner {
+    /// Use the forced aligner.
+    Qwen,
+    /// Use ZIPA-derived phoneme spans for word timing.
+    Zipa,
+}
+
+impl Default for Aligner {
+    fn default() -> Self {
+        Self::Qwen
+    }
+}
+
 /// Strategy for choosing rotation cut points inside a decode session.
 #[repr(u8)]
 #[derive(Debug, Clone, Facet)]
@@ -118,6 +134,9 @@ pub struct SessionOptions {
     /// Skip all audio filters (VAD, DC removal, RMS normalization).
     /// Every chunk is fed directly to the decoder as-is.
     pub bypass_audio_filters: bool,
+
+    /// Which model to use for word-level timing.
+    pub aligner: Aligner,
 }
 
 impl Default for SessionOptions {
@@ -134,6 +153,7 @@ impl Default for SessionOptions {
             app_id: None,
             rotation_cut_strategy: RotationCutStrategy::Qwen3,
             bypass_audio_filters: false,
+            aligner: Aligner::Qwen,
         }
     }
 }

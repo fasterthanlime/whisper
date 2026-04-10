@@ -65,6 +65,9 @@ pub struct Engine {
     zipa: ZipaInference,
     vad_tensors: HashMap<String, mlx_rs::Array>,
     correction: Option<SharedCorrectionEngine>,
+    /// Directory containing espeak data, used to create per-session G2P when
+    /// `SessionOptions::aligner == Aligner::Zipa`.
+    g2p_dir: Option<std::path::PathBuf>,
 }
 
 // SAFETY: Engine is immutable after construction. The MLX arrays inside are
@@ -132,6 +135,8 @@ impl Engine {
             None
         };
 
+        let g2p_dir = config.correction_dir.map(|p| p.to_path_buf());
+
         Ok(Engine {
             model,
             tokenizer,
@@ -139,6 +144,7 @@ impl Engine {
             zipa,
             vad_tensors,
             correction,
+            g2p_dir,
         })
     }
 
@@ -167,6 +173,15 @@ impl Engine {
             .correction
             .as_ref()
             .map(|ce| (ce.clone(), Corrector::new()));
+        let g2p = if matches!(options.aligner, Aligner::Zipa) {
+            self.g2p_dir.as_deref().and_then(|dir| {
+                crate::g2p::CachedEspeakG2p::english(dir)
+                    .map_err(|e| log::warn!("g2p init failed, falling back to forced aligner: {e}"))
+                    .ok()
+            })
+        } else {
+            None
+        };
         Ok(session::Session::new(
             &self.model,
             &self.tokenizer,
@@ -177,6 +192,7 @@ impl Engine {
             correction,
             cut_sink,
             chunk_sink,
+            g2p,
         ))
     }
 }
