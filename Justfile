@@ -28,3 +28,14 @@ verbose:
 
 debug:
     scripts/debug-bee.sh --lldb
+
+ime-spy:
+    cd ime-spy && xcodegen generate --spec project.yml
+    xcodebuild -project ime-spy/ime-spy.xcodeproj -scheme ime-spy -configuration Debug build 2>&1 | xcbeautify
+    pkill ime-spy || true
+    sleep 0.5
+    @build_dir="$(xcodebuild -project ime-spy/ime-spy.xcodeproj -scheme ime-spy -configuration Debug -showBuildSettings 2>/dev/null | awk '/^ *BUILT_PRODUCTS_DIR =/ { print $3 }')"; \
+      rm -rf /Applications/ime-spy.app; \
+      cp -R "$build_dir/ime-spy.app" /Applications/ime-spy.app; \
+      echo "Installed to /Applications/ime-spy.app"
+    open /Applications/ime-spy.app

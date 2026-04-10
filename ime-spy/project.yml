@@ -1,0 +1,18 @@
+name: ime-spy
+options:
+  bundleIdPrefix: com.fasterthanlime
+  deploymentTarget:
+    macOS: "13.0"
+targets:
+  ime-spy:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fasterthanlime.ime-spy
+        INFOPLIST_GENERATION_MODE: GeneratedFile
+        GENERATE_INFOPLIST_FILE: YES
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
