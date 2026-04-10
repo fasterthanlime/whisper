@@ -67,3 +67,4 @@ profile.json.gz
 *.wav
 !swift/bee/Sounds/*.wav
 .tmp
+.handoffs
