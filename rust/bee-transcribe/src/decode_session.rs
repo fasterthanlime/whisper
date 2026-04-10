@@ -425,17 +425,12 @@ impl DecodeSession {
             "commit: rotation"
         );
 
-        self.audio = remaining;
-        self.start_time = new_start;
-
-        let drop_start = self.metadata_end;
-        let drop_end = self.metadata_end + plan.drain_count().0;
-        self.tokens.drain(drop_start..drop_end);
-        self.context_token_count = plan.next_context_tokens.0;
-
-        self.encoder_cache = EncoderCache::new();
-        self.mel_extractor = MelExtractor::new(400, 160, 128, 16000);
-        self.generated_start = 0;
+        self.apply_post_commit_state(
+            remaining,
+            new_start,
+            plan.drain_count(),
+            plan.next_context_tokens,
+        );
         log_phase_chunk("commit", "rotate_reset", chunk_index, rotate_start);
         log_phase_chunk("commit", "total", chunk_index, commit_total_start);
 
@@ -477,11 +472,12 @@ impl DecodeSession {
             "commit_all: final commit without rotation"
         );
 
-        self.audio = AudioBuffer::empty(self.audio.sample_rate());
-        self.tokens.truncate(self.metadata_end);
-        self.encoder_cache = EncoderCache::new();
-        self.mel_extractor = MelExtractor::new(400, 160, 128, 16000);
-        self.generated_start = 0;
+        self.apply_post_commit_state(
+            AudioBuffer::empty(self.audio.sample_rate()),
+            self.start_time,
+            TokenCount(self.text_tokens().len()),
+            TokenCount(0),
+        );
         log_phase_chunk("commit_all", "total", chunk_index, commit_total_start);
 
         Ok(Some(aligned))
@@ -566,6 +562,26 @@ impl DecodeSession {
             | RotationCutStrategy::Uncut => commit_end - self.start_time,
         };
         Ok(trim_at)
+    }
+
+    fn apply_post_commit_state(
+        &mut self,
+        remaining_audio: AudioBuffer,
+        new_start: Seconds,
+        drain_text_tokens: TokenCount,
+        next_context_tokens: TokenCount,
+    ) {
+        self.audio = remaining_audio;
+        self.start_time = new_start;
+
+        let drop_start = self.metadata_end;
+        let drop_end = self.metadata_end + drain_text_tokens.0;
+        self.tokens.drain(drop_start..drop_end);
+        self.context_token_count = next_context_tokens.0;
+
+        self.encoder_cache = EncoderCache::new();
+        self.mel_extractor = MelExtractor::new(400, 160, 128, 16000);
+        self.generated_start = 0;
     }
 
     /// Compute the fixed prefix for rollback — text tokens only.
