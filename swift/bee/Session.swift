@@ -521,9 +521,6 @@ actor Session {
         guard ime == .active || ime == .activating else { return }
         let prevState = ime
         ime = .inactive
-        beeLog(
-            "SESSION: routeDidBecomeInactive \(prevState)→inactive id=\(id.uuidString.prefix(8)) reason=\(reason)"
-        )
     }
 
     func liveText() -> String {
@@ -700,9 +697,7 @@ actor Session {
         //     )
         //     return
         // }
-        beeLog(
-            "SESSION: render id=\(sessionID.uuidString.prefix(8)) ime=\(ime) len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)"
-        )
+        // DO NOT RE-ADD LOGGING HERE
         inputClient.setMarkedText(text)
     }
 

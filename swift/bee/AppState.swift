@@ -1022,10 +1022,6 @@ final class AppState {
 
     func handleIMEContextLost(hadMarkedText: Bool) {
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        beeLog(
-            "SESSION: imeContextLost id=\(hotkeyState.session?.id.uuidString.prefix(8) ?? "nil") hotkey=\(String(describing: hotkeyState)) imeState=\(imeSessionState) targetPID=\(activeSessionTarget?.pid.map(String.init) ?? "nil") frontmostPID=\(frontmostPID.map(String.init) ?? "nil") hadMarkedText=\(hadMarkedText)"
-        )
-
         guard let session = hotkeyState.session else { return }
         imeSessionState = .inactive
         showParkedOverlay(for: session)
@@ -1035,9 +1031,6 @@ final class AppState {
     func handleIMESessionStarted() {
         // IME is already active by the time a session starts.
         // This callback is now informational only.
-        beeLog(
-            "SESSION: handleIMESessionStarted hotkey=\(String(describing: hotkeyState)) imeState=\(imeSessionState)"
-        )
     }
 
     private func handleDidTerminateApplication(processIdentifier: pid_t?) {
