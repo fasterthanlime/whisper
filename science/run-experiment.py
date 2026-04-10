@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
-"""Run an IME science experiment with proper bookkeeping."""
+"""
+IME science experiment tool.
+
+Two phases:
+  prepare  - creates the experiment file (commit, procedure, predictions)
+  run      - interactive: cycles through apps, collects logs & observations
+"""
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
@@ -24,26 +31,25 @@ TEST_APPS = [
 ]
 
 
-def run(cmd, **kwargs):
+def sh(cmd, **kwargs):
     return subprocess.run(cmd, capture_output=True, text=True, cwd=REPO_ROOT, **kwargs)
 
 
 def git_is_clean():
-    r = run(["git", "status", "--porcelain"])
+    r = sh(["git", "status", "--porcelain"])
     lines = [
-        l
-        for l in r.stdout.strip().splitlines()
+        l for l in r.stdout.strip().splitlines()
         if l and not l.lstrip("? ").startswith("science/")
     ]
     return len(lines) == 0, r.stdout.strip()
 
 
 def git_sha():
-    return run(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
+    return sh(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
 
 
 def git_sha_full():
-    return run(["git", "rev-parse", "HEAD"]).stdout.strip()
+    return sh(["git", "rev-parse", "HEAD"]).stdout.strip()
 
 
 def next_experiment_number():
@@ -57,63 +63,26 @@ def next_experiment_number():
     return max(numbers, default=0) + 1
 
 
-def truncate_log():
-    if BEE_LOG.exists():
-        BEE_LOG.write_text("")
-        return True
-    return False
+def resolve_apps(app_names):
+    if not app_names:
+        return TEST_APPS
+    apps = [a for a in TEST_APPS if a[0].lower() in [x.lower() for x in app_names]]
+    if not apps:
+        print(f"ERROR: No matching apps. Available: {[a[0] for a in TEST_APPS]}", file=sys.stderr)
+        sys.exit(1)
+    return apps
 
 
-def collect_log(dest):
-    if BEE_LOG.exists():
-        shutil.copy2(BEE_LOG, dest)
-        line_count = sum(1 for _ in open(dest))
-        return line_count
-    else:
-        dest.write_text("(no log file found)\n")
-        return 0
+# ── prepare ──────────────────────────────────────────────────────────
 
+def cmd_prepare(args):
+    # Check git is clean
+    clean, status = git_is_clean()
+    if not clean:
+        print("ERROR: Repository has uncommitted changes. Commit first.\n", file=sys.stderr)
+        print(status, file=sys.stderr)
+        sys.exit(1)
 
-def prompt_observations(app_name):
-    print(f"    Observations for {app_name}? (one line, or empty to skip)")
-    line = input("    > ").strip()
-    return line if line else None
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Run an IME science experiment")
-    parser.add_argument("slug", help="Descriptive slug (e.g. baseline-app-switch)")
-    parser.add_argument(
-        "--description", "-d", required=True,
-        help="One-line description of what we're testing",
-    )
-    parser.add_argument(
-        "--procedure", "-p", required=True,
-        help="Step-by-step procedure to perform in each app (use \\n for newlines)",
-    )
-    parser.add_argument("--prediction", default="", help="What we expect to happen")
-    parser.add_argument(
-        "--skip-clean-check", action="store_true",
-        help="Skip the git clean check",
-    )
-    parser.add_argument(
-        "--apps", nargs="*",
-        help="Only test specific apps (by short name). Default: all five.",
-    )
-    args = parser.parse_args()
-
-    # 1. Check git is clean
-    if not args.skip_clean_check:
-        clean, status = git_is_clean()
-        if not clean:
-            print(
-                "ERROR: Repository has uncommitted changes. Commit first.\n",
-                file=sys.stderr,
-            )
-            print(status, file=sys.stderr)
-            sys.exit(1)
-
-    # 2. Determine experiment ID
     EXPERIMENTS_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -122,75 +91,12 @@ def main():
     sha = git_sha()
     sha_full = git_sha_full()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # Filter apps if requested
-    if args.apps:
-        apps = [a for a in TEST_APPS if a[0].lower() in [x.lower() for x in args.apps]]
-        if not apps:
-            print(f"ERROR: No matching apps. Available: {[a[0] for a in TEST_APPS]}", file=sys.stderr)
-            sys.exit(1)
-    else:
-        apps = TEST_APPS
-
-    print(f"\n  Experiment: {experiment_id}")
-    print(f"  Commit:     {sha}")
-    print(f"  Time:       {timestamp}")
-    print(f"  Description: {args.description}")
-    print(f"  Apps:       {', '.join(a[0] for a in apps)}")
-    print()
+    apps = resolve_apps(args.apps)
 
     procedure_lines = args.procedure.replace("\\n", "\n")
-
-    # 3. Run against each app
-    app_results = []
-    for app_name, bundle_id, app_notes in apps:
-        print(f"  ┌─ {app_name} ({bundle_id})")
-        print(f"  │  {app_notes}")
-        print(f"  │")
-
-        # Truncate log
-        if truncate_log():
-            print(f"  │  [ok] Truncated bee.log")
-        else:
-            print(f"  │  [warn] bee.log not found")
-
-        # Show procedure
-        print(f"  │")
-        print(f"  │  Procedure:")
-        for line in procedure_lines.splitlines():
-            print(f"  │    {line}")
-        print(f"  │")
-        print(f"  │  Perform the test in {app_name} now. Press ENTER when done.")
-        input(f"  │  > ")
-
-        # Collect log
-        log_file = LOGS_DIR / f"{experiment_id}-{app_name.lower()}.txt"
-        line_count = collect_log(log_file)
-        print(f"  │  [ok] Collected {line_count} log lines")
-
-        # Observations
-        obs = prompt_observations(app_name)
-
-        app_results.append({
-            "name": app_name,
-            "bundle_id": bundle_id,
-            "log_file": log_file.name,
-            "line_count": line_count,
-            "observation": obs,
-        })
-
-        print(f"  └─ done\n")
-
-    # 4. Write experiment file
     procedure_formatted = "\n".join(f"   {line}" for line in procedure_lines.splitlines())
 
-    results_section = ""
-    for r in app_results:
-        obs = r["observation"] or "(no observation recorded)"
-        results_section += f"### {r['name']} (`{r['bundle_id']}`)\n\n"
-        results_section += f"- **Log**: [`logs/{r['log_file']}`](../logs/{r['log_file']})"
-        results_section += f" ({r['line_count']} lines)\n"
-        results_section += f"- **Observation**: {obs}\n\n"
+    app_list = "\n".join(f"- {name} (`{bid}`)" for name, bid, _ in apps)
 
     experiment_md = textwrap.dedent(f"""\
     # {experiment_id}
@@ -207,9 +113,14 @@ def main():
 
     {args.prediction or "(none)"}
 
+    ## Test apps
+
+    {app_list}
+
     ## Results
 
-    {results_section}
+    (run `python3 science/run-experiment.py run {experiment_id}` to collect)
+
     ## Conclusions
 
     (to be filled in after analysis)
@@ -217,8 +128,167 @@ def main():
 
     experiment_path = EXPERIMENTS_DIR / f"{experiment_id}.md"
     experiment_path.write_text(experiment_md)
-    print(f"  [ok] Wrote {experiment_path.relative_to(REPO_ROOT)}")
+
+    # Also write a machine-readable sidecar for the run phase
+    meta = {
+        "id": experiment_id,
+        "sha": sha,
+        "sha_full": sha_full,
+        "timestamp": timestamp,
+        "description": args.description,
+        "procedure": procedure_lines,
+        "prediction": args.prediction or "",
+        "apps": [{"name": a[0], "bundle_id": a[1], "notes": a[2]} for a in apps],
+    }
+    meta_path = EXPERIMENTS_DIR / f"{experiment_id}.json"
+    meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+
+    print(f"\n  Prepared: {experiment_id}")
+    print(f"  Commit:   {sha}")
+    print(f"  Apps:     {', '.join(a[0] for a in apps)}")
+    print(f"  Files:")
+    print(f"    {experiment_path.relative_to(REPO_ROOT)}")
+    print(f"    {meta_path.relative_to(REPO_ROOT)}")
+    print(f"\n  To run:  python3 science/run-experiment.py run {experiment_id}\n")
+
+
+# ── run ──────────────────────────────────────────────────────────────
+
+def cmd_run(args):
+    # Find the experiment metadata
+    meta_path = EXPERIMENTS_DIR / f"{args.experiment_id}.json"
+    if not meta_path.exists():
+        # Try glob in case they gave a partial ID
+        candidates = list(EXPERIMENTS_DIR.glob(f"{args.experiment_id}*.json"))
+        if len(candidates) == 1:
+            meta_path = candidates[0]
+        elif len(candidates) > 1:
+            print(f"ERROR: Ambiguous ID. Matches: {[c.stem for c in candidates]}", file=sys.stderr)
+            sys.exit(1)
+        else:
+            print(f"ERROR: No experiment found for '{args.experiment_id}'", file=sys.stderr)
+            print(f"  Available:", file=sys.stderr)
+            for p in sorted(EXPERIMENTS_DIR.glob("E-*.json")):
+                print(f"    {p.stem}", file=sys.stderr)
+            sys.exit(1)
+
+    meta = json.loads(meta_path.read_text())
+    experiment_id = meta["id"]
+    apps = meta["apps"]
+    procedure = meta["procedure"]
+
+    # Verify we're on the right commit
+    current_sha = git_sha()
+    if current_sha != meta["sha"]:
+        print(f"  WARNING: Current commit ({current_sha}) differs from experiment commit ({meta['sha']})")
+        resp = input("  Continue anyway? [y/N] ").strip().lower()
+        if resp != "y":
+            sys.exit(1)
+
+    print(f"\n  Running: {experiment_id}")
+    print(f"  Description: {meta['description']}")
+    print()
+
+    app_results = []
+    for app in apps:
+        app_name = app["name"]
+        bundle_id = app["bundle_id"]
+        notes = app["notes"]
+
+        print(f"  ┌─ {app_name} ({bundle_id})")
+        print(f"  │  {notes}")
+        print(f"  │")
+
+        # Truncate log
+        if BEE_LOG.exists():
+            BEE_LOG.write_text("")
+            print(f"  │  [ok] Truncated bee.log")
+        else:
+            print(f"  │  [warn] bee.log not found")
+
+        # Show procedure
+        print(f"  │")
+        print(f"  │  Procedure:")
+        for line in procedure.splitlines():
+            print(f"  │    {line}")
+        print(f"  │")
+        print(f"  │  Perform the test in {app_name}. Press ENTER when done.")
+        input(f"  │  > ")
+
+        # Collect log
+        log_file = LOGS_DIR / f"{experiment_id}-{app_name.lower()}.txt"
+        if BEE_LOG.exists():
+            shutil.copy2(BEE_LOG, log_file)
+            line_count = sum(1 for _ in open(log_file))
+        else:
+            log_file.write_text("(no log file found)\n")
+            line_count = 0
+        print(f"  │  [ok] Collected {line_count} log lines")
+
+        # Observation
+        print(f"  │")
+        print(f"  │  Observation for {app_name}? (one line, or empty to skip)")
+        obs = input(f"  │  > ").strip() or None
+
+        app_results.append({
+            "name": app_name,
+            "bundle_id": bundle_id,
+            "log_file": log_file.name,
+            "line_count": line_count,
+            "observation": obs,
+        })
+
+        print(f"  └─ done\n")
+
+    # Update the experiment markdown with results
+    results_section = ""
+    for r in app_results:
+        obs = r["observation"] or "(no observation recorded)"
+        results_section += f"### {r['name']} (`{r['bundle_id']}`)\n\n"
+        results_section += f"- **Log**: [`logs/{r['log_file']}`](../logs/{r['log_file']})"
+        results_section += f" ({r['line_count']} lines)\n"
+        results_section += f"- **Observation**: {obs}\n\n"
+
+    experiment_path = EXPERIMENTS_DIR / f"{experiment_id}.md"
+    md = experiment_path.read_text()
+    md = md.replace(
+        f"(run `python3 science/run-experiment.py run {experiment_id}` to collect)",
+        results_section.rstrip(),
+    )
+    experiment_path.write_text(md)
+
+    # Also save results to the JSON
+    meta["results"] = app_results
+    meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+
+    print(f"  [ok] Updated {experiment_path.relative_to(REPO_ROOT)}")
     print(f"\n  Done. Fill in conclusions, then update science/facts.md.\n")
+
+
+# ── main ─────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(description="IME science experiment tool")
+    sub = parser.add_subparsers(dest="command")
+
+    p_prepare = sub.add_parser("prepare", help="Create an experiment (no interaction)")
+    p_prepare.add_argument("slug", help="Descriptive slug (e.g. baseline-app-switch)")
+    p_prepare.add_argument("-d", "--description", required=True, help="What we're testing")
+    p_prepare.add_argument("-p", "--procedure", required=True, help="Steps per app (\\n for newlines)")
+    p_prepare.add_argument("--prediction", default="", help="What we expect")
+    p_prepare.add_argument("--apps", nargs="*", help="Subset of apps to test")
+
+    p_run = sub.add_parser("run", help="Run a prepared experiment (interactive)")
+    p_run.add_argument("experiment_id", help="Experiment ID (e.g. E-001-baseline-app-switch)")
+
+    args = parser.parse_args()
+    if args.command == "prepare":
+        cmd_prepare(args)
+    elif args.command == "run":
+        cmd_run(args)
+    else:
+        parser.print_help()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
