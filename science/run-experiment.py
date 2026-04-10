@@ -147,8 +147,8 @@ def cmd_prepare(args):
     print(f"  Commit:   {sha}")
     print(f"  Apps:     {', '.join(a[0] for a in apps)}")
     print(f"  Files:")
-    print(f"    {experiment_path.relative_to(REPO_ROOT)}")
-    print(f"    {meta_path.relative_to(REPO_ROOT)}")
+    print(f"    {experiment_path.relative_to(EXPERIMENTS_REPO)}")
+    print(f"    {meta_path.relative_to(EXPERIMENTS_REPO)}")
     print(f"\n  To run:  python3 science/run-experiment.py run {experiment_id}\n")
 
 
