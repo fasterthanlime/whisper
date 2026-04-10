@@ -241,13 +241,12 @@ impl AudioFilter for RmsNormalizer {
 }
 
 /// Build the default audio filter chain:
-/// DC removal → clipping guard → VAD → RMS normalization.
 pub fn default_filter_chain(vad: bee_vad::SileroVad, vad_threshold: f32) -> AudioFilterChain {
     let mut chain = AudioFilterChain::new();
     chain.push(DcOffsetFilter::new());
     chain.push(ClippingGuard::new());
     chain.push(VadFilter::new(vad, vad_threshold));
-    chain.push(RmsNormalizer::new(0.08));
+    // chain.push(RmsNormalizer::new(0.08));
     chain
 }
 
