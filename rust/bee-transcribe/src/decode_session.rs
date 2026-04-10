@@ -51,6 +51,10 @@ pub struct DecodeSession {
     /// Decode checkpoints used to estimate a rotation cut without re-discovering
     /// the full boundary from scratch at commit time.
     checkpoints: Vec<DecodeCheckpoint>,
+    /// Number of text tokens at the start that are context carried forward from
+    /// the previous rotation. These have audio at the beginning of `self.audio`
+    /// and must not be counted toward the commit threshold.
+    context_token_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +86,7 @@ impl DecodeSession {
             chunk_count: 0,
             generated_start: 0,
             checkpoints: Vec::new(),
+            context_token_count: 0,
         }
     }
 
@@ -159,10 +164,18 @@ impl DecodeSession {
         self.generated_start.saturating_sub(self.metadata_end)
     }
 
-    /// How many text tokens can be committed without splitting a word.
+    /// Number of context tokens carried forward from the previous rotation.
+    pub fn context_token_count(&self) -> usize {
+        self.context_token_count
+    }
+
+    /// How many *fresh* text tokens can be committed without splitting a word.
+    /// Context tokens from the previous rotation are excluded from the count.
     pub fn committable_text_tokens(&self, tokenizer: &Tokenizer, n: TokenCount) -> TokenCount {
-        let entries = TextBuffer::from_entries(self.pending_entries(tokenizer));
-        entries.snap_to_word_boundary(n)
+        let all_entries = TextBuffer::from_entries(self.pending_entries(tokenizer));
+        let old_ctx = self.context_token_count;
+        let fresh_entries = TextBuffer::from_entries(all_entries.entries()[old_ctx..].to_vec());
+        fresh_entries.snap_to_word_boundary(n)
     }
 
     /// Run one decode step: mel extraction, encoding, generation.
@@ -400,11 +413,12 @@ impl DecodeSession {
     pub fn commit(
         &mut self,
         n: TokenCount,
+        context_tokens: usize,
         rotation_cut_strategy: &RotationCutStrategy,
         forced_aligner: &ForcedAligner,
         zipa: &ZipaInference,
         tokenizer: &Tokenizer,
-    ) -> Result<Option<TextBuffer>, Exception> {
+    ) -> Result<Option<(TextBuffer, AudioBuffer, AudioBuffer)>, Exception> {
         let commit_total_start = phase_start();
         let chunk_index = self.chunk_count;
         // Build entries from text tokens, snap to word boundary
@@ -431,10 +445,36 @@ impl DecodeSession {
             chunk_index,
             boundary_start,
         );
+        // --- context token accounting ---
+        // `safe_n` covers old context tokens (from previous rotation) + fresh committed tokens.
+        // We need to know how many old context tokens are at the front so we can:
+        //   - exclude them from the returned `aligned` (already in transcript)
+        //   - keep `context_tokens` fresh tokens in the next session (with their audio)
+        let old_ctx = self.context_token_count;
+        let fresh_safe_n = safe_n.0.saturating_sub(old_ctx);
+
+        // How many fresh tokens to keep as context for the next rotation.
+        // Snap to word boundary within the fresh portion.
+        let new_ctx_n = if context_tokens > 0 && fresh_safe_n > context_tokens {
+            let fresh_slice = &entries.entries()[old_ctx..safe_n.0];
+            let fresh_buf = TextBuffer::from_entries(fresh_slice.to_vec());
+            let drain_target = TokenCount(fresh_safe_n - context_tokens);
+            let fresh_drain_tokens = fresh_buf.snap_to_word_boundary(drain_target);
+            fresh_safe_n - fresh_drain_tokens.0
+        } else {
+            0
+        };
+        let fresh_drain_n = fresh_safe_n - new_ctx_n;
+        let drain_count = old_ctx + fresh_drain_n; // total tokens to actually drain
+
         tracing::debug!(
             requested = n.0,
             checkpoint_tokens = checkpoint_tokens.0,
             snapped = safe_n.0,
+            old_ctx,
+            fresh_safe_n,
+            new_ctx_n,
+            drain_count,
             total_text_tokens = self.text_tokens().len(),
             "commit: snap to word boundary"
         );
@@ -499,8 +539,32 @@ impl DecodeSession {
                 end: Seconds(item.end_time as f64),
             })
             .collect();
-        let aligned =
+        let mut aligned =
             text_buffer::align(to_commit, &alignment_items, &align_audio, self.start_time);
+
+        // Before stripping context tokens, count words in the portions we need
+        // for the audio cut point calculation.
+        let drain_word_count = if new_ctx_n > 0 {
+            // Words in old context tokens (at the start of aligned)
+            let old_ctx_word_count = aligned.entries()[..old_ctx]
+                .iter()
+                .filter(|e| e.word.is_some())
+                .count();
+            // Words in the fresh tokens that will be drained (not kept as context)
+            let fresh_drain_word_count = aligned.entries()[old_ctx..old_ctx + fresh_drain_n]
+                .iter()
+                .filter(|e| e.word.is_some())
+                .count();
+            old_ctx_word_count + fresh_drain_word_count
+        } else {
+            items.len() // all words drained, no context kept
+        };
+
+        // Strip old context tokens — they're already in the transcript from the previous rotation.
+        if old_ctx > 0 {
+            let _ctx_front = aligned.split_off_front(TokenCount(old_ctx));
+            // `aligned` now contains only fresh tokens.
+        }
         log_phase_chunk(
             "commit",
             "build_aligned_buffer",
@@ -508,23 +572,31 @@ impl DecodeSession {
             align_buffer_start,
         );
 
-        // Rotate: trim audio and drop committed tokens, keep the rest
-        // (like v1's Generator::rotate — remaining tokens provide context
-        // so the model doesn't think it's starting a new utterance).
+        // Rotate: trim audio and drop committed tokens, keep the rest.
+        //
+        // If context_tokens > 0, cut audio at the word boundary of `drain_count` tokens
+        // so the fresh context tokens (new_ctx_n) keep their audio in `remaining`.
+        // Otherwise use the strategy-determined cut point.
         let rotate_start = phase_start();
         let last_end = Seconds(items.last().unwrap().end_time as f64);
-        let trim_at = match rotation_cut_strategy {
-            RotationCutStrategy::Zipa => {
-                let raw = zipa_nearest_cut.unwrap_or(align_prefix_end);
-                Seconds(raw.0.clamp(0.0, align_prefix_end.0))
+
+        let trim_at = if new_ctx_n > 0 && drain_word_count > 0 && drain_word_count <= items.len() {
+            // Cut audio at the end of the last drained word, leaving context-token audio in remaining.
+            Seconds(items[drain_word_count - 1].end_time as f64)
+        } else {
+            match rotation_cut_strategy {
+                RotationCutStrategy::Zipa => {
+                    let raw = zipa_nearest_cut.unwrap_or(align_prefix_end);
+                    Seconds(raw.0.clamp(0.0, align_prefix_end.0))
+                }
+                RotationCutStrategy::Qwen3
+                | RotationCutStrategy::ManualTargetCommittedTextTokens(_) => align_prefix_end,
+                RotationCutStrategy::Uncut => align_prefix_end,
             }
-            RotationCutStrategy::Qwen3
-            | RotationCutStrategy::ManualTargetCommittedTextTokens(_) => align_prefix_end,
-            RotationCutStrategy::Uncut => align_prefix_end,
         };
         let new_start = self.start_time + trim_at;
         let (committed_audio, remaining) = self.audio.split_at(trim_at);
-        let remaining_token_ids: Vec<TokenId> = self.text_tokens()[safe_n.0..]
+        let remaining_token_ids: Vec<TokenId> = self.text_tokens()[drain_count..]
             .iter()
             .map(|token| token.id)
             .collect();
@@ -542,12 +614,14 @@ impl DecodeSession {
             tracing::warn!(%error, "commit: failed to dump rotation debug artifacts");
         }
 
-        let remaining_text_tokens = self.text_tokens().len() - safe_n.0;
+        let remaining_text_tokens = self.text_tokens().len() - drain_count;
         tracing::info!(
             committed_word_count,
             checkpoints = self.checkpoints.len(),
             selected_checkpoint = selected_checkpoint.index,
             committed_tokens = safe_n.0,
+            drain_count,
+            new_ctx_n,
             remaining_text_tokens,
             old_start = %format!("{:.3}s", self.start_time.0),
             new_start = %format!("{:.3}s", new_start.0),
@@ -560,13 +634,16 @@ impl DecodeSession {
             "commit: rotation"
         );
 
+        let remaining_audio_for_sink = remaining.clone();
         self.audio = remaining;
         self.start_time = new_start;
 
-        // Drop the committed text tokens, keep metadata + remaining text
+        // Drain committed tokens. The fresh context tokens (new_ctx_n) stay in self.tokens
+        // with their audio now at the start of self.audio.
         let drop_start = self.metadata_end;
-        let drop_end = self.metadata_end + safe_n.0;
+        let drop_end = self.metadata_end + drain_count;
         self.tokens.drain(drop_start..drop_end);
+        self.context_token_count = new_ctx_n;
         // metadata_end stays the same (metadata tokens unchanged)
 
         self.encoder_cache = EncoderCache::new();
@@ -577,7 +654,7 @@ impl DecodeSession {
         log_phase_chunk("commit", "rotate_reset", chunk_index, rotate_start);
         log_phase_chunk("commit", "total", chunk_index, commit_total_start);
 
-        Ok(Some(aligned))
+        Ok(Some((aligned, committed_audio, remaining_audio_for_sink)))
     }
 
     /// Commit all text tokens. Same as `commit` but without a token limit.
@@ -632,8 +709,13 @@ impl DecodeSession {
                 end: Seconds(item.end_time as f64),
             })
             .collect();
-        let aligned =
+        let mut aligned =
             text_buffer::align(to_commit, &alignment_items, &align_audio, self.start_time);
+        // Strip any context tokens carried into this session — already in transcript.
+        let old_ctx = self.context_token_count;
+        if old_ctx > 0 {
+            let _ctx_front = aligned.split_off_front(TokenCount(old_ctx));
+        }
         log_phase_chunk(
             "commit_all",
             "build_aligned_buffer",
@@ -643,6 +725,7 @@ impl DecodeSession {
 
         tracing::info!(
             committed_tokens = self.text_tokens().len(),
+            old_ctx,
             audio_samples = self.audio.len(),
             aligned_words = items.len(),
             "commit_all: final commit without checkpoint rotation"

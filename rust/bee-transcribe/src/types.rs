@@ -54,10 +54,25 @@ impl Default for RotationCutStrategy {
 pub struct CutEvent {
     /// The words that were just committed at this cut point.
     pub committed_words: Vec<AlignedWord>,
+    /// Audio that was committed (the slice that got locked in).
+    pub committed_audio: crate::audio_buffer::AudioBuffer,
+    /// Audio that was retained and fed back into the next decode session.
+    pub remaining_audio: crate::audio_buffer::AudioBuffer,
 }
 
 /// A sink that receives cut events during a transcription session.
 pub type CutSink = Box<dyn FnMut(CutEvent)>;
+
+/// Event fired for every audio chunk processed by `feed()`.
+pub struct ChunkEvent {
+    /// Raw audio before any filtering.
+    pub raw_audio: crate::audio_buffer::AudioBuffer,
+    /// Post-filter audio. `None` if VAD gated the chunk.
+    pub filtered_audio: Option<crate::audio_buffer::AudioBuffer>,
+}
+
+/// A sink that receives every audio chunk, including VAD-dropped ones.
+pub type ChunkSink = Box<dyn FnMut(ChunkEvent)>;
 
 /// Configuration for a transcription session.
 #[derive(Debug, Clone, Facet)]
@@ -68,12 +83,16 @@ pub struct SessionOptions {
     /// VAD speech probability threshold (0.0-1.0). Default: 0.5
     pub vad_threshold: f32,
 
-    /// How many recent tokens the model is allowed to revise each step.
-    /// Everything before this tail is fed back as fixed context that
-    /// the model must continue from. Higher values give the model more
-    /// freedom to correct itself but make the output less stable between
-    /// steps. Default: 5
+    /// Streaming revision window: how many tail tokens the model may rewrite
+    /// on each streaming step. Everything before this tail is fed back as a
+    /// fixed prefix the model must continue from. Higher = more self-correction,
+    /// less stability. Default: 5
     pub rollback_tokens: usize,
+
+    /// How many tokens from the just-committed text are carried forward as
+    /// fixed context into the next decode session after a rotation cut.
+    /// Independent of `rollback_tokens`. Default: 0
+    pub context_tokens: usize,
 
     /// Minimum number of fixed tokens (total minus `rollback_tokens`)
     /// before we commit and rotate the session. When the fixed portion
@@ -95,6 +114,10 @@ pub struct SessionOptions {
 
     /// How rotation cut points are selected.
     pub rotation_cut_strategy: RotationCutStrategy,
+
+    /// Skip all audio filters (VAD, DC removal, RMS normalization).
+    /// Every chunk is fed directly to the decoder as-is.
+    pub bypass_audio_filters: bool,
 }
 
 impl Default for SessionOptions {
@@ -103,12 +126,14 @@ impl Default for SessionOptions {
             chunk_duration: 0.4,
             vad_threshold: 0.5,
             rollback_tokens: 5,
+            context_tokens: 0,
             commit_token_count: 12,
             max_tokens_streaming: 32,
             max_tokens_final: 512,
             language: Language::default(),
             app_id: None,
             rotation_cut_strategy: RotationCutStrategy::Qwen3,
+            bypass_audio_filters: false,
         }
     }
 }

@@ -20,8 +20,8 @@ use crate::decode_session::DecodeSession;
 use crate::text_buffer::{self, TextBuffer, TokenCount, TokenEntry, TokenId};
 use crate::timing::{log_phase, log_phase_chunk, phase_start};
 use crate::types::{
-    CutEvent, CutSink, PendingToken, RotationCutStrategy, SessionAmbiguitySummary, SessionOptions,
-    SessionSnapshot, TokenAlternative,
+    ChunkEvent, ChunkSink, CutEvent, CutSink, PendingToken, RotationCutStrategy,
+    SessionAmbiguitySummary, SessionOptions, SessionSnapshot, TokenAlternative,
 };
 use crate::{FinishResult, SharedCorrectionEngine};
 
@@ -62,6 +62,7 @@ pub struct Session<'a> {
     revision: u64,
     session_audio: AudioBuffer,
     cut_sink: Option<CutSink>,
+    chunk_sink: Option<ChunkSink>,
 }
 
 impl<'a> Session<'a> {
@@ -74,6 +75,7 @@ impl<'a> Session<'a> {
         options: SessionOptions,
         correction: Option<(SharedCorrectionEngine, Corrector)>,
         cut_sink: Option<CutSink>,
+        chunk_sink: Option<ChunkSink>,
     ) -> Self {
         let chunk_size_samples = (options.chunk_duration * 16000.0) as usize;
         assert!(chunk_size_samples > 0, "chunk_duration too small");
@@ -82,7 +84,11 @@ impl<'a> Session<'a> {
             tokenizer,
             forced_aligner,
             zipa,
-            filters: audio_filter::default_filter_chain(vad, options.vad_threshold),
+            filters: if options.bypass_audio_filters {
+                audio_filter::AudioFilterChain::new()
+            } else {
+                audio_filter::default_filter_chain(vad, options.vad_threshold)
+            },
             decode: DecodeSession::new(
                 AudioBuffer::empty(SampleRate::HZ_16000),
                 Seconds::ZERO,
@@ -101,6 +107,7 @@ impl<'a> Session<'a> {
             revision: 0,
             session_audio: AudioBuffer::empty(SampleRate::HZ_16000),
             cut_sink,
+            chunk_sink,
         }
     }
 
@@ -127,6 +134,7 @@ impl<'a> Session<'a> {
         while self.incoming.len() >= self.chunk_size_samples {
             let chunk_samples: Vec<f32> = self.incoming.drain(..self.chunk_size_samples).collect();
             let chunk = AudioBuffer::new(chunk_samples, SampleRate::HZ_16000);
+            let raw_for_sink = self.chunk_sink.is_some().then(|| chunk.clone());
 
             let filter_start = phase_start();
             let chunk_index = self.decode.chunk_count() + 1;
@@ -136,6 +144,12 @@ impl<'a> Session<'a> {
                     audio_samples = chunk.len(),
                     "feed: speech chunk passed filters"
                 );
+                if let (Some(sink), Some(raw)) = (self.chunk_sink.as_mut(), raw_for_sink) {
+                    sink(ChunkEvent {
+                        raw_audio: raw,
+                        filtered_audio: Some(chunk.clone()),
+                    });
+                }
                 self.session_audio.append(&chunk);
                 self.decode.append_audio(&chunk);
                 let decode_start = phase_start();
@@ -148,6 +162,12 @@ impl<'a> Session<'a> {
             } else {
                 log_phase_chunk("feed", "filter_vad", chunk_index, filter_start);
                 tracing::trace!("feed: chunk filtered out (silence/VAD)");
+                if let (Some(sink), Some(raw)) = (self.chunk_sink.as_mut(), raw_for_sink) {
+                    sink(ChunkEvent {
+                        raw_audio: raw,
+                        filtered_audio: None,
+                    });
+                }
             }
         }
 
@@ -367,20 +387,25 @@ impl<'a> Session<'a> {
             pending_start,
         );
 
-        // Check if enough fixed tokens to try committing (use adaptive rollback)
+        // Check if enough *fresh* fixed tokens to try committing.
+        // Context tokens from the previous rotation are excluded so they don't
+        // eat into the commit threshold and cause premature re-commit cascades.
         let text_count = self.decode.text_tokens().len();
+        let old_ctx = self.decode.context_token_count();
         let rollback = self.effective_rollback();
-        let fixed = text_count.saturating_sub(rollback);
+        let fresh_and_rollback = text_count.saturating_sub(old_ctx);
+        let fresh_fixed = fresh_and_rollback.saturating_sub(rollback);
         let commit_threshold = self.effective_commit_threshold();
         tracing::debug!(
             text_tokens = text_count,
-            fixed,
+            old_ctx,
+            fresh_fixed,
             rollback,
             commit_threshold,
             "decode_and_maybe_commit: token counts"
         );
 
-        if fixed >= commit_threshold {
+        if fresh_fixed >= commit_threshold {
             let requested_commit_tokens = self.requested_commit_tokens();
             tracing::info!(
                 commit_n = requested_commit_tokens.0,
@@ -410,8 +435,9 @@ impl<'a> Session<'a> {
                 );
             }
             let commit_start = phase_start();
-            if let Some(aligned) = self.decode.commit(
+            if let Some((aligned, committed_audio, remaining_audio)) = self.decode.commit(
                 requested_commit_tokens,
+                self.options.context_tokens,
                 &self.options.rotation_cut_strategy,
                 self.forced_aligner,
                 self.zipa,
@@ -438,6 +464,8 @@ impl<'a> Session<'a> {
                 if let Some(sink) = self.cut_sink.as_mut() {
                     sink(CutEvent {
                         committed_words: new_words.clone(),
+                        committed_audio: committed_audio.clone(),
+                        remaining_audio: remaining_audio.clone(),
                     });
                 }
 

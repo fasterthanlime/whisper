@@ -152,6 +152,15 @@ impl Engine {
         options: SessionOptions,
         cut_sink: Option<CutSink>,
     ) -> Result<session::Session<'_>, Exception> {
+        self.session_with_sinks(options, cut_sink, None)
+    }
+
+    pub fn session_with_sinks(
+        &self,
+        options: SessionOptions,
+        cut_sink: Option<CutSink>,
+        chunk_sink: Option<ChunkSink>,
+    ) -> Result<session::Session<'_>, Exception> {
         let vad = SileroVad::from_tensors(&self.vad_tensors)
             .map_err(|e| Exception::custom(format!("vad creation failed: {e}")))?;
         let correction = self
@@ -167,6 +176,7 @@ impl Engine {
             options,
             correction,
             cut_sink,
+            chunk_sink,
         ))
     }
 }
