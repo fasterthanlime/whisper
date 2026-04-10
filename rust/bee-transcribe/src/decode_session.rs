@@ -525,16 +525,28 @@ impl DecodeSession {
 
         // Run word alignment to get per-word timing.
         let align_start = phase_start();
+        tracing::debug!(
+            audio_samples = align_audio.len(),
+            audio_secs = align_audio.duration().0,
+            align_prefix_end_secs = align_prefix_end.0,
+            self_audio_samples = self.audio.len(),
+            self_audio_secs = self.audio.duration().0,
+            session_start_secs = self.start_time.0,
+            wav_slice_start_secs = self.start_time.0,
+            wav_slice_end_secs = self.start_time.0 + align_prefix_end.0,
+            "commit: audio passed to aligner"
+        );
         let alignment_items: Vec<AlignmentItem> = match aligner {
             Aligner::Zipa => {
                 let g2p = g2p.expect("Aligner::Zipa requires G2P but g2p is None — check that correction_dir / g2p_dir is configured");
                 let items = zipa_word_alignments(zipa, &align_audio, &commit_text, g2p)
                     .unwrap_or_else(|e| panic!("commit: zipa alignment failed: {e}"));
-                assert!(
-                    !items.is_empty(),
-                    "commit: zipa alignment returned no items for {:?}",
-                    commit_text.trim()
-                );
+                if items.is_empty() {
+                    tracing::warn!(
+                        text = %commit_text.trim(),
+                        "commit: zipa alignment returned no items (all words outside audio?)"
+                    );
+                }
                 log_phase_chunk("commit", "zipa_align", chunk_index, align_start);
                 items
             }
@@ -606,7 +618,10 @@ impl DecodeSession {
         // so the fresh context tokens (new_ctx_n) keep their audio in `remaining`.
         // Otherwise use the strategy-determined cut point.
         let rotate_start = phase_start();
-        let last_end = alignment_items.last().unwrap().end;
+        let last_end = alignment_items
+            .last()
+            .map(|item| item.end)
+            .unwrap_or(align_prefix_end);
 
         let trim_at =
             if new_ctx_n > 0 && drain_word_count > 0 && drain_word_count <= alignment_items.len() {
@@ -725,11 +740,12 @@ impl DecodeSession {
                 let g2p = g2p.expect("Aligner::Zipa requires G2P but g2p is None — check that correction_dir / g2p_dir is configured");
                 let items = zipa_word_alignments(zipa, &align_audio, &commit_text, g2p)
                     .unwrap_or_else(|e| panic!("commit_all: zipa alignment failed: {e}"));
-                assert!(
-                    !items.is_empty(),
-                    "commit_all: zipa alignment returned no items for {:?}",
-                    commit_text.trim()
-                );
+                if items.is_empty() {
+                    tracing::warn!(
+                        text = %commit_text.trim(),
+                        "commit_all: zipa alignment returned no items"
+                    );
+                }
                 log_phase_chunk("commit_all", "zipa_align", chunk_index, align_start);
                 items
             }
@@ -1156,6 +1172,12 @@ fn zipa_word_alignments(
         samples: audio.samples().to_vec(),
         sample_rate_hz: audio.sample_rate().0,
     };
+    tracing::debug!(
+        audio_samples = audio.len(),
+        audio_secs = audio.duration().0,
+        sample_rate = audio.sample_rate().0,
+        "zipa_word_alignments: audio received"
+    );
     let utterance = zipa.infer_audio(&zipa_audio).map_err(|e| e.to_string())?;
     let duration = audio.duration().0;
 

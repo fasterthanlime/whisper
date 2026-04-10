@@ -227,12 +227,20 @@ pub fn select_segmental_word_windows(
         .iter()
         .enumerate()
         .map(|(word_index, transcript_tokens)| {
-            build_word_segment_candidates(
+            let candidates = build_word_segment_candidates(
                 transcript_tokens,
                 transcript_token_ranges.get(word_index).cloned(),
                 utterance_zipa_normalized,
                 utterance_alignment,
-            )
+            );
+            tracing::debug!(
+                word_index,
+                transcript_tokens = %transcript_tokens.join(" "),
+                token_range = ?transcript_token_ranges.get(word_index),
+                candidates = candidates.len(),
+                "select_segmental_word_windows: word candidates"
+            );
+            candidates
         })
         .collect::<Vec<_>>();
 
@@ -240,6 +248,10 @@ pub fn select_segmental_word_windows(
         .iter()
         .any(|candidates| candidates.is_empty())
     {
+        tracing::debug!(
+            words_with_no_candidates = candidates_per_word.iter().filter(|c| c.is_empty()).count(),
+            "select_segmental_word_windows: some words have no candidates, returning all None"
+        );
         return std::iter::repeat_with(|| None)
             .take(transcript_word_tokens.len())
             .collect();
@@ -287,11 +299,48 @@ pub fn select_segmental_word_windows(
         }
     }
 
-    let last_word_index = candidates_per_word.len() - 1;
+    // Log best DP score per word to see where the DP fails
+    for (word_index, candidates) in candidates_per_word.iter().enumerate() {
+        let best = dp[word_index]
+            .iter()
+            .zip(candidates.iter())
+            .filter(|(s, _)| s.is_finite())
+            .max_by(|(a, _), (b, _)| a.total_cmp(b));
+        match best {
+            Some((score, cand)) => tracing::debug!(
+                word_index,
+                score,
+                range = ?cand.zipa_norm_range,
+                "DP: best finite score for word"
+            ),
+            None => tracing::debug!(word_index, "DP: all candidates NEG_INFINITY for word"),
+        }
+    }
+
+    // Find the last word index that has at least one finite DP score.
+    // Words after it couldn't be placed (audio too short) and stay None.
+    let traceback_start = (0..candidates_per_word.len())
+        .rev()
+        .find(|&wi| dp[wi].iter().any(|s| s.is_finite()));
+
+    let Some(traceback_start) = traceback_start else {
+        return std::iter::repeat_with(|| None)
+            .take(transcript_word_tokens.len())
+            .collect();
+    };
+
+    if traceback_start < candidates_per_word.len() - 1 {
+        tracing::debug!(
+            traceback_start,
+            n_unreachable = candidates_per_word.len() - 1 - traceback_start,
+            "select_segmental_word_windows: last words unreachable (audio too short), partial alignment"
+        );
+    }
+
     let mut best_last = None;
     let mut best_last_score = f32::NEG_INFINITY;
-    for (candidate_index, candidate) in candidates_per_word[last_word_index].iter().enumerate() {
-        let total_score = dp[last_word_index][candidate_index]
+    for (candidate_index, candidate) in candidates_per_word[traceback_start].iter().enumerate() {
+        let total_score = dp[traceback_start][candidate_index]
             - gap_penalty(&utterance_zipa_normalized[candidate.zipa_norm_range.end..]);
         if total_score > best_last_score {
             best_last_score = total_score;
@@ -306,7 +355,7 @@ pub fn select_segmental_word_windows(
     };
 
     let mut chosen = vec![None; transcript_word_tokens.len()];
-    for word_index in (0..candidates_per_word.len()).rev() {
+    for word_index in (0..=traceback_start).rev() {
         let candidate = candidates_per_word[word_index][candidate_index].clone();
         chosen[word_index] = Some(WordAlignmentWindow {
             zipa_norm_range: candidate.zipa_norm_range,
@@ -482,15 +531,27 @@ fn build_word_segment_candidates(
     }
 
     let mut candidate_ranges = Vec::<Range<usize>>::new();
-    if let Some(transcript_token_range) = transcript_token_range {
-        if let Some(projected_range) =
-            utterance_alignment.project_left_range(transcript_token_range)
-        {
+    if let Some(transcript_token_range) = transcript_token_range.clone() {
+        let projected = utterance_alignment.project_left_range(transcript_token_range.clone());
+        tracing::debug!(
+            tokens = %transcript_tokens.join(" "),
+            token_range = ?transcript_token_range,
+            projected_range = ?projected,
+            "build_word_segment_candidates: projection"
+        );
+        if let Some(projected_range) = projected {
             candidate_ranges.push(projected_range);
         }
     }
+    let anchor_windows = top_right_anchor_windows(transcript_tokens, utterance_zipa_normalized, 4);
+    tracing::debug!(
+        tokens = %transcript_tokens.join(" "),
+        anchor_count = anchor_windows.len(),
+        anchors = ?anchor_windows.iter().map(|w| w.right_start as usize..w.right_end as usize).collect::<Vec<_>>(),
+        "build_word_segment_candidates: anchor windows"
+    );
     candidate_ranges.extend(
-        top_right_anchor_windows(transcript_tokens, utterance_zipa_normalized, 4)
+        anchor_windows
             .into_iter()
             .map(|window| window.right_start as usize..window.right_end as usize),
     );
