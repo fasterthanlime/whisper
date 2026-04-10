@@ -497,10 +497,8 @@ final class AppState {
                 rollbackTokens: rollbackTokenNum,
                 commitTokenCount: commitTokenCount
             )
-            beeLog("APP: handleROptDown done, dispatching Tasks")
             // Audio/ASR pipeline on Session actor — runs in parallel
             Task {
-                beeLog("APP: Session Task started")
                 await session.start(
                     language: config.language, asrConfig: config,
                     animationMorphSpeed: animationMorphSpeed,
@@ -1014,7 +1012,7 @@ final class AppState {
             Task { await session.abort() }
         case .pushToTalk(let session), .locked(let session), .lockedOptionHeld(let session):
             transitionToIdle()
-            Task { await session.immediateCommitFromTyping() }
+            Task { await session.abort() }
         case .idle:
             break
         }

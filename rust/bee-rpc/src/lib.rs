@@ -13,9 +13,6 @@ pub trait Ime {
 
     /// App tells IME to stop dictating (cancel/abort).
     async fn stop_dictating(&self) -> bool;
-
-    /// App asks IME to replace previously committed text.
-    async fn replace_text(&self, old_text: String, new_text: String) -> bool;
 }
 
 /// Methods the app exposes — IME calls into app.

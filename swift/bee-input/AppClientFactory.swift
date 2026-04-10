@@ -9,36 +9,10 @@ private func beeVoxSocketPath() -> String? {
     )?.appendingPathComponent("bee.sock").path
 }
 
-// MARK: - IME-side handler (handles calls FROM app)
-
-private final class ImeImpl: ImeHandler, @unchecked Sendable {
-    func setMarkedText(text: String) async throws -> Bool {
-        await MainActor.run { BeeIMEBridgeState.shared.setMarkedText(text) }
-        return true
-    }
-
-    func commitText(text: String) async throws -> Bool {
-        await MainActor.run { BeeIMEBridgeState.shared.commitText(text) }
-        return true
-    }
-
-    func stopDictating() async throws -> Bool {
-        beeInputLog("VOXIPC: stopDictating")
-        await MainActor.run { BeeIMEBridgeState.shared.cancelInput() }
-        return true
-    }
-
-    func replaceText(oldText: String, newText: String) async throws -> Bool {
-        beeInputLog("VOXIPC: replaceText")
-        await MainActor.run { BeeIMEBridgeState.shared.replaceText(oldText: oldText, newText: newText) }
-        return true
-    }
-}
-
 // MARK: - Client
 
-final class BeeVoxIMEClient: Sendable {
-    static let shared = BeeVoxIMEClient()
+final class AppClientFactory: Sendable {
+    static let shared = AppClientFactory()
 
     private struct State: Sendable {
         var appClient: AppClient?
@@ -55,10 +29,10 @@ final class BeeVoxIMEClient: Sendable {
 
     private func connect() async {
         guard let path = beeVoxSocketPath() else {
-            beeInputLog("VOXIPC: no app group container URL")
+            beeInputLog("APPCLIENT: no app group container URL")
             return
         }
-        beeInputLog("VOXIPC: connecting to \(path)")
+        beeInputLog("APPCLIENT: connecting to \(path)")
         let connector = UnixConnector(path: path)
         let dispatcher = ImeDispatcher(handler: ImeImpl())
         do {
@@ -68,9 +42,9 @@ final class BeeVoxIMEClient: Sendable {
             let client = AppClient(connection: session.connection)
             lock.withLock { state.appClient = client }
             let hello = try await client.imeHello()
-            beeInputLog("VOXIPC: connected, app replied: \(hello)")
+            beeInputLog("APPCLIENT: connected, app replied: \(hello)")
         } catch {
-            beeInputLog("VOXIPC: connect failed: \(error)")
+            beeInputLog("APPCLIENT: connect failed: \(error)")
             try? await Task.sleep(for: .seconds(2))
             await connect()
         }
@@ -84,7 +58,7 @@ final class BeeVoxIMEClient: Sendable {
             do {
                 _ = try await client.imeAttach()
             } catch {
-                beeInputLog("VOXIPC: imeAttach failed: \(error)")
+                beeInputLog("APPCLIENT: imeAttach failed: \(error)")
             }
         }
     }
@@ -96,7 +70,7 @@ final class BeeVoxIMEClient: Sendable {
                 _ = try await client.imeKeyEvent(
                     eventType: eventType, keyCode: keyCode, characters: characters)
             } catch {
-                beeInputLog("VOXIPC: imeKeyEvent failed: \(error)")
+                beeInputLog("APPCLIENT: imeKeyEvent failed: \(error)")
             }
         }
     }
@@ -107,7 +81,7 @@ final class BeeVoxIMEClient: Sendable {
             do {
                 _ = try await client.imeContextLost(hadMarkedText: hadMarkedText)
             } catch {
-                beeInputLog("VOXIPC: imeContextLost failed: \(error)")
+                beeInputLog("APPCLIENT: imeContextLost failed: \(error)")
             }
         }
     }
@@ -118,7 +92,7 @@ final class BeeVoxIMEClient: Sendable {
             do {
                 _ = try await client.imeActivationRevoked()
             } catch {
-                beeInputLog("VOXIPC: imeActivationRevoked failed: \(error)")
+                beeInputLog("APPCLIENT: imeActivationRevoked failed: \(error)")
             }
         }
     }

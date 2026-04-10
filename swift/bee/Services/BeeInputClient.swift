@@ -45,13 +45,6 @@ final class BeeInputClient: Sendable {
         return true
     }
 
-    func deactivate(caller: String = #function, file: String = #fileID, line: Int = #line) {
-        // beeLog("IME DEACTIVATE called from \(file):\(line) \(caller)")
-        // Historical: used to call TISDeselectInputSource here when bee was
-        // a keyboard IME. Now bee is palette-type — no need to deselect,
-        // and doing so kills the proxy (can't clear marked text after).
-    }
-
     static func waitForIMEReady() async -> Bool {
         await BeeIPCServer.shared.waitForIMEReady()
     }

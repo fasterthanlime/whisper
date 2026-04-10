@@ -508,12 +508,8 @@ actor Session {
 
     func routeDidBecomeActive() {
         guard ime == .inactive || ime == .activating else { return }
-        let prevState = ime
         ime = .active
         let snapshot = textSnapshot.get()
-        beeLog(
-            "SESSION: routeDidBecomeActive \(prevState)→active id=\(id.uuidString.prefix(8)) snapshotLen=\(snapshot.utf16.count) targetPID=\(targetApp.pid.map(String.init) ?? "nil")"
-        )
         inputClient.setMarkedText(Self.addCursor(snapshot))
     }
 
@@ -527,45 +523,6 @@ actor Session {
         textSnapshot.get()
     }
 
-    /// Immediate commit path for manual typing takeover.
-    /// Skips ASR finalization and commits the latest rendered snapshot.
-    func immediateCommitFromTyping() async {
-        guard !didComplete else { return }
-        beeLog("SESSION: immediate commit id=\(id.uuidString.prefix(8))")
-
-        let text = textSnapshot.get()
-        ch2?.finish()
-        consumerTask?.cancel()
-        await consumerTask?.value
-        consumerTask = nil
-
-        let result: SessionResult
-        if !text.isEmpty {
-            inputClient.commitText(text)
-            ime = .committed
-            result = .committed(id: id, text: text, submitted: false, correction: correctionOutput)
-        } else {
-            inputClient.clearMarkedText()
-            inputClient.stopDictating()
-            ime = .cleared
-            result = .cancelled(id: id, text: "")
-        }
-
-        await MainActor.run { inputClient.deactivate() }
-        emitCompletion(result)
-
-        audioEngine.stopCapture(for: self.id)
-        ch1?.finish()
-        captureTask?.cancel()
-        asrTask?.cancel()
-        await captureTask?.value
-        await asrTask?.value
-        captureTask = nil
-        asrTask = nil
-        capture = .discarded
-        asr = .done
-    }
-
     /// Immediate teardown. No drain, no finalize, no history.
     func abort() async {
         guard !didComplete else { return }
@@ -577,7 +534,6 @@ actor Session {
 
         // IME: deactivate
         inputClient.stopDictating()
-        await MainActor.run { inputClient.deactivate() }
         ime = .tornDown
 
         emitCompletion(.aborted(id: id))
@@ -803,7 +759,6 @@ actor Session {
                 inputClient.commitText(text)
                 ime = .committed
                 await bestEffortSleep(ms: 50, label: "finishIME commit")
-                await MainActor.run { inputClient.deactivate() }
 
                 if submit {
                     let delayMs = targetApp.isTerminal ? 200 : 50
@@ -812,7 +767,6 @@ actor Session {
                 }
             } else {
                 inputClient.stopDictating()
-                await MainActor.run { inputClient.deactivate() }
                 ime = .committed
             }
             emitCompletion(
@@ -820,7 +774,6 @@ actor Session {
 
         case .cancel:
             inputClient.clearMarkedText()
-            await MainActor.run { inputClient.deactivate() }
             ime = .cleared
             emitCompletion(.cancelled(id: id, text: text))
         }
