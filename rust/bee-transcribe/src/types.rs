@@ -137,6 +137,10 @@ pub struct SessionOptions {
 
     /// Which model to use for word-level timing.
     pub aligner: Aligner,
+
+    /// Whether to apply inline corrections. Requires the correction engine
+    /// to be loaded in the Engine. Default: true.
+    pub enable_corrections: bool,
 }
 
 impl Default for SessionOptions {
@@ -154,6 +158,7 @@ impl Default for SessionOptions {
             rotation_cut_strategy: RotationCutStrategy::Qwen3,
             bypass_audio_filters: false,
             aligner: Aligner::Qwen,
+            enable_corrections: true,
         }
     }
 }

@@ -70,6 +70,7 @@ fn main() -> anyhow::Result<()> {
         base_options.commit_token_count = commit_tokens;
         base_options.rollback_tokens = rollback_tokens;
         base_options.context_tokens = context_tokens;
+        base_options.enable_corrections = false;
         let modes_filter: Option<Vec<String>> =
             modes_filter.map(|v| v.iter().map(|s| s.to_string()).collect());
         return cmd_compare(
@@ -578,7 +579,7 @@ fn cmd_compare(
     modes_filter: Option<&[String]>,
 ) -> anyhow::Result<()> {
     let t0 = Instant::now();
-    let engine = load_engine(true)?;
+    let engine = load_engine(false)?;
     println!("Engine loaded in {:.0}ms", t0.elapsed().as_millis());
 
     let samples = load_audio_any(audio_path)?;
@@ -815,7 +816,8 @@ fn cmd_compare(
         );
         cuts_detail.push_str("<tr style=\"color:#45475a;font-size:11px\">");
         cuts_detail.push_str("<td style=\"padding:4px 8px\">#</td>");
-        cuts_detail.push_str("<td style=\"padding:4px 8px\">time</td>");
+        cuts_detail.push_str("<td style=\"padding:4px 8px\">word time</td>");
+        cuts_detail.push_str("<td style=\"padding:4px 8px\">cut point</td>");
         cuts_detail.push_str("<td style=\"padding:4px 8px\">committed</td>");
         cuts_detail.push_str("<td style=\"padding:4px 8px\">retained context</td>");
         cuts_detail.push_str("<td style=\"padding:4px 8px\">audio</td>");
@@ -852,11 +854,19 @@ fn cmd_compare(
                 eprintln!("warn: failed to write {}: {e}", remaining_path.display());
             }
 
+            let committed_samples = cut.committed_audio.len();
+            let committed_secs = cut.committed_audio.duration().0;
+            let remaining_samples = cut.remaining_audio.len();
+            let remaining_secs = cut.remaining_audio.duration().0;
             let row_bg = if i % 2 == 0 { "#181825" } else { "#1e1e2e" };
             cuts_detail.push_str(&format!(
                 "<tr style=\"background:{row_bg}\">\
                 <td style=\"padding:5px 8px;color:#45475a\">{n}</td>\
                 <td style=\"padding:5px 8px;color:#6c7086;white-space:nowrap\">{t_start:.2}s–{t_end:.2}s</td>\
+                <td style=\"padding:5px 8px;color:#a6e3a1;white-space:nowrap;font-family:monospace;font-size:11px\">\
+                  committed: {committed_samples}smp / {committed_secs:.3}s<br>\
+                  remaining: {remaining_samples}smp / {remaining_secs:.3}s\
+                </td>\
                 <td style=\"padding:5px 8px;color:#cdd6f4\">{committed_text}</td>\
                 <td style=\"padding:5px 8px;color:#f9e2af\">{retained}</td>\
                 <td style=\"padding:5px 8px\">\

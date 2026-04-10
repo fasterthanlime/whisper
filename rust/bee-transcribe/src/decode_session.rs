@@ -524,75 +524,38 @@ impl DecodeSession {
         ));
 
         // Run word alignment to get per-word timing.
-        // Use ZIPA when requested (and G2P is available), otherwise fall back to forced aligner.
         let align_start = phase_start();
-        let alignment_items: Vec<AlignmentItem> = if let (Aligner::Zipa, Some(g2p)) = (aligner, g2p)
-        {
-            match zipa_word_alignments(zipa, &align_audio, &commit_text, g2p) {
-                Ok(items) if !items.is_empty() => {
-                    log_phase_chunk("commit", "zipa_align", chunk_index, align_start);
-                    items
-                }
-                Ok(_) => {
-                    tracing::warn!(
-                        "commit: zipa alignment returned no items, falling back to forced aligner"
-                    );
-                    let fa_items = forced_aligner
-                        .align(align_audio.samples(), &commit_text)
-                        .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
-                    log_phase_chunk("commit", "forced_align_fallback", chunk_index, align_start);
-                    if fa_items.is_empty() {
-                        tracing::warn!("commit: forced aligner fallback also returned no items");
-                        return Ok(None);
-                    }
-                    fa_items
-                        .iter()
-                        .map(|i| AlignmentItem {
-                            word: i.word.clone(),
-                            start: Seconds(i.start_time as f64),
-                            end: Seconds(i.end_time as f64),
-                        })
-                        .collect()
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "commit: zipa alignment error: {e}, falling back to forced aligner"
-                    );
-                    let fa_items = forced_aligner
-                        .align(align_audio.samples(), &commit_text)
-                        .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
-                    log_phase_chunk("commit", "forced_align_fallback", chunk_index, align_start);
-                    if fa_items.is_empty() {
-                        tracing::warn!("commit: forced aligner fallback also returned no items");
-                        return Ok(None);
-                    }
-                    fa_items
-                        .iter()
-                        .map(|i| AlignmentItem {
-                            word: i.word.clone(),
-                            start: Seconds(i.start_time as f64),
-                            end: Seconds(i.end_time as f64),
-                        })
-                        .collect()
-                }
+        let alignment_items: Vec<AlignmentItem> = match aligner {
+            Aligner::Zipa => {
+                let g2p = g2p.expect("Aligner::Zipa requires G2P but g2p is None — check that correction_dir / g2p_dir is configured");
+                let items = zipa_word_alignments(zipa, &align_audio, &commit_text, g2p)
+                    .unwrap_or_else(|e| panic!("commit: zipa alignment failed: {e}"));
+                assert!(
+                    !items.is_empty(),
+                    "commit: zipa alignment returned no items for {:?}",
+                    commit_text.trim()
+                );
+                log_phase_chunk("commit", "zipa_align", chunk_index, align_start);
+                items
             }
-        } else {
-            let fa_items = forced_aligner
-                .align(align_audio.samples(), &commit_text)
-                .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
-            log_phase_chunk("commit", "forced_align", chunk_index, align_start);
-            if fa_items.is_empty() {
-                tracing::warn!("commit: forced aligner returned no items");
-                return Ok(None);
+            Aligner::Qwen => {
+                let fa_items = forced_aligner
+                    .align(align_audio.samples(), &commit_text)
+                    .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
+                log_phase_chunk("commit", "forced_align", chunk_index, align_start);
+                if fa_items.is_empty() {
+                    tracing::warn!("commit: forced aligner returned no items");
+                    return Ok(None);
+                }
+                fa_items
+                    .iter()
+                    .map(|i| AlignmentItem {
+                        word: i.word.clone(),
+                        start: Seconds(i.start_time as f64),
+                        end: Seconds(i.end_time as f64),
+                    })
+                    .collect()
             }
-            fa_items
-                .iter()
-                .map(|i| AlignmentItem {
-                    word: i.word.clone(),
-                    start: Seconds(i.start_time as f64),
-                    end: Seconds(i.end_time as f64),
-                })
-                .collect()
         };
 
         if alignment_items.is_empty() {
@@ -754,59 +717,38 @@ impl DecodeSession {
 
         let align_audio = self.audio.clone();
         let align_start = phase_start();
-        let alignment_items: Vec<AlignmentItem> = if let (Aligner::Zipa, Some(g2p)) = (aligner, g2p)
-        {
-            match zipa_word_alignments(zipa, &align_audio, &commit_text, g2p) {
-                Ok(items) if !items.is_empty() => {
-                    log_phase_chunk("commit_all", "zipa_align", chunk_index, align_start);
-                    items
-                }
-                Ok(_) | Err(_) => {
-                    let fa_items = forced_aligner
-                        .align(align_audio.samples(), &commit_text)
-                        .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
-                    log_phase_chunk(
-                        "commit_all",
-                        "forced_align_fallback",
-                        chunk_index,
-                        align_start,
-                    );
-                    if fa_items.is_empty() {
-                        tracing::warn!("commit_all: aligner returned no items");
-                        return Ok(None);
-                    }
-                    fa_items
-                        .iter()
-                        .map(|i| AlignmentItem {
-                            word: i.word.clone(),
-                            start: Seconds(i.start_time as f64),
-                            end: Seconds(i.end_time as f64),
-                        })
-                        .collect()
-                }
+        let alignment_items: Vec<AlignmentItem> = match aligner {
+            Aligner::Zipa => {
+                let g2p = g2p.expect("Aligner::Zipa requires G2P but g2p is None — check that correction_dir / g2p_dir is configured");
+                let items = zipa_word_alignments(zipa, &align_audio, &commit_text, g2p)
+                    .unwrap_or_else(|e| panic!("commit_all: zipa alignment failed: {e}"));
+                assert!(
+                    !items.is_empty(),
+                    "commit_all: zipa alignment returned no items for {:?}",
+                    commit_text.trim()
+                );
+                log_phase_chunk("commit_all", "zipa_align", chunk_index, align_start);
+                items
             }
-        } else {
-            let fa_items = forced_aligner
-                .align(align_audio.samples(), &commit_text)
-                .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
-            log_phase_chunk("commit_all", "forced_align", chunk_index, align_start);
-            if fa_items.is_empty() {
-                tracing::warn!("commit_all: forced aligner returned no items");
-                return Ok(None);
+            Aligner::Qwen => {
+                let fa_items = forced_aligner
+                    .align(align_audio.samples(), &commit_text)
+                    .map_err(|e| Exception::custom(format!("aligner: {e}")))?;
+                log_phase_chunk("commit_all", "forced_align", chunk_index, align_start);
+                if fa_items.is_empty() {
+                    tracing::warn!("commit_all: forced aligner returned no items");
+                    return Ok(None);
+                }
+                fa_items
+                    .iter()
+                    .map(|i| AlignmentItem {
+                        word: i.word.clone(),
+                        start: Seconds(i.start_time as f64),
+                        end: Seconds(i.end_time as f64),
+                    })
+                    .collect()
             }
-            fa_items
-                .iter()
-                .map(|i| AlignmentItem {
-                    word: i.word.clone(),
-                    start: Seconds(i.start_time as f64),
-                    end: Seconds(i.end_time as f64),
-                })
-                .collect()
         };
-
-        if alignment_items.is_empty() {
-            return Ok(None);
-        }
 
         let align_buffer_start = phase_start();
         let mut aligned =
