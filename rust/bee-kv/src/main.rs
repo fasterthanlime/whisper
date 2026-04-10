@@ -691,7 +691,7 @@ fn decode_sliding_window_timed_rollback(
         window_runs.push(SlidingWindowRun {
             chunk_run,
             rollback,
-            replayed_prefix_text: None,
+            replayed_prefix: None,
         });
     }
 
@@ -748,11 +748,11 @@ fn decode_sliding_window_full_replay(
     let mut cache = None;
     let mut start_position = 0usize;
     let mut window_runs = Vec::new();
-    let mut replay_text_for_next: Option<String> = None;
+    let mut replay_prefix_for_next: Option<CarriedBridge> = None;
 
     for (window_index, window) in window_plan.iter().enumerate() {
         let chunk_samples = &samples[window.start_sample..window.end_sample];
-        let replayed_prefix_text = replay_text_for_next.clone();
+        let replayed_prefix = replay_prefix_for_next.clone();
         let chunk_run = decode_chunk_followup_step(
             model,
             tokenizer,
@@ -767,7 +767,7 @@ fn decode_sliding_window_full_replay(
             start_position,
             window.start_sample,
             window.end_sample,
-            replayed_prefix_text.as_deref(),
+            replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
         )?;
 
         let rollback = if window_index + 1 < window_plan.len() {
@@ -798,12 +798,14 @@ fn decode_sliding_window_full_replay(
             None
         };
 
-        replay_text_for_next =
-            (!chunk_run.transcript.is_empty()).then(|| chunk_run.transcript.clone());
+        replay_prefix_for_next = (!chunk_run.transcript.is_empty()).then(|| CarriedBridge {
+            text: chunk_run.transcript.clone(),
+            words: Vec::new(),
+        });
         window_runs.push(SlidingWindowRun {
             chunk_run,
             rollback,
-            replayed_prefix_text,
+            replayed_prefix,
         });
     }
 
@@ -865,11 +867,11 @@ fn decode_sliding_window_bridge_replay(
     let mut cache = None;
     let mut start_position = 0usize;
     let mut window_runs = Vec::new();
-    let mut replay_text_for_next: Option<String> = None;
+    let mut replay_prefix_for_next: Option<CarriedBridge> = None;
 
     for (window_index, window) in window_plan.iter().enumerate() {
         let chunk_samples = &samples[window.start_sample..window.end_sample];
-        let replayed_prefix_text = replay_text_for_next.clone();
+        let replayed_prefix = replay_prefix_for_next.clone();
         let chunk_run = decode_chunk_followup_step(
             model,
             tokenizer,
@@ -884,7 +886,7 @@ fn decode_sliding_window_bridge_replay(
             start_position,
             window.start_sample,
             window.end_sample,
-            replayed_prefix_text.as_deref(),
+            replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
         )?;
 
         let rollback = if window_index + 1 < window_plan.len() {
@@ -906,27 +908,27 @@ fn decode_sliding_window_bridge_replay(
                 chunk_run.start_position + chunk_run.prompt_tokens + split.kept_token_count;
             truncate_cache(&mut cache, rollback_position)?;
             start_position = rollback_position;
-            replay_text_for_next =
-                (!split.bridge_text.is_empty()).then_some(split.bridge_text.clone());
+            replay_prefix_for_next =
+                (!split.bridge.text.is_empty()).then_some(split.bridge.clone());
             Some(WindowRollbackDecision {
                 keep_until_secs,
                 replay_until_secs: Some(replay_until_secs),
                 kept_word_count: split.kept_word_count,
                 kept_token_count: split.kept_token_count,
                 kept_text: split.kept_text,
-                bridge_text: (!split.bridge_text.is_empty()).then_some(split.bridge_text),
+                bridge_text: (!split.bridge.text.is_empty()).then_some(split.bridge.text.clone()),
                 rollback_position,
             })
         } else {
             start_position = chunk_run.end_position;
-            replay_text_for_next = None;
+            replay_prefix_for_next = None;
             None
         };
 
         window_runs.push(SlidingWindowRun {
             chunk_run,
             rollback,
-            replayed_prefix_text,
+            replayed_prefix,
         });
     }
 
@@ -1893,10 +1895,23 @@ struct WindowRollbackDecision {
     rollback_position: usize,
 }
 
+#[derive(Clone)]
+struct CarriedBridgeWord {
+    text: String,
+    start_secs: f64,
+    end_secs: f64,
+}
+
+#[derive(Clone)]
+struct CarriedBridge {
+    text: String,
+    words: Vec<CarriedBridgeWord>,
+}
+
 struct SlidingWindowRun {
     chunk_run: ChunkRun,
     rollback: Option<WindowRollbackDecision>,
-    replayed_prefix_text: Option<String>,
+    replayed_prefix: Option<CarriedBridge>,
 }
 
 struct SlidingWindowTimedRollbackExperimentResult {
@@ -2058,8 +2073,8 @@ fn print_sliding_window_timed_rollback_experiment(
 
     for run in &experiment.window_runs {
         print_chunk_run(&run.chunk_run);
-        if let Some(prefix) = &run.replayed_prefix_text {
-            println!("replayed_prefix_text={}", prefix);
+        if let Some(prefix) = &run.replayed_prefix {
+            println!("replayed_prefix_text={}", prefix.text);
         }
         if let Some(rollback) = &run.rollback {
             println!(
@@ -2301,7 +2316,7 @@ fn render_sliding_window_timed_rollback_html(
             row_index,
             chunk,
             run.rollback.as_ref(),
-            run.replayed_prefix_text.as_deref(),
+            run.replayed_prefix.as_ref(),
             &words,
             total_duration_secs,
             audio_src,
@@ -2403,7 +2418,7 @@ fn render_sliding_window_row(
     row_index: usize,
     chunk: &ChunkRun,
     rollback: Option<&WindowRollbackDecision>,
-    replayed_prefix_text: Option<&str>,
+    replayed_prefix: Option<&CarriedBridge>,
     words: &[SlidingWordPlacement],
     total_duration_secs: f64,
     audio_src: &str,
@@ -2437,15 +2452,20 @@ fn render_sliding_window_row(
         }
     }
 
-    let prefix_band = if let (Some(prefix), Some(rollback)) = (
-        replayed_prefix_text.filter(|text| !text.is_empty()),
-        rollback,
-    ) {
-        let prefix_width = (rollback.keep_until_secs / window_duration_secs) * width_px;
-        format!(
-            "<div class=\"prefix-band\" style=\"left:0px;width:{prefix_width:.1}px\" title=\"replayed prefix\">{}</div>",
-            html_escape(prefix)
-        )
+    let prefix_band = if let Some(prefix) = replayed_prefix.filter(|prefix| !prefix.text.is_empty())
+    {
+        let mut prefix_words = String::new();
+        for word in &prefix.words {
+            let left = (word.start_secs / window_duration_secs) * width_px;
+            let width =
+                ((word.end_secs - word.start_secs).max(0.08) / window_duration_secs) * width_px;
+            let width = width.max(36.0);
+            prefix_words.push_str(&format!(
+                "<div class=\"prefix-band\" style=\"left:{left:.1}px;width:{width:.1}px\" title=\"replayed prefix\">{}</div>",
+                html_escape(&word.text)
+            ));
+        }
+        prefix_words
     } else {
         String::new()
     };
@@ -2503,7 +2523,7 @@ fn render_sliding_window_row(
             "audio {:.2}s..{:.2}s | replayed_prefix={} | kept_text={} | bridge_text={} | kept_tokens={} | rollback_position={}",
             window_start_secs,
             window_end_secs,
-            html_escape(replayed_prefix_text.unwrap_or("none")),
+            html_escape(replayed_prefix.map(|p| p.text.as_str()).unwrap_or("none")),
             html_escape(&rollback.kept_text),
             html_escape(rollback.bridge_text.as_deref().unwrap_or("none")),
             rollback.kept_token_count,
@@ -2831,7 +2851,7 @@ struct TimedGeneratedBridge {
     kept_word_count: usize,
     kept_token_count: usize,
     kept_text: String,
-    bridge_text: String,
+    bridge: CarriedBridge,
 }
 
 fn timed_generated_prefix_for_cut(
@@ -2904,7 +2924,10 @@ fn timed_generated_bridge_for_cuts(
             kept_word_count: 0,
             kept_token_count: 0,
             kept_text: String::new(),
-            bridge_text: String::new(),
+            bridge: CarriedBridge {
+                text: String::new(),
+                words: Vec::new(),
+            },
         });
     }
 
@@ -2940,8 +2963,11 @@ fn timed_generated_bridge_for_cuts(
         transcript[..end].trim_end().to_string()
     };
 
-    let bridge_text = if replay_word_count <= kept_word_count {
-        String::new()
+    let bridge = if replay_word_count <= kept_word_count {
+        CarriedBridge {
+            text: String::new(),
+            words: Vec::new(),
+        }
     } else {
         let start = word_ranges
             .get(kept_word_count)
@@ -2951,7 +2977,24 @@ fn timed_generated_bridge_for_cuts(
             .get(replay_word_count - 1)
             .map(|word| word.char_end)
             .ok_or_else(|| anyhow::anyhow!("missing bridge word end"))?;
-        transcript[start..end].trim().to_string()
+        let words = word_timings[kept_word_count..replay_word_count]
+            .iter()
+            .filter_map(|word_timing| match word_timing.quality {
+                bee_transcribe::zipa_align::AlignmentQuality::Aligned {
+                    start_secs,
+                    end_secs,
+                } => Some(CarriedBridgeWord {
+                    text: word_timing.word.to_string(),
+                    start_secs: (start_secs - keep_until_secs).max(0.0),
+                    end_secs: (end_secs - keep_until_secs).max(0.0),
+                }),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        CarriedBridge {
+            text: transcript[start..end].trim().to_string(),
+            words,
+        }
     };
 
     let kept_token_count = if kept_text.is_empty() {
@@ -2967,6 +3010,6 @@ fn timed_generated_bridge_for_cuts(
         kept_word_count,
         kept_token_count,
         kept_text,
-        bridge_text,
+        bridge,
     })
 }
