@@ -26,26 +26,24 @@ class BeeInputController: IMKInputController {
                 "activateServer: senderID=\(senderId) frontmostPID=\(frontmostPID.map(String.init) ?? "nil") clientID=\(currClientIdentity)"
             )
 
-            // On every activateServer: if proxy reports stale marked text
-            // and we're not actively dictating, clear it.
-            if let client = self.client() as? (any IMKTextInput & NSObjectProtocol) {
-                let marked = client.markedRange()
-                if marked.location != NSNotFound && marked.length > 0 && !bridge.isDictating {
-                    let markedText = client.attributedSubstring(from: marked)?.string
-                    beeInputLog(
-                        "activateServer: stale marked text markedRange=\(NSStringFromRange(marked)) text=\(markedText?.prefix(80).debugDescription ?? "nil"), clearing"
-                    )
-                    let empty = NSAttributedString(string: "", attributes: [.markedClauseSegment: 0])
-                    client.setMarkedText(
-                        empty,
-                        selectionRange: NSRange(location: 0, length: 0),
-                        replacementRange: NSRange(location: NSNotFound, length: 0)
-                    )
-                    let markedAfter = client.markedRange()
-                    beeInputLog(
-                        "activateServer: cleanup result markedRange=\(NSStringFromRange(markedAfter))"
-                    )
-                }
+            // On every activateServer when not dictating: unconditionally
+            // call setMarkedText("") on the sender to clear stale text.
+            // Don't check markedRange — the proxy lies about it (F-017).
+            // Use sender, not self.client() — they are different proxies.
+            if !bridge.isDictating,
+               let senderClient = sender as? (any IMKTextInput & NSObjectProtocol) {
+                beeInputLog(
+                    "activateServer: clearing via sender=\(describeClient(sender)) self.client=\(describeClient(self.client()))"
+                )
+                let empty = NSAttributedString(string: "", attributes: [.markedClauseSegment: 0])
+                senderClient.setMarkedText(
+                    empty,
+                    selectionRange: NSRange(location: 0, length: 0),
+                    replacementRange: NSRange(location: NSNotFound, length: 0)
+                )
+                beeInputLog(
+                    "activateServer: after clear sender=\(describeClient(sender)) self.client=\(describeClient(self.client()))"
+                )
             }
 
             let isNew = bridge.activate(self, pid: frontmostPID, clientID: currClientIdentity)
