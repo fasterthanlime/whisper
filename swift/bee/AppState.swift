@@ -46,7 +46,6 @@ final class AppState {
     private var pendingTimer: Task<Void, Never>?
     private var consumeNextROptUp = false
     fileprivate var activeSessionTarget: TargetApp?
-    // pendingIMEAckWorkItem declared near startIMEAckTimeoutIfNeeded
     private var workspaceObservers: [NSObjectProtocol] = []
     private var captureDeviceObservers: [NSObjectProtocol] = []
     private var lastKnownInputDeviceUIDs: Set<String> = []
@@ -469,8 +468,7 @@ final class AppState {
 
     enum IMESessionState {
         case inactive
-        case activating  // IME input source selected, waiting for imeAttach confirmation
-        case active  // IME confirmed, text can be routed
+        case active  // IME is attached and ready, text can be routed
     }
 
     // MARK: - Event Handlers
@@ -485,15 +483,13 @@ final class AppState {
             let session = createSession(targetApp: target)
             beeLog("APP: session created id=\(session.id.uuidString.prefix(8))")
             activeSessionTarget = target
-            pendingIMEAckWorkItem?.cancel()
-            pendingIMEAckWorkItem = nil
-            imeSessionState = .activating
+            imeSessionState = .active
             parkedOverlayText = ""
             hotkeyState = .held(session)
             duckVolume()
             playRecordingStartedSound()
             startPendingTimer(session: session)
-            startIMEAckTimeoutIfNeeded(session: session)
+            Task { await session.routeDidBecomeActive() }
             let config = TranscriptionService.StreamingSessionConfig(
                 language: detectLanguage(),
                 chunkDuration: chunkSizeSec,
@@ -502,14 +498,6 @@ final class AppState {
                 commitTokenCount: commitTokenCount
             )
             beeLog("APP: handleROptDown done, dispatching Tasks")
-            // IME activation on MainActor — fires immediately, no actor hop
-            Task { @MainActor in
-                beeLog("APP: IME activate Task started")
-                let ok = await inputClient.activate()
-                if !ok {
-                    beeLog("APP: IME activation failed")
-                }
-            }
             // Audio/ASR pipeline on Session actor — runs in parallel
             Task {
                 beeLog("APP: Session Task started")
@@ -662,44 +650,6 @@ final class AppState {
             guard case .held(let s) = hotkeyState, s.id == session.id else { return }
             hotkeyState = .pushToTalk(s)
         }
-    }
-
-    private var pendingIMEAckWorkItem: DispatchWorkItem?
-
-    private func startIMEAckTimeoutIfNeeded(session: Session) {
-        guard pendingIMEAckWorkItem == nil else { return }
-
-        let sessionID = session.id
-        let abortWork = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            guard self.imeSessionState != .active else {
-                self.pendingIMEAckWorkItem = nil
-                return
-            }
-            guard self.hotkeyState.session?.id == sessionID else {
-                self.pendingIMEAckWorkItem = nil
-                return
-            }
-            beeLog(
-                "SESSION: IME confirm timeout id=\(sessionID.uuidString.prefix(8)) imeState=\(self.imeSessionState), showing overlay"
-            )
-            self.pendingTimer?.cancel()
-            switch self.hotkeyState {
-            case .held(let current) where current.id == sessionID:
-                self.hotkeyState = .pushToTalk(current)
-                Task { await current.routeDidBecomeInactive(reason: "imeConfirmTimeout") }
-            case .released(let current) where current.id == sessionID:
-                self.hotkeyState = .locked(current)
-                Task { await current.routeDidBecomeInactive(reason: "imeConfirmTimeout") }
-            default:
-                break
-            }
-            self.imeSessionState = .inactive
-            self.showParkedOverlay(for: session)
-            self.pendingIMEAckWorkItem = nil
-        }
-        pendingIMEAckWorkItem = abortWork
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: abortWork)
     }
 
     private func logFocusDiagnostics(reason: String) {
@@ -1083,30 +1033,11 @@ final class AppState {
     }
 
     func handleIMESessionStarted() {
-        guard imeSessionState != .active else { return }
+        // IME is already active by the time a session starts.
+        // This callback is now informational only.
         beeLog(
-            "SESSION: handleIMESessionStarted hotkey=\(String(describing: hotkeyState)) imeState(before)=\(imeSessionState)"
+            "SESSION: handleIMESessionStarted hotkey=\(String(describing: hotkeyState)) imeState=\(imeSessionState)"
         )
-
-        switch hotkeyState {
-        case .held(let session), .pushToTalk(let session), .locked(let session),
-            .lockedOptionHeld(let session):
-            beeLog("SESSION: IME attached id=\(session.id.uuidString.prefix(8))")
-            imeSessionState = .active
-            hideParkedOverlay()
-            Task { await session.routeDidBecomeActive() }
-
-        case .released(let session):
-            beeLog("SESSION: IME attached id=\(session.id.uuidString.prefix(8)), locking")
-            imeSessionState = .active
-            pendingTimer?.cancel()
-            hotkeyState = .locked(session)
-            hideParkedOverlay()
-            Task { await session.routeDidBecomeActive() }
-
-        case .idle:
-            break
-        }
     }
 
     private func handleDidTerminateApplication(processIdentifier: pid_t?) {
@@ -1125,8 +1056,6 @@ final class AppState {
         )
         hotkeyState = .idle
         pendingTimer?.cancel()
-        pendingIMEAckWorkItem?.cancel()
-        pendingIMEAckWorkItem = nil
         imeSessionState = .inactive
         hideParkedOverlay()
         restoreVolume()

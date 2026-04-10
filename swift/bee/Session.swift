@@ -129,7 +129,10 @@ actor Session {
     private var animationMorphSpeed: Float = 1.0
     private var animationAppendSpeed: Float = 1.0
 
-    func start(language: String?, asrConfig: TranscriptionService.StreamingSessionConfig, animationMorphSpeed: Float = 1.0, animationAppendSpeed: Float = 1.0) async {
+    func start(
+        language: String?, asrConfig: TranscriptionService.StreamingSessionConfig,
+        animationMorphSpeed: Float = 1.0, animationAppendSpeed: Float = 1.0
+    ) async {
         self.animationMorphSpeed = animationMorphSpeed
         self.animationAppendSpeed = animationAppendSpeed
         logger.info("[\(self.id)] Starting session")
@@ -352,7 +355,8 @@ actor Session {
 
                     // Corrections are applied inline during transcription.
                     // The FeedResult already contains corrected text and edits.
-                    let finalText = result?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let finalText =
+                        result?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     let edits = result?.correctionEdits ?? []
 
                     if !edits.isEmpty {
@@ -363,7 +367,9 @@ actor Session {
                             edits: edits
                         )
                         corrOutRef.set(corrOutput)
-                        logger.info("[\(sessionID)] Corrected \(edits.count) span(s): \"\(finalText.prefix(80))\"")
+                        logger.info(
+                            "[\(sessionID)] Corrected \(edits.count) span(s): \"\(finalText.prefix(80))\""
+                        )
                     }
 
                     diagRef.update {
@@ -460,7 +466,8 @@ actor Session {
                             )
 
                             steps += 1
-                            let speed = didAppend ? self.animationAppendSpeed : self.animationMorphSpeed
+                            let speed =
+                                didAppend ? self.animationAppendSpeed : self.animationMorphSpeed
                             if speed <= 0 { break }
                             let baseMs = steps > 20 ? 8 : (steps > 10 ? 15 : 25)
                             let delayMs = max(1, Int(Float(baseMs) / speed))
@@ -514,7 +521,9 @@ actor Session {
         guard ime == .active || ime == .activating else { return }
         let prevState = ime
         ime = .inactive
-        beeLog("SESSION: routeDidBecomeInactive \(prevState)→inactive id=\(id.uuidString.prefix(8)) reason=\(reason)")
+        beeLog(
+            "SESSION: routeDidBecomeInactive \(prevState)→inactive id=\(id.uuidString.prefix(8)) reason=\(reason)"
+        )
     }
 
     func liveText() -> String {
@@ -685,12 +694,12 @@ actor Session {
     private func renderMarkedTextIfActive(
         _ text: String, inputClient: BeeInputClient, sessionID: UUID
     ) async {
-        guard ime == .active else {
-            beeLog(
-                "SESSION: render skipped id=\(sessionID.uuidString.prefix(8)) ime=\(ime) len=\(text.utf16.count)"
-            )
-            return
-        }
+        // guard ime == .active else {
+        //     beeLog(
+        //         "SESSION: render skipped id=\(sessionID.uuidString.prefix(8)) ime=\(ime) len=\(text.utf16.count)"
+        //     )
+        //     return
+        // }
         beeLog(
             "SESSION: render id=\(sessionID.uuidString.prefix(8)) ime=\(ime) len=\(text.utf16.count) text=\(text.prefix(80).debugDescription)"
         )
@@ -749,15 +758,19 @@ actor Session {
     }
 
     static func pruneDebugRecordings(dir: URL, keep: Int = 10) {
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: [.creationDateKey],
-            options: .skipsHiddenFiles
-        ) else { return }
+        guard
+            let files = try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: [.creationDateKey],
+                options: .skipsHiddenFiles
+            )
+        else { return }
         let wavs = files.filter { $0.pathExtension == "wav" }
         guard wavs.count > keep else { return }
         let sorted = wavs.sorted {
-            let d0 = (try? $0.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
-            let d1 = (try? $1.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+            let d0 =
+                (try? $0.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+            let d1 =
+                (try? $1.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
             return d0 < d1
         }
         for file in sorted.dropLast(keep) {
@@ -807,7 +820,8 @@ actor Session {
                 await MainActor.run { inputClient.deactivate() }
                 ime = .committed
             }
-            emitCompletion(.committed(id: id, text: text, submitted: submit, correction: correctionOutput))
+            emitCompletion(
+                .committed(id: id, text: text, submitted: submit, correction: correctionOutput))
 
         case .cancel:
             inputClient.clearMarkedText()
@@ -1002,10 +1016,12 @@ private func beeLogPath() -> String {
 private func beeTimestamp() -> String {
     let now = Date()
     let cal = Calendar.current
-    let dc = cal.dateComponents([.year, .month, .day, .hour, .minute, .second, .nanosecond], from: now)
-    return String(format: "%04d-%02d-%02dT%02d:%02d:%02d.%06dZ",
-                  dc.year!, dc.month!, dc.day!, dc.hour!, dc.minute!, dc.second!,
-                  dc.nanosecond! / 1000)
+    let dc = cal.dateComponents(
+        [.year, .month, .day, .hour, .minute, .second, .nanosecond], from: now)
+    return String(
+        format: "%04d-%02d-%02dT%02d:%02d:%02d.%06dZ",
+        dc.year!, dc.month!, dc.day!, dc.hour!, dc.minute!, dc.second!,
+        dc.nanosecond! / 1000)
 }
 
 /// Log to the shared bee log file.

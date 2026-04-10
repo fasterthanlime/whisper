@@ -1,6 +1,6 @@
 import AVFoundation
-import os
 import SwiftUI
+import os
 
 struct DebugOverlay: View {
     let appState: AppState
@@ -10,7 +10,7 @@ struct DebugOverlay: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            let _ = refreshTick // force redraw on timer
+            let _ = refreshTick  // force redraw on timer
             Text("bee debug")
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -29,7 +29,9 @@ struct DebugOverlay: View {
             row("device", appState.activeInputDeviceName ?? "default")
             row("dev uid", eng.selectedDeviceUID ?? "(none)")
             if eng.state == .warm {
-                row("rate", "\(Int(eng.nativeSampleRate)) Hz → \(Int(AudioEngine.targetSampleRate)) Hz")
+                row(
+                    "rate",
+                    "\(Int(eng.nativeSampleRate)) Hz → \(Int(AudioEngine.targetSampleRate)) Hz")
                 row("ch", "\(eng.channelCount)")
                 row("bufs", "\(eng.totalBuffersReceived)")
                 row("samples", "\(eng.totalSamplesReceived)")
@@ -104,7 +106,6 @@ struct DebugOverlay: View {
     private var imeStateLabel: String {
         switch appState.imeSessionState {
         case .inactive: "Inactive"
-        case .activating: "Activating"
         case .active: "Active"
         }
     }
@@ -178,7 +179,10 @@ struct DiagnosticsView: View {
 
             Divider().padding(.vertical, 1)
 
-            row("feeds", "\(diag.feeds) (last \(diag.lastFeedUs / 1000)ms, total \(diag.totalFeedUs / 1000)ms)")
+            row(
+                "feeds",
+                "\(diag.feeds) (last \(diag.lastFeedUs / 1000)ms, total \(diag.totalFeedUs / 1000)ms)"
+            )
             row("captured", "\(diag.capturedSamples) @16k")
             row("fed", "\(diag.fedSamples) @16k")
             row("total", "\(diag.totalSamples) @16k (\(diag.totalAudioDurationMs) ms)")
@@ -211,7 +215,8 @@ struct DiagnosticsView: View {
                         .font(.system(size: 10, weight: .semibold))
                     } else {
                         Button("Play") {
-                            let sound = NSSound(contentsOfFile: diag.audioWavPath, byReference: true)
+                            let sound = NSSound(
+                                contentsOfFile: diag.audioWavPath, byReference: true)
                             sound?.play()
                             playingSound = sound
                         }
@@ -223,9 +228,11 @@ struct DiagnosticsView: View {
                             guard !isBatchRunning else { return }
                             isBatchRunning = true
                             Task {
-                                let samples = loadAudioSamples(url: URL(fileURLWithPath: diag.audioWavPath))
+                                let samples = loadAudioSamples(
+                                    url: URL(fileURLWithPath: diag.audioWavPath))
                                 if !samples.isEmpty {
-                                    let result = await transcriptionService.transcribeSamples(samples)
+                                    let result = await transcriptionService.transcribeSamples(
+                                        samples)
                                     batchResult = result ?? "(no result)"
                                 } else {
                                     batchResult = "(failed to load audio)"
@@ -238,7 +245,8 @@ struct DiagnosticsView: View {
                     }
 
                     Button("Reveal") {
-                        NSWorkspace.shared.selectFile(diag.audioWavPath, inFileViewerRootedAtPath: "")
+                        NSWorkspace.shared.selectFile(
+                            diag.audioWavPath, inFileViewerRootedAtPath: "")
                     }
                     .font(.system(size: 10, weight: .semibold))
                 }
@@ -292,7 +300,8 @@ struct CorrectionTestView: View {
                         let panel = NSOpenPanel()
                         panel.canChooseDirectories = true
                         panel.canChooseFiles = false
-                        panel.message = "Select the corpus WAV directory (data/phonetic-seed/audio-wav)"
+                        panel.message =
+                            "Select the corpus WAV directory (data/phonetic-seed/audio-wav)"
                         if panel.runModal() == .OK {
                             corpusDir = panel.url
                         }
@@ -416,8 +425,11 @@ struct CorrectionTestView: View {
 /// Load audio file as 16kHz mono float32 samples using AVAudioFile.
 private func loadAudioSamples(url: URL) -> [Float] {
     guard let file = try? AVAudioFile(forReading: url) else { return [] }
-    let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
-    guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(file.length)) else { return [] }
+    let format = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
+    guard
+        let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(file.length))
+    else { return [] }
     do {
         try file.read(into: buf)
     } catch {

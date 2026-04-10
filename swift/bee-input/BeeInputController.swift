@@ -21,7 +21,7 @@ class BeeInputController: IMKInputController {
         // Check if this app needs stale bee marked text cleaned up.
         // Only clear if we previously recorded this bundle as needing cleanup.
         if let senderClient = sender as? (any IMKTextInput & NSObjectProtocol),
-           let senderBundle = senderClient.bundleIdentifier()
+            let senderBundle = senderClient.bundleIdentifier()
         {
             let shouldClean = MainActor.assumeIsolated {
                 BeeIMEBridgeState.shared.pendingCleanupBundles.remove(senderBundle) != nil
@@ -36,7 +36,9 @@ class BeeInputController: IMKInputController {
                 )
                 let afterDesc = describeClient(sender)
                 MainActor.assumeIsolated {
-                    beeInputLog("activateServer: SCOPED CLEAR for bundle=\(senderBundle) before=\(beforeDesc) after=\(afterDesc)")
+                    beeInputLog(
+                        "activateServer: SCOPED CLEAR for bundle=\(senderBundle) before=\(beforeDesc) after=\(afterDesc)"
+                    )
                 }
             }
         }
