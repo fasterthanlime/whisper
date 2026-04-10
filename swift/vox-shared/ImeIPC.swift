@@ -11,7 +11,6 @@ public enum ImeMethodId {
     public static let setMarkedText: UInt64 = 0x2d335085427db481
     public static let commitText: UInt64 = 0x5716af924e8ded0f
     public static let stopDictating: UInt64 = 0x68519c24d46321b4
-    public static let replaceText: UInt64 = 0xc83b94fe5d68ec27
 }
 
 // MARK: - Ime Types
@@ -28,8 +27,6 @@ public protocol ImeCaller {
     func commitText(text: String) async throws -> Bool
     ///  App tells IME to stop dictating (cancel/abort).
     func stopDictating() async throws -> Bool
-    ///  App asks IME to replace previously committed text.
-    func replaceText(oldText: String, newText: String) async throws -> Bool
 }
 
 public final class ImeClient: ImeCaller, Sendable {
@@ -74,19 +71,6 @@ public final class ImeClient: ImeCaller, Sendable {
             return result
         }
     }
-
-    public func replaceText(oldText: String, newText: String) async throws -> Bool {
-        var buffer = ByteBufferAllocator().buffer(capacity: 64)
-        encodeString(oldText, into: &buffer)
-        encodeString(newText, into: &buffer)
-        let payload = buffer.readBytes(length: buffer.readableBytes) ?? []
-        let schemaInfo = ClientSchemaInfo(methodInfo: ime_method_schemas[0xc83b94fe5d68ec27]!, schemaRegistry: ime_schema_registry)
-        let response = try await connection.call(methodId: 0xc83b94fe5d68ec27, metadata: [], payload: payload, retry: .volatile, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
-        return try decodeInfallibleResponse(response) { buf in
-            let result = try decodeBool(from: &buf)
-            return result
-        }
-    }
 }
 
 // MARK: - Ime Server
@@ -99,8 +83,6 @@ public protocol ImeHandler: Sendable {
     func commitText(text: String) async throws -> Bool
     ///  App tells IME to stop dictating (cancel/abort).
     func stopDictating() async throws -> Bool
-    ///  App asks IME to replace previously committed text.
-    func replaceText(oldText: String, newText: String) async throws -> Bool
 }
 
 public final class ImeDispatcher: ServiceDispatcher {
@@ -125,8 +107,6 @@ public final class ImeDispatcher: ServiceDispatcher {
             await dispatch_commitText(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         case 0x68519c24d46321b4:
             await dispatch_stopDictating(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
-        case 0xc83b94fe5d68ec27:
-            await dispatch_replaceText(methodId: methodId, requestId: requestId, buffer: &buffer, registry: registry, taskSender: taskSender)
         default:
             taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
         }
@@ -139,8 +119,6 @@ public final class ImeDispatcher: ServiceDispatcher {
         case 0x5716af924e8ded0f:
             return .volatile
         case 0x68519c24d46321b4:
-            return .volatile
-        case 0xc83b94fe5d68ec27:
             return .volatile
         default:
             return .volatile
@@ -218,27 +196,6 @@ public final class ImeDispatcher: ServiceDispatcher {
         }
     }
 
-    private func dispatch_replaceText(methodId: UInt64, requestId: UInt64, buffer: inout ByteBuffer, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) async {
-        guard let methodInfo = methodSchemas[methodId] else {
-            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
-            return
-        }
-        let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-        do {
-            let oldText = try decodeString(from: &buffer)
-            let newText = try decodeString(from: &buffer)
-            do {
-                let result = try await handler.replaceText(oldText: oldText, newText: newText)
-                let _encoded = encodeResultOk(result, encoder: { val, buf in encodeBool(val, into: &buf) })
-                taskSender(.response(requestId: requestId, payload: _encoded, methodId: methodId, schemaPayload: responseSchemaPayload))
-            } catch {
-                taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
-            }
-        } catch {
-            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(reason: String(describing: error)), methodId: methodId, schemaPayload: responseSchemaPayload))
-        }
-    }
-
 }
 
 // MARK: - Ime Schemas
@@ -247,7 +204,6 @@ public let ime_schemas: [String: MethodBindingSchema] = [
     "setMarkedText": MethodBindingSchema(args: [.string]),
     "commitText": MethodBindingSchema(args: [.string]),
     "stopDictating": MethodBindingSchema(args: []),
-    "replaceText": MethodBindingSchema(args: [.string, .string]),
 ]
 
 /// Global schema registry containing all schemas for this service.
@@ -259,7 +215,6 @@ nonisolated(unsafe) public let ime_schema_registry: [UInt64: Schema] = [
     0x5db70a394660f3e6: Schema(id: 0x5db70a394660f3e6, typeParams: [], kind: .primitive(.never)),
     0x6847ab90feda71c1: Schema(id: 0x6847ab90feda71c1, typeParams: ["T0"], kind: .tuple(elements: [.var(name: "T0")])),
     0x6d7dce914ee150e8: Schema(id: 0x6d7dce914ee150e8, typeParams: [], kind: .primitive(.string)),
-    0xba0496aa8cee7a4c: Schema(id: 0xba0496aa8cee7a4c, typeParams: ["T0", "T1"], kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1")])),
     0xbc5c33249a2dc720: Schema(id: 0xbc5c33249a2dc720, typeParams: [], kind: .primitive(.unit)),
 ]
 
@@ -280,12 +235,6 @@ nonisolated(unsafe) public let ime_method_schemas: [UInt64: MethodSchemaInfo] = 
     0x68519c24d46321b4: MethodSchemaInfo(
         argsSchemaIds: [0xbc5c33249a2dc720],
         argsRoot: .concrete(0xbc5c33249a2dc720),
-        responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
-        responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
-    ),
-    0xc83b94fe5d68ec27: MethodSchemaInfo(
-        argsSchemaIds: [0x6d7dce914ee150e8, 0xba0496aa8cee7a4c],
-        argsRoot: .generic(0xba0496aa8cee7a4c, args: [.concrete(0x6d7dce914ee150e8), .concrete(0x6d7dce914ee150e8)]),
         responseSchemaIds: [0x178367a87f66fb46, 0x281c5be4f2ee63b4, 0x42046de663beeef0, 0x5db70a394660f3e6, 0x6d7dce914ee150e8, 0x4cf4b2aeb98a1939],
         responseRoot: .generic(0x42046de663beeef0, args: [.concrete(0x178367a87f66fb46), .generic(0x4cf4b2aeb98a1939, args: [.concrete(0x5db70a394660f3e6)])])
     ),
