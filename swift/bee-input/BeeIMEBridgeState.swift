@@ -130,31 +130,6 @@ final class BeeIMEBridgeState: NSObject {
     /// Returns true if this is a fresh activation (not just a controller update).
     @discardableResult
     func activate(_ controller: BeeInputController, pid: pid_t?, clientID: String?) -> Bool {
-        // If there's stale marked text from a previous session, clean it up.
-        // Query the proxy directly (F-006: markedRange survives round-trip).
-        if case .idle = state,
-           let client = controller.client() as? (any IMKTextInput & NSObjectProtocol) {
-            let marked = client.markedRange()
-            if marked.location != NSNotFound && marked.length > 0 {
-                let markedText = client.attributedSubstring(from: marked)?.string
-                beeInputLog(
-                    "activate: stale marked text detected markedRange=\(NSStringFromRange(marked)) text=\(markedText?.prefix(80).debugDescription ?? "nil"), clearing"
-                )
-
-                let empty = NSAttributedString(string: "", attributes: [.markedClauseSegment: 0])
-                client.setMarkedText(
-                    empty,
-                    selectionRange: NSRange(location: 0, length: 0),
-                    replacementRange: NSRange(location: NSNotFound, length: 0)
-                )
-
-                let markedAfter = client.markedRange()
-                beeInputLog(
-                    "activate: cleanup result markedRange=\(NSStringFromRange(markedAfter))"
-                )
-            }
-        }
-
         if case .active(let session, let pending) = state {
             beeInputLog(
                 "activate: already active, updating controller pid=\(pid.map(String.init) ?? "nil") clientID=\(clientID ?? "nil") pendingLen=\(pending?.utf16.count ?? 0)"
