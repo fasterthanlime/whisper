@@ -26,10 +26,13 @@ class BeeInputController: IMKInputController {
                 "activateServer: senderID=\(senderId) frontmostPID=\(frontmostPID.map(String.init) ?? "nil") clientID=\(currClientIdentity)"
             )
 
-            let stickyRouteBecameAvailable = bridge.activate(
+            let activationEvent = bridge.activate(
                 self, pid: frontmostPID, clientID: currClientIdentity)
 
-            if stickyRouteBecameAvailable {
+            switch activationEvent {
+            case .none, .delayedTerminalFlushed:
+                break
+            case .stickyRouteRestored:
                 AppClientFactory.shared.imeAttach()
             }
         }
@@ -47,9 +50,12 @@ class BeeInputController: IMKInputController {
                 "deactivateServer: senderID=\(senderID) clientID=\(currentClientIdentity())"
             )
 
-            let stickyRouteBecameUnavailable = bridge.deactivate(self, clientID: senderID)
-            if stickyRouteBecameUnavailable {
-                AppClientFactory.shared.imeContextLost(hadMarkedText: true)
+            let deactivationEvent = bridge.deactivate(self, clientID: senderID)
+            switch deactivationEvent {
+            case .none:
+                break
+            case .stickyRouteUnavailable(let hadMarkedText):
+                AppClientFactory.shared.imeContextLost(hadMarkedText: hadMarkedText)
             }
         }
 
