@@ -74,8 +74,8 @@ pub enum DecodeMode {
     /// decode with a fresh decoder cache.
     RebuildPromptEachStep,
     /// Experimental mode: keep decoder KV cache across streaming chunks,
-    /// rollback by truncating token/cache tail, and run with `Uncut` rotation.
-    ExperimentalPersistentKvNoRotation,
+    /// rollback by truncating token/cache tail.
+    ExperimentalPersistentKv,
 }
 
 impl Default for DecodeMode {

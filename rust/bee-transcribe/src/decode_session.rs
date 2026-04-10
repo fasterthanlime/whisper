@@ -236,7 +236,7 @@ impl DecodeSession {
                     &audio_features,
                 )?;
             }
-            DecodeMode::ExperimentalPersistentKvNoRotation => {
+            DecodeMode::ExperimentalPersistentKv => {
                 self.decode_step_with_persistent_cache(
                     model,
                     tokenizer,

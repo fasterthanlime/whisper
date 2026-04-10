@@ -631,8 +631,8 @@ fn cmd_compare(
             RotationCutStrategy::Uncut,
             false,
             false,
-            DecodeMode::ExperimentalPersistentKvNoRotation,
-            Aligner::Qwen,
+            DecodeMode::ExperimentalPersistentKv,
+            Aligner::Zipa,
         ),
     ];
     let modes: Vec<(&str, RotationCutStrategy, bool, bool, DecodeMode, Aligner)> = all_modes

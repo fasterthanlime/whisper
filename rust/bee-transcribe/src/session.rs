@@ -360,7 +360,7 @@ impl<'a> Session<'a> {
     fn effective_commit_threshold(&self) -> usize {
         if matches!(
             self.options.decode_mode,
-            DecodeMode::ExperimentalPersistentKvNoRotation
+            DecodeMode::ExperimentalPersistentKv
         ) {
             return usize::MAX;
         }
@@ -379,7 +379,7 @@ impl<'a> Session<'a> {
     fn requested_commit_tokens(&self) -> TokenCount {
         if matches!(
             self.options.decode_mode,
-            DecodeMode::ExperimentalPersistentKvNoRotation
+            DecodeMode::ExperimentalPersistentKv
         ) {
             return TokenCount(usize::MAX);
         }
