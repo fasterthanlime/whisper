@@ -46,16 +46,15 @@ class BeeInputController: IMKInputController {
                 "deactivateServer: hadMarkedText=\(hadMarkedText) senderID=\(senderId) clientID=\(currentClientIdentity())"
             )
 
-            if hadMarkedText {
-                bridge.setMarkedText("")
-            }
-
             bridge.deactivate(self)
 
             if isDictating {
                 BeeVoxIMEClient.shared.imeContextLost(hadMarkedText: hadMarkedText)
             }
         }
+        // cancelComposition triggers IMK's internal flow that sends
+        // setMarkedText("") to the actual client app.
+        super.cancelComposition()
         super.deactivateServer(sender)
     }
 
