@@ -505,8 +505,9 @@ actor Session {
         ime = .active
         guard shouldRenderMarkedText else { return }
         let snapshot = textSnapshot.get()
-        let presentation: MarkedTextPresentation = capture == .draining ? .finalizing : .dictating
-        inputClient.setMarkedText(snapshot, presentation: presentation)
+        let phase: ImePhase = capture == .draining ? .finalizing : .dictating
+        inputClient.setPhase(phase)
+        inputClient.setMarkedText(snapshot)
     }
 
     func routeDidBecomeInactive(reason: String) {
@@ -563,6 +564,7 @@ actor Session {
         }
         shouldRenderMarkedText = true
         capture = .draining
+        inputClient.setPhase(.finalizing)
 
         // Begin drain: the capture task will monitor VAD, then send
         // .end(mode) on Channel 1 when silence is detected.
@@ -616,8 +618,7 @@ actor Session {
         _ text: String, inputClient: BeeInputClient, sessionID: UUID
     ) async {
         guard shouldRenderMarkedText else { return }
-        let presentation: MarkedTextPresentation = capture == .draining ? .finalizing : .dictating
-        inputClient.setMarkedText(text, presentation: presentation)
+        inputClient.setMarkedText(text)
     }
 
     // MARK: - Shortest Edit Script (LCS-based)

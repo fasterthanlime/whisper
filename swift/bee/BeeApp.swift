@@ -300,7 +300,8 @@ final class StatusBarController: NSObject {
             let iconSize = baseIcon.size
             let canvasSize = NSSize(width: Self.itemWidth, height: iconSize.height)
             let dotSize: CGFloat = 6
-            let isDark = button.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let isDark =
+                button.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             let iconColor: NSColor = isDark ? .white : .black
             let tinted = baseIcon.copy() as! NSImage
             tinted.lockFocus()
@@ -335,7 +336,8 @@ final class StatusBarController: NSObject {
             let iconSize = baseIcon.size
             let canvasSize = NSSize(width: Self.itemWidth, height: iconSize.height)
             let dotSize: CGFloat = 6
-            let isDark = button.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let isDark =
+                button.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             let iconColor: NSColor = isDark ? .white : .black
             let tinted = baseIcon.copy() as! NSImage
             tinted.lockFocus()
