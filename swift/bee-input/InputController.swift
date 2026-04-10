@@ -54,7 +54,7 @@ class BeeInputController: IMKInputController {
     // MARK: - Utilities
 
     private func currentClientIdentity() -> String {
-        describeClient(self.client())
+        self.client()?.bundleIdentifier() ?? "-"
     }
 }
 
