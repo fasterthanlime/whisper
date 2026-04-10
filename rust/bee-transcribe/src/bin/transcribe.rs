@@ -3,7 +3,9 @@ use std::time::Instant;
 use std::{env, io::IsTerminal};
 
 use bee_transcribe::text_buffer::TokenEntry;
-use bee_transcribe::{Aligner, EngineConfig, RotationCutStrategy, SessionOptions, SessionSnapshot};
+use bee_transcribe::{
+    Aligner, DecodeMode, EngineConfig, RotationCutStrategy, SessionOptions, SessionSnapshot,
+};
 use tokenizers::Tokenizer;
 use tracing_subscriber::EnvFilter;
 
@@ -61,7 +63,7 @@ fn main() -> anyhow::Result<()> {
             .collect();
         if positional.is_empty() {
             eprintln!(
-                "Usage: transcribe compare <audio> [--out report.html] [--chunk-ms 400] [--commit-tokens 12] [--rollback-tokens 5] [--context-tokens 0] [--modes uncut,qwen3,zipa,raw]"
+                "Usage: transcribe compare <audio> [--out report.html] [--chunk-ms 400] [--commit-tokens 12] [--rollback-tokens 5] [--context-tokens 0] [--modes uncut,qwen3,zipa,raw,persistent-kv]"
             );
             std::process::exit(1);
         }
@@ -362,7 +364,9 @@ fn run_mode(
     engine: &bee_transcribe::Engine,
     samples: &[f32],
     cut_mode: RotationCutStrategy,
+    force_one_pass_chunking: bool,
     bypass_audio_filters: bool,
+    decode_mode: DecodeMode,
     word_aligner: Aligner,
     label: &str,
     base_options: SessionOptions,
@@ -373,11 +377,12 @@ fn run_mode(
 )> {
     println!("--- Running {label} ---");
     let mut options = base_options;
-    // For uncut, use a very large chunk so it processes as one pass
-    if matches!(cut_mode, RotationCutStrategy::Uncut) {
+    // Some modes intentionally emulate one-pass decoding.
+    if force_one_pass_chunking {
         options.chunk_duration = 600.0;
     }
     options.rotation_cut_strategy = cut_mode;
+    options.decode_mode = decode_mode;
     options.bypass_audio_filters = bypass_audio_filters;
     options.aligner = word_aligner;
     let chunk_samples = (options.chunk_duration * 16000.0) as usize;
@@ -587,23 +592,61 @@ fn cmd_compare(
     base_options: SessionOptions,
     modes_filter: Option<&[String]>,
 ) -> anyhow::Result<()> {
-    // (label, cut_strategy, bypass_audio_filters, word_aligner)
-    let all_modes: Vec<(&str, RotationCutStrategy, bool, Aligner)> = vec![
-        ("uncut", RotationCutStrategy::Uncut, false, Aligner::Qwen),
-        ("qwen3", RotationCutStrategy::Qwen3, false, Aligner::Qwen),
-        ("zipa", RotationCutStrategy::Zipa, false, Aligner::Zipa),
-        ("raw", RotationCutStrategy::Uncut, true, Aligner::Qwen),
+    // (label, cut_strategy, one_pass_chunking, bypass_audio_filters, decode_mode, word_aligner)
+    let all_modes: Vec<(&str, RotationCutStrategy, bool, bool, DecodeMode, Aligner)> = vec![
+        (
+            "uncut",
+            RotationCutStrategy::Uncut,
+            true,
+            false,
+            DecodeMode::RebuildPromptEachStep,
+            Aligner::Qwen,
+        ),
+        (
+            "qwen3",
+            RotationCutStrategy::Qwen3,
+            false,
+            false,
+            DecodeMode::RebuildPromptEachStep,
+            Aligner::Qwen,
+        ),
+        (
+            "zipa",
+            RotationCutStrategy::Zipa,
+            false,
+            false,
+            DecodeMode::RebuildPromptEachStep,
+            Aligner::Zipa,
+        ),
+        (
+            "raw",
+            RotationCutStrategy::Uncut,
+            false,
+            true,
+            DecodeMode::RebuildPromptEachStep,
+            Aligner::Qwen,
+        ),
+        (
+            "persistent-kv",
+            RotationCutStrategy::Uncut,
+            false,
+            false,
+            DecodeMode::ExperimentalPersistentKvNoRotation,
+            Aligner::Qwen,
+        ),
     ];
-    let modes: Vec<(&str, RotationCutStrategy, bool, Aligner)> = all_modes
+    let modes: Vec<(&str, RotationCutStrategy, bool, bool, DecodeMode, Aligner)> = all_modes
         .into_iter()
-        .filter(|(label, _, _, _)| {
+        .filter(|(label, _, _, _, _, _)| {
             modes_filter
                 .map(|f| f.iter().any(|m| m == label))
                 .unwrap_or(true)
         })
         .collect();
 
-    let need_forced_aligner = modes.iter().any(|(_, _, _, a)| matches!(a, Aligner::Qwen));
+    let need_forced_aligner = modes
+        .iter()
+        .any(|(_, _, _, _, _, a)| matches!(a, Aligner::Qwen));
 
     let t0 = Instant::now();
     let engine = load_engine(false, need_forced_aligner)?;
@@ -613,7 +656,7 @@ fn cmd_compare(
     let duration = samples.len() as f64 / 16000.0;
     println!("Audio: {:.1}s ({} samples)\n", duration, samples.len());
     if modes.is_empty() {
-        let valid = ["uncut", "qwen3", "zipa", "raw"];
+        let valid = ["uncut", "qwen3", "zipa", "raw", "persistent-kv"];
         anyhow::bail!(
             "--modes filter matched nothing; valid: {}",
             valid.join(", ")
@@ -626,12 +669,14 @@ fn cmd_compare(
         Vec<bee_transcribe::CutEvent>,
         Vec<bee_transcribe::ChunkEvent>,
     )> = Vec::new();
-    for (label, cut_mode, bypass, word_aligner) in modes {
+    for (label, cut_mode, one_pass, bypass, decode_mode, word_aligner) in modes {
         let (text, cuts, chunks) = run_mode(
             &engine,
             &samples,
             cut_mode,
+            one_pass,
             bypass,
+            decode_mode,
             word_aligner,
             label,
             base_options.clone(),

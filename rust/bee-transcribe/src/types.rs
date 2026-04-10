@@ -66,6 +66,24 @@ impl Default for RotationCutStrategy {
     }
 }
 
+/// Decode behavior used inside each streaming step.
+#[repr(u8)]
+#[derive(Debug, Clone, Facet)]
+pub enum DecodeMode {
+    /// Default production behavior: rebuild full initial prompt each step and
+    /// decode with a fresh decoder cache.
+    RebuildPromptEachStep,
+    /// Experimental mode: keep decoder KV cache across streaming chunks,
+    /// rollback by truncating token/cache tail, and run with `Uncut` rotation.
+    ExperimentalPersistentKvNoRotation,
+}
+
+impl Default for DecodeMode {
+    fn default() -> Self {
+        Self::RebuildPromptEachStep
+    }
+}
+
 /// Event fired each time the session commits a rotation cut.
 pub struct CutEvent {
     /// The words that were just committed at this cut point.
@@ -131,6 +149,9 @@ pub struct SessionOptions {
     /// How rotation cut points are selected.
     pub rotation_cut_strategy: RotationCutStrategy,
 
+    /// Streaming decode behavior.
+    pub decode_mode: DecodeMode,
+
     /// Skip all audio filters (VAD, DC removal, RMS normalization).
     /// Every chunk is fed directly to the decoder as-is.
     pub bypass_audio_filters: bool,
@@ -156,6 +177,7 @@ impl Default for SessionOptions {
             language: Language::default(),
             app_id: None,
             rotation_cut_strategy: RotationCutStrategy::Qwen3,
+            decode_mode: DecodeMode::RebuildPromptEachStep,
             bypass_audio_filters: false,
             aligner: Aligner::Qwen,
             enable_corrections: true,

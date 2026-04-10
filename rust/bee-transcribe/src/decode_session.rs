@@ -7,6 +7,7 @@ use bee_phonetic::{
     align_token_sequences_with_left_word_boundaries, normalize_ipa_for_comparison,
     normalize_ipa_for_comparison_with_spans, sentence_word_tokens,
 };
+use bee_qwen3_asr::decoder::KVCache;
 use bee_qwen3_asr::encoder::EncoderCache;
 use bee_qwen3_asr::forced_aligner::ForcedAligner;
 use bee_qwen3_asr::generate::{self, ConfidenceMode, TOP_K, TokenConfidence};
@@ -26,7 +27,7 @@ use crate::text_buffer::{
     self, AlignmentItem, AsrToken, TextBuffer, TokenCount, TokenEntry, TokenId, WordStart,
 };
 use crate::timing::{log_phase_chunk, phase_start};
-use crate::types::{Aligner, RotationCutStrategy};
+use crate::types::{Aligner, DecodeMode, RotationCutStrategy};
 use crate::zipa_align::{self, timed_range_for_normalized_range};
 
 /// A decode sub-session. Replaced wholesale on rotation.
@@ -63,11 +64,25 @@ pub struct DecodeSession {
     /// the previous rotation. These have audio at the beginning of `self.audio`
     /// and must not be counted toward the commit threshold.
     context_token_count: usize,
+
+    /// Streaming decode behavior for this sub-session.
+    decode_mode: DecodeMode,
+
+    /// Persistent decoder KV cache used only by the experimental mode.
+    decoder_cache: Option<KVCache>,
+
+    /// Next decoder position (visible token count in KV cache).
+    decoder_position: usize,
 }
 
 impl DecodeSession {
     /// Create a new decode session.
-    pub fn new(audio: AudioBuffer, start_time: Seconds, rollback_tokens: TokenCount) -> Self {
+    pub fn new(
+        audio: AudioBuffer,
+        start_time: Seconds,
+        rollback_tokens: TokenCount,
+        decode_mode: DecodeMode,
+    ) -> Self {
         Self {
             audio,
             start_time,
@@ -79,6 +94,9 @@ impl DecodeSession {
             chunk_count: 0,
             generated_start: 0,
             context_token_count: 0,
+            decode_mode,
+            decoder_cache: None,
+            decoder_position: 0,
         }
     }
 
@@ -207,69 +225,29 @@ impl DecodeSession {
             encode_start,
         );
 
-        // Build prompt with prefix rollback
-        let prompt_start = phase_start();
-        let prefix = self.compute_prefix();
-        let mut prompt = generate::build_initial_prompt(
-            audio_features.shape()[1] as usize,
-            language,
-            "",
-            tokenizer,
-        );
-        if let Some(ref prefix_tokens) = prefix {
-            prompt.extend(prefix_tokens.iter().map(|t| t.id as i32));
-        }
-        log_phase_chunk(
-            "decode_step",
-            "build_prompt",
-            self.chunk_count,
-            prompt_start,
-        );
-
-        // Generate
-        let generate_start = phase_start();
-        let mut cache = None;
-        let (generated, logprobs, _) = generate::prefill_and_decode(
-            model,
-            &prompt,
-            &audio_features,
-            &mut cache,
-            0,
-            max_tokens,
-            confidence_mode,
-        )?;
-        log_phase_chunk(
-            "decode_step",
-            "prefill_and_decode",
-            self.chunk_count,
-            generate_start,
-        );
-
-        // Merge prefix + generated into a single Vec<AsrToken>
-        let merge_start = phase_start();
-        let prefix_len = prefix.as_ref().map_or(0, |p| p.len());
-        let merged = Self::merge_tokens(prefix, &generated, &logprobs);
-        log_phase_chunk("decode_step", "merge_tokens", self.chunk_count, merge_start);
-
-        tracing::debug!(
-            "decode_session: chunk={} generated={} prefix={prefix_len} total={}",
-            self.chunk_count,
-            generated.len(),
-            merged.len(),
-        );
-
-        if merged.is_empty() && !self.tokens.is_empty() {
-            tracing::debug!(
-                "decode_session: EOS with no output, preserving {} tokens",
-                self.tokens.len()
-            );
-        } else if !merged.is_empty() {
-            self.tokens = merged;
-            self.generated_start = prefix_len;
-            self.recompute_metadata_boundary();
+        match self.decode_mode {
+            DecodeMode::RebuildPromptEachStep => {
+                self.decode_step_with_fresh_cache(
+                    model,
+                    tokenizer,
+                    language,
+                    max_tokens,
+                    confidence_mode,
+                    &audio_features,
+                )?;
+            }
+            DecodeMode::ExperimentalPersistentKvNoRotation => {
+                self.decode_step_with_persistent_cache(
+                    model,
+                    tokenizer,
+                    language,
+                    max_tokens,
+                    confidence_mode,
+                    &audio_features,
+                )?;
+            }
         }
 
-        drop(cache);
         let clear_start = phase_start();
         clear_mlx_cache();
         log_phase_chunk(
@@ -511,6 +489,8 @@ impl DecodeSession {
         self.encoder_cache = EncoderCache::new();
         self.chunk_count = 0;
         self.generated_start = 0;
+        self.decoder_cache = None;
+        self.decoder_position = 0;
     }
 
     // ── Internal ────────────────────────────────────────────────────
@@ -601,6 +581,173 @@ impl DecodeSession {
         self.encoder_cache = EncoderCache::new();
         self.mel_extractor = MelExtractor::new(400, 160, 128, 16000);
         self.generated_start = 0;
+        self.decoder_cache = None;
+        self.decoder_position = 0;
+    }
+
+    fn decode_step_with_fresh_cache(
+        &mut self,
+        model: &Qwen3ASRModel,
+        tokenizer: &Tokenizer,
+        language: &str,
+        max_tokens: usize,
+        confidence_mode: ConfidenceMode,
+        audio_features: &Array,
+    ) -> Result<(), Exception> {
+        // Build prompt with prefix rollback
+        let prompt_start = phase_start();
+        let prefix = self.compute_prefix();
+        let mut prompt = generate::build_initial_prompt(
+            audio_features.shape()[1] as usize,
+            language,
+            "",
+            tokenizer,
+        );
+        if let Some(ref prefix_tokens) = prefix {
+            prompt.extend(prefix_tokens.iter().map(|t| t.id as i32));
+        }
+        log_phase_chunk(
+            "decode_step",
+            "build_prompt",
+            self.chunk_count,
+            prompt_start,
+        );
+
+        // Generate
+        let generate_start = phase_start();
+        let mut cache = None;
+        let (generated, logprobs, _) = generate::prefill_and_decode(
+            model,
+            &prompt,
+            audio_features,
+            &mut cache,
+            0,
+            max_tokens,
+            confidence_mode,
+        )?;
+        log_phase_chunk(
+            "decode_step",
+            "prefill_and_decode",
+            self.chunk_count,
+            generate_start,
+        );
+
+        // Merge prefix + generated into a single Vec<AsrToken>
+        let merge_start = phase_start();
+        let prefix_len = prefix.as_ref().map_or(0, |p| p.len());
+        let merged = Self::merge_tokens(prefix, &generated, &logprobs);
+        log_phase_chunk("decode_step", "merge_tokens", self.chunk_count, merge_start);
+
+        tracing::debug!(
+            "decode_session(default): chunk={} generated={} prefix={prefix_len} total={}",
+            self.chunk_count,
+            generated.len(),
+            merged.len(),
+        );
+
+        if merged.is_empty() && !self.tokens.is_empty() {
+            tracing::debug!(
+                "decode_session(default): EOS with no output, preserving {} tokens",
+                self.tokens.len()
+            );
+        } else if !merged.is_empty() {
+            self.tokens = merged;
+            self.generated_start = prefix_len;
+            self.recompute_metadata_boundary();
+        }
+        Ok(())
+    }
+
+    fn decode_step_with_persistent_cache(
+        &mut self,
+        model: &Qwen3ASRModel,
+        tokenizer: &Tokenizer,
+        language: &str,
+        max_tokens: usize,
+        confidence_mode: ConfidenceMode,
+        audio_features: &Array,
+    ) -> Result<(), Exception> {
+        let rollback_start = phase_start();
+        let rolled_back = self.truncate_persistent_tail();
+        log_phase_chunk(
+            "decode_step",
+            "persistent_rollback",
+            self.chunk_count,
+            rollback_start,
+        );
+
+        let prompt_start = phase_start();
+        let n_audio_tokens = audio_features.shape()[1] as usize;
+        let prompt = if self.decoder_position == 0 {
+            generate::build_initial_prompt(n_audio_tokens, language, "", tokenizer)
+        } else {
+            generate::build_followup_prompt(n_audio_tokens, language, tokenizer)
+        };
+        log_phase_chunk(
+            "decode_step",
+            "build_prompt",
+            self.chunk_count,
+            prompt_start,
+        );
+
+        let generate_start = phase_start();
+        let token_start = self.tokens.len();
+        let (generated, logprobs, next_position) = generate::prefill_and_decode(
+            model,
+            &prompt,
+            audio_features,
+            &mut self.decoder_cache,
+            self.decoder_position,
+            max_tokens,
+            confidence_mode,
+        )?;
+        self.decoder_position = next_position;
+        self.generated_start = token_start;
+        log_phase_chunk(
+            "decode_step",
+            "prefill_and_decode",
+            self.chunk_count,
+            generate_start,
+        );
+
+        let merge_start = phase_start();
+        for (i, &token_id) in generated.iter().enumerate() {
+            let lp = logprobs.get(i);
+            self.tokens.push(AsrToken {
+                id: token_id as TokenId,
+                concentration: lp.map_or(0.0, |l| l.concentration),
+                margin: lp.map_or(0.0, |l| l.margin),
+                alternative_count: lp.map_or(0, |l| l.alternative_count),
+                top_ids: lp.map_or([0; TOP_K], |l| l.top_ids.map(|id| id as TokenId)),
+                top_logits: lp.map_or([0.0; TOP_K], |l| l.top_logits),
+            });
+        }
+        self.recompute_metadata_boundary();
+        log_phase_chunk("decode_step", "merge_tokens", self.chunk_count, merge_start);
+
+        tracing::debug!(
+            "decode_session(persistent_kv): chunk={} rollback={} generated={} total={} cache_pos={}",
+            self.chunk_count,
+            rolled_back,
+            generated.len(),
+            self.tokens.len(),
+            self.decoder_position,
+        );
+        Ok(())
+    }
+
+    fn truncate_persistent_tail(&mut self) -> usize {
+        if self.chunk_count < 2 || self.rollback_tokens.0 == 0 || self.tokens.is_empty() {
+            return 0;
+        }
+        let truncate_by = self.rollback_tokens.0.min(self.tokens.len());
+        self.tokens.truncate(self.tokens.len() - truncate_by);
+        self.generated_start = self.generated_start.min(self.tokens.len());
+        self.decoder_position = self.decoder_position.saturating_sub(truncate_by);
+        if let Some(cache) = self.decoder_cache.as_mut() {
+            cache.truncate(self.decoder_position);
+        }
+        truncate_by
     }
 
     /// Compute the fixed prefix for rollback — text tokens only.

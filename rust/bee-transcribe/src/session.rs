@@ -21,7 +21,7 @@ use crate::g2p::CachedEspeakG2p;
 use crate::text_buffer::{self, TextBuffer, TokenCount, TokenEntry, TokenId};
 use crate::timing::{log_phase, log_phase_chunk, phase_start};
 use crate::types::{
-    ChunkEvent, ChunkSink, CutEvent, CutSink, PendingToken, RotationCutStrategy,
+    ChunkEvent, ChunkSink, CutEvent, CutSink, DecodeMode, PendingToken, RotationCutStrategy,
     SessionAmbiguitySummary, SessionOptions, SessionSnapshot, TokenAlternative,
 };
 use crate::{FinishResult, SharedCorrectionEngine};
@@ -126,6 +126,7 @@ impl<'a> Session<'a> {
                 AudioBuffer::empty(SampleRate::HZ_16000),
                 Seconds::ZERO,
                 TokenCount(options.rollback_tokens),
+                options.decode_mode.clone(),
             ),
             committed: TextBuffer::new(),
             pending: TextBuffer::new(),
@@ -357,6 +358,12 @@ impl<'a> Session<'a> {
     }
 
     fn effective_commit_threshold(&self) -> usize {
+        if matches!(
+            self.options.decode_mode,
+            DecodeMode::ExperimentalPersistentKvNoRotation
+        ) {
+            return usize::MAX;
+        }
         match self.options.rotation_cut_strategy {
             RotationCutStrategy::Uncut => usize::MAX,
             RotationCutStrategy::ManualTargetCommittedTextTokens(target) => target.max(1) as usize,
@@ -370,6 +377,12 @@ impl<'a> Session<'a> {
     }
 
     fn requested_commit_tokens(&self) -> TokenCount {
+        if matches!(
+            self.options.decode_mode,
+            DecodeMode::ExperimentalPersistentKvNoRotation
+        ) {
+            return TokenCount(usize::MAX);
+        }
         match self.options.rotation_cut_strategy {
             RotationCutStrategy::Uncut => TokenCount(usize::MAX),
             RotationCutStrategy::Qwen3 | RotationCutStrategy::Zipa => {
