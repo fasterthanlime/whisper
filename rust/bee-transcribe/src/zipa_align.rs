@@ -2,11 +2,13 @@ use std::ops::Range;
 
 use crate::g2p::CachedEspeakG2p;
 use bee_phonetic::{
-    AlignmentOp, TokenAlignment, align_token_sequences, feature_similarity,
+    AlignmentOp, ComparisonToken, TokenAlignment, align_token_sequences,
+    align_token_sequences_with_left_word_boundaries, feature_similarity,
     normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans, phoneme_similarity,
     sentence_word_tokens, top_right_anchor_windows,
 };
-use bee_zipa_mlx::infer::PhoneSpan;
+use bee_zipa_mlx::audio::AudioBuffer as ZipaAudioBuffer;
+use bee_zipa_mlx::infer::{PhoneSpan, ZipaInference};
 
 #[derive(Debug, Clone)]
 pub struct SpanAlignmentSelection {
@@ -910,6 +912,237 @@ pub fn normalize_zipa_raw_for_alignment(
     (normalized, with_spans)
 }
 
+// ---------------------------------------------------------------------------
+// High-level alignment API
+// ---------------------------------------------------------------------------
+
+/// Error returned by [`TranscriptAlignment::build`].
+#[derive(Debug)]
+pub enum AlignmentError {
+    G2p(String),
+    Zipa(String),
+}
+
+impl std::fmt::Display for AlignmentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AlignmentError::G2p(e) => write!(f, "G2P error: {e}"),
+            AlignmentError::Zipa(e) => write!(f, "ZIPA inference error: {e}"),
+        }
+    }
+}
+
+/// Per-word timing result.
+#[derive(Debug, Clone)]
+pub enum AlignmentQuality {
+    Aligned {
+        start_secs: f64,
+        end_secs: f64,
+    },
+    /// DP alignment produced no window for this word (audio too short or severe phoneme mismatch).
+    NoWindow,
+    /// Window found but the raw-phone range resolved to empty (degenerate normalization).
+    NoTiming,
+}
+
+/// A word paired with its alignment quality.
+#[derive(Debug)]
+pub struct WordTiming<'a> {
+    pub word: &'a str,
+    pub quality: AlignmentQuality,
+}
+
+/// Result of [`TranscriptAlignment::span_timing`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum SpanTiming {
+    Aligned {
+        start_secs: f64,
+        end_secs: f64,
+    },
+    /// No word in the requested range has a resolved alignment window.
+    NoAlignedWords,
+    /// Some but not all words in the range have windows; timing covers only the aligned subset.
+    PartialGap {
+        start_secs: f64,
+        end_secs: f64,
+    },
+    /// All windows found but the merged raw-phone range resolved to empty.
+    NoTiming,
+}
+
+/// Pre-computed ZIPA alignment for a transcript + audio pair.
+///
+/// Construct once with [`TranscriptAlignment::build`]; query word or span
+/// timings without touching ZIPA or G2P again.
+pub struct TranscriptAlignment {
+    transcript: String,
+    /// Byte-range of each word inside `transcript` (same order as `word_windows`).
+    word_char_ranges: Vec<Range<usize>>,
+    word_windows: Vec<Option<WordAlignmentWindow>>,
+    zipa_norm_with_spans: Vec<ComparisonToken>,
+    phone_spans: Vec<PhoneSpan>,
+}
+
+impl TranscriptAlignment {
+    /// Run ZIPA inference + G2P + DP alignment for `transcript` over `audio`.
+    ///
+    /// Returns the opaque handle you can query with [`word_timings`] /
+    /// [`span_timing`].  Fails only on ZIPA inference errors or G2P errors;
+    /// partial alignment (some words unreachable) is not an error.
+    pub fn build(
+        transcript: &str,
+        audio: &ZipaAudioBuffer,
+        g2p: &mut CachedEspeakG2p,
+        zipa: &ZipaInference,
+    ) -> Result<Self, AlignmentError> {
+        let utterance = zipa
+            .infer_audio(audio)
+            .map_err(|e| AlignmentError::Zipa(e.to_string()))?;
+
+        let duration = audio.samples.len() as f64 / audio.sample_rate_hz as f64;
+
+        let phone_spans: Vec<PhoneSpan> = utterance
+            .derive_phone_spans(&zipa.tokens, duration, 0)
+            .into_iter()
+            .filter(|s| s.token != "▁")
+            .collect();
+
+        let zipa_raw: Vec<String> = utterance.tokens.into_iter().filter(|t| t != "▁").collect();
+        let zipa_norm_with_spans = normalize_ipa_for_comparison_with_spans(&zipa_raw);
+        let zipa_norm: Vec<String> = zipa_norm_with_spans
+            .iter()
+            .map(|t| t.token.clone())
+            .collect();
+
+        let word_raw_ranges =
+            transcript_word_raw_ranges(g2p, transcript).map_err(AlignmentError::G2p)?;
+
+        let word_norm_ranges: Vec<(Range<usize>, Vec<String>)> = word_raw_ranges
+            .iter()
+            .map(|(range, raw)| (range.clone(), normalize_ipa_for_comparison(raw)))
+            .collect();
+
+        let transcript_norm: Vec<String> = word_norm_ranges
+            .iter()
+            .flat_map(|(_, tokens)| tokens.iter().cloned())
+            .collect();
+
+        let word_ids: Vec<usize> = word_norm_ranges
+            .iter()
+            .enumerate()
+            .flat_map(|(wi, (_, tokens))| std::iter::repeat_n(wi, tokens.len()))
+            .collect();
+
+        let alignment = align_token_sequences_with_left_word_boundaries(
+            &transcript_norm,
+            &zipa_norm,
+            &word_ids,
+        );
+
+        let token_ranges: Vec<Range<usize>> = (0..word_norm_ranges.len())
+            .map(|wi| transcript_token_range_for_span(&word_norm_ranges, wi, wi + 1))
+            .collect();
+
+        let word_tokens: Vec<Vec<String>> = word_norm_ranges
+            .iter()
+            .map(|(_, tokens)| tokens.clone())
+            .collect();
+
+        let word_windows =
+            select_segmental_word_windows(&word_tokens, &token_ranges, &zipa_norm, &alignment);
+
+        let word_char_ranges: Vec<Range<usize>> = word_raw_ranges
+            .into_iter()
+            .map(|(range, _)| range)
+            .collect();
+
+        Ok(Self {
+            transcript: transcript.to_owned(),
+            word_char_ranges,
+            word_windows,
+            zipa_norm_with_spans,
+            phone_spans,
+        })
+    }
+
+    /// Number of words in the transcript.
+    pub fn word_count(&self) -> usize {
+        self.word_char_ranges.len()
+    }
+
+    /// Per-word timing.  Every word is present; check [`AlignmentQuality`] to
+    /// distinguish fully-aligned words from those that could not be placed.
+    pub fn word_timings(&self) -> Vec<WordTiming<'_>> {
+        self.word_char_ranges
+            .iter()
+            .zip(self.word_windows.iter())
+            .map(|(char_range, window)| {
+                let word = &self.transcript[char_range.clone()];
+                let quality = match window {
+                    None => AlignmentQuality::NoWindow,
+                    Some(w) => {
+                        match timed_range_for_normalized_range(
+                            &self.zipa_norm_with_spans,
+                            &self.phone_spans,
+                            w.zipa_norm_range.clone(),
+                        ) {
+                            Some(t) => AlignmentQuality::Aligned {
+                                start_secs: t.start_time_secs,
+                                end_secs: t.end_time_secs,
+                            },
+                            None => AlignmentQuality::NoTiming,
+                        }
+                    }
+                };
+                WordTiming { word, quality }
+            })
+            .collect()
+    }
+
+    /// Timed audio span covering words `[word_start, word_end)`.
+    ///
+    /// When only some words have alignment windows the returned timing covers
+    /// the aligned subset and is tagged [`SpanTiming::PartialGap`] so callers
+    /// can decide how to handle the gap.
+    pub fn span_timing(&self, word_start: usize, word_end: usize) -> SpanTiming {
+        let word_end = word_end.min(self.word_windows.len());
+        let word_start = word_start.min(word_end);
+        let windows = &self.word_windows[word_start..word_end];
+
+        // Collect zipa_norm_ranges from windows that resolved.
+        let resolved: Vec<Range<usize>> = windows
+            .iter()
+            .filter_map(|w| w.as_ref().map(|w| w.zipa_norm_range.clone()))
+            .collect();
+
+        if resolved.is_empty() {
+            return SpanTiming::NoAlignedWords;
+        }
+
+        let is_partial = resolved.len() < windows.len();
+
+        // Merge: span from the first resolved window's start to the last's end.
+        let merged_start = resolved.iter().map(|r| r.start).min().unwrap();
+        let merged_end = resolved.iter().map(|r| r.end).max().unwrap();
+
+        match timed_range_for_normalized_range(
+            &self.zipa_norm_with_spans,
+            &self.phone_spans,
+            merged_start..merged_end,
+        ) {
+            Some(t) if is_partial => SpanTiming::PartialGap {
+                start_secs: t.start_time_secs,
+                end_secs: t.end_time_secs,
+            },
+            Some(t) => SpanTiming::Aligned {
+                start_secs: t.start_time_secs,
+                end_secs: t.end_time_secs,
+            },
+            None => SpanTiming::NoTiming,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1087,5 +1320,144 @@ mod tests {
         assert_eq!(timed.raw_phone_range, 1..3);
         assert!((timed.start_time_secs - 0.12).abs() < 1e-6);
         assert!((timed.end_time_secs - 0.15).abs() < 1e-6);
+    }
+
+    // Build a minimal TranscriptAlignment with three words where the middle
+    // word has no alignment window, then assert all SpanTiming variants.
+    #[test]
+    fn span_timing_variants() {
+        use super::{AlignmentQuality, SpanTiming, TranscriptAlignment, WordAlignmentWindow};
+
+        // transcript: "hello world foo"
+        // words:       0..5   6..11  12..15
+        let transcript = "hello world foo".to_string();
+        let word_char_ranges = vec![0..5, 6..11, 12..15];
+
+        // ZIPA normalized sequence: 4 tokens, each mapping 1:1 to a raw phone.
+        let zipa_norm_with_spans = vec![
+            ComparisonToken {
+                token: "h".into(),
+                source_start: 0,
+                source_end: 1,
+            },
+            ComparisonToken {
+                token: "ɛ".into(),
+                source_start: 1,
+                source_end: 2,
+            },
+            ComparisonToken {
+                token: "w".into(),
+                source_start: 2,
+                source_end: 3,
+            },
+            ComparisonToken {
+                token: "f".into(),
+                source_start: 3,
+                source_end: 4,
+            },
+        ];
+
+        // Raw phone spans with known timings.
+        let phone_spans = vec![
+            PhoneSpan {
+                token_id: 1,
+                token: "h".into(),
+                start_frame: 0,
+                end_frame: 10,
+                start_time_secs: 0.0,
+                end_time_secs: 0.1,
+            },
+            PhoneSpan {
+                token_id: 2,
+                token: "ɛ".into(),
+                start_frame: 10,
+                end_frame: 20,
+                start_time_secs: 0.1,
+                end_time_secs: 0.2,
+            },
+            PhoneSpan {
+                token_id: 3,
+                token: "w".into(),
+                start_frame: 20,
+                end_frame: 30,
+                start_time_secs: 0.2,
+                end_time_secs: 0.3,
+            },
+            PhoneSpan {
+                token_id: 4,
+                token: "f".into(),
+                start_frame: 30,
+                end_frame: 40,
+                start_time_secs: 0.3,
+                end_time_secs: 0.4,
+            },
+        ];
+
+        // word 0 → norm range 0..2, word 1 → None, word 2 → norm range 2..4
+        let word_windows = vec![
+            Some(WordAlignmentWindow {
+                zipa_norm_range: 0..2,
+                ops: vec![],
+            }),
+            None,
+            Some(WordAlignmentWindow {
+                zipa_norm_range: 2..4,
+                ops: vec![],
+            }),
+        ];
+
+        let ta = TranscriptAlignment {
+            transcript,
+            word_char_ranges,
+            word_windows,
+            zipa_norm_with_spans,
+            phone_spans,
+        };
+
+        // Single aligned word.
+        assert_eq!(
+            ta.span_timing(0, 1),
+            SpanTiming::Aligned {
+                start_secs: 0.0,
+                end_secs: 0.2
+            }
+        );
+
+        // Single unaligned word.
+        assert_eq!(ta.span_timing(1, 2), SpanTiming::NoAlignedWords);
+
+        // Range where one word has a window and one doesn't → PartialGap.
+        assert_eq!(
+            ta.span_timing(0, 2),
+            SpanTiming::PartialGap {
+                start_secs: 0.0,
+                end_secs: 0.2
+            }
+        );
+
+        // All three words: words 0 and 2 aligned, word 1 missing → PartialGap
+        // covering the merged range 0..4.
+        assert_eq!(
+            ta.span_timing(0, 3),
+            SpanTiming::PartialGap {
+                start_secs: 0.0,
+                end_secs: 0.4
+            }
+        );
+
+        // word_timings: check quality variants.
+        let timings = ta.word_timings();
+        assert!(matches!(
+            timings[0].quality,
+            AlignmentQuality::Aligned { .. }
+        ));
+        assert!(matches!(timings[1].quality, AlignmentQuality::NoWindow));
+        assert!(matches!(
+            timings[2].quality,
+            AlignmentQuality::Aligned { .. }
+        ));
+        assert_eq!(timings[0].word, "hello");
+        assert_eq!(timings[1].word, "world");
+        assert_eq!(timings[2].word, "foo");
     }
 }

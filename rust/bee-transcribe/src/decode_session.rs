@@ -3,10 +3,6 @@
 //! Rotation = throw away the old DecodeSession and create a new one.
 //! The start_time tracks where this sub-session begins in the timeline.
 
-use bee_phonetic::{
-    align_token_sequences_with_left_word_boundaries, normalize_ipa_for_comparison,
-    normalize_ipa_for_comparison_with_spans, sentence_word_tokens,
-};
 use bee_qwen3_asr::decoder::KVCache;
 use bee_qwen3_asr::encoder::EncoderCache;
 use bee_qwen3_asr::forced_aligner::ForcedAligner;
@@ -28,7 +24,7 @@ use crate::text_buffer::{
 };
 use crate::timing::{log_phase_chunk, phase_start};
 use crate::types::{Aligner, DecodeMode, RotationCutStrategy};
-use crate::zipa_align::{self, timed_range_for_normalized_range};
+use crate::zipa_align::{AlignmentQuality, TranscriptAlignment};
 
 /// A decode sub-session. Replaced wholesale on rotation.
 pub struct DecodeSession {
@@ -818,118 +814,30 @@ fn zipa_word_alignments(
         samples: audio.samples().to_vec(),
         sample_rate_hz: audio.sample_rate().0,
     };
-    tracing::debug!(
-        audio_samples = audio.len(),
-        audio_secs = audio.duration().0,
-        sample_rate = audio.sample_rate().0,
-        "zipa_word_alignments: audio received"
-    );
-    let utterance = zipa.infer_audio(&zipa_audio).map_err(|e| e.to_string())?;
-    let duration = audio.duration().0;
-
-    let phone_spans = utterance
-        .derive_phone_spans(&zipa.tokens, duration, 0)
+    let ta = TranscriptAlignment::build(transcript, &zipa_audio, g2p, zipa)
+        .map_err(|e| e.to_string())?;
+    Ok(ta
+        .word_timings()
         .into_iter()
-        .filter(|s| s.token != "▁")
-        .collect::<Vec<_>>();
-
-    let zipa_raw = utterance
-        .tokens
-        .into_iter()
-        .filter(|t| t != "▁")
-        .collect::<Vec<_>>();
-    let zipa_norm_with_spans = normalize_ipa_for_comparison_with_spans(&zipa_raw);
-    let zipa_norm = zipa_norm_with_spans
-        .iter()
-        .map(|t| t.token.clone())
-        .collect::<Vec<_>>();
-
-    tracing::debug!(
-        phone_spans = phone_spans.len(),
-        zipa_tokens = zipa_norm.len(),
-        transcript = %transcript.trim(),
-        "zipa_word_alignments: inferred"
-    );
-
-    let word_raw_ranges = zipa_align::transcript_word_raw_ranges(g2p, transcript)?;
-    let word_norm_ranges = word_raw_ranges
-        .iter()
-        .map(|(range, raw)| (range.clone(), normalize_ipa_for_comparison(raw)))
-        .collect::<Vec<_>>();
-    let transcript_norm = word_norm_ranges
-        .iter()
-        .flat_map(|(_, tokens)| tokens.iter().cloned())
-        .collect::<Vec<_>>();
-    let word_ids = word_norm_ranges
-        .iter()
-        .enumerate()
-        .flat_map(|(wi, (_, tokens))| std::iter::repeat_n(wi, tokens.len()))
-        .collect::<Vec<_>>();
-
-    tracing::debug!(
-        words = word_norm_ranges.len(),
-        transcript_phones = transcript_norm.len(),
-        transcript_norm = %transcript_norm.join(" "),
-        zipa_norm = %zipa_norm.join(" "),
-        "zipa_word_alignments: phoneme sequences"
-    );
-
-    let alignment =
-        align_token_sequences_with_left_word_boundaries(&transcript_norm, &zipa_norm, &word_ids);
-
-    let transcript_words = sentence_word_tokens(transcript);
-    let token_ranges = (0..word_norm_ranges.len())
-        .map(|wi| zipa_align::transcript_token_range_for_span(&word_norm_ranges, wi, wi + 1))
-        .collect::<Vec<_>>();
-    let word_tokens = word_norm_ranges
-        .iter()
-        .map(|(_, tokens)| tokens.clone())
-        .collect::<Vec<_>>();
-    let word_windows = zipa_align::select_segmental_word_windows(
-        &word_tokens,
-        &token_ranges,
-        &zipa_norm,
-        &alignment,
-    );
-
-    let mut items = Vec::new();
-    for (wi, _) in word_norm_ranges.iter().enumerate() {
-        let word_text = match transcript_words.get(wi) {
-            Some(w) => w.text.clone(),
-            None => continue,
-        };
-        let window = match word_windows.get(wi).and_then(|w| w.as_ref()) {
-            Some(w) => w,
-            None => {
-                tracing::debug!(word = %word_text, word_index = wi, "zipa_word_alignments: no window for word");
-                continue;
+        .filter_map(|wt| match wt.quality {
+            AlignmentQuality::Aligned {
+                start_secs,
+                end_secs,
+            } => Some(AlignmentItem {
+                word: wt.word.to_owned(),
+                start: Seconds(start_secs),
+                end: Seconds(end_secs),
+            }),
+            AlignmentQuality::NoWindow => {
+                tracing::debug!(word = %wt.word, "zipa_word_alignments: no window for word");
+                None
             }
-        };
-        let timed = timed_range_for_normalized_range(
-            &zipa_norm_with_spans,
-            &phone_spans,
-            window.zipa_norm_range.clone(),
-        );
-        match timed {
-            Some(t) => {
-                tracing::debug!(
-                    word = %word_text,
-                    start = t.start_time_secs,
-                    end = t.end_time_secs,
-                    "zipa_word_alignments: aligned"
-                );
-                items.push(AlignmentItem {
-                    word: word_text,
-                    start: Seconds(t.start_time_secs),
-                    end: Seconds(t.end_time_secs),
-                });
+            AlignmentQuality::NoTiming => {
+                tracing::debug!(word = %wt.word, "zipa_word_alignments: no timing for word");
+                None
             }
-            None => {
-                tracing::debug!(word = %word_text, word_index = wi, "zipa_word_alignments: no timing for word");
-            }
-        }
-    }
-    Ok(items)
+        })
+        .collect())
 }
 
 fn render_rotation_debug_report(
