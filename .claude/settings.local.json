@@ -31,7 +31,9 @@
       "Bash(python3 -m json.tool)",
       "Bash(python3 -c \":*)",
       "Bash(RUST_LOG=info ./target/release/transcribe --align ~/Library/Caches/qwen3-asr/mlx-community--Qwen3-ASR-1.7B-4bit ../qwen3-asr-rs/tests/fixtures/audio/sample1.wav)",
-      "Bash(xargs ls:*)"
+      "Bash(xargs ls:*)",
+      "Bash(swift build:*)",
+      "Bash(xcodegen generate:*)"
     ]
   }
 }
