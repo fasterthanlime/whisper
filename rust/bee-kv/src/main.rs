@@ -701,6 +701,12 @@ fn decode_sliding_window_timed_rollback(
         samples,
         wav_path,
     )?;
+    let committed_timeline_path = Some(write_committed_timeline_html(
+        "sliding-window-timed-rollback-committed",
+        &window_runs,
+        samples,
+        wav_path,
+    )?);
 
     Ok(SlidingWindowTimedRollbackExperimentResult {
         mode_label: "sliding-window-timed-rollback",
@@ -709,6 +715,7 @@ fn decode_sliding_window_timed_rollback(
         stride_ms: (stride_samples * 1000) / SAMPLE_RATE as usize,
         window_runs,
         html_path,
+        committed_timeline_path,
     })
 }
 
@@ -815,6 +822,12 @@ fn decode_sliding_window_full_replay(
         samples,
         wav_path,
     )?;
+    let committed_timeline_path = Some(write_committed_timeline_html(
+        "sliding-window-full-replay-committed",
+        &window_runs,
+        samples,
+        wav_path,
+    )?);
 
     Ok(SlidingWindowTimedRollbackExperimentResult {
         mode_label: "sliding-window-full-replay",
@@ -823,6 +836,7 @@ fn decode_sliding_window_full_replay(
         stride_ms: (stride_samples * 1000) / SAMPLE_RATE as usize,
         window_runs,
         html_path,
+        committed_timeline_path,
     })
 }
 
@@ -939,6 +953,12 @@ fn decode_sliding_window_bridge_replay(
         samples,
         wav_path,
     )?;
+    let committed_timeline_path = Some(write_committed_timeline_html(
+        "sliding-window-bridge-replay-committed",
+        &window_runs,
+        samples,
+        wav_path,
+    )?);
 
     Ok(SlidingWindowTimedRollbackExperimentResult {
         mode_label: "sliding-window-bridge-replay",
@@ -947,6 +967,7 @@ fn decode_sliding_window_bridge_replay(
         stride_ms: (stride_samples * 1000) / SAMPLE_RATE as usize,
         window_runs,
         html_path,
+        committed_timeline_path,
     })
 }
 
@@ -1922,6 +1943,7 @@ struct SlidingWindowTimedRollbackExperimentResult {
     stride_ms: usize,
     window_runs: Vec<SlidingWindowRun>,
     html_path: PathBuf,
+    committed_timeline_path: Option<PathBuf>,
 }
 
 struct DualLaneFollowupExperimentResult {
@@ -2098,6 +2120,12 @@ fn print_sliding_window_timed_rollback_experiment(
         println!();
     }
     println!("html_path={}", experiment.html_path.display());
+    if let Some(committed_timeline_path) = &experiment.committed_timeline_path {
+        println!(
+            "committed_timeline_path={}",
+            committed_timeline_path.display()
+        );
+    }
     println!();
 }
 
@@ -2240,6 +2268,14 @@ struct SlidingWordPlacement {
     bridge: bool,
 }
 
+struct CommittedWordPlacement {
+    text: String,
+    start_secs: Option<f64>,
+    end_secs: Option<f64>,
+    quality_label: &'static str,
+    second_bin: usize,
+}
+
 fn build_word_placements(chunks: &[ChunkRun], samples: &[f32]) -> Result<Vec<WordPlacement>> {
     let combined_transcript = combine_transcripts(chunks);
     let alignment = build_transcript_alignment(&combined_transcript, samples)?;
@@ -2293,6 +2329,23 @@ fn write_sliding_window_timed_rollback_html(
         duration_secs,
         &audio_src,
     )?;
+    fs::write(&out_path, html).with_context(|| format!("writing {}", out_path.display()))?;
+    Ok(out_path)
+}
+
+fn write_committed_timeline_html(
+    mode_label: &str,
+    window_runs: &[SlidingWindowRun],
+    samples: &[f32],
+    wav_path: &Path,
+) -> Result<PathBuf> {
+    let duration_secs = samples.len() as f64 / SAMPLE_RATE as f64;
+    let out_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.artifacts/bee-kv");
+    fs::create_dir_all(&out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+    let out_path = out_dir.join(format!("{mode_label}.html"));
+    let audio_src = file_url_for_path(wav_path)?;
+    let words = collect_committed_word_placements(window_runs, samples)?;
+    let html = render_committed_timeline_html(mode_label, duration_secs, &words, &audio_src);
     fs::write(&out_path, html).with_context(|| format!("writing {}", out_path.display()))?;
     Ok(out_path)
 }
@@ -2412,6 +2465,160 @@ chunkAudios.forEach((audio) => {{\
 updatePlayheads(0);\
 </script></body></html>"
     ))
+}
+
+fn collect_committed_word_placements(
+    window_runs: &[SlidingWindowRun],
+    samples: &[f32],
+) -> Result<Vec<CommittedWordPlacement>> {
+    let mut placements = Vec::new();
+
+    for run in window_runs {
+        let chunk = &run.chunk_run;
+        let chunk_samples = &samples[chunk.start_sample..chunk.end_sample];
+        let words = build_window_word_placements(run, chunk_samples)?;
+        let window_start_secs = chunk.start_sample as f64 / SAMPLE_RATE as f64;
+
+        for word in words
+            .into_iter()
+            .filter(|word| !word.carried && (word.kept || word.bridge))
+        {
+            let start_secs = word.start_secs.map(|start| window_start_secs + start);
+            let end_secs = word.end_secs.map(|end| window_start_secs + end);
+            let second_bin = start_secs
+                .map(|start| start.floor() as usize)
+                .unwrap_or_else(|| window_start_secs.floor() as usize);
+            placements.push(CommittedWordPlacement {
+                text: word.text,
+                start_secs,
+                end_secs,
+                quality_label: word.quality_label,
+                second_bin,
+            });
+        }
+    }
+
+    Ok(placements)
+}
+
+fn render_committed_timeline_html(
+    mode_label: &str,
+    duration_secs: f64,
+    words: &[CommittedWordPlacement],
+    audio_src: &str,
+) -> String {
+    let width_px = 1400.0;
+    let row_height_px = 132.0;
+    let transcript_line = words
+        .iter()
+        .map(|word| html_escape(&word.text))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let total_seconds = duration_secs.ceil() as usize;
+    let mut second_bands = String::new();
+    let mut second_markers = String::new();
+    for second in 0..=total_seconds {
+        let x = ((second as f64) / duration_secs.min(duration_secs.max(1.0))) * width_px;
+        if second < total_seconds {
+            let left = (second as f64 / duration_secs) * width_px;
+            let right = (((second + 1) as f64).min(duration_secs) / duration_secs) * width_px;
+            let width = (right - left).max(0.0);
+            let hue = (second * 47) % 360;
+            second_bands.push_str(&format!(
+                "<div class=\"second-band\" style=\"left:{left:.1}px;width:{width:.1}px;background:hsl({hue} 55% 90% / 0.55)\"></div>"
+            ));
+        }
+        if second as f64 <= duration_secs {
+            second_markers.push_str(&format!(
+                "<div class=\"second-marker\" style=\"left:{x:.1}px\"></div><div class=\"second-label\" style=\"left:{x:.1}px\">{second}s</div>"
+            ));
+        }
+    }
+
+    let mut word_divs = String::new();
+    let mut fallback_x = 0.0;
+    let mut lane_end_x = [0.0_f64; 3];
+    let lane_tops = [20.0_f64, 54.0_f64, 88.0_f64];
+    for word in words {
+        let hue = (word.second_bin * 47) % 360;
+        let class = format!("word {}", word.quality_label);
+        let (left, width, lane_index) = match (word.start_secs, word.end_secs) {
+            (Some(start), Some(end)) => {
+                let left = (start / duration_secs) * width_px;
+                let width = ((end - start).max(0.08) / duration_secs) * width_px;
+                let width = width.max(36.0);
+                let mut lane_index = 0usize;
+                while lane_index + 1 < lane_end_x.len() && lane_end_x[lane_index] > left {
+                    lane_index += 1;
+                }
+                if lane_end_x[lane_index] > left && lane_index == lane_end_x.len() - 1 {
+                    lane_index = lane_end_x
+                        .iter()
+                        .enumerate()
+                        .min_by(|a, b| a.1.total_cmp(b.1))
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(0);
+                }
+                lane_end_x[lane_index] = left + width + 6.0;
+                (left, width, lane_index)
+            }
+            _ => {
+                let left = fallback_x;
+                fallback_x += 90.0;
+                (left, 84.0, 2)
+            }
+        };
+        let top = lane_tops[lane_index.min(lane_tops.len() - 1)];
+        let text = html_escape(&word.text);
+        word_divs.push_str(&format!(
+            "<div class=\"{class}\" style=\"left:{left:.1}px;top:{top:.1}px;width:{width:.1}px;background:hsl({hue} 58% 82%);border-color:hsl({hue} 38% 42%);\" title=\"committed @ {start:.2}-{end:.2}s\" data-full-word=\"{text}\">{text}</div>",
+            start = word.start_secs.unwrap_or(0.0),
+            end = word.end_secs.unwrap_or(0.0),
+        ));
+    }
+
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>bee-kv {mode_label}</title><style>\
+body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f7f4ec;color:#1d1b19;padding:24px;}}\
+.legend{{margin-bottom:18px;font-size:13px;color:#514a41;}}\
+.audio-panel{{margin:0 0 20px 0;padding:12px 14px;border:1px solid #b9b09f;background:#fffdf8;width:{width_px}px;}}\
+.audio-title{{font-weight:700;margin:0 0 8px 0;}}\
+.audio-player{{width:100%;margin:6px 0 0 0;}}\
+.transcript-line{{width:{width_px}px;margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#3b352d;}}\
+.timeline{{width:{width_px}px;border:1px solid #b9b09f;background:#fffdf8;position:relative;padding:12px 0;margin-bottom:8px;}}\
+.track{{position:relative;width:{width_px}px;height:{row_height_px}px;border-top:1px solid #d6cfbf;border-bottom:1px solid #d6cfbf;background:linear-gradient(180deg,#fffdf8,#f4efe3);overflow:hidden;}}\
+.second-band{{position:absolute;top:0;height:{row_height_px}px;pointer-events:none;}}\
+.second-marker{{position:absolute;top:0;width:1px;height:{row_height_px}px;background:#9d9483;}}\
+.second-label{{position:absolute;top:2px;transform:translateX(4px);font-size:11px;color:#6d6457;}}\
+.playhead{{position:absolute;top:0;width:2px;height:{row_height_px}px;background:#d97706;pointer-events:none;display:none;}}\
+.word{{text-align:center;vertical-align:middle;position:absolute;height:2em;padding:4px 2px;border-radius:4px;border:1px solid #7a6d56;white-space:nowrap;overflow:visible;font-size:12px;box-sizing:border-box;cursor:default;font-family:\"SF Pro\", serif;}}\
+.word.no-window,.word.no-timing{{background:#e5d9c9 !important;border-color:#8f7f69 !important;height:22px;font-size:11px;}}\
+.axis{{display:flex;justify-content:space-between;font-size:12px;color:#6d6457;margin-top:6px;}}\
+.word:hover::after{{content:attr(data-full-word);position:absolute;left:0;top:-28px;background:#1d1b19;color:#fffdf8;padding:2px 6px;border-radius:4px;white-space:nowrap;z-index:10;font-size:11px;line-height:16px;box-shadow:0 2px 6px rgba(0,0,0,0.18);}}\
+</style></head><body><h1>bee-kv {mode_label}</h1><div class=\"audio-panel\"><div class=\"audio-title\">Full Recording</div><div>Source: {audio_src}</div><audio id=\"master-audio\" class=\"audio-player\" controls preload=\"metadata\" src=\"{audio_src}\"></audio></div><p class=\"legend\">Committed words only. Each word keeps the exact timing it had when it was marked green in its source row. Background bands and box colors change every one-second interval; no extra re-alignment is performed.</p><div class=\"transcript-line\">{transcript_line}</div><div class=\"timeline\" data-row-start=\"0\" data-row-end=\"{duration_secs:.6}\"><div class=\"track\">{second_bands}{second_markers}<div class=\"playhead\"></div>{word_divs}</div><div class=\"axis\"><span>0.00s</span><span>{duration_secs:.2}s total</span></div></div><script>\
+const audio = document.getElementById('master-audio');\
+const row = document.querySelector('[data-row-start]');\
+const playhead = row?.querySelector('.playhead');\
+let rafId = null;\
+function updatePlayhead(time){{\
+  if (!row || !playhead) return;\
+  const start = Number(row.dataset.rowStart);\
+  const end = Number(row.dataset.rowEnd);\
+  const duration = end - start;\
+  if (time < start || time > end || duration <= 0) {{ playhead.style.display = 'none'; return; }}\
+  const frac = (time - start) / duration;\
+  playhead.style.display = 'block';\
+  playhead.style.left = `${{Math.max(0, Math.min(1, frac)) * 100}}%`;\
+}}\
+function stopTracking(){{ if (rafId !== null) cancelAnimationFrame(rafId); rafId = null; }}\
+function tick(){{ if (audio.paused || audio.ended) {{ stopTracking(); return; }} updatePlayhead(audio.currentTime || 0); rafId = requestAnimationFrame(tick); }}\
+audio.addEventListener('play', () => {{ if (rafId !== null) cancelAnimationFrame(rafId); updatePlayhead(audio.currentTime || 0); rafId = requestAnimationFrame(tick); }});\
+audio.addEventListener('pause', stopTracking);\
+audio.addEventListener('ended', stopTracking);\
+audio.addEventListener('seeking', () => updatePlayhead(audio.currentTime || 0));\
+updatePlayhead(0);\
+</script></body></html>",
+    )
 }
 
 fn render_sliding_window_row(
