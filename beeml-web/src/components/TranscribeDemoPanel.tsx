@@ -199,6 +199,35 @@ function resampleMonoLinear(
   return out;
 }
 
+function monoSamplesToWav(samples: Float32Array, sampleRate: number): ArrayBuffer {
+  const dataLen = samples.length * 2;
+  const buf = new ArrayBuffer(44 + dataLen);
+  const view = new DataView(buf);
+  const writeString = (offset: number, value: string) => {
+    for (let i = 0; i < value.length; i++) {
+      view.setUint8(offset + i, value.charCodeAt(i));
+    }
+  };
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + dataLen, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, dataLen, true);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return buf;
+}
+
 export function TranscribeDemoPanel({
   wsUrl,
 }: {
@@ -214,6 +243,7 @@ export function TranscribeDemoPanel({
   const [streamText, setStreamText] = useState("");
   const [streamCommittedLen, setStreamCommittedLen] = useState(0);
   const streamCleanupRef = useRef<(() => void) | null>(null);
+  const lastRecordedWavRef = useRef<Uint8Array | null>(null);
 
   const handleRecord = useCallback(async () => {
     if (recorder.state === "recording") {
@@ -227,6 +257,7 @@ export function TranscribeDemoPanel({
 
         setStatus("Transcribing...");
         const bytes = new Uint8Array(await blob.arrayBuffer());
+        lastRecordedWavRef.current = bytes;
         const result = await client.transcribeWav(bytes);
         if (!result.ok) throw new Error(result.error);
 
@@ -343,6 +374,59 @@ export function TranscribeDemoPanel({
     }
   }, [streaming, wsUrl]);
 
+  const handleSimulateCut = useCallback(
+    async (targetCommittedTokens: number) => {
+      if (!inspectorData?.phoneticTrace) {
+        throw new Error("No phonetic trace available for cut simulation.");
+      }
+
+      let wavBytes = lastRecordedWavRef.current;
+      if (!wavBytes) {
+        const sampleRate =
+          inspectorData.phoneticTrace.sessionAudioSampleRateHz || 16000;
+        const samples = new Float32Array(inspectorData.phoneticTrace.sessionAudioF32);
+        wavBytes = new Uint8Array(monoSamplesToWav(samples, sampleRate));
+      }
+
+      setStatus(`Simulating cut @ token ${targetCommittedTokens}...`);
+      setError(null);
+
+      const client = await connectBeeMl(wsUrl);
+      const result = await client.transcribeWavWithOptions({
+        wav_bytes: wavBytes,
+        options: {
+          chunk_duration: 0.4,
+          vad_threshold: 0.5,
+          rollback_tokens: 5n,
+          commit_token_count: 12n,
+          max_tokens_streaming: 32n,
+          max_tokens_final: 512n,
+          language: { 0: "" },
+          app_id: null,
+          rotation_cut_strategy: {
+            tag: "TargetCommittedTextTokens",
+            value: targetCommittedTokens,
+          },
+        },
+      });
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+
+      setInspectorData(
+        toInspectorData(
+          result.value.transcript,
+          result.value.words,
+          result.value.phonetic_trace
+            ? toPhoneticTrace(result.value.phonetic_trace)
+            : null,
+        ),
+      );
+      setStatus(null);
+    },
+    [inspectorData, wsUrl],
+  );
+
   return (
     <div className="demo-panel">
       <div className="demo-toolbar">
@@ -374,7 +458,11 @@ export function TranscribeDemoPanel({
           {streaming && <span className="cursor" />}
         </div>
       ) : inspectorData ? (
-        <EvalInspector data={inspectorData} wsUrl={wsUrl} />
+        <EvalInspector
+          data={inspectorData}
+          wsUrl={wsUrl}
+          onSimulateCut={handleSimulateCut}
+        />
       ) : (
         <div className="demo-empty">
           {recorder.state === "recording"

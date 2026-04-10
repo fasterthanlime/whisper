@@ -8,9 +8,11 @@ import { TranscriptComparison } from "./TranscriptComparison";
 export function EvalInspector({
   data,
   wsUrl,
+  onSimulateCut,
 }: {
   data: EvalInspectorData;
   wsUrl?: string;
+  onSimulateCut?: (targetCommittedTokens: number) => Promise<void>;
 }) {
   const ctxRef = useRef<AudioContext | null>(null);
   const bufferRef = useRef<AudioBuffer | null>(null);
@@ -170,6 +172,7 @@ export function EvalInspector({
           <PhoneticRescuePanel
             trace={data.phoneticTrace}
             wsUrl={wsUrl}
+            onSimulateCut={onSimulateCut}
           />
       ) : null}
       </div>

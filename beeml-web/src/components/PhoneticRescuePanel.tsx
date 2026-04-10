@@ -391,6 +391,8 @@ function WordGroup({
   onPlayOriginal,
   onPlayTranscript,
   onPlayZipa,
+  onSelectCut,
+  cutSelected,
   controlState,
 }: {
   word: PhoneticWordAlignment;
@@ -398,6 +400,8 @@ function WordGroup({
   onPlayOriginal: () => void;
   onPlayTranscript: () => void;
   onPlayZipa: () => void;
+  onSelectCut?: (targetCommittedTokens: number) => void;
+  cutSelected?: boolean;
   controlState:
     | {
         kind: "original" | "transcript" | "zipa";
@@ -443,7 +447,27 @@ function WordGroup({
           >
             {controlGlyph(controlState, "original")}
           </button>
-          <div className="word-group-inline-box-row">
+          <div className="word-group-inline-box-row" style={{ gap: "0.4rem" }}>
+            {onSelectCut ? (
+              <button
+                type="button"
+                onClick={() => onSelectCut(word.tokenEnd)}
+                className="word-group-inline-play-button"
+                title={`Select cut after "${label}" at token ${word.tokenEnd}`}
+                aria-label={`Select cut after ${label}`}
+                style={{
+                  minWidth: "2rem",
+                  borderColor: cutSelected
+                    ? "color-mix(in srgb, var(--lane-zipa) 75%, transparent)"
+                    : undefined,
+                  background: cutSelected
+                    ? "color-mix(in srgb, var(--lane-zipa-bg) 55%, transparent)"
+                    : undefined,
+                }}
+              >
+                ✂
+              </button>
+            ) : null}
             <span className="word-group-text-box">{label}</span>
           </div>
         </div>
@@ -549,9 +573,11 @@ async function decodeWavBytes(
 export function PhoneticRescuePanel({
   trace,
   wsUrl,
+  onSimulateCut,
 }: {
   trace: PhoneticRescueTrace;
   wsUrl?: string;
+  onSimulateCut?: (targetCommittedTokens: number) => Promise<void>;
 }) {
   const wordAlignments = useMemo(
     () => [...trace.wordAlignments].sort((a, b) => a.tokenStart - b.tokenStart),
@@ -581,6 +607,9 @@ export function PhoneticRescuePanel({
     | null
   >(null);
   const [controlError, setControlError] = useState<string | null>(null);
+  const [selectedCutTokenEnd, setSelectedCutTokenEnd] = useState<number | null>(null);
+  const [simulatingCut, setSimulatingCut] = useState(false);
+  const [simulateCutError, setSimulateCutError] = useState<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const playingSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const sessionBufferRef = useRef<AudioBuffer | null>(null);
@@ -592,6 +621,12 @@ export function PhoneticRescuePanel({
     sessionBufferRef.current = null;
     sessionBufferKeyRef.current = null;
   }, [trace.sessionAudioF32, trace.sessionAudioSampleRateHz]);
+
+  useEffect(() => {
+    setSelectedCutTokenEnd(null);
+    setSimulatingCut(false);
+    setSimulateCutError(null);
+  }, [trace.snapshotRevision]);
 
   useEffect(() => {
     synthBufferCacheRef.current.clear();
@@ -799,6 +834,22 @@ export function PhoneticRescuePanel({
     }
   };
 
+  const handleSimulateCut = async () => {
+    if (!onSimulateCut || selectedCutTokenEnd == null) {
+      return;
+    }
+    try {
+      setSimulateCutError(null);
+      setSimulatingCut(true);
+      stopPlayback();
+      await onSimulateCut(selectedCutTokenEnd);
+    } catch (error) {
+      setSimulateCutError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSimulatingCut(false);
+    }
+  };
+
   useEffect(() => {
     if (!wsUrl || wordAlignments.length === 0) return;
     void Promise.allSettled([
@@ -878,7 +929,36 @@ export function PhoneticRescuePanel({
               controlState={activeGlobalControl}
               onClick={() => void playLaneSequence("zipa")}
             />
+            {onSimulateCut ? (
+              <button
+                type="button"
+                className="word-group-inline-play-button global-lane-play-button"
+                onClick={() => void handleSimulateCut()}
+                disabled={selectedCutTokenEnd == null || simulatingCut}
+                title={
+                  selectedCutTokenEnd == null
+                    ? "Select a word cut (✂) first"
+                    : `Run simulated cut at committed tokens=${selectedCutTokenEnd}`
+                }
+              >
+                <span>{simulatingCut ? "…" : "✂"}</span>
+                <span>
+                  {selectedCutTokenEnd == null
+                    ? "Simulate Cut"
+                    : `Sim Cut @ ${selectedCutTokenEnd}`}
+                </span>
+              </button>
+            ) : null}
           </div>
+
+          {onSimulateCut ? (
+            <div className="token-row muted" style={{ marginBottom: "0.45rem" }}>
+              selected cut:{" "}
+              {selectedCutTokenEnd == null
+                ? "none"
+                : `after token ${selectedCutTokenEnd}`}
+            </div>
+          ) : null}
 
           <PhoneticTimingTimeline
             wordAlignments={wordAlignments}
@@ -891,6 +971,11 @@ export function PhoneticRescuePanel({
               <span className="error-pill">{controlError}</span>
             </div>
           )}
+          {simulateCutError && (
+            <div className="notice-row">
+              <span className="error-pill">{simulateCutError}</span>
+            </div>
+          )}
           <div className="word-group-strip">
             {wordGroups.map(({ word, label }) => (
               <WordGroup
@@ -900,6 +985,8 @@ export function PhoneticRescuePanel({
                 onPlayOriginal={() => void playOriginalWord(word)}
                 onPlayTranscript={() => void synthWord(word, "transcript", word.transcriptRaw)}
                 onPlayZipa={() => void synthWord(word, "zipa", word.zipaRaw)}
+                onSelectCut={onSimulateCut ? setSelectedCutTokenEnd : undefined}
+                cutSelected={selectedCutTokenEnd === word.tokenEnd}
                 controlState={
                   activeControl?.tokenStart === word.tokenStart
                     ? { kind: activeControl.kind, phase: activeControl.phase }
