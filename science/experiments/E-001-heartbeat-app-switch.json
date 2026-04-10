@@ -1,0 +1,36 @@
+{
+  "id": "E-001-heartbeat-app-switch",
+  "sha": "94212d5",
+  "sha_full": "94212d57df9557dba391c7a5069acabd9e44466d",
+  "timestamp": "2026-04-10 12:55:59",
+  "description": "Baseline: does heartbeat marked text clear when switching apps? (stripped-down overrides + super.cancelComposition in deactivateServer)",
+  "procedure": "1. Focus the target app, click in a text field\n2. Start bee session (hold right-option)\n3. Wait for 2-3 heartbeat emojis to appear\n4. Cmd+Tab to switch to a different app\n5. Observe: does the emoji disappear from the target app?",
+  "prediction": "",
+  "apps": [
+    {
+      "name": "ime-spy",
+      "bundle_id": "com.fasterthanlime.ime-spy",
+      "notes": "Custom NSTextInputClient, logs everything"
+    },
+    {
+      "name": "Notes",
+      "bundle_id": "com.apple.Notes",
+      "notes": "Standard Apple app, NSTextView-based"
+    },
+    {
+      "name": "Messages",
+      "bundle_id": "com.apple.MobileSMS",
+      "notes": "Known to hold onto marked text"
+    },
+    {
+      "name": "Zed",
+      "bundle_id": "dev.zed.Zed",
+      "notes": "Custom text engine"
+    },
+    {
+      "name": "Codex",
+      "bundle_id": "com.openai.codex",
+      "notes": "Electron/Chromium"
+    }
+  ]
+}

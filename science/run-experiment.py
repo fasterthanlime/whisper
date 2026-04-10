@@ -189,6 +189,24 @@ def cmd_run(args):
     print(f"  Description: {meta['description']}")
     print()
 
+    # Build and install bee
+    print("  ┌─ Building bee...")
+    build = subprocess.run(
+        ["just", "install-debug"],
+        cwd=REPO_ROOT,
+        capture_output=False,
+    )
+    if build.returncode != 0:
+        print("  │  ERROR: build failed")
+        sys.exit(1)
+    print("  └─ [ok] bee installed\n")
+
+    # Wait a moment for the IME to be ready
+    import time
+    print("  Waiting 2s for IME to load...")
+    time.sleep(2)
+    print()
+
     app_results = []
     for app in apps:
         app_name = app["name"]
