@@ -899,6 +899,7 @@ fn decode_sliding_window_bridge_replay(
                 / SAMPLE_RATE as f64;
             let split = timed_generated_bridge_for_cuts(
                 tokenizer,
+                replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
                 &chunk_run,
                 chunk_samples,
                 keep_until_secs,
@@ -2917,13 +2918,17 @@ fn timed_generated_prefix_for_cut(
 
 fn timed_generated_bridge_for_cuts(
     tokenizer: &Tokenizer,
+    replayed_prefix_text: Option<&str>,
     chunk_run: &ChunkRun,
     chunk_samples: &[f32],
     keep_until_secs: f64,
     replay_until_secs: f64,
 ) -> Result<TimedGeneratedBridge> {
-    let transcript = chunk_run.transcript.trim();
-    if transcript.is_empty() {
+    let generated_transcript = chunk_run.transcript.trim();
+    let replayed_prefix = replayed_prefix_text
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+    if generated_transcript.is_empty() {
         return Ok(TimedGeneratedBridge {
             kept_word_count: 0,
             kept_token_count: 0,
@@ -2935,20 +2940,39 @@ fn timed_generated_bridge_for_cuts(
         });
     }
 
-    let alignment = build_transcript_alignment(transcript, chunk_samples)?;
+    let combined_transcript = match replayed_prefix {
+        Some(prefix) => format!("{prefix} {generated_transcript}"),
+        None => generated_transcript.to_string(),
+    };
+    let alignment = build_transcript_alignment(&combined_transcript, chunk_samples)?;
     let word_timings = alignment.word_timings();
-    let word_ranges = sentence_word_tokens(transcript);
+    let generated_word_ranges = sentence_word_tokens(generated_transcript);
+    let carried_word_count = replayed_prefix
+        .map(sentence_word_tokens)
+        .map(|words| words.len())
+        .unwrap_or(0);
     let mut kept_word_count = 0usize;
-    let mut replay_word_count = 0usize;
+    let mut bridge_word_count = 0usize;
+    let mut bridge_words = Vec::new();
 
-    for word_timing in &word_timings {
+    for (index, word_timing) in word_timings.iter().enumerate() {
+        if index < carried_word_count {
+            continue;
+        }
         match word_timing.quality {
-            bee_transcribe::zipa_align::AlignmentQuality::Aligned { end_secs, .. } => {
+            bee_transcribe::zipa_align::AlignmentQuality::Aligned {
+                start_secs,
+                end_secs,
+            } => {
                 if end_secs <= keep_until_secs {
                     kept_word_count += 1;
-                    replay_word_count += 1;
                 } else if end_secs <= replay_until_secs {
-                    replay_word_count += 1;
+                    bridge_word_count += 1;
+                    bridge_words.push(CarriedBridgeWord {
+                        text: word_timing.word.to_string(),
+                        start_secs: (start_secs - keep_until_secs).max(0.0),
+                        end_secs: (end_secs - keep_until_secs).max(0.0),
+                    });
                 } else {
                     break;
                 }
@@ -2960,44 +2984,30 @@ fn timed_generated_bridge_for_cuts(
     let kept_text = if kept_word_count == 0 {
         String::new()
     } else {
-        let end = word_ranges
+        let end = generated_word_ranges
             .get(kept_word_count - 1)
             .map(|word| word.char_end)
             .ok_or_else(|| anyhow::anyhow!("missing kept word range"))?;
-        transcript[..end].trim_end().to_string()
+        generated_transcript[..end].trim_end().to_string()
     };
 
-    let bridge = if replay_word_count <= kept_word_count {
+    let bridge = if bridge_word_count == 0 {
         CarriedBridge {
             text: String::new(),
             words: Vec::new(),
         }
     } else {
-        let start = word_ranges
+        let start = generated_word_ranges
             .get(kept_word_count)
             .map(|word| word.char_start)
             .ok_or_else(|| anyhow::anyhow!("missing bridge word start"))?;
-        let end = word_ranges
-            .get(replay_word_count - 1)
+        let end = generated_word_ranges
+            .get(kept_word_count + bridge_word_count - 1)
             .map(|word| word.char_end)
             .ok_or_else(|| anyhow::anyhow!("missing bridge word end"))?;
-        let words = word_timings[kept_word_count..replay_word_count]
-            .iter()
-            .filter_map(|word_timing| match word_timing.quality {
-                bee_transcribe::zipa_align::AlignmentQuality::Aligned {
-                    start_secs,
-                    end_secs,
-                } => Some(CarriedBridgeWord {
-                    text: word_timing.word.to_string(),
-                    start_secs: (start_secs - keep_until_secs).max(0.0),
-                    end_secs: (end_secs - keep_until_secs).max(0.0),
-                }),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
         CarriedBridge {
-            text: transcript[start..end].trim().to_string(),
-            words,
+            text: generated_transcript[start..end].trim().to_string(),
+            words: bridge_words,
         }
     };
 
