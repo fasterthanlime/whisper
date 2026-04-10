@@ -838,11 +838,18 @@ fn prefer_clause_boundary_within_context_window(
     entries: &TextBuffer,
     plan: RotationTextPlan,
 ) -> RotationTextPlan {
+    const PREFERRED_BOUNDARY_LOOKBACK_TOKENS: usize = 6;
+
     let stable_fresh_tokens = plan
         .stable_total_tokens
         .saturating_sub(plan.old_context_tokens);
     let max_extra_context = plan.next_context_tokens.0;
     let min_commit_tokens = plan.commit_tokens.0.saturating_sub(max_extra_context);
+    let lookback_floor = plan
+        .commit_tokens
+        .0
+        .saturating_sub(PREFERRED_BOUNDARY_LOOKBACK_TOKENS)
+        .max(min_commit_tokens);
     let stable_fresh_entries = TextBuffer::from_entries(
         entries.entries()[plan.old_context_tokens.0..plan.stable_end().0].to_vec(),
     );
@@ -854,7 +861,7 @@ fn prefer_clause_boundary_within_context_window(
         if seen > plan.commit_tokens.0 {
             break;
         }
-        if seen < min_commit_tokens {
+        if seen < lookback_floor {
             continue;
         }
         if ends_with_clause_punctuation(&decode_entries(tokenizer, word)) {
@@ -875,6 +882,7 @@ fn prefer_clause_boundary_within_context_window(
         new_commit_tokens = commit_tokens.0,
         old_next_context_tokens = plan.next_context_tokens.0,
         new_next_context_tokens = next_context_tokens.0,
+        lookback_floor,
         "commit: preferred clause boundary within context window"
     );
 
