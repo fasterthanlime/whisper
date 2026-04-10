@@ -16,15 +16,10 @@ class BeeInputController: IMKInputController {
     }
 
     nonisolated override func activateServer(_ sender: Any!) {
-        let senderId = describeClient(sender)
-
         MainActor.assumeIsolated {
             let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
             let currClientIdentity = currentClientIdentity()
             let bridge = Bridge.shared
-            beeInputLog(
-                "activateServer: senderID=\(senderId) frontmostPID=\(frontmostPID.map(String.init) ?? "nil") clientID=\(currClientIdentity)"
-            )
 
             let activationEvent = bridge.activate(
                 self, pid: frontmostPID, clientID: currClientIdentity)
@@ -45,10 +40,6 @@ class BeeInputController: IMKInputController {
 
         MainActor.assumeIsolated {
             let bridge = Bridge.shared
-
-            beeInputLog(
-                "deactivateServer: senderID=\(senderID) clientID=\(currentClientIdentity())"
-            )
 
             let deactivationEvent = bridge.deactivate(self, clientID: senderID)
             switch deactivationEvent {
