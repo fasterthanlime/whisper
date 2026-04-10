@@ -125,15 +125,10 @@ actor Session {
 
     // MARK: - Start
 
-    private var animationMorphSpeed: Float = 1.0
-    private var animationAppendSpeed: Float = 1.0
-
     func start(
         language: String?, asrConfig: TranscriptionService.StreamingSessionConfig,
         animationMorphSpeed: Float = 1.0, animationAppendSpeed: Float = 1.0
     ) async {
-        self.animationMorphSpeed = animationMorphSpeed
-        self.animationAppendSpeed = animationAppendSpeed
         logger.info("[\(self.id)] Starting session")
 
         // Warm up engine if cold
@@ -387,103 +382,28 @@ actor Session {
         }
 
         // --- Consumer Task ---
-        // Reads Channel 2, updates IME with typewriter animation.
+        // Reads Channel 2 and forwards plain target text to the IME.
         let ic = self.inputClient
 
         consumerTask = Task {
-            var displayedText = ""
-            var targetText = ""
+            var latestText = ""
 
             for await _ in ch2.stream {
                 let events = ch2.drain()
 
-                // If a .done is in this batch, skip animation and go straight to commit
-                let hasDone = events.contains {
-                    if case .done = $0 { return true }
-                    return false
-                }
-
                 for event in events {
                     switch event {
                     case .partial(let text):
-                        targetText = text
-                        textSnapshot.set(targetText)
-
-                        if hasDone || displayedText == targetText { break }
-
-                        // Matrix-style morph: randomly alternate between
-                        // appending the next char and fixing a wrong char in-place
-                        var chars = Array(displayedText)
-                        let target = Array(targetText)
-
-                        var steps = 0
-                        while chars != target {
-                            if !ch2.isEmpty { break }
-                            if Task.isCancelled { return }
-
-                            // Collect available actions
-                            let canAppend = chars.count < target.count
-                            let canTrim = chars.count > target.count
-                            let wrongIndices: [Int] = (0..<min(chars.count, target.count))
-                                .filter { chars[$0] != target[$0] }
-
-                            if wrongIndices.isEmpty && !canAppend && !canTrim { break }
-
-                            // Randomly pick action: morph a wrong char, append, or trim
-                            let morphWeight = wrongIndices.count
-                            let appendWeight = canAppend ? max(1, wrongIndices.count / 2) : 0
-                            let trimWeight = canTrim ? max(1, wrongIndices.count / 2) : 0
-                            let total = morphWeight + appendWeight + trimWeight
-                            let roll = Int.random(in: 0..<max(total, 1))
-
-                            var didAppend = false
-                            if roll < morphWeight && !wrongIndices.isEmpty {
-                                // Fix a random wrong character in-place
-                                let idx = wrongIndices.randomElement()!
-                                chars[idx] = target[idx]
-                            } else if roll < morphWeight + appendWeight && canAppend {
-                                // Append next correct character
-                                chars.append(target[chars.count])
-                                didAppend = true
-                            } else if canTrim {
-                                // Remove last character
-                                chars.removeLast()
-                            } else if canAppend {
-                                chars.append(target[chars.count])
-                                didAppend = true
-                            } else if !wrongIndices.isEmpty {
-                                let idx = wrongIndices.randomElement()!
-                                chars[idx] = target[idx]
-                            }
-
-                            displayedText = String(chars)
-                            textSnapshot.set(displayedText)
-                            await self.renderMarkedTextIfActive(
-                                displayedText,
-                                inputClient: ic,
-                                sessionID: sessionID
-                            )
-
-                            steps += 1
-                            let speed =
-                                didAppend ? self.animationAppendSpeed : self.animationMorphSpeed
-                            if speed <= 0 { break }
-                            let baseMs = steps > 20 ? 8 : (steps > 10 ? 15 : 25)
-                            let delayMs = max(1, Int(Float(baseMs) / speed))
-                            do { try await Task.sleep(for: .milliseconds(delayMs)) } catch { break }
-                        }
-
-                        // Snap to target in case animation was interrupted
-                        displayedText = targetText
-                        textSnapshot.set(displayedText)
+                        latestText = text
+                        textSnapshot.set(latestText)
                         await self.renderMarkedTextIfActive(
-                            displayedText,
+                            latestText,
                             inputClient: ic,
                             sessionID: sessionID
                         )
 
                     case .done(let text, let mode):
-                        let finalText = text.isEmpty ? targetText : text
+                        let finalText = text.isEmpty ? latestText : text
                         diag.update { $0.finalText = finalText }
                         textSnapshot.set(finalText)
                         shouldRenderMarkedText = false
@@ -621,57 +541,6 @@ actor Session {
         inputClient.setMarkedText(text)
     }
 
-    // MARK: - Shortest Edit Script (LCS-based)
-
-    enum EditOp {
-        case keep
-        case delete
-        case insert(Character)
-    }
-
-    /// Compute the shortest edit script to transform `from` into `to` using
-    /// character-level LCS (longest common subsequence). Returns a sequence of
-    /// keep/delete/insert operations that, applied left-to-right, morph `from` into `to`.
-    static func shortestEdit(from old: String, to new: String) -> [EditOp] {
-        let a = Array(old)
-        let b = Array(new)
-        let m = a.count
-        let n = b.count
-
-        // DP table for LCS lengths — full table needed for backtrace
-        // For strings up to ~500 chars this is fine
-        var dp = [[Int]](repeating: [Int](repeating: 0, count: n + 1), count: m + 1)
-        for i in 1...max(m, 1) {
-            for j in 1...max(n, 1) {
-                if i <= m && j <= n && a[i - 1] == b[j - 1] {
-                    dp[i][j] = dp[i - 1][j - 1] + 1
-                } else if i <= m && j <= n {
-                    dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
-                }
-            }
-        }
-
-        // Backtrace to produce edit script
-        var ops: [EditOp] = []
-        var i = m
-        var j = n
-        while i > 0 || j > 0 {
-            if i > 0 && j > 0 && a[i - 1] == b[j - 1] {
-                ops.append(.keep)
-                i -= 1
-                j -= 1
-            } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
-                ops.append(.insert(b[j - 1]))
-                j -= 1
-            } else {
-                ops.append(.delete)
-                i -= 1
-            }
-        }
-        ops.reverse()
-        return ops
-    }
-
     static func pruneDebugRecordings(dir: URL, keep: Int = 10) {
         guard
             let files = try? FileManager.default.contentsOfDirectory(
@@ -722,7 +591,8 @@ actor Session {
         switch mode {
         case .commit(let submit):
             if !text.isEmpty {
-                inputClient.commitText(text)
+                let committedText = submit ? text : text + " "
+                inputClient.commitText(committedText)
                 ime = .committed
                 await bestEffortSleep(ms: 50, label: "finishIME commit")
 
