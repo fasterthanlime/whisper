@@ -391,7 +391,17 @@ impl DecodeSession {
             self.align_current_text(&entries, aligner, forced_aligner, zipa, tokenizer, g2p)?;
         log_phase_chunk("commit", "align_current_text", chunk_index, align_start);
 
-        let trim_at = self.trim_time_for_plan(&aligned_full, plan, rotation_cut_strategy)?;
+        let Some(trim_at) = self.trim_time_for_plan(&aligned_full, plan, rotation_cut_strategy)
+        else {
+            tracing::debug!(
+                commit_tokens = plan.commit_tokens.0,
+                drain_count = plan.drain_count().0,
+                next_context_tokens = plan.next_context_tokens.0,
+                rollback_tokens = plan.rollback_tokens.0,
+                "commit: skipping rotation because aligned timing does not reach cut boundary"
+            );
+            return Ok(None);
+        };
         let committed_word_count = aligned_full.word_count_before(plan.commit_end());
         let rotation_debug_report = render_rotation_debug_report(
             tokenizer,
@@ -562,17 +572,15 @@ impl DecodeSession {
         aligned_full: &TextBuffer,
         plan: RotationTextPlan,
         rotation_cut_strategy: &RotationCutStrategy,
-    ) -> Result<Seconds, Exception> {
-        let commit_end = aligned_full
-            .last_aligned_word_end_before(plan.commit_end())
-            .ok_or_else(|| Exception::custom("no aligned word end at commit boundary"))?;
+    ) -> Option<Seconds> {
+        let commit_end = aligned_full.last_aligned_word_end_before(plan.commit_end())?;
         let trim_at = match rotation_cut_strategy {
             RotationCutStrategy::Zipa => commit_end - self.start_time,
             RotationCutStrategy::Qwen3
             | RotationCutStrategy::ManualTargetCommittedTextTokens(_)
             | RotationCutStrategy::Uncut => commit_end - self.start_time,
         };
-        Ok(trim_at)
+        Some(trim_at)
     }
 
     fn apply_post_commit_state(
