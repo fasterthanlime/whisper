@@ -7,7 +7,6 @@ use bee_qwen3_asr::load;
 use bee_qwen3_asr::mel::{MelExtractor, load_audio};
 use bee_qwen3_asr::mlx_rs::module::ModuleParametersExt;
 use bee_qwen3_asr::model::Qwen3ASRModel;
-use bee_qwen3_asr::tokenizers::Tokenizer;
 
 mod alignment;
 mod decode;
@@ -15,6 +14,7 @@ mod html;
 mod print;
 mod tui;
 mod types;
+mod types2;
 
 use decode::*;
 use print::*;
@@ -76,8 +76,7 @@ fn main() -> Result<()> {
         .with_context(|| format!("loading {}", config_path.display()))?;
     let thinker = config.thinker_config.clone();
 
-    let tokenizer = Tokenizer::from_file(&args.tokenizer_path)
-        .map_err(|e| anyhow::anyhow!("loading {}: {e}", args.tokenizer_path.display()))?;
+    let tokenizer = types2::init_tokenizer(&args.tokenizer_path)?;
 
     let mut model = Qwen3ASRModel::new(&thinker).context("constructing qwen3-asr model")?;
     let load_stats = load::load_weights(&mut model, &args.model_dir)
