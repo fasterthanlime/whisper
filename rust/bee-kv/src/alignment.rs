@@ -1,4 +1,20 @@
-fn suffix_after_prefix<'a>(prefix: Option<&str>, text: &'a str) -> &'a str {
+use std::env;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+use bee_phonetic::sentence_word_tokens;
+use bee_transcribe::g2p::CachedEspeakG2p;
+use bee_transcribe::zipa_align::{SpanTiming, TranscriptAlignment};
+use bee_zipa_mlx::audio::AudioBuffer as ZipaAudioBuffer;
+use bee_zipa_mlx::infer::ZipaInference;
+
+use bee_qwen3_asr::tokenizers::Tokenizer;
+
+use crate::decode::{normalized_transcript, tokenize_token_ids};
+use crate::types::*;
+use crate::{KEEP_BOUNDARY_MIN_KEPT_SECS, SAMPLE_RATE};
+
+pub(crate) fn suffix_after_prefix<'a>(prefix: Option<&str>, text: &'a str) -> &'a str {
     let Some(prefix) = prefix else {
         return text;
     };
@@ -9,27 +25,27 @@ fn suffix_after_prefix<'a>(prefix: Option<&str>, text: &'a str) -> &'a str {
     }
 }
 
-struct TimedGeneratedPrefix {
-    kept_word_count: usize,
-    kept_token_count: usize,
+pub(crate) struct TimedGeneratedPrefix {
+    pub(crate) kept_word_count: usize,
+    pub(crate) kept_token_count: usize,
 }
 
 #[derive(Clone, Debug)]
-struct TimedWord {
-    text: String,
-    char_range: std::ops::Range<usize>,
-    start_secs: f64,
-    end_secs: f64,
+pub(crate) struct TimedWord {
+    pub(crate) text: String,
+    pub(crate) char_range: std::ops::Range<usize>,
+    pub(crate) start_secs: f64,
+    pub(crate) end_secs: f64,
 }
 
-struct TimedGeneratedBridge {
-    kept_word_count: usize,
-    kept_token_count: usize,
-    kept_text: String,
-    bridge: CarriedBridge,
+pub(crate) struct TimedGeneratedBridge {
+    pub(crate) kept_word_count: usize,
+    pub(crate) kept_token_count: usize,
+    pub(crate) kept_text: String,
+    pub(crate) bridge: CarriedBridge,
 }
 
-fn timed_aligned_words_for_alignment(
+pub(crate) fn timed_aligned_words_for_alignment(
     transcript: &str,
     alignment: &TranscriptAlignment,
 ) -> Result<Vec<TimedWord>> {
@@ -64,7 +80,7 @@ fn timed_aligned_words_for_alignment(
     Ok(timed_words)
 }
 
-fn timed_generated_prefix_for_cut(
+pub(crate) fn timed_generated_prefix_for_cut(
     align_ctx: &mut AlignmentContext,
     tokenizer: &Tokenizer,
     chunk_run: &ChunkRun,
@@ -111,7 +127,7 @@ fn timed_generated_prefix_for_cut(
     })
 }
 
-fn timed_generated_bridge_for_cuts(
+pub(crate) fn timed_generated_bridge_for_cuts(
     tokenizer: &Tokenizer,
     combined_transcript: &str,
     replayed_prefix: Option<&CarriedBridge>,
@@ -238,7 +254,7 @@ fn timed_generated_bridge_for_cuts(
     })
 }
 
-fn adjust_keep_boundary_secs(
+pub(crate) fn adjust_keep_boundary_secs(
     policy: KeepBoundaryPolicy,
     alignment: &TranscriptAlignment,
     target_keep_until_secs: f64,
@@ -299,13 +315,13 @@ fn adjust_keep_boundary_secs(
     Ok((keep_until_secs, debug))
 }
 
-struct AlignmentContext {
+pub(crate) struct AlignmentContext {
     g2p: CachedEspeakG2p,
-    zipa: ZipaInference,
+    pub(crate) zipa: ZipaInference,
 }
 
 impl AlignmentContext {
-    fn new() -> Result<Self> {
+    pub(crate) fn new() -> Result<Self> {
         Ok(Self {
             g2p: CachedEspeakG2p::english(&g2p_base_dir()).context("initializing g2p engine")?,
             zipa: ZipaInference::load_quantized_bundle_dir(&zipa_bundle_dir()?)
@@ -314,7 +330,7 @@ impl AlignmentContext {
     }
 }
 
-fn build_transcript_alignment(
+pub(crate) fn build_transcript_alignment(
     align_ctx: &mut AlignmentContext,
     transcript: &str,
     samples: &[f32],
@@ -328,7 +344,7 @@ fn build_transcript_alignment(
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
-fn format_span_timing(span_timing: SpanTiming) -> String {
+pub(crate) fn format_span_timing(span_timing: SpanTiming) -> String {
     match span_timing {
         SpanTiming::Aligned {
             start_secs,
@@ -343,11 +359,11 @@ fn format_span_timing(span_timing: SpanTiming) -> String {
     }
 }
 
-fn g2p_base_dir() -> PathBuf {
+pub(crate) fn g2p_base_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target")
 }
 
-fn zipa_bundle_dir() -> Result<PathBuf> {
+pub(crate) fn zipa_bundle_dir() -> Result<PathBuf> {
     if let Ok(path) = env::var("BEE_ZIPA_BUNDLE_DIR") {
         return Ok(PathBuf::from(path));
     }

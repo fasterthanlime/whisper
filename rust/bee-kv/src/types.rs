@@ -1,26 +1,41 @@
-struct Args {
-    wav_path: PathBuf,
-    model_dir: PathBuf,
-    tokenizer_path: PathBuf,
-    language: String,
-    max_new_tokens: usize,
-    context: String,
-    mode: Mode,
-    chunk_ms: usize,
-    bridge_ms: usize,
-    max_bridge_windows: usize,
-    stride_ms: Option<usize>,
-    keep_boundary_policy: KeepBoundaryPolicy,
-    rollback_ms: usize,
-    rollback_policy: RollbackPolicy,
-    replay_chunk_index: usize,
-    truncate_tokens: usize,
-    lane_b_first_chunk_ms: usize,
-    mlx_cache_limit_mb: Option<usize>,
+use std::env;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+use bee_qwen3_asr::generate::DecodeStopReason;
+use bee_qwen3_asr::load;
+
+use crate::print::print_usage;
+use crate::{
+    DEFAULT_BRIDGE_MS, DEFAULT_CHUNK_MS, DEFAULT_KEEP_BOUNDARY_POLICY,
+    DEFAULT_LANE_B_FIRST_CHUNK_MS, DEFAULT_LANGUAGE, DEFAULT_MAX_NEW_TOKENS,
+    DEFAULT_MLX_CACHE_LIMIT_MB, DEFAULT_REPLAY_CHUNK_INDEX, DEFAULT_ROLLBACK_MS, DEFAULT_STRIDE_MS,
+    DEFAULT_TRUNCATE_TOKENS, DEFAULT_WAV_RELATIVE_TO_CRATE, MAX_BRIDGE_WINDOWS,
+};
+
+pub(crate) struct Args {
+    pub(crate) wav_path: PathBuf,
+    pub(crate) model_dir: PathBuf,
+    pub(crate) tokenizer_path: PathBuf,
+    pub(crate) language: String,
+    pub(crate) max_new_tokens: usize,
+    pub(crate) context: String,
+    pub(crate) mode: Mode,
+    pub(crate) chunk_ms: usize,
+    pub(crate) bridge_ms: usize,
+    pub(crate) max_bridge_windows: usize,
+    pub(crate) stride_ms: Option<usize>,
+    pub(crate) keep_boundary_policy: KeepBoundaryPolicy,
+    pub(crate) rollback_ms: usize,
+    pub(crate) rollback_policy: RollbackPolicy,
+    pub(crate) replay_chunk_index: usize,
+    pub(crate) truncate_tokens: usize,
+    pub(crate) lane_b_first_chunk_ms: usize,
+    pub(crate) mlx_cache_limit_mb: Option<usize>,
 }
 
 impl Args {
-    fn parse() -> Result<Self> {
+    pub(crate) fn parse() -> Result<Self> {
         let mut positional = Vec::new();
         let mut mode = Mode::Initial;
         let mut context = String::new();
@@ -285,7 +300,7 @@ impl Args {
 }
 
 #[derive(Clone, Copy)]
-enum Mode {
+pub(crate) enum Mode {
     Initial,
     FollowupFresh,
     SystemCompare,
@@ -301,7 +316,7 @@ enum Mode {
 }
 
 impl Mode {
-    fn parse(value: &str) -> Result<Self> {
+    pub(crate) fn parse(value: &str) -> Result<Self> {
         match value {
             "initial" => Ok(Self::Initial),
             "followup-fresh" => Ok(Self::FollowupFresh),
@@ -321,13 +336,13 @@ impl Mode {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum RollbackPolicy {
+pub(crate) enum RollbackPolicy {
     TextSuffix,
     ChunkSegment,
 }
 
 impl RollbackPolicy {
-    fn parse(value: &str) -> Result<Self> {
+    pub(crate) fn parse(value: &str) -> Result<Self> {
         match value {
             "text-suffix" => Ok(Self::TextSuffix),
             "chunk-segment" => Ok(Self::ChunkSegment),
@@ -335,7 +350,7 @@ impl RollbackPolicy {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::TextSuffix => "text-suffix",
             Self::ChunkSegment => "chunk-segment",
@@ -344,13 +359,13 @@ impl RollbackPolicy {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum KeepBoundaryPolicy {
+pub(crate) enum KeepBoundaryPolicy {
     Fixed,
     NearestWordEnd,
 }
 
 impl KeepBoundaryPolicy {
-    fn parse(value: &str) -> Result<Self> {
+    pub(crate) fn parse(value: &str) -> Result<Self> {
         match value {
             "fixed" => Ok(Self::Fixed),
             "nearest-word-end" => Ok(Self::NearestWordEnd),
@@ -358,7 +373,7 @@ impl KeepBoundaryPolicy {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Fixed => "fixed",
             Self::NearestWordEnd => "nearest-word-end",
@@ -366,55 +381,55 @@ impl KeepBoundaryPolicy {
     }
 }
 
-struct ExperimentResult {
-    label: String,
-    prompt_tokens: usize,
-    generated_tokens: usize,
-    transcript: String,
+pub(crate) struct ExperimentResult {
+    pub(crate) label: String,
+    pub(crate) prompt_tokens: usize,
+    pub(crate) generated_tokens: usize,
+    pub(crate) transcript: String,
 }
 
-struct RunSummary<'a> {
-    wav_path: &'a Path,
-    model_dir: &'a Path,
-    tokenizer_path: &'a Path,
-    language: &'a str,
-    load_stats: &'a load::LoadStats,
-    sample_count: usize,
-    mel_frames: usize,
-    audio_tokens: usize,
+pub(crate) struct RunSummary<'a> {
+    pub(crate) wav_path: &'a Path,
+    pub(crate) model_dir: &'a Path,
+    pub(crate) tokenizer_path: &'a Path,
+    pub(crate) language: &'a str,
+    pub(crate) load_stats: &'a load::LoadStats,
+    pub(crate) sample_count: usize,
+    pub(crate) mel_frames: usize,
+    pub(crate) audio_tokens: usize,
 }
 
-struct ChunkResult {
-    label: String,
-    prompt_tokens: usize,
-    generated_tokens: usize,
-    transcript: String,
-    sample_count: usize,
+pub(crate) struct ChunkResult {
+    pub(crate) label: String,
+    pub(crate) prompt_tokens: usize,
+    pub(crate) generated_tokens: usize,
+    pub(crate) transcript: String,
+    pub(crate) sample_count: usize,
 }
 
-struct ChunkedExperimentResult {
-    chunk_ms: usize,
-    chunk_results: Vec<ChunkResult>,
-    combined_transcript: String,
+pub(crate) struct ChunkedExperimentResult {
+    pub(crate) chunk_ms: usize,
+    pub(crate) chunk_results: Vec<ChunkResult>,
+    pub(crate) combined_transcript: String,
 }
 
-struct ChunkRun {
-    label: String,
-    prompt_tokens: usize,
-    generated_tokens: usize,
-    generated_token_ids: Vec<u32>,
-    transcript: String,
-    sample_count: usize,
-    decode_ms: f64,
-    stop_reason: DecodeStopReason,
-    start_position: usize,
-    end_position: usize,
-    start_sample: usize,
-    end_sample: usize,
+pub(crate) struct ChunkRun {
+    pub(crate) label: String,
+    pub(crate) prompt_tokens: usize,
+    pub(crate) generated_tokens: usize,
+    pub(crate) generated_token_ids: Vec<u32>,
+    pub(crate) transcript: String,
+    pub(crate) sample_count: usize,
+    pub(crate) decode_ms: f64,
+    pub(crate) stop_reason: DecodeStopReason,
+    pub(crate) start_position: usize,
+    pub(crate) end_position: usize,
+    pub(crate) start_sample: usize,
+    pub(crate) end_sample: usize,
 }
 
 impl ChunkResult {
-    fn from_run(run: &ChunkRun) -> Self {
+    pub(crate) fn from_run(run: &ChunkRun) -> Self {
         Self {
             label: run.label.clone(),
             prompt_tokens: run.prompt_tokens,
@@ -425,143 +440,143 @@ impl ChunkResult {
     }
 }
 
-struct PrefixResult {
-    label: String,
-    prompt_tokens: usize,
-    generated_tokens: usize,
-    transcript: String,
-    sample_count: usize,
+pub(crate) struct PrefixResult {
+    pub(crate) label: String,
+    pub(crate) prompt_tokens: usize,
+    pub(crate) generated_tokens: usize,
+    pub(crate) transcript: String,
+    pub(crate) sample_count: usize,
 }
 
-struct PrefixRerunExperimentResult {
-    chunk_ms: usize,
-    prefix_results: Vec<PrefixResult>,
+pub(crate) struct PrefixRerunExperimentResult {
+    pub(crate) chunk_ms: usize,
+    pub(crate) prefix_results: Vec<PrefixResult>,
 }
 
-struct ChunkPlanEntry {
-    chunk_index: usize,
-    start_sample: usize,
-    end_sample: usize,
+pub(crate) struct ChunkPlanEntry {
+    pub(crate) chunk_index: usize,
+    pub(crate) start_sample: usize,
+    pub(crate) end_sample: usize,
 }
 
 #[derive(Clone, Copy)]
-struct ReplayPlan {
-    rollback_policy: RollbackPolicy,
-    rollback_after_chunk_index: usize,
-    rollback_position: usize,
-    replay_from_chunk_index: usize,
+pub(crate) struct ReplayPlan {
+    pub(crate) rollback_policy: RollbackPolicy,
+    pub(crate) rollback_after_chunk_index: usize,
+    pub(crate) rollback_position: usize,
+    pub(crate) replay_from_chunk_index: usize,
 }
 
-struct TruncateReplayExperimentResult {
-    chunk_ms: usize,
-    rollback_policy: RollbackPolicy,
-    replay_chunk_index: usize,
-    replay_from_chunk_index: usize,
-    rollback_position: usize,
-    requested_truncate_tokens: usize,
-    applied_truncate_tokens: usize,
-    baseline_runs: Vec<ChunkRun>,
-    replay_runs: Vec<ChunkRun>,
+pub(crate) struct TruncateReplayExperimentResult {
+    pub(crate) chunk_ms: usize,
+    pub(crate) rollback_policy: RollbackPolicy,
+    pub(crate) replay_chunk_index: usize,
+    pub(crate) replay_from_chunk_index: usize,
+    pub(crate) rollback_position: usize,
+    pub(crate) requested_truncate_tokens: usize,
+    pub(crate) applied_truncate_tokens: usize,
+    pub(crate) baseline_runs: Vec<ChunkRun>,
+    pub(crate) replay_runs: Vec<ChunkRun>,
 }
 
-struct WindowRollbackDecision {
-    keep_boundary_policy: KeepBoundaryPolicy,
-    target_keep_until_secs: f64,
-    keep_until_secs: Option<f64>,
-    replay_until_secs: Option<f64>,
-    kept_word_count: usize,
-    kept_token_count: usize,
-    kept_token_ids: Vec<u32>,
-    kept_text: String,
-    bridge_token_ids: Vec<u32>,
-    bridge_text: Option<String>,
-    rollback_position: usize,
-    keep_boundary_debug: KeepBoundaryDebug,
-}
-
-#[derive(Clone)]
-struct CarriedBridgeWord {
-    text: String,
-    token_range: std::ops::Range<usize>,
-    start_secs: f64,
-    end_secs: f64,
+pub(crate) struct WindowRollbackDecision {
+    pub(crate) keep_boundary_policy: KeepBoundaryPolicy,
+    pub(crate) target_keep_until_secs: f64,
+    pub(crate) keep_until_secs: Option<f64>,
+    pub(crate) replay_until_secs: Option<f64>,
+    pub(crate) kept_word_count: usize,
+    pub(crate) kept_token_count: usize,
+    pub(crate) kept_token_ids: Vec<u32>,
+    pub(crate) kept_text: String,
+    pub(crate) bridge_token_ids: Vec<u32>,
+    pub(crate) bridge_text: Option<String>,
+    pub(crate) rollback_position: usize,
+    pub(crate) keep_boundary_debug: KeepBoundaryDebug,
 }
 
 #[derive(Clone)]
-struct CarriedBridge {
-    token_ids: Vec<u32>,
-    text: String,
-    words: Vec<CarriedBridgeWord>,
-}
-
-struct SlidingWindowRun {
-    chunk_run: ChunkRun,
-    rollback: Option<WindowRollbackDecision>,
-    replayed_prefix: Option<CarriedBridge>,
-}
-
-struct SlidingWindowTimedRollbackExperimentResult {
-    mode_label: &'static str,
-    chunk_ms: usize,
-    rollback_ms: usize,
-    stride_ms: usize,
-    window_runs: Vec<SlidingWindowRun>,
-    html_path: PathBuf,
-    committed_timeline_path: Option<PathBuf>,
-    interrupted_early: bool,
+pub(crate) struct CarriedBridgeWord {
+    pub(crate) text: String,
+    pub(crate) token_range: std::ops::Range<usize>,
+    pub(crate) start_secs: f64,
+    pub(crate) end_secs: f64,
 }
 
 #[derive(Clone)]
-struct BoundaryWordDebug {
-    word_index: usize,
-    text: String,
-    start_secs: f64,
-    end_secs: f64,
+pub(crate) struct CarriedBridge {
+    pub(crate) token_ids: Vec<u32>,
+    pub(crate) text: String,
+    pub(crate) words: Vec<CarriedBridgeWord>,
+}
+
+pub(crate) struct SlidingWindowRun {
+    pub(crate) chunk_run: ChunkRun,
+    pub(crate) rollback: Option<WindowRollbackDecision>,
+    pub(crate) replayed_prefix: Option<CarriedBridge>,
+}
+
+pub(crate) struct SlidingWindowTimedRollbackExperimentResult {
+    pub(crate) mode_label: &'static str,
+    pub(crate) chunk_ms: usize,
+    pub(crate) rollback_ms: usize,
+    pub(crate) stride_ms: usize,
+    pub(crate) window_runs: Vec<SlidingWindowRun>,
+    pub(crate) html_path: PathBuf,
+    pub(crate) committed_timeline_path: Option<PathBuf>,
+    pub(crate) interrupted_early: bool,
 }
 
 #[derive(Clone)]
-struct KeepBoundaryDebug {
-    earliest_candidate_secs: f64,
-    min_keep_secs: f64,
-    snapped: bool,
-    chosen_word: Option<BoundaryWordDebug>,
+pub(crate) struct BoundaryWordDebug {
+    pub(crate) word_index: usize,
+    pub(crate) text: String,
+    pub(crate) start_secs: f64,
+    pub(crate) end_secs: f64,
 }
 
-struct DualLaneFollowupExperimentResult {
-    chunk_ms: usize,
-    lane_b_first_chunk_ms: usize,
-    lane_a_runs: Vec<ChunkRun>,
-    lane_b_runs: Vec<ChunkRun>,
+#[derive(Clone)]
+pub(crate) struct KeepBoundaryDebug {
+    pub(crate) earliest_candidate_secs: f64,
+    pub(crate) min_keep_secs: f64,
+    pub(crate) snapped: bool,
+    pub(crate) chosen_word: Option<BoundaryWordDebug>,
 }
 
-struct ChunkSegmentMergeRollbackExperimentResult {
-    chunk_ms: usize,
-    baseline_runs: Vec<ChunkRun>,
-    replay_chunk0: ChunkRun,
-    merged_chunk: ChunkRun,
-    baseline_annotated: String,
-    replay_annotated: String,
-    html_path: PathBuf,
+pub(crate) struct DualLaneFollowupExperimentResult {
+    pub(crate) chunk_ms: usize,
+    pub(crate) lane_b_first_chunk_ms: usize,
+    pub(crate) lane_a_runs: Vec<ChunkRun>,
+    pub(crate) lane_b_runs: Vec<ChunkRun>,
 }
 
-struct BoundarySweepResult {
-    offset: isize,
-    rollback_position: usize,
-    merged_chunk: ChunkRun,
+pub(crate) struct ChunkSegmentMergeRollbackExperimentResult {
+    pub(crate) chunk_ms: usize,
+    pub(crate) baseline_runs: Vec<ChunkRun>,
+    pub(crate) replay_chunk0: ChunkRun,
+    pub(crate) merged_chunk: ChunkRun,
+    pub(crate) baseline_annotated: String,
+    pub(crate) replay_annotated: String,
+    pub(crate) html_path: PathBuf,
 }
 
-struct ChunkSegmentMergeBoundarySweepExperimentResult {
-    chunk_ms: usize,
-    exact_boundary: usize,
-    baseline_runs: Vec<ChunkRun>,
-    sweep_results: Vec<BoundarySweepResult>,
+pub(crate) struct BoundarySweepResult {
+    pub(crate) offset: isize,
+    pub(crate) rollback_position: usize,
+    pub(crate) merged_chunk: ChunkRun,
 }
 
-fn env_path(name: &str) -> Result<PathBuf> {
+pub(crate) struct ChunkSegmentMergeBoundarySweepExperimentResult {
+    pub(crate) chunk_ms: usize,
+    pub(crate) exact_boundary: usize,
+    pub(crate) baseline_runs: Vec<ChunkRun>,
+    pub(crate) sweep_results: Vec<BoundarySweepResult>,
+}
+
+pub(crate) fn env_path(name: &str) -> Result<PathBuf> {
     let value = env::var(name).with_context(|| format!("{name} is not set"))?;
     Ok(PathBuf::from(value))
 }
 
-fn default_wav_path() -> PathBuf {
+pub(crate) fn default_wav_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_WAV_RELATIVE_TO_CRATE)
 }

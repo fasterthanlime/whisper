@@ -1,4 +1,15 @@
-fn print_usage() {
+use anyhow::Result;
+use bee_phonetic::sentence_word_tokens;
+
+use crate::alignment::{AlignmentContext, build_transcript_alignment, format_span_timing};
+use crate::decode::combine_transcripts;
+use crate::types::*;
+use crate::{
+    ANSI_BLUE, ANSI_BOLD, ANSI_RESET, DEFAULT_BRIDGE_MS, DEFAULT_CHUNK_MS, DEFAULT_LANGUAGE,
+    DEFAULT_MAX_NEW_TOKENS, DEFAULT_ROLLBACK_MS, MAX_BRIDGE_WINDOWS, SAMPLE_RATE,
+};
+
+pub(crate) fn print_usage() {
     eprintln!(
         "usage: bee-kv [--mode MODE] [--context TEXT] [--chunk-ms N] [--bridge-ms N] [--rollback-ms N] [wav-path] [language] [max-new-tokens]\n\
          defaults:\n\
@@ -33,7 +44,7 @@ fn print_usage() {
     );
 }
 
-fn print_chunked_experiment(experiment: &ChunkedExperimentResult) {
+pub(crate) fn print_chunked_experiment(experiment: &ChunkedExperimentResult) {
     println!("=== chunked-followup ===");
     println!("chunk_ms={}", experiment.chunk_ms);
     println!();
@@ -51,7 +62,7 @@ fn print_chunked_experiment(experiment: &ChunkedExperimentResult) {
     println!();
 }
 
-fn print_prefix_rerun_experiment(experiment: &PrefixRerunExperimentResult) {
+pub(crate) fn print_prefix_rerun_experiment(experiment: &PrefixRerunExperimentResult) {
     println!("=== prefix-rerun ===");
     println!("chunk_ms={}", experiment.chunk_ms);
     println!();
@@ -66,7 +77,7 @@ fn print_prefix_rerun_experiment(experiment: &PrefixRerunExperimentResult) {
     }
 }
 
-fn print_truncate_replay_experiment(experiment: &TruncateReplayExperimentResult) {
+pub(crate) fn print_truncate_replay_experiment(experiment: &TruncateReplayExperimentResult) {
     println!("=== truncate-replay ===");
     println!("chunk_ms={}", experiment.chunk_ms);
     println!("rollback_policy={}", experiment.rollback_policy.as_str());
@@ -99,7 +110,7 @@ fn print_truncate_replay_experiment(experiment: &TruncateReplayExperimentResult)
     println!();
 }
 
-fn print_sliding_window_timed_rollback_experiment(
+pub(crate) fn print_sliding_window_timed_rollback_experiment(
     experiment: &SlidingWindowTimedRollbackExperimentResult,
 ) {
     println!("=== {} ===", experiment.mode_label);
@@ -154,7 +165,7 @@ fn print_sliding_window_timed_rollback_experiment(
     println!();
 }
 
-fn print_dual_lane_followup_experiment(experiment: &DualLaneFollowupExperimentResult) {
+pub(crate) fn print_dual_lane_followup_experiment(experiment: &DualLaneFollowupExperimentResult) {
     println!("=== dual-lane-followup ===");
     println!("lane_a_chunk_ms={}", experiment.chunk_ms);
     println!("lane_b_first_chunk_ms={}", experiment.lane_b_first_chunk_ms);
@@ -176,7 +187,7 @@ fn print_dual_lane_followup_experiment(experiment: &DualLaneFollowupExperimentRe
     }
 }
 
-fn print_chunk_segment_merge_rollback_experiment(
+pub(crate) fn print_chunk_segment_merge_rollback_experiment(
     experiment: &ChunkSegmentMergeRollbackExperimentResult,
 ) {
     println!("=== chunk-segment-merge-rollback ===");
@@ -209,7 +220,7 @@ fn print_chunk_segment_merge_rollback_experiment(
     println!();
 }
 
-fn print_chunk_segment_merge_boundary_sweep_experiment(
+pub(crate) fn print_chunk_segment_merge_boundary_sweep_experiment(
     experiment: &ChunkSegmentMergeBoundarySweepExperimentResult,
 ) {
     println!("=== chunk-segment-merge-boundary-sweep ===");
@@ -232,7 +243,7 @@ fn print_chunk_segment_merge_boundary_sweep_experiment(
     println!();
 }
 
-fn clone_chunk_run(chunk: &ChunkRun) -> ChunkRun {
+pub(crate) fn clone_chunk_run(chunk: &ChunkRun) -> ChunkRun {
     ChunkRun {
         label: chunk.label.clone(),
         prompt_tokens: chunk.prompt_tokens,
@@ -249,7 +260,7 @@ fn clone_chunk_run(chunk: &ChunkRun) -> ChunkRun {
     }
 }
 
-fn bracketed_chunks(chunks: &[ChunkRun]) -> String {
+pub(crate) fn bracketed_chunks(chunks: &[ChunkRun]) -> String {
     chunks
         .iter()
         .map(|chunk| format!("[{}]", chunk.transcript))
@@ -257,7 +268,7 @@ fn bracketed_chunks(chunks: &[ChunkRun]) -> String {
         .join(" ")
 }
 
-fn annotate_chunk_runs(chunks: &[ChunkRun], samples: &[f32]) -> Result<String> {
+pub(crate) fn annotate_chunk_runs(chunks: &[ChunkRun], samples: &[f32]) -> Result<String> {
     let combined_transcript = combine_transcripts(chunks);
     let mut align_ctx = AlignmentContext::new()?;
     let alignment = build_transcript_alignment(&mut align_ctx, &combined_transcript, samples)?;
@@ -278,7 +289,7 @@ fn annotate_chunk_runs(chunks: &[ChunkRun], samples: &[f32]) -> Result<String> {
     Ok(annotated.join(" "))
 }
 
-fn print_lane_row(label: &str, chunks: &[ChunkRun]) {
+pub(crate) fn print_lane_row(label: &str, chunks: &[ChunkRun]) {
     for chunk in chunks {
         let seam_ms = (chunk.end_sample * 1000) / SAMPLE_RATE as usize;
         println!(
@@ -289,7 +300,7 @@ fn print_lane_row(label: &str, chunks: &[ChunkRun]) {
     println!();
 }
 
-fn print_chunk_run(chunk: &ChunkRun) {
+pub(crate) fn print_chunk_run(chunk: &ChunkRun) {
     println!("--- {} ---", chunk.label);
     println!(
         "samples={} audio={}..{}ms prompt_tokens={} generated_tokens={} decode_ms={:.1} stop_reason={} start_position={} end_position={}",
@@ -307,13 +318,13 @@ fn print_chunk_run(chunk: &ChunkRun) {
     println!();
 }
 
-fn print_finalizing_banner() {
+pub(crate) fn print_finalizing_banner() {
     println!(
         "{ANSI_BLUE}{ANSI_BOLD}===================== FINALIZING ====================={ANSI_RESET}"
     );
 }
 
-fn print_summary(summary: &RunSummary<'_>) {
+pub(crate) fn print_summary(summary: &RunSummary<'_>) {
     println!("wav: {}", summary.wav_path.display());
     println!("model_dir: {}", summary.model_dir.display());
     println!("tokenizer: {}", summary.tokenizer_path.display());
@@ -333,7 +344,7 @@ fn print_summary(summary: &RunSummary<'_>) {
     println!();
 }
 
-fn print_experiment(experiment: &ExperimentResult) {
+pub(crate) fn print_experiment(experiment: &ExperimentResult) {
     println!("=== {} ===", experiment.label);
     println!(
         "prompt_tokens={} generated_tokens={}",

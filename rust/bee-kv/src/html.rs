@@ -1,5 +1,16 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use bee_phonetic::sentence_word_tokens;
+
+use crate::SAMPLE_RATE;
+use crate::alignment::{AlignmentContext, build_transcript_alignment};
+use crate::decode::{combine_transcripts, normalized_transcript};
+use crate::types::*;
+
 #[derive(Clone)]
-struct WordPlacement {
+pub(crate) struct WordPlacement {
     text: String,
     chunk_index: usize,
     start_secs: Option<f64>,
@@ -7,7 +18,7 @@ struct WordPlacement {
     quality_label: &'static str,
 }
 
-struct SlidingWordPlacement {
+pub(crate) struct SlidingWordPlacement {
     text: String,
     start_secs: Option<f64>,
     end_secs: Option<f64>,
@@ -18,7 +29,7 @@ struct SlidingWordPlacement {
     cut_word: bool,
 }
 
-struct CommittedWordPlacement {
+pub(crate) struct CommittedWordPlacement {
     text: String,
     start_secs: Option<f64>,
     end_secs: Option<f64>,
@@ -26,7 +37,7 @@ struct CommittedWordPlacement {
     second_bin: usize,
 }
 
-fn committed_words_equivalent(
+pub(crate) fn committed_words_equivalent(
     left: &CommittedWordPlacement,
     right: &CommittedWordPlacement,
 ) -> bool {
@@ -46,7 +57,7 @@ fn committed_words_equivalent(
     }
 }
 
-fn build_word_placements(
+pub(crate) fn build_word_placements(
     align_ctx: &mut AlignmentContext,
     chunks: &[ChunkRun],
     samples: &[f32],
@@ -85,7 +96,7 @@ fn build_word_placements(
     Ok(placements)
 }
 
-fn write_sliding_window_timed_rollback_html(
+pub(crate) fn write_sliding_window_timed_rollback_html(
     mode_label: &str,
     window_runs: &[SlidingWindowRun],
     samples: &[f32],
@@ -109,7 +120,7 @@ fn write_sliding_window_timed_rollback_html(
     Ok(out_path)
 }
 
-fn write_committed_timeline_html(
+pub(crate) fn write_committed_timeline_html(
     mode_label: &str,
     window_runs: &[SlidingWindowRun],
     samples: &[f32],
@@ -127,7 +138,7 @@ fn write_committed_timeline_html(
     Ok(out_path)
 }
 
-fn render_sliding_window_timed_rollback_html(
+pub(crate) fn render_sliding_window_timed_rollback_html(
     align_ctx: &mut AlignmentContext,
     mode_label: &str,
     window_runs: &[SlidingWindowRun],
@@ -267,7 +278,7 @@ updatePlayheads(0);\
     ))
 }
 
-fn collect_committed_word_placements(
+pub(crate) fn collect_committed_word_placements(
     align_ctx: &mut AlignmentContext,
     window_runs: &[SlidingWindowRun],
     samples: &[f32],
@@ -318,7 +329,7 @@ fn collect_committed_word_placements(
     Ok(placements)
 }
 
-fn render_committed_timeline_html(
+pub(crate) fn render_committed_timeline_html(
     mode_label: &str,
     duration_secs: f64,
     words: &[CommittedWordPlacement],
@@ -472,7 +483,7 @@ updatePlayhead(0);\
     )
 }
 
-fn render_sliding_window_row(
+pub(crate) fn render_sliding_window_row(
     width_px: f64,
     row_height_px: f64,
     row_index: usize,
@@ -645,7 +656,7 @@ fn render_sliding_window_row(
     )
 }
 
-fn build_window_word_placements(
+pub(crate) fn build_window_word_placements(
     align_ctx: &mut AlignmentContext,
     run: &SlidingWindowRun,
     chunk_samples: &[f32],
@@ -724,7 +735,7 @@ fn build_window_word_placements(
         .collect())
 }
 
-fn write_chunk_segment_merge_rollback_html(
+pub(crate) fn write_chunk_segment_merge_rollback_html(
     baseline_runs: &[ChunkRun],
     replay_runs: &[ChunkRun],
     samples: &[f32],
@@ -747,7 +758,7 @@ fn write_chunk_segment_merge_rollback_html(
     Ok(out_path)
 }
 
-fn render_word_timeline_html(
+pub(crate) fn render_word_timeline_html(
     duration_secs: f64,
     baseline_runs: &[ChunkRun],
     replay_runs: &[ChunkRun],
@@ -792,7 +803,7 @@ body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f7f4ec
     )
 }
 
-fn render_word_row(
+pub(crate) fn render_word_row(
     title: &str,
     width_px: f64,
     _row_height_px: f64,
@@ -867,14 +878,14 @@ fn render_word_row(
     )
 }
 
-fn html_escape(text: &str) -> String {
+pub(crate) fn html_escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('\"', "&quot;")
 }
 
-fn file_url_for_path(path: &Path) -> Result<String> {
+pub(crate) fn file_url_for_path(path: &Path) -> Result<String> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {

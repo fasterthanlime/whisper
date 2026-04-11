@@ -1,4 +1,18 @@
-struct ExerciseTui {
+use std::collections::VecDeque;
+use std::io;
+use std::io::IsTerminal;
+
+use crossterm::cursor::{Hide, Show};
+use crossterm::execute;
+use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+
+pub(crate) struct ExerciseTui {
     enabled: bool,
     terminal: Option<Terminal<CrosstermBackend<io::Stdout>>>,
     phase: String,
@@ -9,7 +23,7 @@ struct ExerciseTui {
 }
 
 impl ExerciseTui {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let enabled = std::io::stdout().is_terminal();
         let terminal = if enabled {
             let mut stdout = std::io::stdout();
@@ -32,7 +46,7 @@ impl ExerciseTui {
         tui
     }
 
-    fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         if !self.enabled {
             return;
         }
@@ -45,7 +59,7 @@ impl ExerciseTui {
         self.enabled = false;
     }
 
-    fn log(&mut self, message: impl Into<String>) {
+    pub(crate) fn log(&mut self, message: impl Into<String>) {
         if !self.enabled {
             return;
         }
@@ -70,7 +84,7 @@ impl ExerciseTui {
         self.render();
     }
 
-    fn render(&mut self) {
+    pub(crate) fn render(&mut self) {
         if !self.enabled {
             return;
         }
@@ -169,7 +183,7 @@ impl ExerciseTui {
     }
 }
 
-fn update_exercise_progress(
+pub(crate) fn update_exercise_progress(
     tui: &mut ExerciseTui,
     phase: &str,
     chunk_index: usize,
@@ -179,13 +193,13 @@ fn update_exercise_progress(
     tui.update(phase, chunk_index, committed, draft);
 }
 
-fn append_exact(target: &mut String, text: &str) {
+pub(crate) fn append_exact(target: &mut String, text: &str) {
     if !text.is_empty() {
         target.push_str(text);
     }
 }
 
-fn append_display_delta(target: &mut String, text: &str) {
+pub(crate) fn append_display_delta(target: &mut String, text: &str) {
     if text.is_empty() {
         return;
     }

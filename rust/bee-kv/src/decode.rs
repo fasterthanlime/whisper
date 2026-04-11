@@ -1,4 +1,35 @@
-fn decode_with_initial_prompt(
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+
+use anyhow::{Context, Result, bail};
+use bee_phonetic::sentence_word_tokens;
+use bee_qwen3_asr::generate::{
+    ConfidenceMode, build_followup_prompt, build_initial_prompt, prefill_and_decode,
+};
+use bee_qwen3_asr::mel::MelExtractor;
+use bee_qwen3_asr::mlx_rs::Array;
+use bee_qwen3_asr::mlx_rs::module::Module;
+use bee_qwen3_asr::mlx_rs::ops;
+use bee_qwen3_asr::model::Qwen3ASRModel;
+use bee_qwen3_asr::tokenizers::Tokenizer;
+
+use crate::alignment::{
+    AlignmentContext, adjust_keep_boundary_secs, build_transcript_alignment, suffix_after_prefix,
+    timed_aligned_words_for_alignment, timed_generated_bridge_for_cuts,
+    timed_generated_prefix_for_cut,
+};
+use crate::html;
+use crate::print::{annotate_chunk_runs, clone_chunk_run, print_finalizing_banner};
+use crate::tui::{ExerciseTui, append_display_delta, append_exact, update_exercise_progress};
+use crate::types::*;
+use crate::{
+    BOUNDARY_SWEEP_OFFSETS, DEFAULT_START_POSITION_FOR_FRESH_FOLLOWUP, HOP_LENGTH, N_FFT,
+    SAMPLE_RATE,
+};
+
+pub(crate) fn decode_with_initial_prompt(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
     audio_features: &Array,
@@ -19,7 +50,7 @@ fn decode_with_initial_prompt(
     )
 }
 
-fn decode_with_followup_prompt(
+pub(crate) fn decode_with_followup_prompt(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
     audio_features: &Array,
@@ -39,7 +70,7 @@ fn decode_with_followup_prompt(
     )
 }
 
-fn decode_prompt(
+pub(crate) fn decode_prompt(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
     audio_features: &Array,
@@ -76,7 +107,7 @@ fn decode_prompt(
     })
 }
 
-fn decode_chunked_followup(
+pub(crate) fn decode_chunked_followup(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
     samples: &[f32],
@@ -107,7 +138,7 @@ fn decode_chunked_followup(
     })
 }
 
-fn decode_prefix_rerun(
+pub(crate) fn decode_prefix_rerun(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
     samples: &[f32],
@@ -173,7 +204,7 @@ fn decode_prefix_rerun(
     })
 }
 
-fn decode_truncate_replay(
+pub(crate) fn decode_truncate_replay(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
     samples: &[f32],
@@ -266,7 +297,7 @@ fn decode_truncate_replay(
     })
 }
 
-fn decode_dual_lane_followup(
+pub(crate) fn decode_dual_lane_followup(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
     samples: &[f32],
@@ -322,7 +353,7 @@ fn decode_dual_lane_followup(
     })
 }
 
-fn decode_sliding_window_timed_rollback(
+pub(crate) fn decode_sliding_window_timed_rollback(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
     samples: &[f32],
@@ -427,13 +458,13 @@ fn decode_sliding_window_timed_rollback(
         });
     }
 
-    let html_path = write_sliding_window_timed_rollback_html(
+    let html_path = html::write_sliding_window_timed_rollback_html(
         "sliding-window-timed-rollback",
         &window_runs,
         samples,
         wav_path,
     )?;
-    let committed_timeline_path = Some(write_committed_timeline_html(
+    let committed_timeline_path = Some(html::write_committed_timeline_html(
         "sliding-window-timed-rollback-committed",
         &window_runs,
         samples,
@@ -452,7 +483,7 @@ fn decode_sliding_window_timed_rollback(
     })
 }
 
-fn decode_sliding_window_full_replay(
+pub(crate) fn decode_sliding_window_full_replay(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
     samples: &[f32],
@@ -645,13 +676,13 @@ fn decode_sliding_window_full_replay(
 
     tui.clear();
 
-    let html_path = write_sliding_window_timed_rollback_html(
+    let html_path = html::write_sliding_window_timed_rollback_html(
         "sliding-window-full-replay",
         &window_runs,
         samples,
         wav_path,
     )?;
-    let committed_timeline_path = Some(write_committed_timeline_html(
+    let committed_timeline_path = Some(html::write_committed_timeline_html(
         "sliding-window-full-replay-committed",
         &window_runs,
         samples,
@@ -670,7 +701,7 @@ fn decode_sliding_window_full_replay(
     })
 }
 
-fn decode_sliding_window_bridge_replay(
+pub(crate) fn decode_sliding_window_bridge_replay(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
     samples: &[f32],
@@ -994,13 +1025,13 @@ fn decode_sliding_window_bridge_replay(
 
     tui.clear();
 
-    let html_path = write_sliding_window_timed_rollback_html(
+    let html_path = html::write_sliding_window_timed_rollback_html(
         "sliding-window-bridge-replay",
         &window_runs,
         samples,
         wav_path,
     )?;
-    let committed_timeline_path = Some(write_committed_timeline_html(
+    let committed_timeline_path = Some(html::write_committed_timeline_html(
         "sliding-window-bridge-replay-committed",
         &window_runs,
         samples,
@@ -1019,7 +1050,7 @@ fn decode_sliding_window_bridge_replay(
     })
 }
 
-fn decode_chunk_segment_merge_rollback(
+pub(crate) fn decode_chunk_segment_merge_rollback(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
     samples: &[f32],
@@ -1125,7 +1156,7 @@ fn decode_chunk_segment_merge_rollback(
         ],
         samples,
     )?;
-    let html_path = write_chunk_segment_merge_rollback_html(
+    let html_path = html::write_chunk_segment_merge_rollback_html(
         &baseline_runs,
         &[
             clone_chunk_run(&replay_chunk0),
@@ -1145,7 +1176,7 @@ fn decode_chunk_segment_merge_rollback(
     })
 }
 
-fn decode_chunk_segment_merge_boundary_sweep(
+pub(crate) fn decode_chunk_segment_merge_boundary_sweep(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
     samples: &[f32],
@@ -1267,7 +1298,7 @@ fn decode_chunk_segment_merge_boundary_sweep(
     })
 }
 
-fn decode_prefix_window(
+pub(crate) fn decode_prefix_window(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
     mel_extractor: &MelExtractor,
@@ -1309,7 +1340,7 @@ fn decode_prefix_window(
     })
 }
 
-fn run_chunked_followup_sequence(
+pub(crate) fn run_chunked_followup_sequence(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
     samples: &[f32],
@@ -1377,7 +1408,7 @@ fn run_chunked_followup_sequence(
     Ok(chunk_runs)
 }
 
-fn decode_chunk_followup_step(
+pub(crate) fn decode_chunk_followup_step(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
     mel_extractor: &MelExtractor,
@@ -1456,7 +1487,7 @@ fn decode_chunk_followup_step(
     })
 }
 
-fn truncate_cache(
+pub(crate) fn truncate_cache(
     cache: &mut Option<bee_qwen3_asr::decoder::KVCache>,
     rollback_position: usize,
 ) -> Result<()> {
@@ -1467,24 +1498,24 @@ fn truncate_cache(
     Ok(())
 }
 
-fn normalized_transcript(text: &str) -> &str {
+pub(crate) fn normalized_transcript(text: &str) -> &str {
     text.trim()
 }
 
-fn decode_token_ids(tokenizer: &Tokenizer, token_ids: &[u32]) -> Result<String> {
+pub(crate) fn decode_token_ids(tokenizer: &Tokenizer, token_ids: &[u32]) -> Result<String> {
     tokenizer
         .decode(token_ids, true)
         .map_err(|e| anyhow::anyhow!("decoding transcript tokens: {e}"))
 }
 
-fn prompt_tokens_from_token_ids(token_ids: &[u32]) -> Result<Vec<i32>> {
+pub(crate) fn prompt_tokens_from_token_ids(token_ids: &[u32]) -> Result<Vec<i32>> {
     token_ids
         .iter()
         .map(|&id| i32::try_from(id).context("prompt token id overflow"))
         .collect()
 }
 
-fn tokenize_token_ids(tokenizer: &Tokenizer, text: &str) -> Result<Vec<u32>> {
+pub(crate) fn tokenize_token_ids(tokenizer: &Tokenizer, text: &str) -> Result<Vec<u32>> {
     Ok(tokenizer
         .encode_fast(text, false)
         .map_err(|e| anyhow::anyhow!("encoding prompt text: {e}"))?
@@ -1492,19 +1523,22 @@ fn tokenize_token_ids(tokenizer: &Tokenizer, text: &str) -> Result<Vec<u32>> {
         .to_vec())
 }
 
-fn kept_generated_token_ids(chunk_run: &ChunkRun, kept_token_count: usize) -> Vec<u32> {
+pub(crate) fn kept_generated_token_ids(chunk_run: &ChunkRun, kept_token_count: usize) -> Vec<u32> {
     chunk_run.generated_token_ids[..kept_token_count.min(chunk_run.generated_token_ids.len())]
         .to_vec()
 }
 
-fn kept_carried_token_ids(prefix: Option<&CarriedBridge>, kept_token_count: usize) -> Vec<u32> {
+pub(crate) fn kept_carried_token_ids(
+    prefix: Option<&CarriedBridge>,
+    kept_token_count: usize,
+) -> Vec<u32> {
     let Some(prefix) = prefix else {
         return Vec::new();
     };
     prefix.token_ids[..kept_token_count.min(prefix.token_ids.len())].to_vec()
 }
 
-fn kept_carried_token_count(
+pub(crate) fn kept_carried_token_count(
     prefix: Option<&CarriedBridge>,
     keep_until_secs: Option<f64>,
     chosen_word: Option<&BoundaryWordDebug>,
@@ -1529,7 +1563,10 @@ fn kept_carried_token_count(
         .unwrap_or(0)
 }
 
-fn carried_bridge_text(tokenizer: &Tokenizer, bridge: Option<&CarriedBridge>) -> Result<String> {
+pub(crate) fn carried_bridge_text(
+    tokenizer: &Tokenizer,
+    bridge: Option<&CarriedBridge>,
+) -> Result<String> {
     match bridge {
         Some(bridge) if !bridge.token_ids.is_empty() => {
             decode_token_ids(tokenizer, &bridge.token_ids)
@@ -1539,7 +1576,7 @@ fn carried_bridge_text(tokenizer: &Tokenizer, bridge: Option<&CarriedBridge>) ->
     }
 }
 
-fn combine_transcripts(chunks: &[ChunkRun]) -> String {
+pub(crate) fn combine_transcripts(chunks: &[ChunkRun]) -> String {
     let mut combined = String::new();
     for chunk in chunks {
         if chunk.transcript.is_empty() {
@@ -1550,7 +1587,7 @@ fn combine_transcripts(chunks: &[ChunkRun]) -> String {
     combined
 }
 
-fn build_chunk_plan(
+pub(crate) fn build_chunk_plan(
     total_samples: usize,
     first_chunk_samples: usize,
     subsequent_chunk_samples: usize,
@@ -1582,7 +1619,7 @@ fn build_chunk_plan(
     Ok(plan)
 }
 
-fn build_overlapping_window_plan(
+pub(crate) fn build_overlapping_window_plan(
     total_samples: usize,
     window_samples: usize,
     stride_samples: usize,
@@ -1615,7 +1652,7 @@ fn build_overlapping_window_plan(
     Ok(plan)
 }
 
-fn ms_to_samples(chunk_ms: usize) -> Result<usize> {
+pub(crate) fn ms_to_samples(chunk_ms: usize) -> Result<usize> {
     let chunk_size_samples = (chunk_ms * SAMPLE_RATE as usize) / 1000;
     if chunk_size_samples == 0 {
         bail!("chunk size is zero; chunk_ms={chunk_ms}");
@@ -1623,7 +1660,7 @@ fn ms_to_samples(chunk_ms: usize) -> Result<usize> {
     Ok(chunk_size_samples)
 }
 
-fn system_compare_contexts() -> &'static [&'static str] {
+pub(crate) fn system_compare_contexts() -> &'static [&'static str] {
     &[
         "",
         "You are a helpful assistant.",
