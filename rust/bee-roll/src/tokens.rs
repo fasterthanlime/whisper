@@ -260,6 +260,50 @@ impl ZipaPhoneSpan {
     }
 }
 
+/// One normalized comparison phone attached to a token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComparisonPhone {
+    /// Normalized phone symbol used for transcript-vs-ZIPA comparison.
+    phone: CompactString,
+}
+
+impl ComparisonPhone {
+    pub(crate) fn new(phone: CompactString) -> Self {
+        Self { phone }
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.phone.as_str()
+    }
+}
+
+/// Token-level ZIPA timing status.
+///
+/// Intent:
+/// - represent the actual alignment outcome explicitly
+/// - preserve deleted/projected states instead of collapsing them into `None`
+#[derive(Clone, Debug, PartialEq)]
+pub enum ZipaTiming {
+    /// ZIPA aligned this token onto a concrete utterance-global time span.
+    Aligned(TimeRange),
+    /// The token was projected into ZIPA space, but the projection collapsed to
+    /// a zero-width deletion point.
+    Deleted {
+        /// Normalized ZIPA comparison index where the token collapsed.
+        projected_at: usize,
+    },
+    /// The token projected into ZIPA comparison space, but no timed phone span
+    /// could be recovered for that projected normalized range.
+    Projected {
+        /// Half-open normalized ZIPA comparison range.
+        normalized_start: usize,
+        /// Half-open normalized ZIPA comparison range.
+        normalized_end: usize,
+    },
+    /// The token did not produce a valid comparison range.
+    Invalid,
+}
+
 /// Token-aligned output bundle returned from one feed step.
 ///
 /// Intent:
@@ -274,8 +318,12 @@ pub struct OutputToken {
     asr_confidence: Option<AsrTokenConfidence>,
     /// G2P-derived IPA for this token, when available.
     g2p_ipa: Option<G2pTokenIpa>,
+    /// Normalized comparison phones derived from the transcript-side G2P view.
+    transcript_phones: Vec<ComparisonPhone>,
     /// One or more ZIPA phone spans aligned back onto this token.
     zipa_phone_spans: Vec<ZipaPhoneSpan>,
+    /// ZIPA timing status for this token, when audio-side alignment has run.
+    zipa_timing: ZipaTiming,
 }
 
 impl OutputToken {
@@ -283,13 +331,17 @@ impl OutputToken {
         timed_token: TimedToken,
         asr_confidence: Option<AsrTokenConfidence>,
         g2p_ipa: Option<G2pTokenIpa>,
+        transcript_phones: Vec<ComparisonPhone>,
         zipa_phone_spans: Vec<ZipaPhoneSpan>,
+        zipa_timing: ZipaTiming,
     ) -> Self {
         Self {
             timed_token,
             asr_confidence,
             g2p_ipa,
+            transcript_phones,
             zipa_phone_spans,
+            zipa_timing,
         }
     }
 
@@ -305,8 +357,16 @@ impl OutputToken {
         self.g2p_ipa.as_ref()
     }
 
+    pub fn transcript_phones(&self) -> &[ComparisonPhone] {
+        &self.transcript_phones
+    }
+
     pub fn zipa_phone_spans(&self) -> &[ZipaPhoneSpan] {
         &self.zipa_phone_spans
+    }
+
+    pub fn zipa_timing(&self) -> &ZipaTiming {
+        &self.zipa_timing
     }
 }
 

@@ -32,8 +32,9 @@ mod utterance;
 pub(crate) const SAMPLE_RATE: u32 = 16_000;
 
 pub use tokens::{
-    AsrTokenAlternative, AsrTokenConfidence, Cut, FeedOutput, G2pTokenIpa, OutputToken, TimeRange,
-    TimedToken, TokenId, TokenIndex, UtteranceTime, ZipaPhoneSpan,
+    AsrTokenAlternative, AsrTokenConfidence, ComparisonPhone, Cut, FeedOutput, G2pTokenIpa,
+    OutputToken, TimeRange, TimedToken, TokenId, TokenIndex, UtteranceTime, ZipaPhoneSpan,
+    ZipaTiming,
 };
 pub use utterance::{Cutter, Listener, Utterance};
 
