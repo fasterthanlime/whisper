@@ -14,29 +14,85 @@ use crate::config::T5Config;
 // KV Cache for decoder attention
 // ---------------------------------------------------------------------------
 
-/// Per-layer cache for one attention sublayer (self-attn or cross-attn).
-#[derive(Default)]
+/// Preallocated KV cache. Allocates [batch, heads, max_len, d_kv] up front,
+/// writes new K/V into the next slot, returns a view of the filled portion.
 pub struct KvCache {
-    pub keys: Option<Array>,
-    pub values: Option<Array>,
+    keys: Option<Array>,
+    values: Option<Array>,
+    len: i32,
+    /// If true, this is a static cache (cross-attention) that doesn't grow.
+    is_static: bool,
+}
+
+impl Default for KvCache {
+    fn default() -> Self {
+        Self {
+            keys: None,
+            values: None,
+            len: 0,
+            is_static: false,
+        }
+    }
 }
 
 impl KvCache {
+    /// Create a preallocated cache for up to `max_len` steps.
+    /// `batch_size`, `num_heads`, `d_kv` define the shape.
+    pub fn preallocated(
+        batch_size: i32,
+        num_heads: i32,
+        max_len: i32,
+        d_kv: i32,
+    ) -> Result<Self, Exception> {
+        // Shape: [batch, heads, max_len, d_kv]
+        let keys = ops::zeros::<f32>(&[batch_size, num_heads, max_len, d_kv])?;
+        let values = ops::zeros::<f32>(&[batch_size, num_heads, max_len, d_kv])?;
+        Ok(Self {
+            keys: Some(keys),
+            values: Some(values),
+            len: 0,
+            is_static: false,
+        })
+    }
+
+    /// Append new K/V (shape [batch, heads, new_len, d_kv]) and return the filled slice.
     pub fn update(&mut self, k: Array, v: Array) -> Result<(Array, Array), Exception> {
-        match (self.keys.take(), self.values.take()) {
-            (Some(prev_k), Some(prev_v)) => {
-                let new_k = concatenate_axis(&[prev_k, k], 2)?;
-                let new_v = concatenate_axis(&[prev_v, v], 2)?;
+        if self.is_static {
+            // Static cache (cross-attention): just return what we have
+            return Ok((self.keys.clone().unwrap(), self.values.clone().unwrap()));
+        }
+
+        let new_len = k.shape()[2];
+
+        match (&self.keys, &self.values) {
+            (Some(_buf_k), Some(_buf_v)) if self.len > 0 => {
+                // Append to existing cache via concatenation on the preallocated buffer
+                let prev_k = self.keys.take().unwrap();
+                let prev_v = self.values.take().unwrap();
+                // Slice to filled portion and concatenate
+                let filled_k = prev_k.index((.., .., ..self.len, ..));
+                let filled_v = prev_v.index((.., .., ..self.len, ..));
+                let new_k = concatenate_axis(&[filled_k, k], 2)?;
+                let new_v = concatenate_axis(&[filled_v, v], 2)?;
+                self.len += new_len;
                 self.keys = Some(new_k.clone());
                 self.values = Some(new_v.clone());
                 Ok((new_k, new_v))
             }
             _ => {
+                self.len = new_len;
                 self.keys = Some(k.clone());
                 self.values = Some(v.clone());
                 Ok((k, v))
             }
         }
+    }
+
+    /// Set static K/V (for cross-attention, computed once).
+    pub fn set_static(&mut self, k: Array, v: Array) {
+        self.keys = Some(k);
+        self.values = Some(v);
+        self.is_static = true;
     }
 
     pub fn get(&self) -> Option<(&Array, &Array)> {
@@ -54,9 +110,11 @@ pub struct DecoderLayerCache {
     pub cross_attn: KvCache,
 }
 
-/// Full decoder cache: one entry per decoder layer.
+/// Full decoder cache with precomputed position bias.
 pub struct DecoderCache {
     pub layers: Vec<DecoderLayerCache>,
+    /// Precomputed full position bias: [1, num_heads, max_len, max_len]
+    pub position_bias: Option<Array>,
 }
 
 impl DecoderCache {
@@ -65,7 +123,10 @@ impl DecoderCache {
         for _ in 0..num_layers {
             layers.push(DecoderLayerCache::default());
         }
-        Self { layers }
+        Self {
+            layers,
+            position_bias: None,
+        }
     }
 }
 
@@ -641,11 +702,18 @@ impl T5Decoder {
     ) -> Result<Array, Exception> {
         let mut x = self.embed_tokens.forward(token_ids)?;
 
-        // Position bias for this step: need bias for position `step` attending to all positions 0..=step
+        // Precompute full position bias on first step, then index into it
+        if cache.position_bias.is_none() {
+            // Max decode length — compute once for the largest possible sequence
+            let max_len = 64i32;
+            let bias = self.position_bias.forward(max_len, max_len)?;
+            bias.eval()?;
+            cache.position_bias = Some(bias);
+        }
+        let full_bias = cache.position_bias.as_ref().unwrap();
+        // Extract row `step` attending to positions 0..=step
         // Shape: [1, num_heads, 1, step+1]
-        let full_bias = self.position_bias.forward(step + 1, step + 1)?;
-        // Take only the last row (the new token attending to all cached + itself)
-        let step_bias = full_bias.index((.., .., -1.., ..));
+        let step_bias = full_bias.index((.., .., step..step + 1, ..step + 1));
 
         for (block, layer_cache) in self.blocks.iter().zip(cache.layers.iter_mut()) {
             x = block.forward_cached(
