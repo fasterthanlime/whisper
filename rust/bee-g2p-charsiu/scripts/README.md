@@ -6,6 +6,10 @@ being worked out.
 The current target model for those experiments lives in
 [MODEL.md](/Users/amos/bearcove/bee/rust/bee-g2p-charsiu/MODEL.md).
 
+The simplest Rust entry point for this crate now lives in
+[main.rs](/Users/amos/bearcove/bee/rust/bee-g2p-charsiu/src/main.rs), which
+spawns the sidecar and prints `word -> ipa` rows.
+
 The near-term plan is:
 
 - inspect Charsiu's byte-level encoder/decoder behavior

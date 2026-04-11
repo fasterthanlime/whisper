@@ -4,7 +4,7 @@
 
 Right now it is deliberately a skeleton:
 
-- no real Rust implementation yet
+- a small Rust client exists, but real inference still lives in Python
 - Python probes and sidecars are expected here first
 - the immediate job is to understand the model and settle the strategy
 - the later job is to move the useful parts into Rust and eventually MLX
@@ -14,6 +14,57 @@ good enough.
 
 The concrete intermediate model now lives in
 [MODEL.md](/Users/amos/bearcove/bee/rust/bee-g2p-charsiu/MODEL.md).
+
+## Current Rust Surface
+
+This crate now has a minimal usable Rust surface:
+
+- a persistent sidecar client in [lib.rs](/Users/amos/bearcove/bee/rust/bee-g2p-charsiu/src/lib.rs)
+- a tiny CLI in [main.rs](/Users/amos/bearcove/bee/rust/bee-g2p-charsiu/src/main.rs)
+
+The current job of that Rust code is simple:
+
+- spawn the Python Charsiu sidecar
+- send batches of words
+- get back IPA strings
+- or split a text into words, keep spans, and phonemize those words
+- or run the cross-attention probe and return typed ownership data
+
+Example:
+
+```bash
+eval "$(direnv export bash)"
+cargo run -p bee-g2p-charsiu -- Facet Wednesday
+cargo run -p bee-g2p-charsiu -- --text "For Jason, this Thursday, use Facet."
+cargo run -p bee-g2p-charsiu -- --probe-text "use Facet"
+```
+
+Current output:
+
+```text
+charsiu ready model=charsiu/g2p_multilingual_byT5_tiny_16_layers device=mps
+Facet      ˈfeɪsət
+Wednesday  ˈwɛdnɪsdi
+
+charsiu ready model=charsiu/g2p_multilingual_byT5_tiny_16_layers device=mps
+0..3   For       ˈfɔɹ
+4..9   Jason     ˈdʒeɪsən
+11..15 this      ˈtʰɪs
+16..24 Thursday  ˈθɝzdi
+26..29 use       ˈjuz
+30..35 Facet     ˈfeɪsət
+
+text    use Facet
+decoded_ipa      ˈjuzˈfeɪsət
+out[2]  j        word=use      qwen=use
+out[8]  e        word=Facet    qwen=ĠFac
+out[14] t        word=Facet    qwen=et
+```
+
+That is intentionally modest.
+
+It gives us a Rust entry point now, without forcing the MLX/runtime work too
+early.
 
 ## Why This Exists
 

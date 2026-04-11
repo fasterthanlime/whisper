@@ -1,0 +1,21 @@
+[package]
+name = "bee-g2p-charsiu-mlx"
+version = "0.1.0"
+edition = "2024"
+description = "Charsiu G2P (ByT5) inference via MLX on Apple Silicon"
+license = "MIT"
+
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
+[[bin]]
+name = "bee-g2p-charsiu-mlx"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+mlx-rs.workspace = true
+serde.workspace = true
+serde_json.workspace = true

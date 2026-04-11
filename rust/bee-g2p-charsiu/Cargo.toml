@@ -9,3 +9,6 @@ edition = "2024"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
+facet = "0.44.3"
+facet-json = "0.44"
+regex = "1"

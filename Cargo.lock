@@ -184,6 +184,21 @@ dependencies = [
 [[package]]
 name = "bee-g2p-charsiu"
 version = "0.1.0"
+dependencies = [
+ "facet",
+ "facet-json",
+ "regex",
+]
+
+[[package]]
+name = "bee-g2p-charsiu-mlx"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "mlx-rs",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "bee-kv"
