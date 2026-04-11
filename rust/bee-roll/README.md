@@ -104,6 +104,131 @@ So the loop is:
 4. repartition the right edge into `carry` + `preview`
 5. repeat
 
+## Worked Timeline: 200 ms Feeds
+
+Here is the same model spelled out on a concrete timeline.
+
+Assumptions for this example:
+
+- the app calls `feed()` every `200 ms`
+- `preview` becomes eligible for a cut search at `2.0 s`
+- token text below is schematic; the point is the state transition, not the
+  exact words
+- on the very first decode, ASR uses its initial prompt form
+- on later decodes, ASR uses its follow-up prompt form
+- after the first cut in this example:
+  - `stable = 0.0 .. 1.2 s`
+  - `carry = 1.2 .. 1.6 s`
+  - `preview = 1.6 .. 2.0 s`
+
+### Phase 1: bootstrapping before the first cut
+
+Before the first cut exists, there is no stable prefix yet and there is no
+carry to replay. So each `feed()` call rewrites the whole current tape.
+
+| feed | new samples | utterance audio after append | KV kept before decode | replayed carry tokens | audio fed to ASR | tape after decode | cutter? |
+|---|---:|---|---|---|---|---|---|
+| 1 | `+0.2s` | `0.0 .. 0.2` | none | none | `0.0 .. 0.2` | all `preview` | no |
+| 2 | `+0.2s` | `0.0 .. 0.4` | none, truncate back to `0` | none | `0.0 .. 0.4` | all `preview` | no |
+| 3 | `+0.2s` | `0.0 .. 0.6` | none, truncate back to `0` | none | `0.0 .. 0.6` | all `preview` | no |
+| 4 | `+0.2s` | `0.0 .. 0.8` | none, truncate back to `0` | none | `0.0 .. 0.8` | all `preview` | no |
+| 5 | `+0.2s` | `0.0 .. 1.0` | none, truncate back to `0` | none | `0.0 .. 1.0` | all `preview` | no |
+| 6 | `+0.2s` | `0.0 .. 1.2` | none, truncate back to `0` | none | `0.0 .. 1.2` | all `preview` | no |
+| 7 | `+0.2s` | `0.0 .. 1.4` | none, truncate back to `0` | none | `0.0 .. 1.4` | all `preview` | no |
+| 8 | `+0.2s` | `0.0 .. 1.6` | none, truncate back to `0` | none | `0.0 .. 1.6` | all `preview` | no |
+| 9 | `+0.2s` | `0.0 .. 1.8` | none, truncate back to `0` | none | `0.0 .. 1.8` | all `preview` | no |
+| 10 | `+0.2s` | `0.0 .. 2.0` | none, truncate back to `0` | none | `0.0 .. 2.0` | decode full tape, then partition into `stable` / `carry` / `preview` | yes |
+
+At `feed(10)`, the cutter runs for the first time because `preview` has
+grown to the search threshold.
+
+For this example, suppose it chooses:
+
+```text
+audio time:  0.0                1.2      1.6        2.0
+             |------------------|--------|----------|
+tape:        S S S S S S        C C      P P P P
+```
+
+That means:
+
+- everything before `1.2 s` becomes `stable`
+- `1.2 .. 1.6 s` becomes `carry`
+- `1.6 .. 2.0 s` remains `preview`
+
+The returned tape now has all three regions.
+
+### Phase 2: steady-state after the first cut
+
+After that first cut, `feed()` stops rewriting from `0`.
+
+Instead, each later call:
+
+1. keeps KV only for `stable`
+2. drops the old `carry + preview` suffix from live decode state
+3. converts the previous `carry` tokens into prompt tokens
+4. decodes audio starting at the beginning of `carry`
+5. rebuilds `carry + preview` from the new decode
+
+So `feed(11)` looks like this:
+
+```text
+before feed(11):
+stable = 0.0 .. 1.2
+carry  = 1.2 .. 1.6
+preview= 1.6 .. 2.0
+
+new audio arrives:
+append 2.0 .. 2.2
+
+ASR input for feed(11):
+- retained KV for tokens covering 0.0 .. 1.2
+- follow-up prompt
+- replayed carry tokens from 1.2 .. 1.6
+- audio chunk 1.2 .. 2.2
+
+result:
+- stable stays 0.0 .. 1.2
+- carry is regenerated
+- preview is regenerated and now extends through 2.2
+```
+
+The same pattern repeats:
+
+| feed | utterance audio after append | KV kept before decode | replayed carry tokens | audio fed to ASR | preview length after decode | cutter? |
+|---|---|---|---|---|---:|---|
+| 11 | `0.0 .. 2.2` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 2.2` | `0.6s` | no |
+| 12 | `0.0 .. 2.4` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 2.4` | `0.8s` | no |
+| 13 | `0.0 .. 2.6` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 2.6` | `1.0s` | no |
+| 14 | `0.0 .. 2.8` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 2.8` | `1.2s` | no |
+| 15 | `0.0 .. 3.0` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 3.0` | `1.4s` | no |
+| 16 | `0.0 .. 3.2` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 3.2` | `1.6s` | no |
+| 17 | `0.0 .. 3.4` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 3.4` | `1.8s` | no |
+| 18 | `0.0 .. 3.6` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 3.6` | `2.0s` | yes |
+
+At `feed(18)`, `preview` is large enough again, so the cutter runs again.
+
+If it accepts a later boundary, more material moves from the right edge into
+`stable`, a new `carry` is chosen behind the seam, and the remaining right
+edge becomes the new `preview`.
+
+In other words, the cycle is:
+
+```text
+rewrite preview
+rewrite preview
+rewrite preview
+rewrite preview
+cut
+rewrite preview
+rewrite preview
+...
+```
+
+The important part is that the tape returned from `feed()` is always the
+whole current tape, but the next decode step only keeps KV for `stable`,
+replays `carry` as prompt tokens, and reopens `preview`.
+
 ## Why We Return More Than Text
 
 Text alone is not enough.
