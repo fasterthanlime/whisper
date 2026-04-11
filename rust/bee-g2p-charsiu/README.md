@@ -33,6 +33,10 @@ The current job of that Rust code is simple:
 - or collapse those spans into transcript-side comparison phones
 - or flatten those comparison phones into the exact token stream shape the
   aligner wants
+- or emit that flat utterance-level comparison-token stream with token-piece
+  provenance preserved on every item
+- or emit the aligner-ready adapter view: flat normalized tokens plus
+  contiguous comparison ranges for each word and Qwen token piece
 
 Example:
 
@@ -44,6 +48,8 @@ cargo run -p bee-g2p-charsiu -- --probe-text "use Facet"
 cargo run -p bee-g2p-charsiu -- --token-spans-text "use Facet"
 cargo run -p bee-g2p-charsiu -- --token-phones-text "use Facet"
 cargo run -p bee-g2p-charsiu -- --comparison-tokens-text "use Facet"
+cargo run -p bee-g2p-charsiu -- --transcript-comparison-text "use Facet"
+cargo run -p bee-g2p-charsiu -- --alignment-input-text "use Facet"
 ```
 
 Current output:
@@ -90,6 +96,27 @@ cmp      Fac     word=Facet    token=ĠFac  phone=ɪ  span=1..2
 cmp      Fac     word=Facet    token=ĠFac  phone=s  span=2..3
 cmp     et       word=Facet    token=et    phone=ə  span=0..1
 cmp     et       word=Facet    token=et    phone=t  span=1..2
+
+text    use Facet
+decoded_ipa      ˈjuzˈfeɪsət
+txcmp   use      word=use      token=use   phone=j  cmp=0..1  span=0..1
+txcmp   use      word=use      token=use   phone=ʊ  cmp=1..2  span=1..2
+txcmp   use      word=use      token=use   phone=z  cmp=2..3  span=2..3
+txcmp    Fac     word=Facet    token=ĠFac  phone=f  cmp=3..4  span=0..1
+txcmp    Fac     word=Facet    token=ĠFac  phone=ɛ  cmp=4..5  span=1..2
+txcmp    Fac     word=Facet    token=ĠFac  phone=ɪ  cmp=5..6  span=1..2
+txcmp    Fac     word=Facet    token=ĠFac  phone=s  cmp=6..7  span=2..3
+txcmp   et       word=Facet    token=et    phone=ə  cmp=7..8  span=0..1
+txcmp   et       word=Facet    token=et    phone=t  cmp=8..9  span=1..2
+
+text    use Facet
+decoded_ipa      ˈjuzˈfeɪsət
+normalized       j ʊ z f ɛ ɪ s ə t
+word    use      chars=0..3   cmp=0..3
+word    Facet    chars=4..9   cmp=3..9
+token   use      word=use     chars=0..3   cmp=0..3
+token    Fac     word=Facet   chars=3..7   cmp=3..7
+token   et       word=Facet   chars=7..9   cmp=7..9
 ```
 
 That is intentionally modest.

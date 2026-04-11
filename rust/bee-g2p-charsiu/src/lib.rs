@@ -5,7 +5,8 @@ use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::OnceLock;
 
 use bee_phonetic::{
-    normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans, parse_reviewed_ipa,
+    ComparisonToken, normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans,
+    parse_reviewed_ipa,
 };
 use facet::Facet;
 use regex::Regex;
@@ -214,6 +215,78 @@ pub struct TokenPieceComparisonToken {
     pub ipa_source_start: usize,
     pub ipa_source_end: usize,
     pub ownership_score: f32,
+}
+
+#[derive(Debug, Clone, Facet)]
+pub struct TranscriptComparisonToken {
+    pub comparison_index: usize,
+    pub comparison_token: String,
+    pub comparison_source_start: usize,
+    pub comparison_source_end: usize,
+    pub word_index: Option<usize>,
+    pub word_surface: Option<String>,
+    pub token_index: usize,
+    pub token: String,
+    pub token_surface: String,
+    pub token_char_start: usize,
+    pub token_char_end: usize,
+    pub ipa_text: String,
+    pub ipa_source_start: usize,
+    pub ipa_source_end: usize,
+    pub ownership_score: f32,
+}
+
+#[derive(Debug, Clone, Facet)]
+pub struct TranscriptComparisonProvenance {
+    pub comparison_index: usize,
+    pub word_index: Option<usize>,
+    pub word_surface: Option<String>,
+    pub token_index: usize,
+    pub token: String,
+    pub token_surface: String,
+    pub token_char_start: usize,
+    pub token_char_end: usize,
+    pub ipa_text: String,
+    pub ipa_source_start: usize,
+    pub ipa_source_end: usize,
+    pub ownership_score: f32,
+}
+
+#[derive(Debug, Clone, Facet)]
+pub struct TranscriptComparisonSequence {
+    pub tokens: Vec<ComparisonToken>,
+    pub provenance: Vec<TranscriptComparisonProvenance>,
+}
+
+#[derive(Debug, Clone, Facet)]
+pub struct TranscriptWordComparisonRange {
+    pub word_index: usize,
+    pub word_surface: String,
+    pub char_start: usize,
+    pub char_end: usize,
+    pub comparison_start: usize,
+    pub comparison_end: usize,
+}
+
+#[derive(Debug, Clone, Facet)]
+pub struct TranscriptTokenPieceComparisonRange {
+    pub token_index: usize,
+    pub token: String,
+    pub token_surface: String,
+    pub token_char_start: usize,
+    pub token_char_end: usize,
+    pub word_index: Option<usize>,
+    pub word_surface: Option<String>,
+    pub comparison_start: usize,
+    pub comparison_end: usize,
+}
+
+#[derive(Debug, Clone, Facet)]
+pub struct TranscriptAlignmentInput {
+    pub normalized: Vec<String>,
+    pub sequence: TranscriptComparisonSequence,
+    pub words: Vec<TranscriptWordComparisonRange>,
+    pub token_pieces: Vec<TranscriptTokenPieceComparisonRange>,
 }
 
 #[derive(Debug)]
@@ -637,6 +710,133 @@ pub fn token_piece_comparison_tokens(result: &ProbeResult) -> Vec<TokenPieceComp
         .collect()
 }
 
+pub fn transcript_comparison_tokens(result: &ProbeResult) -> Vec<TranscriptComparisonToken> {
+    token_piece_comparison_tokens(result)
+        .into_iter()
+        .enumerate()
+        .map(|(comparison_index, token)| TranscriptComparisonToken {
+            comparison_index,
+            comparison_token: token.comparison_token,
+            comparison_source_start: comparison_index,
+            comparison_source_end: comparison_index + 1,
+            word_index: token.word_index,
+            word_surface: token.word_surface,
+            token_index: token.token_index,
+            token: token.token,
+            token_surface: token.token_surface,
+            token_char_start: token.token_char_start,
+            token_char_end: token.token_char_end,
+            ipa_text: token.ipa_text,
+            ipa_source_start: token.ipa_source_start,
+            ipa_source_end: token.ipa_source_end,
+            ownership_score: token.ownership_score,
+        })
+        .collect()
+}
+
+pub fn transcript_comparison_sequence(result: &ProbeResult) -> TranscriptComparisonSequence {
+    let rows = transcript_comparison_tokens(result);
+    let tokens = rows
+        .iter()
+        .map(|token| ComparisonToken {
+            token: token.comparison_token.clone(),
+            source_start: token.comparison_source_start,
+            source_end: token.comparison_source_end,
+        })
+        .collect();
+    let provenance = rows
+        .into_iter()
+        .map(|token| TranscriptComparisonProvenance {
+            comparison_index: token.comparison_index,
+            word_index: token.word_index,
+            word_surface: token.word_surface,
+            token_index: token.token_index,
+            token: token.token,
+            token_surface: token.token_surface,
+            token_char_start: token.token_char_start,
+            token_char_end: token.token_char_end,
+            ipa_text: token.ipa_text,
+            ipa_source_start: token.ipa_source_start,
+            ipa_source_end: token.ipa_source_end,
+            ownership_score: token.ownership_score,
+        })
+        .collect();
+    TranscriptComparisonSequence { tokens, provenance }
+}
+
+pub fn transcript_alignment_input(result: &ProbeResult) -> TranscriptAlignmentInput {
+    let sequence = transcript_comparison_sequence(result);
+    let normalized = sequence
+        .tokens
+        .iter()
+        .map(|token| token.token.clone())
+        .collect();
+
+    let mut words = Vec::new();
+    let mut token_pieces = Vec::new();
+
+    let mut comparison_index = 0usize;
+    while comparison_index < sequence.provenance.len() {
+        let current = &sequence.provenance[comparison_index];
+
+        let mut next = comparison_index + 1;
+        while next < sequence.provenance.len() {
+            let candidate = &sequence.provenance[next];
+            if candidate.token_index != current.token_index {
+                break;
+            }
+            next += 1;
+        }
+
+        token_pieces.push(TranscriptTokenPieceComparisonRange {
+            token_index: current.token_index,
+            token: current.token.clone(),
+            token_surface: current.token_surface.clone(),
+            token_char_start: current.token_char_start,
+            token_char_end: current.token_char_end,
+            word_index: current.word_index,
+            word_surface: current.word_surface.clone(),
+            comparison_start: comparison_index,
+            comparison_end: next,
+        });
+
+        comparison_index = next;
+    }
+
+    let mut word_start_by_index =
+        std::collections::BTreeMap::<usize, TranscriptWordComparisonRange>::new();
+    for row in &sequence.provenance {
+        let Some(word_index) = row.word_index else {
+            continue;
+        };
+        let word_span = result
+            .word_spans
+            .iter()
+            .find(|word| word.index == word_index)
+            .expect("probe provenance should reference an existing word span");
+        let entry = word_start_by_index.entry(word_index).or_insert_with(|| {
+            TranscriptWordComparisonRange {
+                word_index,
+                word_surface: word_span.text.clone(),
+                char_start: word_span.char_start,
+                char_end: word_span.char_end,
+                comparison_start: row.comparison_index,
+                comparison_end: row.comparison_index + 1,
+            }
+        });
+        entry.comparison_start = entry.comparison_start.min(row.comparison_index);
+        entry.comparison_end = entry.comparison_end.max(row.comparison_index + 1);
+    }
+    words.extend(word_start_by_index.into_values());
+
+    TranscriptAlignmentInput {
+        normalized,
+        sequence,
+        words,
+        token_pieces,
+    }
+}
+
 impl Drop for CharsiuSidecarClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -692,7 +892,8 @@ mod tests {
     use super::{
         ProbeAttentionRow, ProbeQwenPieceScore, ProbeQwenTokenPiece, ProbeRankedInput, ProbeResult,
         ProbeWordScore, ProbeWordSpan, summarize_probe_runs, token_piece_comparison_tokens,
-        token_piece_ipa_spans, transcript_words,
+        token_piece_ipa_spans, transcript_alignment_input, transcript_comparison_sequence,
+        transcript_comparison_tokens, transcript_words,
     };
 
     #[test]
@@ -826,6 +1027,67 @@ mod tests {
                 ("et".to_string(), "t".to_string(), 1, 2),
             ]
         );
+
+        let transcript = transcript_comparison_tokens(&result);
+        let rendered: Vec<_> = transcript
+            .into_iter()
+            .map(|token| (token.comparison_index, token.token, token.comparison_token))
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                (0, "Fac".to_string(), "f".to_string()),
+                (1, "Fac".to_string(), "ɛ".to_string()),
+                (2, "Fac".to_string(), "ɪ".to_string()),
+                (3, "Fac".to_string(), "s".to_string()),
+                (4, "et".to_string(), "ə".to_string()),
+                (5, "et".to_string(), "t".to_string()),
+            ]
+        );
+
+        let sequence = transcript_comparison_sequence(&result);
+        let rendered: Vec<_> = sequence
+            .tokens
+            .into_iter()
+            .map(|token| (token.token, token.source_start, token.source_end))
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                ("f".to_string(), 0, 1),
+                ("ɛ".to_string(), 1, 2),
+                ("ɪ".to_string(), 2, 3),
+                ("s".to_string(), 3, 4),
+                ("ə".to_string(), 4, 5),
+                ("t".to_string(), 5, 6),
+            ]
+        );
+
+        let input = transcript_alignment_input(&result);
+        assert_eq!(input.normalized, vec!["f", "ɛ", "ɪ", "s", "ə", "t"]);
+        let token_ranges: Vec<_> = input
+            .token_pieces
+            .into_iter()
+            .map(|token| (token.token, token.comparison_start, token.comparison_end))
+            .collect();
+        assert_eq!(
+            token_ranges,
+            vec![("Fac".to_string(), 0, 4), ("et".to_string(), 4, 6)]
+        );
+        let word_ranges: Vec<_> = input
+            .words
+            .into_iter()
+            .map(|word| {
+                (
+                    word.word_surface,
+                    word.char_start,
+                    word.char_end,
+                    word.comparison_start,
+                    word.comparison_end,
+                )
+            })
+            .collect();
+        assert_eq!(word_ranges, vec![("Facet".to_string(), 0, 5, 0, 6)]);
     }
 
     fn probe_row(

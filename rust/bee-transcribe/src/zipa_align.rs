@@ -37,6 +37,15 @@ pub struct WordAlignmentWindow {
     pub ops: Vec<AlignmentOp>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TranscriptComparisonInput {
+    pub transcript: String,
+    pub word_char_ranges: Vec<Range<usize>>,
+    pub word_normalized_ranges: Vec<Range<usize>>,
+    pub word_tokens: Vec<Vec<String>>,
+    pub transcript_normalized: Vec<String>,
+}
+
 #[derive(Clone)]
 struct WordSegmentCandidate {
     zipa_norm_range: Range<usize>,
@@ -97,6 +106,68 @@ pub fn transcript_normalized_for_span(
             .flat_map(|(_, tokens)| tokens.iter().cloned())
             .collect::<Vec<_>>(),
     )
+}
+
+pub fn transcript_comparison_input_from_word_raw_ranges(
+    transcript: &str,
+    word_raw_ranges: &[(Range<usize>, Vec<String>)],
+) -> TranscriptComparisonInput {
+    let word_tokens: Vec<Vec<String>> = word_raw_ranges
+        .iter()
+        .map(|(_, raw)| normalize_ipa_for_comparison(raw))
+        .collect();
+    let transcript_normalized: Vec<String> = word_tokens
+        .iter()
+        .flat_map(|tokens| tokens.iter().cloned())
+        .collect();
+    let mut cursor = 0usize;
+    let word_normalized_ranges = word_tokens
+        .iter()
+        .map(|tokens| {
+            let start = cursor;
+            cursor += tokens.len();
+            start..cursor
+        })
+        .collect();
+    let word_char_ranges = word_raw_ranges
+        .iter()
+        .map(|(range, _)| range.clone())
+        .collect();
+    TranscriptComparisonInput {
+        transcript: transcript.to_owned(),
+        word_char_ranges,
+        word_normalized_ranges,
+        word_tokens,
+        transcript_normalized,
+    }
+}
+
+pub fn transcript_comparison_input_from_charsiu(
+    transcript: &str,
+    input: &bee_g2p_charsiu::TranscriptAlignmentInput,
+) -> TranscriptComparisonInput {
+    let word_char_ranges = input
+        .words
+        .iter()
+        .map(|word| word.char_start..word.char_end)
+        .collect::<Vec<_>>();
+    let word_normalized_ranges = input
+        .words
+        .iter()
+        .map(|word| word.comparison_start..word.comparison_end)
+        .collect::<Vec<_>>();
+    let word_tokens = input
+        .words
+        .iter()
+        .map(|word| input.normalized[word.comparison_start..word.comparison_end].to_vec())
+        .collect::<Vec<_>>();
+    TranscriptComparisonInput {
+        transcript: transcript.to_owned(),
+        word_char_ranges,
+        word_normalized_ranges,
+        word_tokens,
+        transcript_normalized: input.normalized.clone(),
+    }
 }
 
 pub fn raw_slice_for_normalized_range(
@@ -979,21 +1050,53 @@ pub struct TranscriptAlignment {
     transcript: String,
     /// Byte-range of each word inside `transcript` (same order as `word_windows`).
     word_char_ranges: Vec<Range<usize>>,
+    transcript_alignment: TokenAlignment,
+    transcript_normalized_len: usize,
     word_windows: Vec<Option<WordAlignmentWindow>>,
     zipa_norm_with_spans: Vec<ComparisonToken>,
     phone_spans: Vec<PhoneSpan>,
 }
 
 impl TranscriptAlignment {
-    /// Run ZIPA inference + G2P + DP alignment for `transcript` over `audio`.
-    ///
-    /// Returns the opaque handle you can query with [`word_timings`] /
-    /// [`span_timing`].  Fails only on ZIPA inference errors or G2P errors;
-    /// partial alignment (some words unreachable) is not an error.
-    pub fn build(
-        transcript: &str,
+    pub fn build_from_comparison_input_and_zipa(
+        input: TranscriptComparisonInput,
+        zipa_norm_with_spans: Vec<ComparisonToken>,
+        phone_spans: Vec<PhoneSpan>,
+    ) -> Self {
+        let word_ids: Vec<usize> = input
+            .word_tokens
+            .iter()
+            .enumerate()
+            .flat_map(|(wi, tokens)| std::iter::repeat_n(wi, tokens.len()))
+            .collect();
+
+        let alignment = align_token_sequences_with_left_word_boundaries(
+            &input.transcript_normalized,
+            &zipa_norm,
+            &word_ids,
+        );
+
+        let word_windows = select_segmental_word_windows(
+            &input.word_tokens,
+            &input.word_normalized_ranges,
+            &zipa_norm,
+            &alignment,
+        );
+
+        Self {
+            transcript: input.transcript,
+            word_char_ranges: input.word_char_ranges,
+            transcript_alignment: alignment,
+            transcript_normalized_len: input.transcript_normalized.len(),
+            word_windows,
+            zipa_norm_with_spans,
+            phone_spans,
+        }
+    }
+
+    pub fn build_from_comparison_input(
+        input: TranscriptComparisonInput,
         audio: &ZipaAudioBuffer,
-        g2p: &mut CachedEspeakG2p,
         zipa: &ZipaInference,
     ) -> Result<Self, AlignmentError> {
         let utterance = zipa
@@ -1010,60 +1113,29 @@ impl TranscriptAlignment {
 
         let zipa_raw: Vec<String> = utterance.tokens.into_iter().filter(|t| t != "▁").collect();
         let zipa_norm_with_spans = normalize_ipa_for_comparison_with_spans(&zipa_raw);
-        let zipa_norm: Vec<String> = zipa_norm_with_spans
-            .iter()
-            .map(|t| t.token.clone())
-            .collect();
 
-        let word_raw_ranges =
-            transcript_word_raw_ranges(g2p, transcript).map_err(AlignmentError::G2p)?;
-
-        let word_norm_ranges: Vec<(Range<usize>, Vec<String>)> = word_raw_ranges
-            .iter()
-            .map(|(range, raw)| (range.clone(), normalize_ipa_for_comparison(raw)))
-            .collect();
-
-        let transcript_norm: Vec<String> = word_norm_ranges
-            .iter()
-            .flat_map(|(_, tokens)| tokens.iter().cloned())
-            .collect();
-
-        let word_ids: Vec<usize> = word_norm_ranges
-            .iter()
-            .enumerate()
-            .flat_map(|(wi, (_, tokens))| std::iter::repeat_n(wi, tokens.len()))
-            .collect();
-
-        let alignment = align_token_sequences_with_left_word_boundaries(
-            &transcript_norm,
-            &zipa_norm,
-            &word_ids,
-        );
-
-        let token_ranges: Vec<Range<usize>> = (0..word_norm_ranges.len())
-            .map(|wi| transcript_token_range_for_span(&word_norm_ranges, wi, wi + 1))
-            .collect();
-
-        let word_tokens: Vec<Vec<String>> = word_norm_ranges
-            .iter()
-            .map(|(_, tokens)| tokens.clone())
-            .collect();
-
-        let word_windows =
-            select_segmental_word_windows(&word_tokens, &token_ranges, &zipa_norm, &alignment);
-
-        let word_char_ranges: Vec<Range<usize>> = word_raw_ranges
-            .into_iter()
-            .map(|(range, _)| range)
-            .collect();
-
-        Ok(Self {
-            transcript: transcript.to_owned(),
-            word_char_ranges,
-            word_windows,
+        Ok(Self::build_from_comparison_input_and_zipa(
+            input,
             zipa_norm_with_spans,
             phone_spans,
-        })
+        ))
+    }
+
+    /// Run ZIPA inference + G2P + DP alignment for `transcript` over `audio`.
+    ///
+    /// Returns the opaque handle you can query with [`word_timings`] /
+    /// [`span_timing`].  Fails only on ZIPA inference errors or G2P errors;
+    /// partial alignment (some words unreachable) is not an error.
+    pub fn build(
+        transcript: &str,
+        audio: &ZipaAudioBuffer,
+        g2p: &mut CachedEspeakG2p,
+        zipa: &ZipaInference,
+    ) -> Result<Self, AlignmentError> {
+        let word_raw_ranges =
+            transcript_word_raw_ranges(g2p, transcript).map_err(AlignmentError::G2p)?;
+        let input = transcript_comparison_input_from_word_raw_ranges(transcript, &word_raw_ranges);
+        Self::build_from_comparison_input(input, audio, zipa)
     }
 
     /// Number of words in the transcript.
@@ -1098,6 +1170,22 @@ impl TranscriptAlignment {
                 WordTiming { word, quality }
             })
             .collect()
+    }
+
+    /// Timed audio span covering transcript normalized phones `[start, end)`.
+    pub fn comparison_range_timing(
+        &self,
+        comparison_range: Range<usize>,
+    ) -> Option<TimedZipaRange> {
+        if comparison_range.start >= comparison_range.end
+            || comparison_range.end > self.transcript_normalized_len
+        {
+            return None;
+        }
+        let projected = self
+            .transcript_alignment
+            .project_left_range(comparison_range)?;
+        timed_range_for_normalized_range(&self.zipa_norm_with_spans, &self.phone_spans, projected)
     }
 
     /// Timed audio span covering words `[word_start, word_end)`.
@@ -1147,8 +1235,10 @@ impl TranscriptAlignment {
 #[cfg(test)]
 mod tests {
     use super::{
-        expand_degenerate_projected_range, partition_word_alignment_windows,
-        select_segmental_word_windows, timed_range_for_normalized_range,
+        TranscriptAlignment, TranscriptComparisonInput, expand_degenerate_projected_range,
+        partition_word_alignment_windows, select_segmental_word_windows,
+        timed_range_for_normalized_range, transcript_comparison_input_from_charsiu,
+        transcript_comparison_input_from_word_raw_ranges,
     };
     use bee_phonetic::{
         AlignmentOp, AlignmentOpKind, ComparisonToken,
@@ -1323,11 +1413,90 @@ mod tests {
         assert!((timed.end_time_secs - 0.15).abs() < 1e-6);
     }
 
+    #[test]
+    fn transcript_comparison_input_flattens_word_ranges() {
+        let input = transcript_comparison_input_from_word_raw_ranges(
+            "use Facet",
+            &[
+                (
+                    0..3,
+                    vec!["j".to_string(), "u".to_string(), "z".to_string()],
+                ),
+                (
+                    4..9,
+                    vec![
+                        "f".to_string(),
+                        "eɪ".to_string(),
+                        "s".to_string(),
+                        "ə".to_string(),
+                        "t".to_string(),
+                    ],
+                ),
+            ],
+        );
+
+        assert_eq!(input.word_char_ranges, vec![0..3, 4..9]);
+        assert_eq!(input.word_normalized_ranges, vec![0..3, 3..9]);
+        assert_eq!(input.word_tokens[0], vec!["j", "ʊ", "z"]);
+        assert_eq!(input.word_tokens[1], vec!["f", "ɛ", "ɪ", "s", "ə", "t"]);
+        assert_eq!(
+            input.transcript_normalized,
+            vec!["j", "ʊ", "z", "f", "ɛ", "ɪ", "s", "ə", "t"]
+        );
+    }
+
+    #[test]
+    fn transcript_comparison_input_from_charsiu_keeps_word_ranges() {
+        let input = bee_g2p_charsiu::TranscriptAlignmentInput {
+            normalized: vec![
+                "j".to_string(),
+                "ʊ".to_string(),
+                "z".to_string(),
+                "f".to_string(),
+                "ɛ".to_string(),
+                "ɪ".to_string(),
+                "s".to_string(),
+                "ə".to_string(),
+                "t".to_string(),
+            ],
+            sequence: bee_g2p_charsiu::TranscriptComparisonSequence {
+                tokens: vec![],
+                provenance: vec![],
+            },
+            words: vec![
+                bee_g2p_charsiu::TranscriptWordComparisonRange {
+                    word_index: 0,
+                    word_surface: "use".to_string(),
+                    char_start: 0,
+                    char_end: 3,
+                    comparison_start: 0,
+                    comparison_end: 3,
+                },
+                bee_g2p_charsiu::TranscriptWordComparisonRange {
+                    word_index: 1,
+                    word_surface: "Facet".to_string(),
+                    char_start: 4,
+                    char_end: 9,
+                    comparison_start: 3,
+                    comparison_end: 9,
+                },
+            ],
+            token_pieces: vec![],
+        };
+
+        let converted = transcript_comparison_input_from_charsiu("use Facet", &input);
+        assert_eq!(converted.word_char_ranges, vec![0..3, 4..9]);
+        assert_eq!(converted.word_normalized_ranges, vec![0..3, 3..9]);
+        assert_eq!(converted.word_tokens[0], vec!["j", "ʊ", "z"]);
+        assert_eq!(converted.word_tokens[1], vec!["f", "ɛ", "ɪ", "s", "ə", "t"]);
+        assert_eq!(converted.transcript_normalized, input.normalized);
+    }
+
     // Build a minimal TranscriptAlignment with three words where the middle
     // word has no alignment window, then assert all SpanTiming variants.
     #[test]
     fn span_timing_variants() {
-        use super::{AlignmentQuality, SpanTiming, TranscriptAlignment, WordAlignmentWindow};
+        use super::{AlignmentQuality, SpanTiming, WordAlignmentWindow};
 
         // transcript: "hello world foo"
         // words:       0..5   6..11  12..15
@@ -1410,6 +1579,22 @@ mod tests {
         let ta = TranscriptAlignment {
             transcript,
             word_char_ranges,
+            transcript_alignment: align_token_sequences_with_left_word_boundaries(
+                &[
+                    "h".to_string(),
+                    "ɛ".to_string(),
+                    "w".to_string(),
+                    "f".to_string(),
+                ],
+                &[
+                    "h".to_string(),
+                    "ɛ".to_string(),
+                    "w".to_string(),
+                    "f".to_string(),
+                ],
+                &[0usize, 0, 2, 2],
+            ),
+            transcript_normalized_len: 4,
             word_windows,
             zipa_norm_with_spans,
             phone_spans,
@@ -1460,5 +1645,165 @@ mod tests {
         assert_eq!(timings[0].word, "hello");
         assert_eq!(timings[1].word, "world");
         assert_eq!(timings[2].word, "foo");
+    }
+
+    #[test]
+    fn comparison_range_timing_recovers_token_piece_times() {
+        let input = TranscriptComparisonInput {
+            transcript: "use Facet".to_string(),
+            word_char_ranges: vec![0..3, 4..9],
+            word_normalized_ranges: vec![0..3, 3..9],
+            word_tokens: vec![
+                vec!["j".to_string(), "ʊ".to_string(), "z".to_string()],
+                vec![
+                    "f".to_string(),
+                    "ɛ".to_string(),
+                    "ɪ".to_string(),
+                    "s".to_string(),
+                    "ə".to_string(),
+                    "t".to_string(),
+                ],
+            ],
+            transcript_normalized: vec![
+                "j".to_string(),
+                "ʊ".to_string(),
+                "z".to_string(),
+                "f".to_string(),
+                "ɛ".to_string(),
+                "ɪ".to_string(),
+                "s".to_string(),
+                "ə".to_string(),
+                "t".to_string(),
+            ],
+        };
+        let zipa_norm_with_spans = vec![
+            ComparisonToken {
+                token: "j".into(),
+                source_start: 0,
+                source_end: 1,
+            },
+            ComparisonToken {
+                token: "ʊ".into(),
+                source_start: 1,
+                source_end: 2,
+            },
+            ComparisonToken {
+                token: "z".into(),
+                source_start: 2,
+                source_end: 3,
+            },
+            ComparisonToken {
+                token: "f".into(),
+                source_start: 3,
+                source_end: 4,
+            },
+            ComparisonToken {
+                token: "ɛ".into(),
+                source_start: 4,
+                source_end: 5,
+            },
+            ComparisonToken {
+                token: "ɪ".into(),
+                source_start: 4,
+                source_end: 5,
+            },
+            ComparisonToken {
+                token: "s".into(),
+                source_start: 5,
+                source_end: 6,
+            },
+            ComparisonToken {
+                token: "ə".into(),
+                source_start: 6,
+                source_end: 7,
+            },
+            ComparisonToken {
+                token: "t".into(),
+                source_start: 7,
+                source_end: 8,
+            },
+        ];
+        let phone_spans = vec![
+            PhoneSpan {
+                token_id: 1,
+                token: "j".into(),
+                start_frame: 0,
+                end_frame: 10,
+                start_time_secs: 0.00,
+                end_time_secs: 0.10,
+            },
+            PhoneSpan {
+                token_id: 2,
+                token: "ʊ".into(),
+                start_frame: 10,
+                end_frame: 20,
+                start_time_secs: 0.10,
+                end_time_secs: 0.20,
+            },
+            PhoneSpan {
+                token_id: 3,
+                token: "z".into(),
+                start_frame: 20,
+                end_frame: 30,
+                start_time_secs: 0.20,
+                end_time_secs: 0.30,
+            },
+            PhoneSpan {
+                token_id: 4,
+                token: "f".into(),
+                start_frame: 30,
+                end_frame: 40,
+                start_time_secs: 0.30,
+                end_time_secs: 0.40,
+            },
+            PhoneSpan {
+                token_id: 5,
+                token: "eɪ".into(),
+                start_frame: 40,
+                end_frame: 50,
+                start_time_secs: 0.40,
+                end_time_secs: 0.50,
+            },
+            PhoneSpan {
+                token_id: 6,
+                token: "s".into(),
+                start_frame: 50,
+                end_frame: 60,
+                start_time_secs: 0.50,
+                end_time_secs: 0.60,
+            },
+            PhoneSpan {
+                token_id: 7,
+                token: "ə".into(),
+                start_frame: 60,
+                end_frame: 70,
+                start_time_secs: 0.60,
+                end_time_secs: 0.70,
+            },
+            PhoneSpan {
+                token_id: 8,
+                token: "t".into(),
+                start_frame: 70,
+                end_frame: 80,
+                start_time_secs: 0.70,
+                end_time_secs: 0.80,
+            },
+        ];
+
+        let ta = TranscriptAlignment::build_from_comparison_input_and_zipa(
+            input,
+            zipa_norm_with_spans,
+            phone_spans,
+        );
+
+        let fac = ta.comparison_range_timing(3..7).expect("Fac timing");
+        assert_eq!(fac.raw_phone_range, 3..6);
+        assert!((fac.start_time_secs - 0.30).abs() < 1e-6);
+        assert!((fac.end_time_secs - 0.60).abs() < 1e-6);
+
+        let et = ta.comparison_range_timing(7..9).expect("et timing");
+        assert_eq!(et.raw_phone_range, 6..8);
+        assert!((et.start_time_secs - 0.60).abs() < 1e-6);
+        assert!((et.end_time_secs - 0.80).abs() < 1e-6);
     }
 }

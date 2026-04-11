@@ -17,6 +17,7 @@ mlx-rs.workspace = true
 tokenizers.workspace = true
 bee-types = { path = "../bee-types" }
 bee-correct = { path = "../bee-correct" }
+bee-g2p-charsiu = { path = "../bee-g2p-charsiu" }
 bee-phonetic = { path = "../bee-phonetic" }
 bee-rpc = { path = "../bee-rpc" }
 bee-zipa-mlx = { path = "../bee-zipa-mlx" }
