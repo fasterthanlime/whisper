@@ -167,6 +167,21 @@ pub struct ProbeTokenOwnershipRun {
     pub average_word_score: Option<f32>,
 }
 
+#[derive(Debug, Clone, Facet)]
+pub struct TokenPieceIpaSpan {
+    pub word_index: Option<usize>,
+    pub word_surface: Option<String>,
+    pub token_index: usize,
+    pub token: String,
+    pub token_surface: String,
+    pub token_char_start: usize,
+    pub token_char_end: usize,
+    pub ipa_step_start: usize,
+    pub ipa_step_end: usize,
+    pub ipa_text: String,
+    pub ownership_score: f32,
+}
+
 #[derive(Debug)]
 pub enum SidecarClientError {
     Io(std::io::Error),
@@ -516,6 +531,31 @@ pub fn summarize_probe_runs(result: &ProbeResult) -> Vec<ProbeTokenOwnershipRun>
     runs
 }
 
+pub fn token_piece_ipa_spans(result: &ProbeResult) -> Vec<TokenPieceIpaSpan> {
+    summarize_probe_runs(result)
+        .into_iter()
+        .filter_map(|run| {
+            let piece = result
+                .qwen_token_pieces
+                .iter()
+                .find(|piece| piece.index == run.qwen_piece_index)?;
+            Some(TokenPieceIpaSpan {
+                word_index: run.word_index,
+                word_surface: run.word_surface,
+                token_index: run.qwen_piece_index,
+                token: run.qwen_piece_token,
+                token_surface: piece.surface.clone(),
+                token_char_start: piece.char_start,
+                token_char_end: piece.char_end,
+                ipa_step_start: run.output_start,
+                ipa_step_end: run.output_end,
+                ipa_text: run.rendered_output,
+                ownership_score: run.average_qwen_score,
+            })
+        })
+        .collect()
+}
+
 impl Drop for CharsiuSidecarClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -570,7 +610,8 @@ fn word_re() -> &'static Regex {
 mod tests {
     use super::{
         ProbeAttentionRow, ProbeQwenPieceScore, ProbeQwenTokenPiece, ProbeRankedInput, ProbeResult,
-        ProbeWordScore, ProbeWordSpan, summarize_probe_runs, transcript_words,
+        ProbeWordScore, ProbeWordSpan, summarize_probe_runs, token_piece_ipa_spans,
+        transcript_words,
     };
 
     #[test]
@@ -673,6 +714,13 @@ mod tests {
         assert_eq!(runs[1].rendered_output, "ət");
         assert_eq!(runs[1].output_start, 7);
         assert_eq!(runs[1].output_end, 10);
+
+        let spans = token_piece_ipa_spans(&result);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].token, "Fac");
+        assert_eq!(spans[0].ipa_text, "feɪs");
+        assert_eq!(spans[1].token, "et");
+        assert_eq!(spans[1].ipa_text, "ət");
     }
 
     fn probe_row(

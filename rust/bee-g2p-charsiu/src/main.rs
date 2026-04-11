@@ -1,6 +1,6 @@
 use bee_g2p_charsiu::{
     CharsiuSidecarClient, PhonemizeTextRequest, PhonemizeWordsRequest, ProbeRequest,
-    probe_text_default, summarize_probe_runs,
+    probe_text_default, summarize_probe_runs, token_piece_ipa_spans,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -8,6 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut lang_code = "eng-us".to_string();
     let mut text = None;
     let mut probe_text = None;
+    let mut token_spans_text = None;
     let mut words = Vec::new();
 
     while let Some(arg) = args.next() {
@@ -26,19 +27,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             probe_text = Some(value);
             continue;
         }
+        if arg == "--token-spans-text" {
+            let value = args.next().ok_or("--token-spans-text requires a value")?;
+            token_spans_text = Some(value);
+            continue;
+        }
         words.push(arg);
     }
 
-    let selected_modes = usize::from(text.is_some()) + usize::from(probe_text.is_some());
-    if selected_modes > 1 || ((text.is_some() || probe_text.is_some()) && !words.is_empty()) {
-        return Err("use exactly one of --text TEXT, --probe-text TEXT, or WORD...".into());
-    }
-
-    if text.is_none() && probe_text.is_none() && words.is_empty() {
+    let selected_modes = usize::from(text.is_some())
+        + usize::from(probe_text.is_some())
+        + usize::from(token_spans_text.is_some());
+    if selected_modes > 1
+        || ((text.is_some() || probe_text.is_some() || token_spans_text.is_some())
+            && !words.is_empty())
+    {
         return Err(
-            "usage: bee-g2p-charsiu [--lang-code CODE] [--text TEXT | --probe-text TEXT | WORD...]"
+            "use exactly one of --text TEXT, --probe-text TEXT, --token-spans-text TEXT, or WORD..."
                 .into(),
         );
+    }
+
+    if text.is_none() && probe_text.is_none() && token_spans_text.is_none() && words.is_empty() {
+        return Err(
+            "usage: bee-g2p-charsiu [--lang-code CODE] [--text TEXT | --probe-text TEXT | --token-spans-text TEXT | WORD...]"
+                .into()
+        );
+    }
+
+    if let Some(text) = token_spans_text {
+        let result = probe_text_default(ProbeRequest {
+            text,
+            lang_code,
+            top_k: 6,
+        })?;
+        println!("text\t{}", result.text);
+        println!("decoded_ipa\t{}", result.decoded_output);
+        for span in token_piece_ipa_spans(&result) {
+            let word = span.word_surface.unwrap_or_default();
+            println!(
+                "span\t{}..{}\t{}\tword={}\ttoken={}\tsurface={}",
+                span.ipa_step_start,
+                span.ipa_step_end,
+                span.ipa_text,
+                word,
+                span.token,
+                span.token_surface
+            );
+        }
+        return Ok(());
     }
 
     if let Some(text) = probe_text {

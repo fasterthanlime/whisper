@@ -29,6 +29,7 @@ The current job of that Rust code is simple:
 - get back IPA strings
 - or split a text into words, keep spans, and phonemize those words
 - or run the cross-attention probe and return typed ownership data
+- or collapse that ownership into model-facing token-piece IPA spans
 
 Example:
 
@@ -37,6 +38,7 @@ eval "$(direnv export bash)"
 cargo run -p bee-g2p-charsiu -- Facet Wednesday
 cargo run -p bee-g2p-charsiu -- --text "For Jason, this Thursday, use Facet."
 cargo run -p bee-g2p-charsiu -- --probe-text "use Facet"
+cargo run -p bee-g2p-charsiu -- --token-spans-text "use Facet"
 ```
 
 Current output:
@@ -59,6 +61,12 @@ decoded_ipa      ˈjuzˈfeɪsət
 run     0..5     ˈjuz         word=use      qwen=use
 run     5..12    ˈfeɪs        word=Facet    qwen=ĠFac
 run     12..15   ət           word=Facet    qwen=et
+
+text    use Facet
+decoded_ipa      ˈjuzˈfeɪsət
+span    0..5     ˈjuz         word=use      token=use   surface=use
+span    5..12    ˈfeɪs        word=Facet    token=ĠFac  surface= Fac
+span    12..15   ət           word=Facet    token=et    surface=et
 ```
 
 That is intentionally modest.
