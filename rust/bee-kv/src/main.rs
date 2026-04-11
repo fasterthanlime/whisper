@@ -817,6 +817,8 @@ fn decode_sliding_window_full_replay(
     let mut replay_prefix_for_next: Option<CarriedBridge> = None;
     let mut align_ctx = AlignmentContext::new()?;
     let mut tui = ExerciseTui::new();
+    let mut committed_text = String::new();
+    let mut draft_text = String::new();
 
     for (window_index, window) in window_plan.iter().enumerate() {
         let chunk_samples = &samples[window.start_sample..window.end_sample];
@@ -825,7 +827,8 @@ fn decode_sliding_window_full_replay(
             &mut tui,
             "Decoding",
             window_index,
-            &live_composition_text(&window_runs, replayed_prefix.as_ref(), None),
+            &committed_text,
+            &draft_text,
         );
         tui.log(format!(
             "decoding chunk {window_index}: audio={}..{}ms samples={} replayed_prefix_words={} start_position={}",
@@ -891,6 +894,15 @@ fn decode_sliding_window_full_replay(
             start_position = chunk_run.end_position;
             None
         };
+        draft_text.clear();
+        draft_text.push_str(chunk_run.transcript.as_str());
+        if let Some(rollback) = rollback.as_ref() {
+            append_exact(&mut committed_text, rollback.kept_text.as_str());
+            draft_text.clear();
+        } else {
+            append_exact(&mut committed_text, chunk_run.transcript.as_str());
+            draft_text.clear();
+        }
         tui.log(format!(
             "decoded chunk {window_index}: decode_ms={:.1} start_position={} end_position={} generated_tokens={} stop_reason={}",
             chunk_run.decode_ms,
@@ -908,11 +920,8 @@ fn decode_sliding_window_full_replay(
                 "Finalizing"
             },
             window_index,
-            &live_composition_text(
-                &window_runs,
-                replayed_prefix.as_ref(),
-                Some(chunk_run.transcript.as_str()),
-            ),
+            &committed_text,
+            &draft_text,
         );
 
         replay_prefix_for_next = (!chunk_run.transcript.is_empty()).then(|| CarriedBridge {
@@ -1033,6 +1042,8 @@ fn decode_sliding_window_bridge_replay(
     let mut align_ctx = AlignmentContext::new()?;
     let mut interrupted_early = false;
     let mut tui = ExerciseTui::new();
+    let mut committed_text = String::new();
+    let mut draft_text = String::new();
 
     while next_window_start < samples.len() {
         if interrupted.load(Ordering::SeqCst) {
@@ -1063,7 +1074,8 @@ fn decode_sliding_window_bridge_replay(
             &mut tui,
             "Decoding",
             window_index,
-            &live_composition_text(&window_runs, replayed_prefix.as_ref(), None),
+            &committed_text,
+            &draft_text,
         );
         tui.log(format!(
             "decoding chunk {window_index}: audio={}..{}ms samples={} replayed_prefix_words={} start_position={}",
@@ -1100,6 +1112,11 @@ fn decode_sliding_window_bridge_replay(
             chunk_run.generated_tokens,
             chunk_run.stop_reason.as_str(),
         ));
+        draft_text.clear();
+        if let Some(prefix) = replayed_prefix.as_ref() {
+            append_exact(&mut draft_text, prefix.text.as_str());
+        }
+        append_exact(&mut draft_text, chunk_run.transcript.as_str());
         update_exercise_progress(
             &mut tui,
             if window.end_sample < samples.len() {
@@ -1108,11 +1125,8 @@ fn decode_sliding_window_bridge_replay(
                 "Finalizing"
             },
             window_index,
-            &live_composition_text(
-                &window_runs,
-                replayed_prefix.as_ref(),
-                Some(chunk_run.transcript.as_str()),
-            ),
+            &committed_text,
+            &draft_text,
         );
 
         let has_next_window = window.end_sample < samples.len();
@@ -1165,6 +1179,15 @@ fn decode_sliding_window_bridge_replay(
             start_position = rollback_position;
             replay_prefix_for_next =
                 (!split.bridge.text.is_empty()).then_some(split.bridge.clone());
+            let delta = suffix_after_prefix(
+                replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
+                split.kept_text.as_str(),
+            );
+            append_exact(&mut committed_text, delta);
+            draft_text.clear();
+            if let Some(prefix) = replay_prefix_for_next.as_ref() {
+                append_exact(&mut draft_text, prefix.text.as_str());
+            }
             Some(WindowRollbackDecision {
                 keep_boundary_policy,
                 target_keep_until_secs,
@@ -1180,6 +1203,12 @@ fn decode_sliding_window_bridge_replay(
         } else {
             start_position = chunk_run.end_position;
             replay_prefix_for_next = None;
+            let delta = suffix_after_prefix(
+                replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
+                draft_text.as_str(),
+            );
+            append_exact(&mut committed_text, delta);
+            draft_text.clear();
             None
         };
 
@@ -3649,7 +3678,8 @@ struct ExerciseTui {
     terminal: Option<Terminal<CrosstermBackend<io::Stdout>>>,
     phase: String,
     chunk_index: usize,
-    composition: String,
+    committed: String,
+    draft: String,
     logs: VecDeque<String>,
 }
 
@@ -3670,7 +3700,8 @@ impl ExerciseTui {
             terminal,
             phase: "Starting".to_string(),
             chunk_index: 0,
-            composition: String::new(),
+            committed: String::new(),
+            draft: String::new(),
             logs: VecDeque::new(),
         };
         tui.render();
@@ -3702,15 +3733,17 @@ impl ExerciseTui {
         self.render();
     }
 
-    fn update(&mut self, phase: &str, chunk_index: usize, composition: &str) {
+    fn update(&mut self, phase: &str, chunk_index: usize, committed: &str, draft: &str) {
         if !self.enabled {
             return;
         }
         self.phase.clear();
         self.phase.push_str(phase);
         self.chunk_index = chunk_index;
-        self.composition.clear();
-        self.composition.push_str(composition);
+        self.committed.clear();
+        self.committed.push_str(committed);
+        self.draft.clear();
+        self.draft.push_str(draft);
         self.render();
     }
 
@@ -3720,10 +3753,15 @@ impl ExerciseTui {
         }
         let phase = self.phase.clone();
         let chunk_index = self.chunk_index;
-        let composition = if self.composition.trim().is_empty() {
+        let committed = if self.committed.trim().is_empty() {
             "[empty]".to_string()
         } else {
-            self.composition.clone()
+            self.committed.clone()
+        };
+        let draft = if self.draft.trim().is_empty() {
+            "[empty]".to_string()
+        } else {
+            self.draft.clone()
         };
         let logs = self.logs.iter().cloned().collect::<Vec<_>>();
         if let Some(terminal) = self.terminal.as_mut() {
@@ -3732,7 +3770,8 @@ impl ExerciseTui {
                     .direction(Direction::Vertical)
                     .constraints([
                         Constraint::Length(3),
-                        Constraint::Min(8),
+                        Constraint::Min(6),
+                        Constraint::Min(6),
                         Constraint::Length(10),
                     ])
                     .split(frame.area());
@@ -3756,13 +3795,23 @@ impl ExerciseTui {
                 ]))
                 .block(Block::default().borders(Borders::ALL).title("Status"));
 
-                let transcript = Paragraph::new(composition)
+                let committed_panel = Paragraph::new(committed)
                     .style(Style::default().fg(Color::White))
                     .block(
                         Block::default()
                             .borders(Borders::ALL)
-                            .title("Composition")
-                            .border_style(Style::default().fg(Color::Blue)),
+                            .title("Committed")
+                            .border_style(Style::default().fg(Color::Green)),
+                    )
+                    .wrap(Wrap { trim: false });
+
+                let draft_panel = Paragraph::new(draft)
+                    .style(Style::default().fg(Color::Yellow))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("Draft")
+                            .border_style(Style::default().fg(Color::Yellow)),
                     )
                     .wrap(Wrap { trim: false });
 
@@ -3789,58 +3838,39 @@ impl ExerciseTui {
                 );
 
                 frame.render_widget(header, chunks[0]);
-                frame.render_widget(transcript, chunks[1]);
-                frame.render_widget(event_log, chunks[2]);
+                frame.render_widget(committed_panel, chunks[1]);
+                frame.render_widget(draft_panel, chunks[2]);
+                frame.render_widget(event_log, chunks[3]);
             });
         }
     }
-}
-
-fn push_transcript_text(target: &mut String, text: &str) {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return;
-    }
-    if !target.is_empty() {
-        target.push(' ');
-    }
-    target.push_str(trimmed);
-}
-
-fn live_composition_text(
-    window_runs: &[SlidingWindowRun],
-    replayed_prefix: Option<&CarriedBridge>,
-    current_generated: Option<&str>,
-) -> String {
-    let mut composition = String::new();
-    for run in window_runs {
-        if let Some(rollback) = &run.rollback {
-            push_transcript_text(&mut composition, &rollback.kept_text);
-        } else {
-            push_transcript_text(&mut composition, &run.chunk_run.transcript);
-        }
-    }
-    if let Some(prefix) = replayed_prefix {
-        push_transcript_text(&mut composition, &prefix.text);
-    }
-    if let Some(current_generated) = current_generated {
-        push_transcript_text(&mut composition, current_generated);
-    }
-    composition
 }
 
 fn update_exercise_progress(
     tui: &mut ExerciseTui,
     phase: &str,
     chunk_index: usize,
-    composition: &str,
+    committed: &str,
+    draft: &str,
 ) {
-    let summary = if composition.trim().is_empty() {
-        "[empty]"
-    } else {
-        composition
+    tui.update(phase, chunk_index, committed, draft);
+}
+
+fn append_exact(target: &mut String, text: &str) {
+    if !text.is_empty() {
+        target.push_str(text);
+    }
+}
+
+fn suffix_after_prefix<'a>(prefix: Option<&str>, text: &'a str) -> &'a str {
+    let Some(prefix) = prefix else {
+        return text;
     };
-    tui.update(phase, chunk_index, summary);
+    if let Some(suffix) = text.strip_prefix(prefix) {
+        suffix
+    } else {
+        text
+    }
 }
 
 struct TimedGeneratedPrefix {
