@@ -329,6 +329,40 @@ impl T5Attention {
         self.attend(&q, &k, &v, position_bias, mask)
     }
 
+    /// Forward that also returns cross-attention weights [batch, heads, qlen, klen].
+    /// Used for teacher-forced cross-attention extraction.
+    pub fn forward_returning_weights(
+        &self,
+        x: &Array,
+        kv_input: &Array,
+        position_bias: Option<&Array>,
+        mask: Option<&Array>,
+    ) -> Result<(Array, Array), Exception> {
+        let batch_size = x.shape()[0];
+        let q_len = x.shape()[1];
+        let k_len = kv_input.shape()[1];
+
+        let q = self
+            .q
+            .forward(x)?
+            .reshape(&[batch_size, q_len, self.num_heads, self.d_kv])?
+            .transpose_axes(&[0, 2, 1, 3])?;
+
+        let k = self
+            .k
+            .forward(kv_input)?
+            .reshape(&[batch_size, k_len, self.num_heads, self.d_kv])?
+            .transpose_axes(&[0, 2, 1, 3])?;
+
+        let v = self
+            .v
+            .forward(kv_input)?
+            .reshape(&[batch_size, k_len, self.num_heads, self.d_kv])?
+            .transpose_axes(&[0, 2, 1, 3])?;
+
+        self.attend_returning_weights(&q, &k, &v, position_bias, mask)
+    }
+
     /// Use pre-computed K/V from cache (for cross-attention after first step).
     pub fn forward_cross_cached(
         &self,
@@ -360,6 +394,30 @@ impl T5Attention {
         position_bias: Option<&Array>,
         mask: Option<&Array>,
     ) -> Result<Array, Exception> {
+        let (output, _) = self.attend_impl(q, k, v, position_bias, mask)?;
+        Ok(output)
+    }
+
+    /// Like attend but also returns attention weights [batch, heads, qlen, klen].
+    fn attend_returning_weights(
+        &self,
+        q: &Array,
+        k: &Array,
+        v: &Array,
+        position_bias: Option<&Array>,
+        mask: Option<&Array>,
+    ) -> Result<(Array, Array), Exception> {
+        self.attend_impl(q, k, v, position_bias, mask)
+    }
+
+    fn attend_impl(
+        &self,
+        q: &Array,
+        k: &Array,
+        v: &Array,
+        position_bias: Option<&Array>,
+        mask: Option<&Array>,
+    ) -> Result<(Array, Array), Exception> {
         let batch_size = q.shape()[0];
         let q_len = q.shape()[2];
 
@@ -382,7 +440,8 @@ impl T5Attention {
             self.num_heads * self.d_kv,
         ])?;
 
-        self.o.forward(&context)
+        let output = self.o.forward(&context)?;
+        Ok((output, weights))
     }
 }
 
@@ -527,6 +586,35 @@ impl T5DecoderBlock {
         let normed = self.ff_norm.forward(&x)?;
         let ff_out = self.ff.forward(&normed)?;
         x.add(&ff_out)
+    }
+
+    /// Forward that also returns cross-attention weights [batch, heads, dec_len, enc_len].
+    pub fn forward_returning_cross_weights(
+        &self,
+        x: &Array,
+        encoder_output: &Array,
+        self_attn_bias: Option<&Array>,
+        cross_attn_bias: Option<&Array>,
+        causal_mask: Option<&Array>,
+    ) -> Result<(Array, Array), Exception> {
+        let normed = self.self_attn_norm.forward(x)?;
+        let attn_out = self
+            .self_attn
+            .forward(&normed, &normed, self_attn_bias, causal_mask)?;
+        let x = x.add(&attn_out)?;
+
+        let normed = self.cross_attn_norm.forward(&x)?;
+        let (cross_out, cross_weights) = self.cross_attn.forward_returning_weights(
+            &normed,
+            encoder_output,
+            cross_attn_bias,
+            None,
+        )?;
+        let x = x.add(&cross_out)?;
+
+        let normed = self.ff_norm.forward(&x)?;
+        let ff_out = self.ff.forward(&normed)?;
+        Ok((x.add(&ff_out)?, cross_weights))
     }
 
     /// Cached forward: only processes the new token, using KV cache.
@@ -689,6 +777,36 @@ impl T5Decoder {
         self.final_layer_norm.forward(&x)
     }
 
+    /// Teacher-forced forward: run all decoder blocks with known output tokens,
+    /// returning hidden states AND per-layer cross-attention weights.
+    /// Each weight tensor has shape [batch, heads, dec_len, enc_len].
+    pub fn forward_teacher_forced(
+        &self,
+        decoder_input_ids: &Array,
+        encoder_output: &Array,
+    ) -> Result<(Array, Vec<Array>), Exception> {
+        let dec_len = decoder_input_ids.shape()[1] as i32;
+
+        let mut x = self.embed_tokens.forward(decoder_input_ids)?;
+        let self_attn_bias = self.position_bias.forward(dec_len, dec_len)?;
+
+        let mut cross_attention_weights = Vec::with_capacity(self.blocks.len());
+        for block in &self.blocks {
+            let (new_x, cross_weights) = block.forward_returning_cross_weights(
+                &x,
+                encoder_output,
+                Some(&self_attn_bias),
+                None,
+                None,
+            )?;
+            x = new_x;
+            cross_attention_weights.push(cross_weights);
+        }
+
+        let hidden = self.final_layer_norm.forward(&x)?;
+        Ok((hidden, cross_attention_weights))
+    }
+
     /// Cached step: processes one new token per batch element using KV cache.
     /// `token_ids` shape: [batch, 1]. `step` is the current decode position (0-indexed).
     /// `cross_attn_mask`: optional [batch, 1, 1, enc_len] mask for encoder padding.
@@ -783,6 +901,66 @@ impl T5ForConditionalGeneration {
     ) -> Result<Array, Exception> {
         let hidden = self.decoder.forward(decoder_input_ids, encoder_output)?;
         self.lm_head.forward(&hidden)
+    }
+
+    /// Teacher-forced cross-attention: given input_ids and known decoder_input_ids,
+    /// run the decoder and return averaged cross-attention weights [dec_len, enc_len].
+    ///
+    /// This mirrors Python's `average_teacher_forced_cross_attention()`:
+    /// - Run decoder with known output tokens (teacher forcing)
+    /// - Collect cross-attention weights from each layer: [batch, heads, dec_len, enc_len]
+    /// - Average across layers and heads → [dec_len, enc_len]
+    ///
+    /// `decoder_input_ids` should be the generated output shifted right (prepend decoder_start_token_id,
+    /// drop last token), matching HuggingFace's `generated_ids[:, :-1]`.
+    pub fn teacher_forced_cross_attention(
+        &self,
+        input_ids: &Array,
+        decoder_input_ids: &Array,
+        attention_mask: Option<&Array>,
+    ) -> Result<Array, Exception> {
+        let encoder_output = self.encode_with_mask(input_ids, attention_mask)?;
+        encoder_output.eval()?;
+
+        let (_hidden, cross_attention_weights) = self
+            .decoder
+            .forward_teacher_forced(decoder_input_ids, &encoder_output)?;
+
+        // Each element: [batch, heads, dec_len, enc_len]
+        // Stack along new axis 0: [num_layers, batch, heads, dec_len, enc_len]
+        let stacked = ops::stack_axis(&cross_attention_weights.iter().collect::<Vec<_>>(), 0)?;
+
+        // Average over layers (axis 0) → [batch, heads, dec_len, enc_len]
+        let mean_layers = ops::mean_axis(&stacked, 0, None)?;
+        // Average over heads (axis 1) → [batch, dec_len, enc_len]
+        let mean_heads = ops::mean_axis(&mean_layers, 1, None)?;
+        // Take batch element 0: [dec_len, enc_len]
+        Ok(mean_heads.index((0, .., ..)))
+    }
+
+    /// Generate + extract cross-attention in one shot.
+    /// Returns (generated_token_ids, cross_attention_matrix [dec_len, enc_len]).
+    pub fn generate_with_cross_attention(
+        &self,
+        input_ids: &Array,
+        max_length: i32,
+    ) -> Result<(Vec<i32>, Array), Exception> {
+        // Step 1: generate normally
+        let generated = self.generate(input_ids, max_length)?;
+
+        // Step 2: build decoder_input_ids = [decoder_start_token_id] + generated[:-1]
+        // (the shift-right that HuggingFace does with generated_ids[:, :-1])
+        let mut decoder_ids = vec![self.config.decoder_start_token_id];
+        decoder_ids.extend_from_slice(&generated);
+        let decoder_input_ids =
+            Array::from_slice(&decoder_ids, &[1, decoder_ids.len() as i32]).as_type::<i32>()?;
+
+        // Step 3: teacher-forced cross-attention
+        let cross_attn =
+            self.teacher_forced_cross_attention(input_ids, &decoder_input_ids, None)?;
+        cross_attn.eval()?;
+
+        Ok((generated, cross_attn))
     }
 
     pub fn generate(&self, input_ids: &Array, max_length: i32) -> Result<Vec<i32>, Exception> {

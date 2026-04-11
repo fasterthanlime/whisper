@@ -261,6 +261,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bee-correct",
+ "bee-g2p-charsiu",
  "bee-phonetic",
  "bee-qwen3-asr",
  "bee-transcribe",
