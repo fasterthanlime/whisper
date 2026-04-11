@@ -1063,6 +1063,11 @@ impl TranscriptAlignment {
         zipa_norm_with_spans: Vec<ComparisonToken>,
         phone_spans: Vec<PhoneSpan>,
     ) -> Self {
+        let zipa_norm: Vec<String> = zipa_norm_with_spans
+            .iter()
+            .map(|t| t.token.clone())
+            .collect();
+
         let word_ids: Vec<usize> = input
             .word_tokens
             .iter()
