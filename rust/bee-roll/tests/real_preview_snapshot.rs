@@ -20,7 +20,7 @@ static TEST_TRACING: Once = Once::new();
 fn real_preview_snapshot_8453579b() -> anyhow::Result<()> {
     insta::assert_snapshot!(
         "real_preview_snapshot_8453579b",
-        snapshot_for_artifact("8453579B")?
+        snapshot_for_artifact("8453579B", Cutting::Never)?
     );
     Ok(())
 }
@@ -29,12 +29,18 @@ fn real_preview_snapshot_8453579b() -> anyhow::Result<()> {
 fn real_preview_snapshot_1dce2f4b() -> anyhow::Result<()> {
     insta::assert_snapshot!(
         "real_preview_snapshot_1dce2f4b",
-        snapshot_for_artifact("1DCE2F4B")?
+        snapshot_for_artifact("1DCE2F4B", Cutting::Never)?
     );
     Ok(())
 }
 
-fn snapshot_for_artifact(stem: &str) -> anyhow::Result<String> {
+#[test]
+fn real_preview_auto_smoke_8453579b() -> anyhow::Result<()> {
+    let _ = snapshot_for_artifact("8453579B", Cutting::Auto)?;
+    Ok(())
+}
+
+fn snapshot_for_artifact(stem: &str, cutting: Cutting) -> anyhow::Result<String> {
     init_test_tracing();
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let wav_path = fixtures.join(format!("{stem}.wav"));
@@ -58,7 +64,7 @@ fn snapshot_for_artifact(stem: &str) -> anyhow::Result<String> {
 
     let mut utterance = Utterance::new(
         asr_config.thinker_config.text_config.num_hidden_layers,
-        Cutting::Never,
+        cutting,
     );
     utterance.attach_qwen_asr(
         model,
