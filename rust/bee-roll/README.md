@@ -106,115 +106,198 @@ So the loop is:
 
 ## Worked Timeline: 200 ms Feeds
 
-Here is the same model spelled out on a concrete timeline.
-
-Assumptions for this example:
-
-- the app calls `feed()` every `200 ms`
-- `preview` becomes eligible for a cut search at `2.0 s`
-- token text below is schematic; the point is the state transition, not the
-  exact words
-- on the very first decode, ASR uses its initial prompt form
-- on later decodes, ASR uses its follow-up prompt form
-- after the first cut in this example:
-  - `stable = 0.0 .. 1.2 s`
-  - `carry = 1.2 .. 1.6 s`
-  - `preview = 1.6 .. 2.0 s`
-
-### Phase 1: bootstrapping before the first cut
-
-Before the first cut exists, there is no stable prefix yet and there is no
-carry to replay. So each `feed()` call rewrites the whole current tape.
-
-| feed | new samples | utterance audio after append | KV kept before decode | replayed carry tokens | audio fed to ASR | tape after decode | cutter? |
-|---|---:|---|---|---|---|---|---|
-| 1 | `+0.2s` | `0.0 .. 0.2` | none | none | `0.0 .. 0.2` | all `preview` | no |
-| 2 | `+0.2s` | `0.0 .. 0.4` | none, truncate back to `0` | none | `0.0 .. 0.4` | all `preview` | no |
-| 3 | `+0.2s` | `0.0 .. 0.6` | none, truncate back to `0` | none | `0.0 .. 0.6` | all `preview` | no |
-| 4 | `+0.2s` | `0.0 .. 0.8` | none, truncate back to `0` | none | `0.0 .. 0.8` | all `preview` | no |
-| 5 | `+0.2s` | `0.0 .. 1.0` | none, truncate back to `0` | none | `0.0 .. 1.0` | all `preview` | no |
-| 6 | `+0.2s` | `0.0 .. 1.2` | none, truncate back to `0` | none | `0.0 .. 1.2` | all `preview` | no |
-| 7 | `+0.2s` | `0.0 .. 1.4` | none, truncate back to `0` | none | `0.0 .. 1.4` | all `preview` | no |
-| 8 | `+0.2s` | `0.0 .. 1.6` | none, truncate back to `0` | none | `0.0 .. 1.6` | all `preview` | no |
-| 9 | `+0.2s` | `0.0 .. 1.8` | none, truncate back to `0` | none | `0.0 .. 1.8` | all `preview` | no |
-| 10 | `+0.2s` | `0.0 .. 2.0` | none, truncate back to `0` | none | `0.0 .. 2.0` | decode full tape, then partition into `stable` / `carry` / `preview` | yes |
-
-At `feed(10)`, the cutter runs for the first time because `preview` has
-grown to the search threshold.
-
-For this example, suppose it chooses:
+One column below is one `200 ms` slice of utterance time.
 
 ```text
-audio time:  0.0                1.2      1.6        2.0
-             |------------------|--------|----------|
-tape:        S S S S S S        C C      P P P P
+Legend
+
+A = audio currently held by the utterance
+S = stable tokens; KV for these stays alive
+C = carry tokens; these are replayed into the next ASR step
+P = preview tokens; these are the live tail
+^ = audio passed to the ASR encoder on this feed
 ```
 
-That means:
+In this example, the cutter wakes up whenever `preview` reaches `10`
+columns, that is `2.0 s`.
 
-- everything before `1.2 s` becomes `stable`
-- `1.2 .. 1.6 s` becomes `carry`
-- `1.6 .. 2.0 s` remains `preview`
+### Before the first cut
 
-The returned tape now has all three regions.
+Before the first cut exists:
 
-### Phase 2: steady-state after the first cut
-
-After that first cut, `feed()` stops rewriting from `0`.
-
-Instead, each later call:
-
-1. keeps KV only for `stable`
-2. drops the old `carry + preview` suffix from live decode state
-3. converts the previous `carry` tokens into prompt tokens
-4. decodes audio starting at the beginning of `carry`
-5. rebuilds `carry + preview` from the new decode
-
-So `feed(11)` looks like this:
+- there is no `stable`
+- there is no `carry`
+- there is no KV worth keeping
+- every `feed()` re-decodes from the beginning
 
 ```text
-before feed(11):
-stable = 0.0 .. 1.2
-carry  = 1.2 .. 1.6
-preview= 1.6 .. 2.0
+feed(1)   append one 200 ms buffer
+audio held : A
+kv kept    :
+carry txt  :
+ASR audio  : ^
+tape out   : P
 
-new audio arrives:
-append 2.0 .. 2.2
+feed(2)
+audio held : AA
+kv kept    :
+carry txt  :
+ASR audio  : ^^
+tape out   : PP
 
-ASR input for feed(11):
-- retained KV for tokens covering 0.0 .. 1.2
-- follow-up prompt
-- replayed carry tokens from 1.2 .. 1.6
-- audio chunk 1.2 .. 2.2
+feed(3)
+audio held : AAA
+kv kept    :
+carry txt  :
+ASR audio  : ^^^
+tape out   : PPP
 
-result:
-- stable stays 0.0 .. 1.2
-- carry is regenerated
-- preview is regenerated and now extends through 2.2
+feed(4)
+audio held : AAAA
+kv kept    :
+carry txt  :
+ASR audio  : ^^^^
+tape out   : PPPP
+
+feed(5)
+audio held : AAAAA
+kv kept    :
+carry txt  :
+ASR audio  : ^^^^^
+tape out   : PPPPP
+
+feed(6)
+audio held : AAAAAA
+kv kept    :
+carry txt  :
+ASR audio  : ^^^^^^
+tape out   : PPPPPP
+
+feed(7)
+audio held : AAAAAAA
+kv kept    :
+carry txt  :
+ASR audio  : ^^^^^^^
+tape out   : PPPPPPP
+
+feed(8)
+audio held : AAAAAAAA
+kv kept    :
+carry txt  :
+ASR audio  : ^^^^^^^^
+tape out   : PPPPPPPP
+
+feed(9)
+audio held : AAAAAAAAA
+kv kept    :
+carry txt  :
+ASR audio  : ^^^^^^^^^
+tape out   : PPPPPPPPP
+
+feed(10)  preview just reached the cut-search threshold
+audio held : AAAAAAAAAA
+kv kept    :
+carry txt  :
+ASR audio  : ^^^^^^^^^^
+raw out    : PPPPPPPPPP
+cut        : SSSSSSCCPP
 ```
 
-The same pattern repeats:
-
-| feed | utterance audio after append | KV kept before decode | replayed carry tokens | audio fed to ASR | preview length after decode | cutter? |
-|---|---|---|---|---|---:|---|
-| 11 | `0.0 .. 2.2` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 2.2` | `0.6s` | no |
-| 12 | `0.0 .. 2.4` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 2.4` | `0.8s` | no |
-| 13 | `0.0 .. 2.6` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 2.6` | `1.0s` | no |
-| 14 | `0.0 .. 2.8` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 2.8` | `1.2s` | no |
-| 15 | `0.0 .. 3.0` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 3.0` | `1.4s` | no |
-| 16 | `0.0 .. 3.2` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 3.2` | `1.6s` | no |
-| 17 | `0.0 .. 3.4` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 3.4` | `1.8s` | no |
-| 18 | `0.0 .. 3.6` | `stable = 0.0 .. 1.2` | tokens for `1.2 .. 1.6` | `1.2 .. 3.6` | `2.0s` | yes |
-
-At `feed(18)`, `preview` is large enough again, so the cutter runs again.
-
-If it accepts a later boundary, more material moves from the right edge into
-`stable`, a new `carry` is chosen behind the seam, and the remaining right
-edge becomes the new `preview`.
-
-In other words, the cycle is:
+So after `feed(10)` the tape has been repartitioned like this:
 
 ```text
+SSSSSSCCPP
+```
+
+That means, in this worked example:
+
+- `stable` is `6` columns
+- `carry` is `2` columns
+- `preview` is `2` columns
+
+### After the first cut
+
+Now each `feed()` does something more interesting:
+
+- keep KV for `stable`
+- replay `carry` into the prompt
+- re-decode audio starting at the beginning of `carry`
+- rebuild `carry + preview`
+
+```text
+feed(11)
+audio held : AAAAAAAAAAA
+kv kept    : SSSSSS
+carry txt  :       CC
+ASR audio  :       ^^^^^
+tape out   : SSSSSSCCPPP
+
+feed(12)
+audio held : AAAAAAAAAAAA
+kv kept    : SSSSSS
+carry txt  :       CC
+ASR audio  :       ^^^^^^
+tape out   : SSSSSSCCPPPP
+
+feed(13)
+audio held : AAAAAAAAAAAAA
+kv kept    : SSSSSS
+carry txt  :       CC
+ASR audio  :       ^^^^^^^
+tape out   : SSSSSSCCPPPPP
+
+feed(14)
+audio held : AAAAAAAAAAAAAA
+kv kept    : SSSSSS
+carry txt  :       CC
+ASR audio  :       ^^^^^^^^
+tape out   : SSSSSSCCPPPPPP
+
+feed(15)
+audio held : AAAAAAAAAAAAAAA
+kv kept    : SSSSSS
+carry txt  :       CC
+ASR audio  :       ^^^^^^^^^
+tape out   : SSSSSSCCPPPPPPP
+
+feed(16)
+audio held : AAAAAAAAAAAAAAAA
+kv kept    : SSSSSS
+carry txt  :       CC
+ASR audio  :       ^^^^^^^^^^
+tape out   : SSSSSSCCPPPPPPPP
+
+feed(17)
+audio held : AAAAAAAAAAAAAAAAA
+kv kept    : SSSSSS
+carry txt  :       CC
+ASR audio  :       ^^^^^^^^^^^
+tape out   : SSSSSSCCPPPPPPPPP
+
+feed(18)  preview just reached the cut-search threshold again
+audio held : AAAAAAAAAAAAAAAAAA
+kv kept    : SSSSSS
+carry txt  :       CC
+ASR audio  :       ^^^^^^^^^^^^
+raw out    : SSSSSSCCPPPPPPPPPP
+cut        : SSSSSSSSSSSSCCPPPP
+```
+
+After `feed(18)`, the seam has moved right:
+
+```text
+old : SSSSSSCCPPPPPPPPPP
+new : SSSSSSSSSSSSCCPPPP
+```
+
+That is the entire loop:
+
+```text
+rewrite preview
+rewrite preview
+rewrite preview
+rewrite preview
+rewrite preview
 rewrite preview
 rewrite preview
 rewrite preview
@@ -222,12 +305,34 @@ rewrite preview
 cut
 rewrite preview
 rewrite preview
+rewrite preview
+rewrite preview
+rewrite preview
+rewrite preview
+rewrite preview
+cut
 ...
 ```
 
-The important part is that the tape returned from `feed()` is always the
-whole current tape, but the next decode step only keeps KV for `stable`,
-replays `carry` as prompt tokens, and reopens `preview`.
+One more step, just to show the new seam taking effect immediately:
+
+```text
+feed(19)
+audio held : AAAAAAAAAAAAAAAAAAA
+kv kept    : SSSSSSSSSSSS
+carry txt  :             CC
+ASR audio  :             ^^^^^^^
+tape out   : SSSSSSSSSSSSCCPPPPP
+```
+
+That is the geometry `bee-roll` is trying to express:
+
+- the whole current tape is returned every time
+- only `stable` survives in KV
+- `carry` is replayed as prompt text
+- `preview` is reopened and regenerated
+- when `preview` gets large enough, the cutter promotes more of the right
+  edge into `stable` and chooses a new `carry`
 
 ## Why We Return More Than Text
 
