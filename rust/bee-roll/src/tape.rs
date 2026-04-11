@@ -180,6 +180,13 @@ pub(crate) struct Tape {
     tokens: TokenTape,
     /// KV cache state synchronized to the token sequence.
     kv: KvTape,
+    /// Decoder-visible cache position for each token boundary in the current
+    /// preview state.
+    ///
+    /// Invariant:
+    /// - length is always `tokens.len() + 1`
+    /// - entry `i` is the decoder position that keeps tokens `[0, i)`
+    decoder_boundaries: Vec<usize>,
     detected_language: Option<CompactString>,
 }
 
@@ -189,6 +196,7 @@ impl Tape {
         Self {
             tokens: TokenTape::new(),
             kv: KvTape::new(num_layers),
+            decoder_boundaries: vec![0],
             detected_language: None,
         }
     }
@@ -209,7 +217,10 @@ impl Tape {
     /// - the appended tokens must continue contiguously from the current end
     /// - callers must separately keep decoder position in sync with the cache
     pub(crate) fn append(&mut self, tokens: Vec<OutputToken>) {
+        let appended = tokens.len();
         self.tokens.append(tokens);
+        self.decoder_boundaries
+            .extend(std::iter::repeat_n(self.kv.decoder_position(), appended));
     }
 
     /// Truncates transcript tokens and KV state to the chosen rewind points.
@@ -218,7 +229,11 @@ impl Tape {
     /// - `token_end` must lie within the current transcript
     pub(crate) fn truncate_to(&mut self, token_end: TokenIndex, decoder_position: usize) {
         self.tokens.truncate_to(token_end);
+        self.decoder_boundaries.truncate(token_end.as_usize() + 1);
         self.kv.truncate_to(decoder_position);
+        if let Some(last) = self.decoder_boundaries.last_mut() {
+            *last = decoder_position;
+        }
     }
 
     pub(crate) fn tokens(&self) -> &[OutputToken] {
@@ -239,6 +254,13 @@ impl Tape {
 
     pub(crate) fn advance_decoder_to(&mut self, decoder_position: usize) {
         self.kv.advance_to(decoder_position);
+        if let Some(last) = self.decoder_boundaries.last_mut() {
+            *last = decoder_position;
+        }
+    }
+
+    pub(crate) fn decoder_position_for_boundary(&self, token_boundary: TokenIndex) -> usize {
+        self.decoder_boundaries[token_boundary.as_usize()]
     }
 
     pub(crate) fn prefill_and_decode(
@@ -261,5 +283,27 @@ impl Tape {
         )?;
         self.kv.advance_to(next_position);
         Ok((generated, confidences, next_position, stop_reason))
+    }
+
+    pub(crate) fn append_decoded(
+        &mut self,
+        tokens: Vec<OutputToken>,
+        prompt_end_position: usize,
+        next_decoder_position: usize,
+    ) {
+        let generated = tokens.len();
+        let expected_end = prompt_end_position.saturating_add(generated);
+        assert!(
+            expected_end == next_decoder_position,
+            "decoded token count must match decoder-position advance"
+        );
+        self.tokens.append(tokens);
+        self.decoder_boundaries.reserve(generated);
+        let mut position = prompt_end_position;
+        for _ in 0..generated {
+            position += 1;
+            self.decoder_boundaries.push(position);
+        }
+        self.kv.advance_to(next_decoder_position);
     }
 }

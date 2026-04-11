@@ -34,6 +34,7 @@ struct PreviewDecodePlan {
 struct DecodedPreview {
     detected_language: Option<CompactString>,
     tokens: Vec<OutputToken>,
+    prompt_end_position: usize,
     next_decoder_position: usize,
 }
 
@@ -263,7 +264,7 @@ impl Utterance {
     fn plan_preview_decode(&self) -> PreviewDecodePlan {
         PreviewDecodePlan {
             rollback_to: self.carry_through,
-            decoder_position: self.tape.decoder_position(),
+            decoder_position: self.tape.decoder_position_for_boundary(self.carry_through),
             rewrite_budget_tokens: self.preview_rewrite_tokens,
         }
     }
@@ -295,8 +296,11 @@ impl Utterance {
     /// - persistent-KV mode adopts the model-reported next decoder position
     fn apply_decoded_preview(&mut self, decoded: DecodedPreview) {
         self.tape.set_detected_language(decoded.detected_language);
-        self.tape.append(decoded.tokens);
-        self.tape.advance_decoder_to(decoded.next_decoder_position);
+        self.tape.append_decoded(
+            decoded.tokens,
+            decoded.prompt_end_position,
+            decoded.next_decoder_position,
+        );
     }
 
     fn decode_preview(
@@ -358,10 +362,12 @@ impl Utterance {
                 ConfidenceMode::Streaming,
             )
             .map_err(|e| anyhow::anyhow!("prefill/decode preview: {e}"))?;
+        let prompt_end_position = next_decoder_position.saturating_sub(generated.len());
 
         Ok(Some(DecodedPreview {
             detected_language: Some(asr.language.clone()),
             tokens: self.output_tokens_from_generated(&generated, &confidences),
+            prompt_end_position,
             next_decoder_position,
         }))
     }
@@ -467,13 +473,16 @@ mod tests {
     #[test]
     fn feed_rewrites_preview_from_carry_boundary() {
         let mut utterance = Utterance::new(2, Box::new(NoCut), Box::new(NullListener));
-        utterance.tape.append(vec![
-            dummy_output_token(0, 10),
-            dummy_output_token(1, 11),
-            dummy_output_token(2, 12),
-            dummy_output_token(3, 13),
-        ]);
-        utterance.tape.advance_decoder_to(3);
+        utterance.tape.append_decoded(
+            vec![
+                dummy_output_token(0, 10),
+                dummy_output_token(1, 11),
+                dummy_output_token(2, 12),
+                dummy_output_token(3, 13),
+            ],
+            0,
+            4,
+        );
         utterance.set_stable_and_carry(TokenIndex::new(1), TokenIndex::new(3));
 
         let output_len = {
@@ -491,14 +500,16 @@ mod tests {
     #[test]
     fn apply_decoded_preview_appends_tokens_and_updates_language() {
         let mut utterance = Utterance::new(2, Box::new(NoCut), Box::new(NullListener));
-        utterance.tape.append(vec![dummy_output_token(0, 10)]);
-        utterance.tape.advance_decoder_to(1);
+        utterance
+            .tape
+            .append_decoded(vec![dummy_output_token(0, 10)], 0, 1);
         utterance.set_stable_and_carry(TokenIndex::new(0), TokenIndex::new(1));
         utterance.rewrite_preview(TokenIndex::new(1), 1);
 
         utterance.apply_decoded_preview(DecodedPreview {
             detected_language: Some(CompactString::from("English")),
             tokens: vec![dummy_output_token(1, 11), dummy_output_token(2, 12)],
+            prompt_end_position: 1,
             next_decoder_position: 3,
         });
 
