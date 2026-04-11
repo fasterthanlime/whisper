@@ -32,15 +32,15 @@ pub(crate) struct TimedWord {
     /// Character range this word occupies in the combined transcript.
     pub(crate) char_range: std::ops::Range<usize>,
     /// Start time in seconds (relative to the chunk/window start).
-    pub(crate) start_secs: f64,
+    pub(crate) start_secs: WindowTime,
     /// End time in seconds (relative to the chunk/window start).
-    pub(crate) end_secs: f64,
+    pub(crate) end_secs: WindowTime,
 }
 
 /// Result of computing a bridge cut: kept prefix plus a bridge to carry forward.
 pub(crate) struct TimedGeneratedBridge {
     /// Number of tokens spanning the kept generated words.
-    pub(crate) kept_token_count: usize,
+    pub(crate) kept_token_count: TokenCount,
     /// Full kept text (including carried prefix).
     pub(crate) kept_text: String,
     /// Bridge tokens and words to carry into the next window's prompt.
@@ -76,8 +76,8 @@ pub(crate) fn timed_aligned_words_for_alignment(
 
         timed_words.push(TimedWord {
             char_range: word_range.char_start..word_range.char_end,
-            start_secs,
-            end_secs,
+            start_secs: WindowTime::from_secs(start_secs),
+            end_secs: WindowTime::from_secs(end_secs),
         });
     }
 
@@ -93,8 +93,8 @@ pub(crate) fn timed_generated_bridge_for_cuts(
     combined_transcript: &str,
     replayed_prefix: Option<&CarriedBridge>,
     timed_words: &[TimedWord],
-    keep_until_secs: f64,
-    replay_until_secs: f64,
+    keep_until_secs: WindowTime,
+    replay_until_secs: WindowTime,
     chosen_word: Option<&BoundaryWordDebug>,
 ) -> Result<TimedGeneratedBridge> {
     if timed_words.is_empty() {
@@ -104,7 +104,7 @@ pub(crate) fn timed_generated_bridge_for_cuts(
             words: Vec::new(),
         });
         return Ok(TimedGeneratedBridge {
-            kept_token_count: 0,
+            kept_token_count: TokenCount::new(0),
             kept_text: String::new(),
             bridge,
         });
@@ -120,7 +120,7 @@ pub(crate) fn timed_generated_bridge_for_cuts(
         })
         .unwrap_or(0);
     let generated_words = &timed_words[carried_word_count.min(timed_words.len())..];
-    let chosen_word_index = chosen_word.map(|chosen| chosen.word_index);
+    let chosen_word_index = chosen_word.map(|chosen| chosen.word_index.as_usize());
     let full_kept_word_count = chosen_word_index.map(|index| index + 1).unwrap_or_else(|| {
         timed_words
             .iter()
@@ -162,7 +162,9 @@ pub(crate) fn timed_generated_bridge_for_cuts(
                 let token_end = tokenize_token_ids(tokenizer, &text[..relative_end])?.len();
                 Ok(CarriedBridgeWord {
                     token_range: token_start..token_end,
-                    end_secs: (word.end_secs - keep_until_secs).max(0.0),
+                    end_secs: WindowTime::from_secs(
+                        (word.end_secs.as_secs() - keep_until_secs.as_secs()).max(0.0),
+                    ),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -196,12 +198,14 @@ pub(crate) fn timed_generated_bridge_for_cuts(
     };
 
     let kept_token_count = if generated_kept_text.is_empty() {
-        0
+        TokenCount::new(0)
     } else {
-        tokenizer
-            .encode_fast(generated_kept_text.as_str(), false)
-            .map_err(|e| anyhow::anyhow!("encoding kept bridge prefix: {e}"))?
-            .len()
+        TokenCount::new(
+            tokenizer
+                .encode_fast(generated_kept_text.as_str(), false)
+                .map_err(|e| anyhow::anyhow!("encoding kept bridge prefix: {e}"))?
+                .len(),
+        )
     };
 
     Ok(TimedGeneratedBridge {
@@ -219,9 +223,9 @@ pub(crate) fn timed_generated_bridge_for_cuts(
 pub(crate) fn adjust_keep_boundary_secs(
     policy: KeepBoundaryPolicy,
     alignment: &TranscriptAlignment,
-    target_keep_until_secs: f64,
-    replay_until_secs: f64,
-) -> Result<(f64, KeepBoundaryDebug)> {
+    target_keep_until_secs: WindowTime,
+    replay_until_secs: WindowTime,
+) -> Result<(WindowTime, KeepBoundaryDebug)> {
     let fixed_debug = KeepBoundaryDebug {
         earliest_candidate_secs: target_keep_until_secs,
         min_keep_secs: target_keep_until_secs,
@@ -232,7 +236,8 @@ pub(crate) fn adjust_keep_boundary_secs(
         return Ok((target_keep_until_secs, fixed_debug));
     }
 
-    let min_keep_secs = KEEP_BOUNDARY_MIN_KEPT_SECS.min(target_keep_until_secs);
+    let min_keep_secs =
+        WindowTime::from_secs(KEEP_BOUNDARY_MIN_KEPT_SECS.min(target_keep_until_secs.as_secs()));
     let earliest_candidate_secs = min_keep_secs;
     let mut best_candidate = None;
     let mut best_distance = f64::INFINITY;
@@ -243,17 +248,19 @@ pub(crate) fn adjust_keep_boundary_secs(
             end_secs,
         } = word_timing.quality
         {
-            if end_secs <= 0.0 || end_secs >= replay_until_secs {
+            let start_secs = WindowTime::from_secs(start_secs);
+            let end_secs = WindowTime::from_secs(end_secs);
+            if end_secs <= WindowTime::from_secs(0.0) || end_secs >= replay_until_secs {
                 continue;
             }
             if end_secs > target_keep_until_secs || end_secs < earliest_candidate_secs {
                 continue;
             }
-            let distance = (end_secs - target_keep_until_secs).abs();
+            let distance = (end_secs.as_secs() - target_keep_until_secs.as_secs()).abs();
             if distance < best_distance {
                 best_distance = distance;
                 best_candidate = Some(BoundaryWordDebug {
-                    word_index,
+                    word_index: WordIndex::new(word_index),
                     text: word_timing.word.to_string(),
                     start_secs,
                     end_secs,

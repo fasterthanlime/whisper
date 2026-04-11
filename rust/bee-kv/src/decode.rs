@@ -48,7 +48,11 @@ pub(crate) fn decode_sliding_window_bridge_replay(
     let (committed_samples, bridge_samples) = if let Some(stride_ms) = stride_ms {
         let committed_samples = ms_to_samples(stride_ms)?;
         let bridge_samples = window_samples
-            .checked_sub(committed_samples + rollback_samples)
+            .checked_sub(
+                committed_samples
+                    .checked_add(rollback_samples)
+                    .ok_or_else(|| anyhow::anyhow!("invalid bridge geometry overflow"))?,
+            )
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "invalid bridge geometry: stride_ms={} rollback_ms={} chunk_ms={}",
@@ -57,7 +61,7 @@ pub(crate) fn decode_sliding_window_bridge_replay(
                     chunk_ms
                 )
             })?;
-        if bridge_samples == 0 {
+        if bridge_samples.is_zero() {
             bail!(
                 "bridge segment must be non-zero: stride_ms={} rollback_ms={} chunk_ms={}",
                 stride_ms,
@@ -68,10 +72,14 @@ pub(crate) fn decode_sliding_window_bridge_replay(
         (committed_samples, bridge_samples)
     } else {
         let committed_samples = window_samples
-            .checked_sub(ms_to_samples(bridge_ms)? + rollback_samples)
+            .checked_sub(
+                ms_to_samples(bridge_ms)?
+                    .checked_add(rollback_samples)
+                    .ok_or_else(|| anyhow::anyhow!("committed segment geometry overflow"))?,
+            )
             .ok_or_else(|| anyhow::anyhow!("committed segment underflow"))?;
         let bridge_samples = ms_to_samples(bridge_ms)?;
-        if committed_samples == 0 {
+        if committed_samples.is_zero() {
             bail!(
                 "committed segment must be non-zero: bridge_ms={} rollback_ms={} chunk_ms={}",
                 bridge_ms,
@@ -93,10 +101,10 @@ pub(crate) fn decode_sliding_window_bridge_replay(
     let embed_dtype = model.model.embed_tokens.forward(&probe_ids)?.dtype();
 
     let mut cache = None;
-    let mut start_position = 0usize;
+    let mut start_position = CachePosition::new(0);
     let mut window_runs = Vec::new();
     let mut replay_prefix_for_next: Option<CarriedBridge> = None;
-    let mut next_window_start = 0usize;
+    let mut next_window_start = SampleOffset::new(0);
     let mut window_index = 0usize;
     let mut unresolved_keep_samples = committed_samples;
     let mut align_ctx = AlignmentContext::new()?;
@@ -107,7 +115,7 @@ pub(crate) fn decode_sliding_window_bridge_replay(
     let mut committed_text = String::new();
     let mut draft_text = String::new();
 
-    while next_window_start < samples.len() {
+    while next_window_start.as_usize() < samples.len() {
         if interrupted.load(Ordering::SeqCst) {
             interrupted_early = true;
             tui.clear();
@@ -124,10 +132,16 @@ pub(crate) fn decode_sliding_window_bridge_replay(
             );
         }
 
-        let current_window_samples = unresolved_keep_samples + bridge_samples + rollback_samples;
+        let current_window_samples = unresolved_keep_samples
+            .checked_add(bridge_samples)
+            .and_then(|samples| samples.checked_add(rollback_samples))
+            .ok_or_else(|| anyhow::anyhow!("window geometry overflow"))?;
         let window_start_sample = next_window_start;
-        let window_end_sample = (next_window_start + current_window_samples).min(samples.len());
-        let chunk_samples = &samples[window_start_sample..window_end_sample];
+        let window_end_sample = next_window_start
+            .checked_add(current_window_samples)
+            .map(|end| SampleOffset::new(end.as_usize().min(samples.len())))
+            .ok_or_else(|| anyhow::anyhow!("window end overflow"))?;
+        let chunk_samples = &samples[window_start_sample.as_usize()..window_end_sample.as_usize()];
         let replayed_prefix = replay_prefix_for_next.clone();
         let replayed_prefix_text = carried_bridge_text(tokenizer, replayed_prefix.as_ref())?;
         update_exercise_progress(
@@ -139,8 +153,8 @@ pub(crate) fn decode_sliding_window_bridge_replay(
         );
         tui.log(format!(
             "decoding chunk {window_index}: audio={}..{}ms samples={} replayed_prefix_words={} start_position={}",
-            (window_start_sample * 1000) / SAMPLE_RATE as usize,
-            (window_end_sample * 1000) / SAMPLE_RATE as usize,
+            (window_start_sample.as_usize() * 1000) / SAMPLE_RATE as usize,
+            (window_end_sample.as_usize() * 1000) / SAMPLE_RATE as usize,
             chunk_samples.len(),
             sentence_word_tokens(&replayed_prefix_text).len(),
             start_position,
@@ -179,7 +193,7 @@ pub(crate) fn decode_sliding_window_bridge_replay(
         append_display_delta(&mut draft_text, chunk_run.transcript.as_str());
         update_exercise_progress(
             &mut tui,
-            if window_end_sample < samples.len() {
+            if window_end_sample.as_usize() < samples.len() {
                 "Rolling"
             } else {
                 "Finalizing"
@@ -189,7 +203,7 @@ pub(crate) fn decode_sliding_window_bridge_replay(
             &draft_text,
         );
 
-        let has_next_window = window_end_sample < samples.len();
+        let has_next_window = window_end_sample.as_usize() < samples.len();
         let rollback = if has_next_window {
             let generated_transcript = normalized_transcript(&chunk_run.transcript);
             let normalized_replayed_prefix = normalized_transcript(&replayed_prefix_text);
@@ -203,9 +217,13 @@ pub(crate) fn decode_sliding_window_bridge_replay(
                 };
             let alignment =
                 build_transcript_alignment(&mut align_ctx, &combined_transcript, chunk_samples)?;
-            let target_keep_until_secs = unresolved_keep_samples as f64 / SAMPLE_RATE as f64;
-            let replay_until_secs =
-                (unresolved_keep_samples + bridge_samples) as f64 / SAMPLE_RATE as f64;
+            let target_keep_until_secs = WindowTime::from_secs(unresolved_keep_samples.as_secs());
+            let replay_until_secs = WindowTime::from_secs(
+                unresolved_keep_samples
+                    .checked_add(bridge_samples)
+                    .ok_or_else(|| anyhow::anyhow!("replay window geometry overflow"))?
+                    .as_secs(),
+            );
             let (candidate_keep_until_secs, keep_boundary_debug) = adjust_keep_boundary_secs(
                 keep_boundary_policy,
                 &alignment,
@@ -225,7 +243,7 @@ pub(crate) fn decode_sliding_window_bridge_replay(
                 &combined_transcript,
                 replayed_prefix.as_ref(),
                 &timed_words,
-                keep_until_secs.unwrap_or(0.0),
+                keep_until_secs.unwrap_or(WindowTime::from_secs(0.0)),
                 replay_until_secs,
                 keep_boundary_debug.chosen_word.as_ref(),
             )?;
@@ -245,16 +263,19 @@ pub(crate) fn decode_sliding_window_bridge_replay(
                 .as_ref()
                 .map(|prefix| prefix.token_ids.len())
                 .unwrap_or(0);
-            let base_prompt_tokens = chunk_run
-                .prompt_tokens
-                .saturating_sub(replay_prefix_token_count);
+            let base_prompt_tokens = TokenCount::new(
+                chunk_run
+                    .prompt_tokens
+                    .saturating_sub(replay_prefix_token_count),
+            );
             let rollback_position = if keep_until_secs.is_some()
-                && (carried_token_count > 0 || split.kept_token_count > 0)
+                && (carried_token_count > 0 || !split.kept_token_count.is_zero())
             {
-                chunk_run.start_position
-                    + base_prompt_tokens
-                    + carried_token_count
-                    + split.kept_token_count
+                chunk_run
+                    .start_position
+                    .saturating_add(base_prompt_tokens)
+                    .saturating_add(TokenCount::new(carried_token_count))
+                    .saturating_add(split.kept_token_count)
             } else {
                 chunk_run.start_position
             };
@@ -273,7 +294,7 @@ pub(crate) fn decode_sliding_window_bridge_replay(
                 keep_until_secs,
                 replay_until_secs: Some(replay_until_secs),
                 kept_word_count: sentence_word_tokens(&kept_text).len(),
-                kept_token_count: kept_token_ids.len(),
+                kept_token_count: TokenCount::new(kept_token_ids.len()),
                 kept_token_ids,
                 kept_text,
                 bridge_token_ids: split.bridge.token_ids.clone(),
@@ -328,7 +349,9 @@ pub(crate) fn decode_sliding_window_bridge_replay(
         next_window_start =
             if let Some(rollback) = window_runs.last().and_then(|run| run.rollback.as_ref()) {
                 let next_start = if let Some(keep_until_secs) = rollback.keep_until_secs {
-                    window_start_sample + ((keep_until_secs * SAMPLE_RATE as f64).round() as usize)
+                    window_start_sample.saturating_add(SampleCount::new(
+                        (keep_until_secs.as_secs() * SAMPLE_RATE as f64).round() as usize,
+                    ))
                 } else {
                     window_start_sample
                 };
@@ -337,7 +360,11 @@ pub(crate) fn decode_sliding_window_bridge_replay(
                 let replay_tail_samples = window_end_sample.saturating_sub(next_start);
                 unresolved_keep_samples = replay_tail_samples
                     .saturating_add(committed_samples)
-                    .saturating_sub(bridge_samples + rollback_samples);
+                    .saturating_sub(
+                        bridge_samples
+                            .checked_add(rollback_samples)
+                            .ok_or_else(|| anyhow::anyhow!("rollback geometry overflow"))?,
+                    );
                 next_start
             } else {
                 next_window_start.saturating_add(stride_samples)
@@ -364,7 +391,7 @@ pub(crate) fn decode_sliding_window_bridge_replay(
         mode_label: "sliding-window-bridge-replay",
         chunk_ms,
         rollback_ms,
-        stride_ms: (stride_samples * 1000) / SAMPLE_RATE as usize,
+        stride_ms: (stride_samples.as_usize() * 1000) / SAMPLE_RATE as usize,
         window_runs,
         html_path,
         committed_timeline_path,
@@ -384,9 +411,9 @@ pub(crate) fn decode_chunk_followup_step(
     context: &str,
     max_new_tokens: usize,
     cache: &mut Option<bee_qwen3_asr::decoder::KVCache>,
-    start_position: usize,
-    start_sample: usize,
-    end_sample: usize,
+    start_position: CachePosition,
+    start_sample: SampleOffset,
+    end_sample: SampleOffset,
     replay_prefix: Option<&CarriedBridge>,
 ) -> Result<ChunkRun> {
     let decode_start = Instant::now();
@@ -422,7 +449,7 @@ pub(crate) fn decode_chunk_followup_step(
         &prompt_tokens,
         &audio_features,
         cache,
-        start_position,
+        start_position.as_usize(),
         max_new_tokens,
         ConfidenceMode::Streaming,
     )
@@ -442,11 +469,11 @@ pub(crate) fn decode_chunk_followup_step(
         generated_tokens: generated.len(),
         generated_token_ids: token_ids,
         transcript,
-        sample_count: chunk_samples.len(),
+        sample_count: SampleCount::new(chunk_samples.len()),
         decode_ms: decode_start.elapsed().as_secs_f64() * 1000.0,
         stop_reason,
         start_position,
-        end_position,
+        end_position: CachePosition::new(end_position),
         start_sample,
         end_sample,
     })
@@ -455,12 +482,12 @@ pub(crate) fn decode_chunk_followup_step(
 /// Truncates the KV cache to a target rollback position.
 pub(crate) fn truncate_cache(
     cache: &mut Option<bee_qwen3_asr::decoder::KVCache>,
-    rollback_position: usize,
+    rollback_position: CachePosition,
 ) -> Result<()> {
     let cache = cache
         .as_mut()
         .ok_or_else(|| anyhow::anyhow!("cache missing before truncate"))?;
-    cache.truncate(rollback_position);
+    cache.truncate(rollback_position.as_usize());
     Ok(())
 }
 
@@ -494,8 +521,13 @@ pub(crate) fn tokenize_token_ids(tokenizer: &Tokenizer, text: &str) -> Result<Ve
 }
 
 /// Returns the leading generated token IDs that should be kept.
-pub(crate) fn kept_generated_token_ids(chunk_run: &ChunkRun, kept_token_count: usize) -> Vec<u32> {
-    chunk_run.generated_token_ids[..kept_token_count.min(chunk_run.generated_token_ids.len())]
+pub(crate) fn kept_generated_token_ids(
+    chunk_run: &ChunkRun,
+    kept_token_count: TokenCount,
+) -> Vec<u32> {
+    chunk_run.generated_token_ids[..kept_token_count
+        .as_usize()
+        .min(chunk_run.generated_token_ids.len())]
         .to_vec()
 }
 
@@ -513,15 +545,17 @@ pub(crate) fn kept_carried_token_ids(
 /// Counts how many carried-bridge tokens should survive a rollback cut.
 pub(crate) fn kept_carried_token_count(
     prefix: Option<&CarriedBridge>,
-    keep_until_secs: Option<f64>,
+    keep_until_secs: Option<WindowTime>,
     chosen_word: Option<&BoundaryWordDebug>,
 ) -> usize {
     let Some(prefix) = prefix else {
         return 0;
     };
     if let Some(chosen_word) = chosen_word {
-        if chosen_word.word_index < prefix.words.len() {
-            return prefix.words[chosen_word.word_index].token_range.end;
+        if chosen_word.word_index.as_usize() < prefix.words.len() {
+            return prefix.words[chosen_word.word_index.as_usize()]
+                .token_range
+                .end;
         }
     }
     let Some(keep_until_secs) = keep_until_secs else {
@@ -551,10 +585,13 @@ pub(crate) fn carried_bridge_text(
 }
 
 /// Converts milliseconds to samples at the fixed ASR sample rate.
-pub(crate) fn ms_to_samples(chunk_ms: usize) -> Result<usize> {
-    let chunk_size_samples = (chunk_ms * SAMPLE_RATE as usize) / 1000;
+pub(crate) fn ms_to_samples(chunk_ms: usize) -> Result<SampleCount> {
+    let chunk_size_samples = chunk_ms
+        .checked_mul(SAMPLE_RATE as usize)
+        .ok_or_else(|| anyhow::anyhow!("chunk size overflow; chunk_ms={chunk_ms}"))?
+        / 1000;
     if chunk_size_samples == 0 {
         bail!("chunk size is zero; chunk_ms={chunk_ms}");
     }
-    Ok(chunk_size_samples)
+    Ok(SampleCount::new(chunk_size_samples))
 }

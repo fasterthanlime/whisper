@@ -37,7 +37,7 @@ pub(crate) fn print_sliding_window_timed_rollback_experiment(
                 );
             }
             if let Some(replay_until_secs) = rollback.replay_until_secs {
-                println!("replay_until={:.3}s", replay_until_secs);
+                println!("replay_until={:.3}s", replay_until_secs.as_secs());
             }
             if let Some(bridge_text) = &rollback.bridge_text {
                 println!("bridge_text={}", bridge_text);
@@ -70,8 +70,8 @@ pub(crate) fn print_chunk_run(chunk: &ChunkRun) {
     println!(
         "samples={} audio={}..{}ms prompt_tokens={} generated_tokens={} decode_ms={:.1} stop_reason={} start_position={} end_position={}",
         chunk.sample_count,
-        (chunk.start_sample * 1000) / SAMPLE_RATE as usize,
-        (chunk.end_sample * 1000) / SAMPLE_RATE as usize,
+        (chunk.start_sample.as_usize() * 1000) / SAMPLE_RATE as usize,
+        (chunk.end_sample.as_usize() * 1000) / SAMPLE_RATE as usize,
         chunk.prompt_tokens,
         chunk.generated_tokens,
         chunk.decode_ms,

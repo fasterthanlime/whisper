@@ -123,7 +123,7 @@ pub(crate) fn render_sliding_window_timed_rollback_html(
 
     for (row_index, run) in window_runs.iter().enumerate() {
         let chunk = &run.chunk_run;
-        let chunk_samples = &samples[chunk.start_sample..chunk.end_sample];
+        let chunk_samples = &samples[chunk.start_sample.as_usize()..chunk.end_sample.as_usize()];
         let words = build_window_word_placements(align_ctx, run, chunk_samples)?;
         rows.push_str(&render_sliding_window_row(
             width_px,
@@ -258,9 +258,9 @@ pub(crate) fn collect_committed_word_placements(
 
     for run in window_runs {
         let chunk = &run.chunk_run;
-        let chunk_samples = &samples[chunk.start_sample..chunk.end_sample];
+        let chunk_samples = &samples[chunk.start_sample.as_usize()..chunk.end_sample.as_usize()];
         let words = build_window_word_placements(align_ctx, run, chunk_samples)?;
-        let window_start_secs = chunk.start_sample as f64 / SAMPLE_RATE as f64;
+        let window_start_secs = chunk.start_sample.as_secs();
         let keep_word_count = if let Some(rollback) = &run.rollback {
             sentence_word_tokens(&rollback.kept_text).len()
         } else {
@@ -469,9 +469,12 @@ pub(crate) fn render_sliding_window_row(
 ) -> String {
     let transcript_line = html_escape(&chunk.transcript);
     let mut markers = String::new();
-    let window_start_secs = chunk.start_sample as f64 / SAMPLE_RATE as f64;
-    let window_end_secs = chunk.end_sample as f64 / SAMPLE_RATE as f64;
-    let window_duration_secs = (chunk.end_sample - chunk.start_sample) as f64 / SAMPLE_RATE as f64;
+    let window_start_secs = chunk.start_sample.as_secs();
+    let window_end_secs = chunk.end_sample.as_secs();
+    let window_duration_secs = chunk
+        .end_sample
+        .saturating_sub(chunk.start_sample)
+        .as_secs();
 
     markers.push_str(&format!(
         "<div class=\"window-start\" style=\"left:0px\"></div><div class=\"window-end\" style=\"left:{:.1}px\"></div><div class=\"window-label\" style=\"left:0px\">{:.2}s</div><div class=\"window-label\" style=\"left:{:.1}px\">{:.2}s</div>",
@@ -482,10 +485,14 @@ pub(crate) fn render_sliding_window_row(
     ));
     markers.push_str("<div class=\"playhead\"></div>");
     if let Some(rollback) = rollback {
-        let search_start_x = (rollback.keep_boundary_debug.earliest_candidate_secs
+        let search_start_x = (rollback
+            .keep_boundary_debug
+            .earliest_candidate_secs
+            .as_secs()
             / window_duration_secs)
             * width_px;
-        let search_end_x = (rollback.target_keep_until_secs / window_duration_secs) * width_px;
+        let search_end_x =
+            (rollback.target_keep_until_secs.as_secs() / window_duration_secs) * width_px;
         let search_width = (search_end_x - search_start_x).max(0.0);
         let search_label_x = search_start_x + (search_width / 2.0);
         markers.push_str(&format!(
@@ -494,22 +501,23 @@ pub(crate) fn render_sliding_window_row(
             row_height_px - 28.0,
         ));
         if let Some(keep_until_secs) = rollback.keep_until_secs {
-            let cut_x = (keep_until_secs / window_duration_secs) * width_px;
+            let cut_x = (keep_until_secs.as_secs() / window_duration_secs) * width_px;
             markers.push_str(&format!(
                 "<div class=\"cut\" style=\"left:{cut_x:.1}px\"></div><div class=\"cut-label cut-label-cut\" style=\"left:{cut_x:.1}px\">cut @{:.2}s</div>",
-                window_start_secs + keep_until_secs
+                window_start_secs + keep_until_secs.as_secs()
             ));
         }
-        let target_cut_x = (rollback.target_keep_until_secs / window_duration_secs) * width_px;
+        let target_cut_x =
+            (rollback.target_keep_until_secs.as_secs() / window_duration_secs) * width_px;
         markers.push_str(&format!(
             "<div class=\"cut\" style=\"left:{target_cut_x:.1}px;background:#5a5a5a;opacity:0.55\"></div><div class=\"cut-label cut-label-target\" style=\"left:{target_cut_x:.1}px;color:#5a5a5a\">target @{:.2}s</div>",
-            window_start_secs + rollback.target_keep_until_secs
+            window_start_secs + rollback.target_keep_until_secs.as_secs()
         ));
         if let Some(replay_until_secs) = rollback.replay_until_secs {
-            let replay_x = (replay_until_secs / window_duration_secs) * width_px;
+            let replay_x = (replay_until_secs.as_secs() / window_duration_secs) * width_px;
             markers.push_str(&format!(
                 "<div class=\"cut\" style=\"left:{replay_x:.1}px;background:#8b5e1a\"></div><div class=\"cut-label cut-label-bridge\" style=\"left:{replay_x:.1}px;color:#8b5e1a\">bridge @{:.2}s</div>",
-                window_start_secs + replay_until_secs
+                window_start_secs + replay_until_secs.as_secs()
             ));
         }
     }
@@ -576,8 +584,8 @@ pub(crate) fn render_sliding_window_row(
                 format!(
                     "{} [{:.2}-{:.2}s]",
                     html_escape(&word.text),
-                    window_start_secs + word.start_secs,
-                    window_start_secs + word.end_secs
+                    window_start_secs + word.start_secs.as_secs(),
+                    window_start_secs + word.end_secs.as_secs()
                 )
             })
             .unwrap_or_else(|| "none".to_string());
@@ -592,11 +600,19 @@ pub(crate) fn render_sliding_window_row(
             rollback.bridge_token_ids.len(),
             rollback.rollback_position,
             rollback.keep_boundary_policy.as_str(),
-            window_start_secs + rollback.target_keep_until_secs,
-            window_start_secs + rollback.keep_until_secs.unwrap_or(0.0),
-            window_start_secs + rollback.keep_boundary_debug.earliest_candidate_secs,
-            window_start_secs + rollback.target_keep_until_secs,
-            window_start_secs + rollback.keep_boundary_debug.min_keep_secs,
+            window_start_secs + rollback.target_keep_until_secs.as_secs(),
+            window_start_secs
+                + rollback
+                    .keep_until_secs
+                    .map(|time| time.as_secs())
+                    .unwrap_or(0.0),
+            window_start_secs
+                + rollback
+                    .keep_boundary_debug
+                    .earliest_candidate_secs
+                    .as_secs(),
+            window_start_secs + rollback.target_keep_until_secs.as_secs(),
+            window_start_secs + rollback.keep_boundary_debug.min_keep_secs.as_secs(),
             if rollback.keep_boundary_debug.snapped {
                 "yes"
             } else {
@@ -690,8 +706,8 @@ pub(crate) fn build_window_word_placements(
             let cut_word = match (&chosen_cut, start_secs, end_secs) {
                 (Some(chosen), Some(start), Some(end)) => {
                     word_timing.word == chosen.text
-                        && (start - chosen.start_secs).abs() < 0.000_1
-                        && (end - chosen.end_secs).abs() < 0.000_1
+                        && (start - chosen.start_secs.as_secs()).abs() < 0.000_1
+                        && (end - chosen.end_secs.as_secs()).abs() < 0.000_1
                 }
                 _ => false,
             };
