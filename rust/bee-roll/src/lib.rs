@@ -21,6 +21,10 @@
 //! - audio buffers store utterance-global sample start plus owned samples
 //! - `Cut::At(index)` refers to an utterance-global token boundary, not a local
 //!   offset inside a token slice
+//! - there is only one rollback machine:
+//!   - "no cut yet" is just the case where the stable boundary remains at 0
+//!   - prompt choice is driven by the retained decoder position, not by feed
+//!     count or a separate "initial vs followup mode"
 
 mod audio;
 mod tape;

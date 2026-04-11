@@ -4,6 +4,10 @@
 //! - `stable` is the left prefix that remains alive in retained KV state
 //! - `carry` is the bridge slice that is replayed as token IDs in the next prompt
 //! - `preview` is the live tail that gets truncated and regenerated
+//! - there is one machine:
+//!   - zero stable / zero cut is not a special mode
+//!   - it is simply the case where nothing has been promoted yet
+//!   - the same planning rules still apply
 //!
 //! Non-negotiable constraints:
 //! - token boundaries are canonical; we do not cut or replay in string space
@@ -183,6 +187,9 @@ pub struct Utterance {
     ///
     /// Invariant:
     /// - zero means no tokens are stable yet
+    /// - when this stays at zero, the machine is still the same machine: no
+    ///   stable KV is retained, prompt building falls back to the initial prompt,
+    ///   and the whole utterance remains live
     /// - tokens before this boundary are `stable`
     /// - any sample/time boundaries are derived from this token boundary, not stored separately
     stable_through: TokenIndex,
@@ -203,9 +210,11 @@ pub struct Utterance {
 
     /// Streaming decode behavior for this utterance.
     ///
-    /// Today this remains `PersistentKv` by default because that is the target
-    /// architecture. The current full-audio path must still obey the README
-    /// semantics above instead of smuggling `carry` through strings.
+    /// Today the default is `RebuildPromptEachFeed`, because the current path
+    /// still feeds the full utterance audio buffer on every step. The
+    /// `PersistentKv` three-way split belongs to the rotated-audio
+    /// implementation described in the README, not to this temporary full-audio
+    /// path.
     decode_mode: DecodeMode,
 
     /// Number of feed steps processed so far.
@@ -235,7 +244,7 @@ impl Utterance {
             preview_from: TokenIndex::new(0),
             tape: Tape::new(num_layers),
             preview_rewrite_tokens: DEFAULT_PREVIEW_REWRITE_TOKENS,
-            decode_mode: DecodeMode::PersistentKv,
+            decode_mode: DecodeMode::RebuildPromptEachFeed,
             feed_count: 0,
             cutter,
             listener,
@@ -376,6 +385,10 @@ impl Utterance {
     /// - do not "simplify" this by rewinding KV to `preview_from`
     /// - do not apply cuts unless audio rotation matches the README model
     /// - the README is the source of truth here, not ad hoc experiments
+    ///
+    /// Orientation:
+    /// - if `stable_through == 0`, then the retained decoder position is also 0
+    /// - that is the "no stable prefix yet" case, not a different decode mode
     fn plan_preview_decode(&self) -> PreviewDecodePlan {
         PreviewDecodePlan {
             rollback_to: self.preview_from,
@@ -425,6 +438,9 @@ impl Utterance {
         // Desired state:
         // - `carry` is replayed as raw token IDs from the tape
         // - no decode/re-tokenize round trip is ever allowed here
+        // - the prompt choice below is driven only by the retained decoder
+        //   position from `plan`, not by feed count and not by whether a cut
+        //   "just happened"
         let carry_prompt_tokens = self
             .carry_tokens()
             .iter()
@@ -499,6 +515,12 @@ impl Utterance {
         // - decoding carry to text
         // - re-tokenizing carry text
         // - storing carry as String anywhere in bee-roll
+        //
+        // Orientation:
+        // - retained decoder position 0 => initial prompt
+        // - retained decoder position > 0 => follow-up prompt
+        // - that rule stays true even when the chosen cut is effectively 0 and
+        //   nothing has been promoted yet
         let mut prompt = match decode_mode {
             DecodeMode::PersistentKv => {
                 if plan.decoder_position == 0 {

@@ -415,7 +415,10 @@ impl<'a> FeedOutput<'a> {
 /// A cut in utterance-global token space.
 ///
 /// Intent:
-/// - `NoCut` means the chunk grows; nothing is committed yet
+/// - `NoCut` means "leave the stable boundary where it already is"
+/// - when the current stable boundary is 0, `NoCut` is effectively the same as
+///   "cut at 0": nothing is promoted, nothing rotates, and the whole utterance
+///   remains live
 /// - `At(index)` means commit everything strictly before `index`
 ///
 /// Invariant:
