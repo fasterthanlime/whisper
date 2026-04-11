@@ -3051,15 +3051,28 @@ fn render_committed_timeline_html(
         ));
     }
 
+    let word_timings_js = words
+        .iter()
+        .filter_map(|w| {
+            let s = w.start_secs?;
+            let e = w.end_secs?;
+            let t = w.text.replace('\\', "\\\\").replace('"', "\\\"");
+            Some(format!("{{t:\"{t}\",s:{s:.3},e:{e:.3}}}"))
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>bee-kv {mode_label}</title><style>\
 body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#111315;color:#ece7dc;padding:24px;color-scheme:dark;}}\
 .legend{{margin-bottom:18px;font-size:13px;color:#b9b3a7;}}\
-.audio-panel{{margin:0 0 20px 0;padding:12px 14px;border:1px solid #4b4f56;background:#181c20;width:{width_px}px;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
+.audio-panel{{margin:0 0 20px 0;padding:12px 14px;border:1px solid #4b4f56;background:#181c20;max-width:900px;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
 .audio-title{{font-weight:700;margin:0 0 8px 0;}}\
 .audio-player{{width:100%;margin:6px 0 0 0;color-scheme:dark;accent-color:#d97706;}}\
+.current-word-display{{font-size:52px;font-weight:700;text-align:center;min-height:72px;color:#f6f1e5;margin:16px 0;letter-spacing:0.02em;line-height:1.2;}}\
+.timeline-scroll{{overflow-x:auto;margin-bottom:8px;}}\
 .transcript-line{{width:{width_px}px;margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#ded7ca;}}\
-.timeline{{width:{width_px}px;border:1px solid #4b4f56;background:#181c20;position:relative;padding:12px 0;margin-bottom:8px;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
+.timeline{{width:{width_px}px;border:1px solid #4b4f56;background:#181c20;position:relative;padding:12px 0;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
 .track{{position:relative;width:{width_px}px;height:{row_height_px}px;border-top:1px solid #343940;border-bottom:1px solid #343940;background:linear-gradient(180deg,#1b2024,#14181c);overflow:hidden;}}\
 .second-band{{position:absolute;top:0;height:{row_height_px}px;pointer-events:none;mix-blend-mode:screen;}}\
 .second-marker{{position:absolute;top:0;width:1px;height:{row_height_px}px;background:#5b616b;}}\
@@ -3069,29 +3082,48 @@ body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#111315
 .word.no-window,.word.no-timing{{background:#3b352c !important;border-color:#908672 !important;color:#f1e8d5 !important;height:22px;font-size:11px;}}\
 .axis{{display:flex;justify-content:space-between;font-size:12px;color:#9299a4;margin-top:6px;}}\
 .word:hover::after{{content:attr(data-full-word);position:absolute;left:0;top:-28px;background:#f6f1e5;color:#111315;padding:2px 6px;border-radius:4px;white-space:nowrap;z-index:10;font-size:11px;line-height:16px;box-shadow:0 2px 6px rgba(0,0,0,0.35);}}\
-</style></head><body><h1>bee-kv {mode_label}</h1><div class=\"audio-panel\"><div class=\"audio-title\">Full Recording</div><div>Source: {audio_src}</div><audio id=\"master-audio\" class=\"audio-player\" controls preload=\"metadata\" src=\"{audio_src}\"></audio></div><p class=\"legend\">Committed words only. Each word keeps the exact timing it had when it was marked green in its source row. Background bands and box colors change every one-second interval; no extra re-alignment is performed.</p><div class=\"transcript-line\">{transcript_line}</div><div class=\"timeline\" data-row-start=\"0\" data-row-end=\"{duration_secs:.6}\"><div class=\"track\">{second_bands}{second_markers}<div class=\"playhead\"></div>{word_divs}</div><div class=\"axis\"><span>0.00s</span><span>{duration_secs:.2}s total</span></div></div><script>\
-const audio = document.getElementById('master-audio');\
-const row = document.querySelector('[data-row-start]');\
-const playhead = row?.querySelector('.playhead');\
-let rafId = null;\
+</style></head><body>\
+<h1>bee-kv {mode_label}</h1>\
+<div class=\"audio-panel\"><div class=\"audio-title\">Full Recording</div><div>Source: {audio_src}</div><audio id=\"master-audio\" class=\"audio-player\" controls preload=\"metadata\" src=\"{audio_src}\"></audio></div>\
+<p class=\"legend\">Committed words only. Each word keeps the exact timing it had when it was marked green in its source row. Background bands and box colors change every one-second interval; no extra re-alignment is performed.</p>\
+<div id=\"current-word-display\"></div>\
+<div class=\"timeline-scroll\">\
+<div class=\"transcript-line\">{transcript_line}</div>\
+<div class=\"timeline\" data-row-start=\"0\" data-row-end=\"{duration_secs:.6}\">\
+<div class=\"track\">{second_bands}{second_markers}<div class=\"playhead\"></div>{word_divs}</div>\
+<div class=\"axis\"><span>0.00s</span><span>{duration_secs:.2}s total</span></div>\
+</div></div>\
+<script>\
+const wordTimings=[{word_timings_js}];\
+const trackWidth={width_px};\
+const audio=document.getElementById('master-audio');\
+const row=document.querySelector('[data-row-start]');\
+const playhead=row?.querySelector('.playhead');\
+const currentWordEl=document.getElementById('current-word-display');\
+const scrollEl=document.querySelector('.timeline-scroll');\
+let rafId=null;\
+function findWord(t){{for(let i=0;i<wordTimings.length;i++){{const w=wordTimings[i];if(t>=w.s&&t<=w.e)return w.t;}}return '';}}\
 function updatePlayhead(time){{\
-  if (!row || !playhead) return;\
-  const start = Number(row.dataset.rowStart);\
-  const end = Number(row.dataset.rowEnd);\
-  const duration = end - start;\
-  if (time < start || time > end || duration <= 0) {{ playhead.style.display = 'none'; return; }}\
-  const frac = (time - start) / duration;\
-  playhead.style.display = 'block';\
-  playhead.style.left = `${{Math.max(0, Math.min(1, frac)) * 100}}%`;\
+  if(!row||!playhead)return;\
+  const start=Number(row.dataset.rowStart);\
+  const end=Number(row.dataset.rowEnd);\
+  const dur=end-start;\
+  if(time<start||time>end||dur<=0){{playhead.style.display='none';return;}}\
+  const frac=(time-start)/dur;\
+  const px=Math.max(0,Math.min(1,frac))*trackWidth;\
+  playhead.style.display='block';\
+  playhead.style.left=`${{px}}px`;\
+  if(scrollEl){{const cw=scrollEl.offsetWidth;scrollEl.scrollLeft=Math.max(0,px-cw/2);}}\
+  if(currentWordEl)currentWordEl.textContent=findWord(time);\
 }}\
-function hidePlayhead(){{ if (playhead) playhead.style.display = 'none'; }}\
-function syncPlayhead(){{ updatePlayhead(audio.currentTime || 0); }}\
-function stopTracking(){{ if (rafId !== null) cancelAnimationFrame(rafId); rafId = null; hidePlayhead(); }}\
-function tick(){{ if (audio.paused || audio.ended) {{ stopTracking(); return; }} syncPlayhead(); rafId = requestAnimationFrame(tick); }}\
-audio.addEventListener('play', () => {{ if (rafId !== null) cancelAnimationFrame(rafId); syncPlayhead(); rafId = requestAnimationFrame(tick); }});\
-audio.addEventListener('pause', stopTracking);\
-audio.addEventListener('ended', stopTracking);\
-audio.addEventListener('seeking', () => updatePlayhead(audio.currentTime || 0));\
+function hidePlayhead(){{if(playhead)playhead.style.display='none';}}\
+function syncPlayhead(){{updatePlayhead(audio.currentTime||0);}}\
+function stopTracking(){{if(rafId!==null)cancelAnimationFrame(rafId);rafId=null;hidePlayhead();if(currentWordEl)currentWordEl.textContent='';}}\
+function tick(){{if(audio.paused||audio.ended){{stopTracking();return;}}syncPlayhead();rafId=requestAnimationFrame(tick);}}\
+audio.addEventListener('play',()=>{{if(rafId!==null)cancelAnimationFrame(rafId);syncPlayhead();rafId=requestAnimationFrame(tick);}});\
+audio.addEventListener('pause',stopTracking);\
+audio.addEventListener('ended',stopTracking);\
+audio.addEventListener('seeking',()=>updatePlayhead(audio.currentTime||0));\
 updatePlayhead(0);\
 </script></body></html>",
     )
