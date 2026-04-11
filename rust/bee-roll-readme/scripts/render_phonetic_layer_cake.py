@@ -90,9 +90,9 @@ def audio_row(data: dict, name: str) -> Row:
     return Row(
         name,
         [
-            Span(word["token_start"], word["token_end"], word["audio"]["label"])
-            for word in data["words"]
-            if word["audio"] is not None
+            Span(piece["token_start"], piece["token_end"], piece["audio"]["label"])
+            for piece in data["token_pieces"]
+            if piece["audio"] is not None
         ],
     )
 
@@ -104,13 +104,13 @@ def token_row(data: dict) -> Row:
     )
 
 
-def word_row(data: dict, name: str, field: str) -> Row:
+def token_piece_row(data: dict, name: str, field: str) -> Row:
     return Row(
         name,
         [
-            Span(word["token_start"], word["token_end"], " ".join(word[field]))
-            for word in data["words"]
-            if word["token_start"] < word["token_end"] and word[field]
+            Span(piece["token_start"], piece["token_end"], " ".join(piece[field]))
+            for piece in data["token_pieces"]
+            if piece["token_start"] < piece["token_end"] and piece[field]
         ],
     )
 
@@ -119,9 +119,9 @@ def alignment_row(data: dict) -> Row:
     return Row(
         "align",
         [
-            Span(word["token_start"], word["token_end"], word["alignment"])
-            for word in data["words"]
-            if word["token_start"] < word["token_end"] and word["alignment"]
+            Span(piece["token_start"], piece["token_end"], piece["alignment"])
+            for piece in data["token_pieces"]
+            if piece["token_start"] < piece["token_end"] and piece["alignment"]
         ],
     )
 
@@ -131,11 +131,11 @@ def build_rows(data: dict) -> list[Row]:
         text_row(data),
         audio_row(data, "audio top"),
         token_row(data),
-        word_row(data, "G2P IPA", "g2p_raw"),
-        word_row(data, "G2P norm", "g2p_normalized"),
+        token_piece_row(data, "G2P IPA", "g2p_raw"),
+        token_piece_row(data, "G2P norm", "g2p_normalized"),
         alignment_row(data),
-        word_row(data, "ZIPA norm", "zipa_normalized"),
-        word_row(data, "ZIPA raw", "zipa_raw"),
+        token_piece_row(data, "ZIPA norm", "zipa_normalized"),
+        token_piece_row(data, "ZIPA raw", "zipa_raw"),
         audio_row(data, "audio bot"),
     ]
 
