@@ -659,6 +659,7 @@ fn decode_sliding_window_timed_rollback(
     let mut cache = None;
     let mut start_position = 0usize;
     let mut window_runs = Vec::new();
+    let mut align_ctx = AlignmentContext::new()?;
 
     for (window_index, window) in window_plan.iter().enumerate() {
         let chunk_samples = &samples[window.start_sample..window.end_sample];
@@ -684,6 +685,7 @@ fn decode_sliding_window_timed_rollback(
             let keep_until_secs =
                 (keep_until_sample.saturating_sub(window.start_sample)) as f64 / SAMPLE_RATE as f64;
             let keep = timed_generated_prefix_for_cut(
+                &mut align_ctx,
                 tokenizer,
                 &chunk_run,
                 chunk_samples,
@@ -783,6 +785,7 @@ fn decode_sliding_window_full_replay(
     let mut start_position = 0usize;
     let mut window_runs = Vec::new();
     let mut replay_prefix_for_next: Option<CarriedBridge> = None;
+    let mut align_ctx = AlignmentContext::new()?;
 
     for (window_index, window) in window_plan.iter().enumerate() {
         let chunk_samples = &samples[window.start_sample..window.end_sample];
@@ -809,6 +812,7 @@ fn decode_sliding_window_full_replay(
             let keep_until_secs =
                 (keep_until_sample.saturating_sub(window.start_sample)) as f64 / SAMPLE_RATE as f64;
             let keep = timed_generated_prefix_for_cut(
+                &mut align_ctx,
                 tokenizer,
                 &chunk_run,
                 chunk_samples,
@@ -946,6 +950,7 @@ fn decode_sliding_window_bridge_replay(
     let mut next_window_start = 0usize;
     let mut window_index = 0usize;
     let mut unresolved_keep_samples = committed_samples;
+    let mut align_ctx = AlignmentContext::new()?;
 
     while next_window_start < samples.len() {
         if window_index >= MAX_BRIDGE_WINDOWS {
@@ -997,6 +1002,7 @@ fn decode_sliding_window_bridge_replay(
             let replay_until_secs =
                 (unresolved_keep_samples + bridge_samples) as f64 / SAMPLE_RATE as f64;
             let (candidate_keep_until_secs, keep_boundary_debug) = adjust_keep_boundary_secs(
+                &mut align_ctx,
                 keep_boundary_policy,
                 replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
                 &chunk_run,
@@ -1012,6 +1018,7 @@ fn decode_sliding_window_bridge_replay(
                 None
             };
             let split = timed_generated_bridge_for_cuts(
+                &mut align_ctx,
                 tokenizer,
                 replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
                 &chunk_run,
@@ -2453,7 +2460,8 @@ fn bracketed_chunks(chunks: &[ChunkRun]) -> String {
 
 fn annotate_chunk_runs(chunks: &[ChunkRun], samples: &[f32]) -> Result<String> {
     let combined_transcript = combine_transcripts(chunks);
-    let alignment = build_transcript_alignment(&combined_transcript, samples)?;
+    let mut align_ctx = AlignmentContext::new()?;
+    let alignment = build_transcript_alignment(&mut align_ctx, &combined_transcript, samples)?;
     let mut word_start = 0usize;
     let mut annotated = Vec::with_capacity(chunks.len());
 
@@ -2519,9 +2527,13 @@ fn committed_words_equivalent(
     }
 }
 
-fn build_word_placements(chunks: &[ChunkRun], samples: &[f32]) -> Result<Vec<WordPlacement>> {
+fn build_word_placements(
+    align_ctx: &mut AlignmentContext,
+    chunks: &[ChunkRun],
+    samples: &[f32],
+) -> Result<Vec<WordPlacement>> {
     let combined_transcript = combine_transcripts(chunks);
-    let alignment = build_transcript_alignment(&combined_transcript, samples)?;
+    let alignment = build_transcript_alignment(align_ctx, &combined_transcript, samples)?;
     let word_timings = alignment.word_timings();
     let mut next_word = 0usize;
     let mut placements = Vec::new();
@@ -2565,7 +2577,9 @@ fn write_sliding_window_timed_rollback_html(
     fs::create_dir_all(&out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
     let out_path = out_dir.join(format!("{mode_label}.html"));
     let audio_src = file_url_for_path(wav_path)?;
+    let mut align_ctx = AlignmentContext::new()?;
     let html = render_sliding_window_timed_rollback_html(
+        &mut align_ctx,
         mode_label,
         window_runs,
         samples,
@@ -2587,13 +2601,15 @@ fn write_committed_timeline_html(
     fs::create_dir_all(&out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
     let out_path = out_dir.join(format!("{mode_label}.html"));
     let audio_src = file_url_for_path(wav_path)?;
-    let words = collect_committed_word_placements(window_runs, samples)?;
+    let mut align_ctx = AlignmentContext::new()?;
+    let words = collect_committed_word_placements(&mut align_ctx, window_runs, samples)?;
     let html = render_committed_timeline_html(mode_label, duration_secs, &words, &audio_src);
     fs::write(&out_path, html).with_context(|| format!("writing {}", out_path.display()))?;
     Ok(out_path)
 }
 
 fn render_sliding_window_timed_rollback_html(
+    align_ctx: &mut AlignmentContext,
     mode_label: &str,
     window_runs: &[SlidingWindowRun],
     samples: &[f32],
@@ -2607,7 +2623,7 @@ fn render_sliding_window_timed_rollback_html(
     for (row_index, run) in window_runs.iter().enumerate() {
         let chunk = &run.chunk_run;
         let chunk_samples = &samples[chunk.start_sample..chunk.end_sample];
-        let words = build_window_word_placements(run, chunk_samples)?;
+        let words = build_window_word_placements(align_ctx, run, chunk_samples)?;
         rows.push_str(&render_sliding_window_row(
             width_px,
             row_height_px,
@@ -2733,6 +2749,7 @@ updatePlayheads(0);\
 }
 
 fn collect_committed_word_placements(
+    align_ctx: &mut AlignmentContext,
     window_runs: &[SlidingWindowRun],
     samples: &[f32],
 ) -> Result<Vec<CommittedWordPlacement>> {
@@ -2741,7 +2758,7 @@ fn collect_committed_word_placements(
     for run in window_runs {
         let chunk = &run.chunk_run;
         let chunk_samples = &samples[chunk.start_sample..chunk.end_sample];
-        let words = build_window_word_placements(run, chunk_samples)?;
+        let words = build_window_word_placements(align_ctx, run, chunk_samples)?;
         let window_start_secs = chunk.start_sample as f64 / SAMPLE_RATE as f64;
         let keep_word_count = if let Some(rollback) = &run.rollback {
             sentence_word_tokens(&rollback.kept_text).len()
@@ -3076,6 +3093,7 @@ fn render_sliding_window_row(
 }
 
 fn build_window_word_placements(
+    align_ctx: &mut AlignmentContext,
     run: &SlidingWindowRun,
     chunk_samples: &[f32],
 ) -> Result<Vec<SlidingWordPlacement>> {
@@ -3095,7 +3113,7 @@ fn build_window_word_placements(
         (None, false) => generated_transcript.to_string(),
         (None, true) => String::new(),
     };
-    let alignment = build_transcript_alignment(&combined_transcript, chunk_samples)?;
+    let alignment = build_transcript_alignment(align_ctx, &combined_transcript, chunk_samples)?;
     let word_timings = alignment.word_timings();
     let carried_word_count = replayed_prefix
         .map(sentence_word_tokens)
@@ -3161,8 +3179,9 @@ fn write_chunk_segment_merge_rollback_html(
     replay_runs: &[ChunkRun],
     samples: &[f32],
 ) -> Result<PathBuf> {
-    let baseline_words = build_word_placements(baseline_runs, samples)?;
-    let replay_words = build_word_placements(replay_runs, samples)?;
+    let mut align_ctx = AlignmentContext::new()?;
+    let baseline_words = build_word_placements(&mut align_ctx, baseline_runs, samples)?;
+    let replay_words = build_word_placements(&mut align_ctx, replay_runs, samples)?;
     let duration_secs = samples.len() as f64 / SAMPLE_RATE as f64;
     let out_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.artifacts/bee-kv");
     fs::create_dir_all(&out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
@@ -3324,17 +3343,32 @@ fn tokenize_prompt_text(tokenizer: &Tokenizer, text: &str) -> Result<Vec<i32>> {
         .collect()
 }
 
-fn build_transcript_alignment(transcript: &str, samples: &[f32]) -> Result<TranscriptAlignment> {
+struct AlignmentContext {
+    g2p: CachedEspeakG2p,
+    zipa: ZipaInference,
+}
+
+impl AlignmentContext {
+    fn new() -> Result<Self> {
+        Ok(Self {
+            g2p: CachedEspeakG2p::english(&g2p_base_dir()).context("initializing g2p engine")?,
+            zipa: ZipaInference::load_quantized_bundle_dir(&zipa_bundle_dir()?)
+                .context("loading ZIPA bundle")?,
+        })
+    }
+}
+
+fn build_transcript_alignment(
+    align_ctx: &mut AlignmentContext,
+    transcript: &str,
+    samples: &[f32],
+) -> Result<TranscriptAlignment> {
     let zipa_audio = ZipaAudioBuffer {
         samples: samples.to_vec(),
         sample_rate_hz: SAMPLE_RATE,
     };
 
-    let mut g2p = CachedEspeakG2p::english(&g2p_base_dir()).context("initializing g2p engine")?;
-    let zipa = ZipaInference::load_quantized_bundle_dir(&zipa_bundle_dir()?)
-        .context("loading ZIPA bundle")?;
-
-    TranscriptAlignment::build(transcript, &zipa_audio, &mut g2p, &zipa)
+    TranscriptAlignment::build(transcript, &zipa_audio, &mut align_ctx.g2p, &align_ctx.zipa)
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
@@ -3407,6 +3441,7 @@ struct TimedGeneratedBridge {
 }
 
 fn timed_generated_prefix_for_cut(
+    align_ctx: &mut AlignmentContext,
     tokenizer: &Tokenizer,
     chunk_run: &ChunkRun,
     chunk_samples: &[f32],
@@ -3421,7 +3456,7 @@ fn timed_generated_prefix_for_cut(
         });
     }
 
-    let alignment = build_transcript_alignment(transcript, chunk_samples)?;
+    let alignment = build_transcript_alignment(align_ctx, transcript, chunk_samples)?;
     let word_timings = alignment.word_timings();
     let word_ranges = sentence_word_tokens(transcript);
     let mut kept_word_count = 0usize;
@@ -3464,6 +3499,7 @@ fn timed_generated_prefix_for_cut(
 }
 
 fn timed_generated_bridge_for_cuts(
+    align_ctx: &mut AlignmentContext,
     tokenizer: &Tokenizer,
     replayed_prefix_text: Option<&str>,
     chunk_run: &ChunkRun,
@@ -3491,7 +3527,7 @@ fn timed_generated_bridge_for_cuts(
         Some(prefix) => format!("{prefix} {generated_transcript}"),
         None => generated_transcript.to_string(),
     };
-    let alignment = build_transcript_alignment(&combined_transcript, chunk_samples)?;
+    let alignment = build_transcript_alignment(align_ctx, &combined_transcript, chunk_samples)?;
     let word_timings = alignment.word_timings();
     let combined_word_ranges = sentence_word_tokens(&combined_transcript);
     let generated_word_ranges = sentence_word_tokens(generated_transcript);
@@ -3612,6 +3648,7 @@ fn timed_generated_bridge_for_cuts(
 }
 
 fn adjust_keep_boundary_secs(
+    align_ctx: &mut AlignmentContext,
     policy: KeepBoundaryPolicy,
     replayed_prefix_text: Option<&str>,
     chunk_run: &ChunkRun,
@@ -3641,7 +3678,7 @@ fn adjust_keep_boundary_secs(
         Some(prefix) => format!("{prefix} {generated_transcript}"),
         None => generated_transcript.to_string(),
     };
-    let alignment = build_transcript_alignment(&combined_transcript, chunk_samples)?;
+    let alignment = build_transcript_alignment(align_ctx, &combined_transcript, chunk_samples)?;
     let min_keep_secs = KEEP_BOUNDARY_MIN_KEPT_SECS.min(target_keep_until_secs);
     let earliest_candidate_secs = min_keep_secs;
     let mut best_candidate = None;
