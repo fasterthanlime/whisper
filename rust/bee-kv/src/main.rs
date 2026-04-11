@@ -696,7 +696,7 @@ fn decode_sliding_window_timed_rollback(
             Some(WindowRollbackDecision {
                 keep_boundary_policy: KeepBoundaryPolicy::Fixed,
                 target_keep_until_secs: keep_until_secs,
-                keep_until_secs,
+                keep_until_secs: Some(keep_until_secs),
                 replay_until_secs: None,
                 kept_word_count: keep.kept_word_count,
                 kept_token_count: keep.kept_token_count,
@@ -821,7 +821,7 @@ fn decode_sliding_window_full_replay(
             Some(WindowRollbackDecision {
                 keep_boundary_policy: KeepBoundaryPolicy::Fixed,
                 target_keep_until_secs: keep_until_secs,
-                keep_until_secs,
+                keep_until_secs: Some(keep_until_secs),
                 replay_until_secs: None,
                 kept_word_count: keep.kept_word_count,
                 kept_token_count: keep.kept_token_count,
@@ -964,6 +964,16 @@ fn decode_sliding_window_bridge_replay(
         };
         let chunk_samples = &samples[window.start_sample..window.end_sample];
         let replayed_prefix = replay_prefix_for_next.clone();
+        println!(
+            "decoding chunk {window_index}: audio={}..{}ms samples={} replayed_prefix_words={}",
+            (window.start_sample * 1000) / SAMPLE_RATE as usize,
+            (window.end_sample * 1000) / SAMPLE_RATE as usize,
+            chunk_samples.len(),
+            replayed_prefix
+                .as_ref()
+                .map(|prefix| sentence_word_tokens(&prefix.text).len())
+                .unwrap_or(0)
+        );
         let chunk_run = decode_chunk_followup_step(
             model,
             tokenizer,
@@ -997,16 +1007,16 @@ fn decode_sliding_window_bridge_replay(
             let found_boundary =
                 keep_boundary_policy == KeepBoundaryPolicy::Fixed || keep_boundary_debug.snapped;
             let keep_until_secs = if found_boundary {
-                candidate_keep_until_secs
+                Some(candidate_keep_until_secs)
             } else {
-                0.0
+                None
             };
             let split = timed_generated_bridge_for_cuts(
                 tokenizer,
                 replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
                 &chunk_run,
                 chunk_samples,
-                keep_until_secs,
+                keep_until_secs.unwrap_or(0.0),
                 replay_until_secs,
             )?;
             let made_progress = split.kept_token_count > 0;
@@ -1049,9 +1059,8 @@ fn decode_sliding_window_bridge_replay(
         }
         next_window_start =
             if let Some(rollback) = window_runs.last().and_then(|run| run.rollback.as_ref()) {
-                if rollback.kept_token_count > 0 && rollback.keep_until_secs > 0.0 {
-                    window.start_sample
-                        + ((rollback.keep_until_secs * SAMPLE_RATE as f64).round() as usize)
+                if let Some(keep_until_secs) = rollback.keep_until_secs {
+                    window.start_sample + ((keep_until_secs * SAMPLE_RATE as f64).round() as usize)
                 } else {
                     window.start_sample
                 }
@@ -2105,7 +2114,7 @@ struct TruncateReplayExperimentResult {
 struct WindowRollbackDecision {
     keep_boundary_policy: KeepBoundaryPolicy,
     target_keep_until_secs: f64,
-    keep_until_secs: f64,
+    keep_until_secs: Option<f64>,
     replay_until_secs: Option<f64>,
     kept_word_count: usize,
     kept_token_count: usize,
@@ -2314,7 +2323,7 @@ fn print_sliding_window_timed_rollback_experiment(
         }
         if let Some(rollback) = &run.rollback {
             println!(
-                "rollback keep_until={:.3}s kept_words={} kept_tokens={} rollback_position={}",
+                "rollback keep_until={:?} kept_words={} kept_tokens={} rollback_position={}",
                 rollback.keep_until_secs,
                 rollback.kept_word_count,
                 rollback.kept_token_count,
@@ -2931,11 +2940,13 @@ fn render_sliding_window_row(
             row_height_px - 14.0,
             row_height_px - 28.0,
         ));
-        let cut_x = (rollback.keep_until_secs / window_duration_secs) * width_px;
-        markers.push_str(&format!(
-            "<div class=\"cut\" style=\"left:{cut_x:.1}px\"></div><div class=\"cut-label cut-label-cut\" style=\"left:{cut_x:.1}px\">cut @{:.2}s</div>",
-            window_start_secs + rollback.keep_until_secs
-        ));
+        if let Some(keep_until_secs) = rollback.keep_until_secs {
+            let cut_x = (keep_until_secs / window_duration_secs) * width_px;
+            markers.push_str(&format!(
+                "<div class=\"cut\" style=\"left:{cut_x:.1}px\"></div><div class=\"cut-label cut-label-cut\" style=\"left:{cut_x:.1}px\">cut @{:.2}s</div>",
+                window_start_secs + keep_until_secs
+            ));
+        }
         let target_cut_x = (rollback.target_keep_until_secs / window_duration_secs) * width_px;
         markers.push_str(&format!(
             "<div class=\"cut\" style=\"left:{target_cut_x:.1}px;background:#5a5a5a;opacity:0.55\"></div><div class=\"cut-label cut-label-target\" style=\"left:{target_cut_x:.1}px;color:#5a5a5a\">target @{:.2}s</div>",
@@ -3028,7 +3039,7 @@ fn render_sliding_window_row(
             rollback.rollback_position,
             rollback.keep_boundary_policy.as_str(),
             window_start_secs + rollback.target_keep_until_secs,
-            window_start_secs + rollback.keep_until_secs,
+            window_start_secs + rollback.keep_until_secs.unwrap_or(0.0),
             window_start_secs + rollback.keep_boundary_debug.earliest_candidate_secs,
             window_start_secs + rollback.target_keep_until_secs,
             window_start_secs + rollback.keep_boundary_debug.min_keep_secs,
@@ -3548,12 +3559,13 @@ fn timed_generated_bridge_for_cuts(
         generated_transcript[..end].trim_end().to_string()
     };
 
-    let preserve_full_replayed_prefix = generated_kept_text.is_empty() && replayed_prefix.is_some();
+    let stalled_on_carried_prefix =
+        generated_kept_text.is_empty() && !kept_text.is_empty() && replayed_prefix.is_some();
 
     let bridge = if let (Some(start_word_index), Some(end_word_index)) =
         (effective_bridge_start_word, effective_bridge_end_word)
     {
-        let start = if preserve_full_replayed_prefix {
+        let start = if stalled_on_carried_prefix {
             0
         } else {
             combined_word_ranges
@@ -3570,7 +3582,7 @@ fn timed_generated_bridge_for_cuts(
             words: bridge_words,
         }
     } else if bridge_word_count == 0 {
-        if preserve_full_replayed_prefix {
+        if stalled_on_carried_prefix {
             CarriedBridge {
                 text: replayed_prefix.unwrap_or_default().to_string(),
                 words: Vec::new(),
