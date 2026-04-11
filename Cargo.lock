@@ -271,6 +271,7 @@ dependencies = [
  "insta",
  "tokenizers",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

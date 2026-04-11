@@ -678,11 +678,13 @@ impl Utterance {
             Cutting::Never => TokenIndex::new(0),
             Cutting::Auto => self.find_auto_cut_boundary().unwrap_or(self.stable_through),
         };
+        let cut_context = self.cut_context_debug(new_stable);
         tracing::trace!(
             cutting = ?self.cutting,
             stable_through = self.stable_through.as_usize(),
             preview_from = self.preview_from.as_usize(),
             chosen_boundary = new_stable.as_usize(),
+            context = %cut_context,
             "bee_roll.apply_cut_if_any.choose"
         );
         if new_stable <= self.stable_through {
@@ -691,6 +693,7 @@ impl Utterance {
         let Some(cut_sample) = self.audio_cut_sample_for_boundary(new_stable) else {
             tracing::trace!(
                 boundary = new_stable.as_usize(),
+                context = %self.cut_context_debug(new_stable),
                 "bee_roll.apply_cut_if_any.no_audio_cut_sample"
             );
             return;
@@ -701,6 +704,7 @@ impl Utterance {
             stable_through = self.stable_through.as_usize(),
             preview_from = self.preview_from.as_usize(),
             cut_sample = cut_sample.as_usize(),
+            context = %self.cut_context_debug(new_stable),
             "bee_roll.apply_cut_if_any.applied"
         );
     }
@@ -766,6 +770,140 @@ impl Utterance {
             asr.encoder_cache = EncoderCache::new();
         }
     }
+
+    fn cut_context_debug(&self, boundary: TokenIndex) -> String {
+        let tokens = self.tape.tokens();
+        let ids = tokens
+            .iter()
+            .map(|token| token.timed_token().token().as_u32())
+            .collect::<Vec<_>>();
+        let transcript = crate::decode_token_ids(
+            &tokens
+                .iter()
+                .map(|token| token.timed_token().token())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|e| format!("<decode-error:{e}>"));
+        let word_spans = streamed_word_spans(&ids, self.stable_through.as_usize(), tokens.len())
+            .into_iter()
+            .map(|(start, end, text)| format!("{start}..{end}:{text:?}"))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        let start = boundary.as_usize().saturating_sub(3);
+        let end = (boundary.as_usize() + 3).min(tokens.len());
+        format!(
+            "transcript={transcript:?}; stable={} preview_from={} boundary={} tape_end={}; window=[{}]; words=[{}]",
+            self.stable_through.as_usize(),
+            self.preview_from.as_usize(),
+            boundary.as_usize(),
+            tokens.len(),
+            debug_token_window(tokens, start, end),
+            word_spans,
+        )
+    }
+}
+
+fn debug_token_window(tokens: &[OutputToken], start: usize, end: usize) -> String {
+    tokens[start.min(tokens.len())..end.min(tokens.len())]
+        .iter()
+        .map(|token| debug_token(token))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn debug_token(token: &OutputToken) -> String {
+    let timed = token.timed_token();
+    let surface = timed
+        .token()
+        .decode()
+        .unwrap_or_else(|e| format!("<decode-error:{e}>"));
+    let g2p = token
+        .g2p_ipa()
+        .map(|ipa| ipa.as_str().to_owned())
+        .unwrap_or_else(|| "-".to_owned());
+    let phones = if token.transcript_phones().is_empty() {
+        "-".to_owned()
+    } else {
+        token
+            .transcript_phones()
+            .iter()
+            .map(|phone| phone.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    format!(
+        "#{} id={} txt={surface:?} g2p={g2p} phones={phones} zipa={}",
+        timed.index().as_usize(),
+        timed.token().as_u32(),
+        format_zipa_timing(token.zipa_timing())
+    )
+}
+
+fn format_zipa_timing(timing: &ZipaTiming) -> String {
+    match timing {
+        ZipaTiming::Aligned(range) => {
+            format!("{:.3}..{:.3}", range.start.as_secs(), range.end.as_secs())
+        }
+        ZipaTiming::Deleted { projected_at } => format!("del@{projected_at}"),
+        ZipaTiming::Projected {
+            normalized_start,
+            normalized_end,
+        } => format!("proj {normalized_start}..{normalized_end}"),
+        ZipaTiming::Invalid => "invalid".to_owned(),
+    }
+}
+
+fn streamed_word_spans(
+    ids: &[u32],
+    start_boundary: usize,
+    end_boundary: usize,
+) -> Vec<(usize, usize, String)> {
+    let end_boundary = end_boundary.min(ids.len());
+    if start_boundary >= end_boundary {
+        return Vec::new();
+    }
+    let mut stream = crate::tokenizer().decode_stream(true);
+    let mut pending_start = start_boundary;
+    let mut current_start = start_boundary;
+    let mut current_text = String::new();
+    let mut out = Vec::new();
+
+    for (i, &id) in ids
+        .iter()
+        .enumerate()
+        .take(end_boundary)
+        .skip(start_boundary)
+    {
+        match stream
+            .step(id)
+            .unwrap_or_else(|e| panic!("decode stream failed: {e}"))
+        {
+            None => {}
+            Some(chunk) => {
+                let starts_new_word = chunk.starts_with(' ') || chunk.starts_with('\n');
+                if starts_new_word {
+                    if !current_text.is_empty() {
+                        out.push((
+                            current_start,
+                            pending_start,
+                            std::mem::take(&mut current_text),
+                        ));
+                    }
+                    current_start = pending_start;
+                    current_text.push_str(chunk.trim_start());
+                } else {
+                    current_text.push_str(&chunk);
+                }
+                pending_start = i + 1;
+            }
+        }
+    }
+
+    if !current_text.is_empty() {
+        out.push((current_start, end_boundary, current_text));
+    }
+
+    out
 }
 
 fn find_word_start_at_or_before(ids: &[u32], start_boundary: usize, target: usize) -> usize {

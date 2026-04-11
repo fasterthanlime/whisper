@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Once;
 
 use bee_qwen3_asr::config::AsrConfig;
 use bee_qwen3_asr::load;
@@ -10,8 +11,10 @@ use bee_qwen3_asr::model::Qwen3ASRModel;
 use bee_roll::{Cutting, FeedOutput, Utterance, ZipaTiming};
 use bee_zipa_mlx::audio::load_wav_mono_f32;
 use tokenizers::Tokenizer;
+use tracing_subscriber::EnvFilter;
 
 const CHUNK_SAMPLES: usize = 3_200;
+static TEST_TRACING: Once = Once::new();
 
 #[test]
 fn real_preview_snapshot_8453579b() -> anyhow::Result<()> {
@@ -32,6 +35,7 @@ fn real_preview_snapshot_1dce2f4b() -> anyhow::Result<()> {
 }
 
 fn snapshot_for_artifact(stem: &str) -> anyhow::Result<String> {
+    init_test_tracing();
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let wav_path = fixtures.join(format!("{stem}.wav"));
     let transcript_path = fixtures.join(format!("{stem}.transcript.txt"));
@@ -81,6 +85,18 @@ fn snapshot_for_artifact(stem: &str) -> anyhow::Result<String> {
     }
 
     Ok(snapshot)
+}
+
+fn init_test_tracing() {
+    TEST_TRACING.call_once(|| {
+        let filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("trace,tokenizers=warn"));
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_test_writer()
+            .without_time()
+            .try_init();
+    });
 }
 
 fn render_feed(
