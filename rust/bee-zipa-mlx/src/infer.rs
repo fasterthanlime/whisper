@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Instant;
 
 use mlx_rs::Array;
 use mlx_rs::module::ModuleParameters;
@@ -165,26 +166,49 @@ impl ZipaInference {
     }
 
     pub fn features_from_audio(&self, audio: &AudioBuffer) -> Result<Array> {
+        let start = Instant::now();
         let features = self.features.extract(audio)?;
-        Ok(Array::from_slice(
+        let array = Array::from_slice(
             &features.data,
             &[1, features.num_frames as i32, features.num_filters as i32],
-        ))
+        );
+        tracing::trace!(
+            target: "bee_phase",
+            component = "zipa",
+            phase = "features_from_audio",
+            samples = audio.samples.len(),
+            frames = features.num_frames,
+            ms = start.elapsed().as_secs_f64() * 1000.0,
+            "phase timing"
+        );
+        Ok(array)
     }
 
     fn forward_encoder(&self, features: &Array) -> Result<Array> {
+        let start = Instant::now();
         let mut x = self.model.forward_frontend(features)?;
         x = x.transpose_axes(&[1, 0, 2])?;
         let mut outputs = Vec::with_capacity(6);
         x = self.stage0.forward(&x)?;
-        outputs.push(x.clone());
-        x = self.stage1.forward(&x)?;
-        outputs.push(x.clone());
+        outputs.push(x);
+        x = self
+            .stage1
+            .forward(outputs.last().expect("stage0 output present"))?;
+        outputs.push(x);
         for stage in &self.stages_2_to_5 {
-            x = stage.forward(&x)?;
-            outputs.push(x.clone());
+            x = stage.forward(outputs.last().expect("previous stage output present"))?;
+            outputs.push(x);
         }
-        get_full_dim_output(&outputs, &self.config.encoder_dim)
+        let output = get_full_dim_output(outputs, &self.config.encoder_dim)?;
+        tracing::trace!(
+            target: "bee_phase",
+            component = "zipa",
+            phase = "forward_encoder",
+            stages = self.config.encoder_dim.len(),
+            ms = start.elapsed().as_secs_f64() * 1000.0,
+            "phase timing"
+        );
+        Ok(output)
     }
 
     pub fn forward_features(&self, features: &Array) -> Result<(Array, usize)> {
@@ -209,8 +233,17 @@ impl ZipaInference {
     }
 
     pub fn infer_audio_greedy(&self, audio: &AudioBuffer) -> Result<GreedyInferenceOutput> {
+        let start = Instant::now();
         let features = self.features_from_audio(audio)?;
-        self.infer_features_greedy(&features)
+        let output = self.infer_features_greedy(&features)?;
+        tracing::trace!(
+            target: "bee_phase",
+            component = "zipa",
+            phase = "infer_audio_greedy",
+            ms = start.elapsed().as_secs_f64() * 1000.0,
+            "phase timing"
+        );
+        Ok(output)
     }
 
     pub fn infer_wav_greedy(&self, wav_path: impl AsRef<Path>) -> Result<GreedyInferenceOutput> {
@@ -236,20 +269,41 @@ impl ZipaInference {
     }
 
     pub fn infer_features_greedy(&self, features: &Array) -> Result<GreedyInferenceOutput> {
+        let start = Instant::now();
         let full_dim = self.forward_encoder(features)?;
         let frame_count = full_dim.shape()[0] as usize;
+        let logits_start = Instant::now();
         let logits = self
             .model
             .ctc_head
             .forward_logits(&full_dim)?
             .transpose_axes(&[1, 0, 2])?;
+        let logits_ms = logits_start.elapsed().as_secs_f64() * 1000.0;
+        let argmax_start = Instant::now();
         let best_ids = argmax_axis(logits.index((0, .., ..)), -1, false)?;
+        let argmax_ms = argmax_start.elapsed().as_secs_f64() * 1000.0;
+        let decode_start = Instant::now();
         let token_ids = best_ids
             .as_slice::<u32>()
             .iter()
             .map(|&id| id as usize)
             .collect::<Vec<_>>();
+        let token_ids_ms = decode_start.elapsed().as_secs_f64() * 1000.0;
+        let text_start = Instant::now();
         let tokens = self.tokens.decode_ctc_greedy(&token_ids, 0);
+        let text_ms = text_start.elapsed().as_secs_f64() * 1000.0;
+        tracing::trace!(
+            target: "bee_phase",
+            component = "zipa",
+            phase = "infer_features_greedy",
+            frame_count = frame_count,
+            logits_ms = logits_ms,
+            argmax_ms = argmax_ms,
+            token_ids_ms = token_ids_ms,
+            text_ms = text_ms,
+            ms = start.elapsed().as_secs_f64() * 1000.0,
+            "phase timing"
+        );
         Ok(GreedyInferenceOutput {
             frame_count,
             token_ids,
@@ -499,7 +553,7 @@ fn require_no_missing(stats: LoadStats, label: &str) -> Result<()> {
     )))
 }
 
-fn get_full_dim_output(outputs: &[Array], encoder_dims: &[usize]) -> Result<Array> {
+fn get_full_dim_output(outputs: Vec<Array>, encoder_dims: &[usize]) -> Result<Array> {
     if outputs.len() != encoder_dims.len() {
         return Err(ZipaError::Other(anyhow::anyhow!(
             "expected {} encoder outputs, got {}",
@@ -508,10 +562,11 @@ fn get_full_dim_output(outputs: &[Array], encoder_dims: &[usize]) -> Result<Arra
         )));
     }
     let output_dim = encoder_dims.iter().copied().max().unwrap_or(0) as i32;
-    let mut output_pieces = vec![outputs[outputs.len() - 1].clone()];
+    let mut outputs = outputs;
+    let mut output_pieces = vec![outputs.pop().expect("output count checked above")];
     let mut cur_dim = encoder_dims[encoder_dims.len() - 1] as i32;
 
-    for i in (0..outputs.len() - 1).rev() {
+    for i in (0..outputs.len()).rev() {
         let dim = encoder_dims[i] as i32;
         if dim > cur_dim {
             output_pieces.push(outputs[i].index((.., .., cur_dim..dim)));

@@ -1580,12 +1580,16 @@ pub fn infer_cached_zipa_output(
     raw_token_offset: usize,
     time_offset_secs: f64,
 ) -> Result<CachedZipaOutput, AlignmentError> {
+    let start = Instant::now();
+    let infer_start = Instant::now();
     let utterance = zipa
         .infer_audio_greedy(audio)
         .map_err(|e| AlignmentError::Zipa(e.to_string()))?;
+    let infer_ms = infer_start.elapsed().as_secs_f64() * 1000.0;
 
     let duration = audio.samples.len() as f64 / audio.sample_rate_hz as f64;
 
+    let spans_start = Instant::now();
     let phone_spans: Vec<PhoneSpan> = utterance
         .derive_phone_spans(&zipa.tokens, duration, 0)
         .into_iter()
@@ -1596,7 +1600,9 @@ pub fn infer_cached_zipa_output(
             ..span
         })
         .collect();
+    let spans_ms = spans_start.elapsed().as_secs_f64() * 1000.0;
 
+    let normalize_start = Instant::now();
     let zipa_raw: Vec<String> = utterance.tokens.into_iter().filter(|t| t != "▁").collect();
     let zipa_norm_with_spans = normalize_ipa_for_comparison_with_spans(&zipa_raw)
         .into_iter()
@@ -1606,6 +1612,17 @@ pub fn infer_cached_zipa_output(
             token
         })
         .collect();
+    let normalize_ms = normalize_start.elapsed().as_secs_f64() * 1000.0;
+    tracing::trace!(
+        target: "bee_phase",
+        component = "bee_transcribe",
+        phase = "infer_cached_zipa_output",
+        infer_ms = infer_ms,
+        spans_ms = spans_ms,
+        normalize_ms = normalize_ms,
+        ms = start.elapsed().as_secs_f64() * 1000.0,
+        "phase timing"
+    );
 
     Ok(CachedZipaOutput {
         raw_token_count: zipa_raw.len(),

@@ -19,3 +19,4 @@ mlx-rs.workspace = true
 rustfft = "6"
 serde_json.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
