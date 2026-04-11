@@ -2583,38 +2583,38 @@ fn render_sliding_window_timed_rollback_html(
 
     Ok(format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>bee-kv {mode_label}</title><style>\
-body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f7f4ec;color:#1d1b19;padding:24px;}}\
-.legend{{margin-bottom:18px;font-size:13px;color:#514a41;}}\
-.audio-panel{{margin:0 0 20px 0;padding:12px 14px;border:1px solid #b9b09f;background:#fffdf8;width:{width_px}px;}}\
+body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#111315;color:#ece7dc;padding:24px;}}\
+.legend{{margin-bottom:18px;font-size:13px;color:#b9b3a7;}}\
+.audio-panel{{margin:0 0 20px 0;padding:12px 14px;border:1px solid #4b4f56;background:#181c20;width:{width_px}px;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
 .audio-title{{font-weight:700;margin:0 0 8px 0;}}\
 .audio-player{{width:100%;margin:6px 0 0 0;}}\
 .row{{margin-bottom:28px;}}\
 .row-title{{font-weight:700;margin:0 0 6px 0;}}\
-.row-meta{{margin:0 0 8px 0;font-size:13px;color:#5d554b;}}\
+.row-meta{{margin:0 0 8px 0;font-size:13px;color:#b0aa9d;}}\
 .row-audio{{margin:0 0 8px 0;display:flex;align-items:center;gap:10px;}}\
 .row-audio audio{{width:420px;max-width:100%;}}\
-.transcript-line{{width:{width_px}px;margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#3b352d;}}\
-.timeline{{width:{width_px}px;border:1px solid #b9b09f;background:#fffdf8;position:relative;padding:12px 0;margin-bottom:8px;}}\
-.track{{position:relative;width:{width_px}px;height:{row_height_px}px;border-top:1px solid #d6cfbf;border-bottom:1px solid #d6cfbf;background:linear-gradient(180deg,#fffdf8,#f4efe3);overflow:hidden;}}\
-.word{{text-align:center;vertical-align:middle;position:absolute;height:2em;padding:4px 2px;border-radius:4px;border:1px solid #7a6d56;white-space:nowrap;overflow:visible;font-size:12px;box-sizing:border-box;cursor:default;font-family:\"SF Pro\", serif;}}\
-.word.carried{{background:#d8d0f0;border-color:#6f64a8;color:#30274f;}}\
-.word.kept{{background:#b9e5c0;border-color:#2d8a57;color:#113a25;font-weight:700;box-shadow:0 0 0 2px rgba(45,138,87,0.18);}}\
-.word.bridge{{background:#efe2b8;border-color:#9a7b2f;}}\
-.word.rolled{{background:#e7c2c2;border-color:#9f5d5d;}}\
-.word.cut-word{{outline:3px solid rgba(36,88,166,0.35);outline-offset:1px;border-style:dashed;}}\
-.word.no-window,.word.no-timing{{background:#e5d9c9;border-color:#8f7f69;height:22px;font-size:11px;}}\
-.search-range{{position:absolute;height:12px;border-bottom:2px solid #5a5a5a;border-left:2px solid #5a5a5a;border-right:2px solid #5a5a5a;border-bottom-left-radius:8px;border-bottom-right-radius:8px;background:rgba(90,90,90,0.06);pointer-events:none;}}\
-.search-range-label{{position:absolute;transform:translateX(-50%);font-size:11px;color:#5a5a5a;font-weight:700;pointer-events:none;}}\
-.cut{{position:absolute;top:0;width:2px;height:{row_height_px}px;background:#2458a6;}}\
-.cut-label{{position:absolute;transform:translateX(6px);font-size:11px;color:#2458a6;font-weight:700;white-space:nowrap;}}\
+.transcript-line{{width:{width_px}px;margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#ded7ca;}}\
+.timeline{{width:{width_px}px;border:1px solid #4b4f56;background:#181c20;position:relative;padding:12px 0;margin-bottom:8px;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
+.track{{position:relative;width:{width_px}px;height:{row_height_px}px;border-top:1px solid #343940;border-bottom:1px solid #343940;background:linear-gradient(180deg,#1b2024,#14181c);overflow:hidden;}}\
+.word{{text-align:center;vertical-align:middle;position:absolute;height:2em;padding:4px 2px;border-radius:4px;border:1px solid #7a6d56;white-space:nowrap;overflow:visible;font-size:12px;box-sizing:border-box;cursor:default;font-family:\"SF Pro\", serif;box-shadow:0 3px 10px rgba(0,0,0,0.28);}}\
+.word.carried{{background:#544775;border-color:#aa9cf0;color:#f0ebff;}}\
+.word.kept{{background:#183b2a;border-color:#62d596;color:#dffff0;font-weight:700;box-shadow:0 0 0 2px rgba(98,213,150,0.24),0 3px 10px rgba(0,0,0,0.28);}}\
+.word.bridge{{background:#4b3c12;border-color:#e4bd4f;color:#fff1bf;}}\
+.word.rolled{{background:#4d2528;border-color:#db7f88;color:#ffe0e3;}}\
+.word.cut-word{{outline:3px solid rgba(117,173,255,0.6);outline-offset:1px;border-style:dashed;}}\
+.word.no-window,.word.no-timing{{background:#3b352c;border-color:#908672;color:#f1e8d5;height:22px;font-size:11px;}}\
+.search-range{{position:absolute;height:12px;border-bottom:2px solid #7e8793;border-left:2px solid #7e8793;border-right:2px solid #7e8793;border-bottom-left-radius:8px;border-bottom-right-radius:8px;background:rgba(126,135,147,0.10);pointer-events:none;}}\
+.search-range-label{{position:absolute;transform:translateX(-50%);font-size:11px;color:#9ba4af;font-weight:700;pointer-events:none;}}\
+.cut{{position:absolute;top:0;width:2px;height:{row_height_px}px;background:#5ba2ff;}}\
+.cut-label{{position:absolute;transform:translateX(6px);font-size:11px;color:#7fb6ff;font-weight:700;white-space:nowrap;}}\
 .cut-label.cut-label-cut{{top:2px;}}\
 .cut-label.cut-label-target{{top:18px;}}\
 .cut-label.cut-label-bridge{{top:2px;}}\
-.window-start,.window-end{{position:absolute;top:0;width:1px;height:{row_height_px}px;background:#9d9483;}}\
-.window-label{{position:absolute;bottom:2px;transform:translateX(4px);font-size:11px;color:#6d6457;}}\
+.window-start,.window-end{{position:absolute;top:0;width:1px;height:{row_height_px}px;background:#5b616b;}}\
+.window-label{{position:absolute;bottom:2px;transform:translateX(4px);font-size:11px;color:#9299a4;}}\
 .playhead{{position:absolute;top:0;width:2px;height:{row_height_px}px;background:#d97706;pointer-events:none;display:none;}}\
-.axis{{display:flex;justify-content:space-between;font-size:12px;color:#6d6457;margin-top:6px;}}\
-.word:hover::after{{content:attr(data-full-word);position:absolute;left:0;top:-28px;background:#1d1b19;color:#fffdf8;padding:2px 6px;border-radius:4px;white-space:nowrap;z-index:10;font-size:11px;line-height:16px;box-shadow:0 2px 6px rgba(0,0,0,0.18);}}\
+.axis{{display:flex;justify-content:space-between;font-size:12px;color:#9299a4;margin-top:6px;}}\
+.word:hover::after{{content:attr(data-full-word);position:absolute;left:0;top:-28px;background:#f6f1e5;color:#111315;padding:2px 6px;border-radius:4px;white-space:nowrap;z-index:10;font-size:11px;line-height:16px;box-shadow:0 2px 6px rgba(0,0,0,0.35);}}\
 </style></head><body><h1>bee-kv {mode_label}</h1><div class=\"audio-panel\"><div class=\"audio-title\">Full Recording</div><div>Source: {audio_src}</div><audio id=\"master-audio\" class=\"audio-player\" controls preload=\"metadata\" src=\"{audio_src}\"></audio></div><p class=\"legend\">Each row is one decode window. Purple words are prompt text replayed into that row. Green words are KV-kept generated words. Yellow words are bridge-region generated words. Red words are re-decoded tail words. Blue line marks the keep cut. Brown line marks the bridge cut. Orange line is the current playhead.</p>{rows}<script>\
 const masterAudio = document.getElementById('master-audio');\
 const chunkAudios = Array.from(document.querySelectorAll('audio[data-window-start]'));\
@@ -2787,22 +2787,22 @@ fn render_committed_timeline_html(
 
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>bee-kv {mode_label}</title><style>\
-body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f7f4ec;color:#1d1b19;padding:24px;}}\
-.legend{{margin-bottom:18px;font-size:13px;color:#514a41;}}\
-.audio-panel{{margin:0 0 20px 0;padding:12px 14px;border:1px solid #b9b09f;background:#fffdf8;width:{width_px}px;}}\
+body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#111315;color:#ece7dc;padding:24px;}}\
+.legend{{margin-bottom:18px;font-size:13px;color:#b9b3a7;}}\
+.audio-panel{{margin:0 0 20px 0;padding:12px 14px;border:1px solid #4b4f56;background:#181c20;width:{width_px}px;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
 .audio-title{{font-weight:700;margin:0 0 8px 0;}}\
 .audio-player{{width:100%;margin:6px 0 0 0;}}\
-.transcript-line{{width:{width_px}px;margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#3b352d;}}\
-.timeline{{width:{width_px}px;border:1px solid #b9b09f;background:#fffdf8;position:relative;padding:12px 0;margin-bottom:8px;}}\
-.track{{position:relative;width:{width_px}px;height:{row_height_px}px;border-top:1px solid #d6cfbf;border-bottom:1px solid #d6cfbf;background:linear-gradient(180deg,#fffdf8,#f4efe3);overflow:hidden;}}\
-.second-band{{position:absolute;top:0;height:{row_height_px}px;pointer-events:none;}}\
-.second-marker{{position:absolute;top:0;width:1px;height:{row_height_px}px;background:#9d9483;}}\
-.second-label{{position:absolute;top:2px;transform:translateX(4px);font-size:11px;color:#6d6457;}}\
+.transcript-line{{width:{width_px}px;margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#ded7ca;}}\
+.timeline{{width:{width_px}px;border:1px solid #4b4f56;background:#181c20;position:relative;padding:12px 0;margin-bottom:8px;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
+.track{{position:relative;width:{width_px}px;height:{row_height_px}px;border-top:1px solid #343940;border-bottom:1px solid #343940;background:linear-gradient(180deg,#1b2024,#14181c);overflow:hidden;}}\
+.second-band{{position:absolute;top:0;height:{row_height_px}px;pointer-events:none;mix-blend-mode:screen;}}\
+.second-marker{{position:absolute;top:0;width:1px;height:{row_height_px}px;background:#5b616b;}}\
+.second-label{{position:absolute;top:2px;transform:translateX(4px);font-size:11px;color:#9299a4;}}\
 .playhead{{position:absolute;top:0;width:2px;height:{row_height_px}px;background:#d97706;pointer-events:none;display:none;}}\
-.word{{text-align:center;vertical-align:middle;position:absolute;height:2em;padding:4px 2px;border-radius:4px;border:1px solid #7a6d56;white-space:nowrap;overflow:visible;font-size:12px;box-sizing:border-box;cursor:default;font-family:\"SF Pro\", serif;}}\
-.word.no-window,.word.no-timing{{background:#e5d9c9 !important;border-color:#8f7f69 !important;height:22px;font-size:11px;}}\
-.axis{{display:flex;justify-content:space-between;font-size:12px;color:#6d6457;margin-top:6px;}}\
-.word:hover::after{{content:attr(data-full-word);position:absolute;left:0;top:-28px;background:#1d1b19;color:#fffdf8;padding:2px 6px;border-radius:4px;white-space:nowrap;z-index:10;font-size:11px;line-height:16px;box-shadow:0 2px 6px rgba(0,0,0,0.18);}}\
+.word{{text-align:center;vertical-align:middle;position:absolute;height:2em;padding:4px 2px;border-radius:4px;border:1px solid #7a6d56;white-space:nowrap;overflow:visible;font-size:12px;box-sizing:border-box;cursor:default;font-family:\"SF Pro\", serif;color:#101214;box-shadow:0 3px 10px rgba(0,0,0,0.28);}}\
+.word.no-window,.word.no-timing{{background:#3b352c !important;border-color:#908672 !important;color:#f1e8d5 !important;height:22px;font-size:11px;}}\
+.axis{{display:flex;justify-content:space-between;font-size:12px;color:#9299a4;margin-top:6px;}}\
+.word:hover::after{{content:attr(data-full-word);position:absolute;left:0;top:-28px;background:#f6f1e5;color:#111315;padding:2px 6px;border-radius:4px;white-space:nowrap;z-index:10;font-size:11px;line-height:16px;box-shadow:0 2px 6px rgba(0,0,0,0.35);}}\
 </style></head><body><h1>bee-kv {mode_label}</h1><div class=\"audio-panel\"><div class=\"audio-title\">Full Recording</div><div>Source: {audio_src}</div><audio id=\"master-audio\" class=\"audio-player\" controls preload=\"metadata\" src=\"{audio_src}\"></audio></div><p class=\"legend\">Committed words only. Each word keeps the exact timing it had when it was marked green in its source row. Background bands and box colors change every one-second interval; no extra re-alignment is performed.</p><div class=\"transcript-line\">{transcript_line}</div><div class=\"timeline\" data-row-start=\"0\" data-row-end=\"{duration_secs:.6}\"><div class=\"track\">{second_bands}{second_markers}<div class=\"playhead\"></div>{word_divs}</div><div class=\"axis\"><span>0.00s</span><span>{duration_secs:.2}s total</span></div></div><script>\
 const audio = document.getElementById('master-audio');\
 const row = document.querySelector('[data-row-start]');\
