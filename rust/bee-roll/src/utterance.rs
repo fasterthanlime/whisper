@@ -1,8 +1,21 @@
 use crate::tokens::UtteranceTokenRange;
-use crate::{AudioBuffer, Cut, FeedOutput, OutputToken, SampleOffset, Tape, TokenIndex};
+use crate::{
+    AsrTokenAlternative, AsrTokenConfidence, AudioBuffer, Cut, FeedOutput, OutputToken,
+    SampleOffset, SampleRange, Tape, TimedToken, TokenId, TokenIndex,
+};
+use bee_qwen3_asr::encoder::EncoderCache;
+use bee_qwen3_asr::generate::{self, ConfidenceMode, TokenConfidence};
+use bee_qwen3_asr::mel::MelExtractor;
+use bee_qwen3_asr::mlx_rs::Array;
+use bee_qwen3_asr::mlx_rs::error::Exception;
+use bee_qwen3_asr::mlx_rs::ops;
+use bee_qwen3_asr::model::Qwen3ASRModel;
 use compact_str::CompactString;
+use std::path::Path;
+use std::sync::Arc;
 
 const DEFAULT_PREVIEW_REWRITE_TOKENS: usize = 5;
+const DEFAULT_MAX_NEW_TOKENS: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DecodeMode {
@@ -22,6 +35,33 @@ struct DecodedPreview {
     detected_language: Option<CompactString>,
     tokens: Vec<OutputToken>,
     next_decoder_position: usize,
+}
+
+struct AsrRuntime {
+    model: Arc<Qwen3ASRModel>,
+    mel_extractor: MelExtractor,
+    encoder_cache: EncoderCache,
+    language: CompactString,
+    max_new_tokens: usize,
+}
+
+impl AsrRuntime {
+    fn new(
+        model: Arc<Qwen3ASRModel>,
+        tokenizer_path: &Path,
+        num_mel_bins: usize,
+        language: CompactString,
+        max_new_tokens: usize,
+    ) -> Self {
+        crate::init_tokenizer(tokenizer_path);
+        Self {
+            model,
+            mel_extractor: MelExtractor::new(400, 160, num_mel_bins, crate::SAMPLE_RATE),
+            encoder_cache: EncoderCache::new(),
+            language,
+            max_new_tokens,
+        }
+    }
 }
 
 /// Policy hook that decides where to cut a ready chunk.
@@ -93,14 +133,14 @@ pub struct Utterance {
     /// Number of feed steps processed so far.
     feed_count: usize,
 
-    /// Next decoder-visible token position for persistent-KV mode.
-    decoder_position: usize,
-
     /// Boxed cut policy used by this utterance.
     cutter: Box<dyn Cutter>,
 
     /// Boxed event sink used by this utterance.
     listener: Box<dyn Listener>,
+
+    /// Optional ASR runtime used to decode preview on each feed step.
+    asr: Option<AsrRuntime>,
 }
 
 impl Utterance {
@@ -116,10 +156,26 @@ impl Utterance {
             preview_rewrite_tokens: DEFAULT_PREVIEW_REWRITE_TOKENS,
             decode_mode: DecodeMode::PersistentKv,
             feed_count: 0,
-            decoder_position: 0,
             cutter,
             listener,
+            asr: None,
         }
+    }
+
+    pub fn attach_qwen_asr(
+        &mut self,
+        model: Arc<Qwen3ASRModel>,
+        tokenizer_path: &Path,
+        num_mel_bins: usize,
+        language: impl Into<CompactString>,
+    ) {
+        self.asr = Some(AsrRuntime::new(
+            model,
+            tokenizer_path,
+            num_mel_bins,
+            language.into(),
+            DEFAULT_MAX_NEW_TOKENS,
+        ));
     }
 
     /// Feeds raw samples into the utterance recording buffer.
@@ -135,9 +191,13 @@ impl Utterance {
         self.feed_count += 1;
 
         let plan = self.plan_preview_decode();
-        self.rewrite_preview(plan.rollback_to);
-        // TODO: decide when enough audio exists to run ASR
-        // TODO: decode preview from `plan` using `decode_mode`
+        self.rewrite_preview(plan.rollback_to, plan.decoder_position);
+        if let Some(decoded) = self
+            .decode_preview(&plan)
+            .unwrap_or_else(|e| panic!("bee-roll preview decode failed: {e}"))
+        {
+            self.apply_decoded_preview(decoded);
+        }
         // TODO: optionally run cutter and promote stable/carry boundaries
 
         FeedOutput::new(self.tape.tokens(), self.tape.detected_language())
@@ -203,7 +263,7 @@ impl Utterance {
     fn plan_preview_decode(&self) -> PreviewDecodePlan {
         PreviewDecodePlan {
             rollback_to: self.carry_through,
-            decoder_position: self.carry_through.as_usize(),
+            decoder_position: self.tape.decoder_position(),
             rewrite_budget_tokens: self.preview_rewrite_tokens,
         }
     }
@@ -214,7 +274,7 @@ impl Utterance {
     /// Invariants:
     /// - `rollback_to` must not precede `carry_through`
     /// - `rollback_to` must lie within the current tape
-    fn rewrite_preview(&mut self, rollback_to: TokenIndex) {
+    fn rewrite_preview(&mut self, rollback_to: TokenIndex, decoder_position: usize) {
         assert!(
             rollback_to >= self.carry_through,
             "preview rewrites must not cut into carry"
@@ -223,10 +283,7 @@ impl Utterance {
             rollback_to <= self.tape.end(),
             "preview rewrite boundary must lie within the tape"
         );
-        self.tape.truncate_to(rollback_to);
-        if matches!(self.decode_mode, DecodeMode::PersistentKv) {
-            self.decoder_position = rollback_to.as_usize();
-        }
+        self.tape.truncate_to(rollback_to, decoder_position);
     }
 
     /// Apply one decode pass that regenerated preview from the current
@@ -239,9 +296,144 @@ impl Utterance {
     fn apply_decoded_preview(&mut self, decoded: DecodedPreview) {
         self.tape.set_detected_language(decoded.detected_language);
         self.tape.append(decoded.tokens);
-        if matches!(self.decode_mode, DecodeMode::PersistentKv) {
-            self.decoder_position = decoded.next_decoder_position;
+        self.tape.advance_decoder_to(decoded.next_decoder_position);
+    }
+
+    fn decode_preview(
+        &mut self,
+        plan: &PreviewDecodePlan,
+    ) -> anyhow::Result<Option<DecodedPreview>> {
+        let carry_context = if matches!(self.decode_mode, DecodeMode::RebuildPromptEachFeed) {
+            Some(
+                crate::decode_token_ids(
+                    &self
+                        .carry_tokens()
+                        .iter()
+                        .map(|token| token.timed_token().token())
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|e| anyhow::anyhow!("decoding carry tokens: {e}"))?,
+            )
+        } else {
+            None
+        };
+
+        let Some(asr) = self.asr.as_mut() else {
+            return Ok(None);
+        };
+        if self.audio.is_empty() {
+            return Ok(None);
         }
+
+        let (mel_data, n_mels, n_frames) = asr
+            .mel_extractor
+            .extract(self.audio.samples())
+            .map_err(|e| anyhow::anyhow!("extracting mel features: {e}"))?;
+        let mel = Array::from_slice(&mel_data, &[n_mels as i32, n_frames as i32]);
+        let audio_features = asr
+            .model
+            .encode_incremental(&mel, &mut asr.encoder_cache)
+            .map_err(|e| anyhow::anyhow!("encoding incremental audio: {e}"))?;
+        let audio_features = ops::expand_dims(&audio_features, 0)
+            .map_err(|e| anyhow::anyhow!("adding batch axis to audio features: {e}"))?;
+        audio_features
+            .eval()
+            .map_err(|e| anyhow::anyhow!("evaluating audio features: {e}"))?;
+        let n_audio_tokens = audio_features.shape()[1] as usize;
+
+        let prompt = Self::build_prompt(
+            self.decode_mode,
+            plan,
+            asr,
+            n_audio_tokens,
+            carry_context.as_deref(),
+        )?;
+        let (generated, confidences, next_decoder_position, _) = self
+            .tape
+            .prefill_and_decode(
+                asr.model.as_ref(),
+                &prompt,
+                &audio_features,
+                asr.max_new_tokens,
+                ConfidenceMode::Streaming,
+            )
+            .map_err(|e| anyhow::anyhow!("prefill/decode preview: {e}"))?;
+
+        Ok(Some(DecodedPreview {
+            detected_language: Some(asr.language.clone()),
+            tokens: self.output_tokens_from_generated(&generated, &confidences),
+            next_decoder_position,
+        }))
+    }
+
+    fn build_prompt(
+        decode_mode: DecodeMode,
+        plan: &PreviewDecodePlan,
+        asr: &AsrRuntime,
+        n_audio_tokens: usize,
+        carry_context: Option<&str>,
+    ) -> Result<Vec<i32>, Exception> {
+        Ok(match decode_mode {
+            DecodeMode::PersistentKv => {
+                if plan.decoder_position == 0 {
+                    generate::build_initial_prompt(
+                        n_audio_tokens,
+                        asr.language.as_str(),
+                        "",
+                        crate::tokenizer(),
+                    )
+                } else {
+                    generate::build_followup_prompt(
+                        n_audio_tokens,
+                        asr.language.as_str(),
+                        crate::tokenizer(),
+                    )
+                }
+            }
+            DecodeMode::RebuildPromptEachFeed => generate::build_initial_prompt(
+                n_audio_tokens,
+                asr.language.as_str(),
+                carry_context.unwrap_or(""),
+                crate::tokenizer(),
+            ),
+        })
+    }
+
+    fn output_tokens_from_generated(
+        &self,
+        generated: &[i32],
+        confidences: &[TokenConfidence],
+    ) -> Vec<OutputToken> {
+        let start_index = self.tape.end().as_usize();
+        let anchor = self.audio.utterance_range().end;
+        generated
+            .iter()
+            .enumerate()
+            .map(|(offset, &token_id)| {
+                let confidence = confidences.get(offset).map(Self::map_token_confidence);
+                OutputToken::new(
+                    TimedToken::new(
+                        TokenIndex::new(start_index + offset),
+                        TokenId::new(token_id as u32),
+                        SampleRange::new(anchor, anchor),
+                    ),
+                    confidence,
+                    None,
+                    Vec::new(),
+                    Vec::new(),
+                    crate::ZipaTiming::Invalid,
+                )
+            })
+            .collect()
+    }
+
+    fn map_token_confidence(confidence: &TokenConfidence) -> AsrTokenConfidence {
+        let alternatives = confidence.top_ids[..confidence.alternative_count as usize]
+            .iter()
+            .zip(confidence.top_logits.iter())
+            .map(|(&token, &logit)| AsrTokenAlternative::new(TokenId::new(token as u32), logit))
+            .collect();
+        AsrTokenConfidence::new(confidence.concentration, confidence.margin, alternatives)
     }
 }
 
@@ -281,6 +473,7 @@ mod tests {
             dummy_output_token(2, 12),
             dummy_output_token(3, 13),
         ]);
+        utterance.tape.advance_decoder_to(3);
         utterance.set_stable_and_carry(TokenIndex::new(1), TokenIndex::new(3));
 
         let output_len = {
@@ -292,15 +485,16 @@ mod tests {
         assert_eq!(utterance.carry_tokens().len(), 2);
         assert_eq!(utterance.preview_tokens().len(), 0);
         assert_eq!(output_len, 3);
-        assert_eq!(utterance.decoder_position, 3);
+        assert_eq!(utterance.tape.decoder_position(), 3);
     }
 
     #[test]
     fn apply_decoded_preview_appends_tokens_and_updates_language() {
         let mut utterance = Utterance::new(2, Box::new(NoCut), Box::new(NullListener));
         utterance.tape.append(vec![dummy_output_token(0, 10)]);
+        utterance.tape.advance_decoder_to(1);
         utterance.set_stable_and_carry(TokenIndex::new(0), TokenIndex::new(1));
-        utterance.rewrite_preview(TokenIndex::new(1));
+        utterance.rewrite_preview(TokenIndex::new(1), 1);
 
         utterance.apply_decoded_preview(DecodedPreview {
             detected_language: Some(CompactString::from("English")),
@@ -309,7 +503,7 @@ mod tests {
         });
 
         assert_eq!(utterance.tape.tokens().len(), 3);
-        assert_eq!(utterance.decoder_position, 3);
+        assert_eq!(utterance.tape.decoder_position(), 3);
         assert_eq!(utterance.tape.detected_language(), Some("English"));
         assert_eq!(utterance.preview_tokens().len(), 2);
     }

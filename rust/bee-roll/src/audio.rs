@@ -128,6 +128,10 @@ impl AudioBuffer {
         self.samples.extend(samples);
     }
 
+    pub(crate) fn samples(&self) -> &[f32] {
+        &self.samples
+    }
+
     /// Returns a copied utterance-global slice of this buffer.
     ///
     /// Intent:

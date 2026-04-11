@@ -1,4 +1,8 @@
 use bee_qwen3_asr::decoder::KVCache;
+use bee_qwen3_asr::generate::{self, ConfidenceMode, DecodeStopReason, TokenConfidence};
+use bee_qwen3_asr::mlx_rs::Array;
+use bee_qwen3_asr::mlx_rs::error::Exception;
+use bee_qwen3_asr::model::Qwen3ASRModel;
 use compact_str::CompactString;
 
 use crate::tokens::{TokenCount, UtteranceTokenRange, decode_timed_tokens};
@@ -109,45 +113,55 @@ impl TokenTape {
 /// - represent the empty decode state as an empty cache at token boundary 0
 ///
 /// Invariants:
-/// - `end` is the cache/token boundary represented by the current cache state
-/// - `cache` has been truncated/extended consistently with `end`
+/// - `decoder_position` is the number of decoder-visible prompt/generated tokens
+///   currently represented in the cache
+/// - the cache is truncated/extended consistently with `decoder_position`
 pub(crate) struct KvTape {
-    cache: KVCache,
-    end: TokenIndex,
+    cache: Option<KVCache>,
+    decoder_position: usize,
 }
 
 impl KvTape {
     /// Creates an empty KV tape at utterance token boundary 0.
     pub(crate) fn new(num_layers: usize) -> Self {
         Self {
-            cache: KVCache::new(num_layers),
-            end: TokenIndex::new(0),
+            cache: Some(KVCache::new(num_layers)),
+            decoder_position: 0,
         }
     }
 
-    /// Returns the token boundary represented by the current cache state.
-    pub(crate) fn end(&self) -> TokenIndex {
-        self.end
+    /// Returns the decoder-visible position represented by the current cache state.
+    pub(crate) fn decoder_position(&self) -> usize {
+        self.decoder_position
     }
 
-    /// Advances the cached token boundary after a successful decode/prefill step.
+    /// Advances the cached decoder position after a successful decode/prefill step.
     ///
     /// Invariants:
-    /// - `end` must not move backward
-    pub(crate) fn advance_to(&mut self, end: TokenIndex) {
-        assert!(end >= self.end, "KV tape cannot advance backward");
-        self.end = end;
+    /// - `decoder_position` must not move backward
+    pub(crate) fn advance_to(&mut self, decoder_position: usize) {
+        assert!(
+            decoder_position >= self.decoder_position,
+            "KV tape cannot advance backward"
+        );
+        self.decoder_position = decoder_position;
     }
 
-    /// Truncates the KV cache to `end`, keeping state strictly before that boundary.
+    /// Truncates the KV cache to `decoder_position`, keeping state strictly
+    /// before that boundary.
     ///
     /// Invariants:
-    /// - `end` must lie within the current cache boundary
-    /// - the cache is truncated in lockstep with `self.end`
-    pub(crate) fn truncate_to(&mut self, end: TokenIndex) {
-        assert!(end <= self.end, "KV tape truncate must lie within the tape");
-        self.cache.truncate(end.as_usize());
-        self.end = end;
+    /// - `decoder_position` must lie within the current cache boundary
+    /// - the cache is truncated in lockstep with `self.decoder_position`
+    pub(crate) fn truncate_to(&mut self, decoder_position: usize) {
+        assert!(
+            decoder_position <= self.decoder_position,
+            "KV tape truncate must lie within the cache"
+        );
+        if let Some(cache) = self.cache.as_mut() {
+            cache.truncate(decoder_position);
+        }
+        self.decoder_position = decoder_position;
     }
 }
 
@@ -159,7 +173,8 @@ impl KvTape {
 /// - higher-level utterance code should not truncate tokens and KV separately
 ///
 /// Invariants:
-/// - `tokens.end() == kv.end()`
+/// - token truncation and KV truncation happen through one owner
+/// - token-space boundaries and decoder-space boundaries are tracked separately
 pub(crate) struct Tape {
     /// Canonical utterance-global token sequence.
     tokens: TokenTape,
@@ -178,15 +193,9 @@ impl Tape {
         }
     }
 
-    /// Returns the token boundary immediately after the last committed token.
+    /// Returns the token boundary immediately after the last stored token.
     pub(crate) fn end(&self) -> TokenIndex {
-        let tokens_end = self.tokens.end();
-        let kv_end = self.kv.end();
-        assert!(
-            tokens_end == kv_end,
-            "transcript token/KV boundaries must stay synchronized"
-        );
-        tokens_end
+        self.tokens.end()
     }
 
     /// Returns a borrowed token slice over an utterance-global token range.
@@ -194,24 +203,22 @@ impl Tape {
         self.tokens.slice(range)
     }
 
-    /// Appends already-indexed tokens and advances the KV boundary to match.
+    /// Appends already-indexed decoded tokens to the token tape.
     ///
     /// Invariants:
     /// - the appended tokens must continue contiguously from the current end
-    /// - callers must only use this after the raw KV cache has already been
-    ///   advanced by the matching decode step
+    /// - callers must separately keep decoder position in sync with the cache
     pub(crate) fn append(&mut self, tokens: Vec<OutputToken>) {
         self.tokens.append(tokens);
-        self.kv.advance_to(self.tokens.end());
     }
 
-    /// Truncates transcript tokens and KV state to the same token boundary.
+    /// Truncates transcript tokens and KV state to the chosen rewind points.
     ///
     /// Invariants:
-    /// - `end` must lie within the current transcript
-    pub(crate) fn truncate_to(&mut self, end: TokenIndex) {
-        self.tokens.truncate_to(end);
-        self.kv.truncate_to(end);
+    /// - `token_end` must lie within the current transcript
+    pub(crate) fn truncate_to(&mut self, token_end: TokenIndex, decoder_position: usize) {
+        self.tokens.truncate_to(token_end);
+        self.kv.truncate_to(decoder_position);
     }
 
     pub(crate) fn tokens(&self) -> &[OutputToken] {
@@ -224,5 +231,35 @@ impl Tape {
 
     pub(crate) fn set_detected_language(&mut self, detected_language: Option<CompactString>) {
         self.detected_language = detected_language;
+    }
+
+    pub(crate) fn decoder_position(&self) -> usize {
+        self.kv.decoder_position()
+    }
+
+    pub(crate) fn advance_decoder_to(&mut self, decoder_position: usize) {
+        self.kv.advance_to(decoder_position);
+    }
+
+    pub(crate) fn prefill_and_decode(
+        &mut self,
+        model: &Qwen3ASRModel,
+        prompt_tokens: &[i32],
+        audio_features: &Array,
+        max_new_tokens: usize,
+        confidence_mode: ConfidenceMode,
+    ) -> Result<(Vec<i32>, Vec<TokenConfidence>, usize, DecodeStopReason), Exception> {
+        let start_position = self.kv.decoder_position();
+        let (generated, confidences, next_position, stop_reason) = generate::prefill_and_decode(
+            model,
+            prompt_tokens,
+            audio_features,
+            &mut self.kv.cache,
+            start_position,
+            max_new_tokens,
+            confidence_mode,
+        )?;
+        self.kv.advance_to(next_position);
+        Ok((generated, confidences, next_position, stop_reason))
     }
 }
