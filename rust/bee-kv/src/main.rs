@@ -27,9 +27,7 @@ use bee_zipa_mlx::audio::AudioBuffer as ZipaAudioBuffer;
 use bee_zipa_mlx::infer::ZipaInference;
 use crossterm::cursor::{Hide, Show};
 use crossterm::execute;
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
+use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -402,7 +400,7 @@ fn decode_prompt(
         label,
         prompt_tokens: prompt_tokens.len(),
         generated_tokens: generated.len(),
-        transcript: transcript.trim().to_string(),
+        transcript,
     })
 }
 
@@ -1131,15 +1129,17 @@ fn decode_sliding_window_bridge_replay(
 
         let has_next_window = window.end_sample < samples.len();
         let rollback = if has_next_window {
-            let generated_transcript = chunk_run.transcript.trim();
-            let combined_transcript =
-                match replayed_prefix.as_ref().map(|prefix| prefix.text.trim()) {
-                    Some(prefix) if !prefix.is_empty() && !generated_transcript.is_empty() => {
-                        format!("{prefix} {generated_transcript}")
-                    }
-                    Some(prefix) if !prefix.is_empty() => prefix.to_string(),
-                    _ => generated_transcript.to_string(),
-                };
+            let generated_transcript = normalized_transcript(&chunk_run.transcript);
+            let combined_transcript = match replayed_prefix
+                .as_ref()
+                .map(|prefix| normalized_transcript(&prefix.text))
+            {
+                Some(prefix) if !prefix.is_empty() && !generated_transcript.is_empty() => {
+                    format!("{prefix} {generated_transcript}")
+                }
+                Some(prefix) if !prefix.is_empty() => prefix.to_string(),
+                _ => generated_transcript.to_string(),
+            };
             let alignment =
                 build_transcript_alignment(&mut align_ctx, &combined_transcript, chunk_samples)?;
             let target_keep_until_secs = unresolved_keep_samples as f64 / SAMPLE_RATE as f64;
@@ -1688,9 +1688,7 @@ fn decode_chunk_followup_step(
         .collect::<Result<_>>()?;
     let transcript = tokenizer
         .decode(&token_ids, true)
-        .map_err(|e| anyhow::anyhow!("decoding transcript: {e}"))?
-        .trim()
-        .to_string();
+        .map_err(|e| anyhow::anyhow!("decoding transcript: {e}"))?;
 
     Ok(ChunkRun {
         label,
@@ -1718,14 +1716,15 @@ fn truncate_cache(
     Ok(())
 }
 
+fn normalized_transcript(text: &str) -> &str {
+    text.trim()
+}
+
 fn combine_transcripts(chunks: &[ChunkRun]) -> String {
     let mut combined = String::new();
     for chunk in chunks {
         if chunk.transcript.is_empty() {
             continue;
-        }
-        if !combined.is_empty() {
-            combined.push(' ');
         }
         combined.push_str(&chunk.transcript);
     }
@@ -3098,7 +3097,7 @@ body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#111315
 .audio-panel{{margin:0 0 20px 0;padding:12px 14px;border:1px solid #4b4f56;background:#181c20;max-width:900px;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
 .audio-title{{font-weight:700;margin:0 0 8px 0;}}\
 .audio-player{{width:100%;margin:6px 0 0 0;color-scheme:dark;accent-color:#d97706;}}\
-.current-word-display{{font-family:\"SF Pro Display\",\"SF Pro\",ui-sans-serif,-apple-system,sans-serif;font-size:80px;font-weight:700;height:110px;display:flex;align-items:center;justify-content:center;color:#f6f1e5;margin:20px 0;letter-spacing:-0.01em;flex-shrink:0;}}\
+#current-word-display{{font-family:\"SF Pro Display\",\"SF Pro\",ui-sans-serif,-apple-system,sans-serif;font-size:80px;font-weight:700;height:110px;display:flex;align-items:center;justify-content:center;color:#f6f1e5;margin:20px 0;letter-spacing:-0.01em;flex-shrink:0;}}\
 .timeline-scroll{{overflow-x:auto;margin-bottom:8px;}}\
 .transcript-line{{width:{width_px}px;margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#ded7ca;}}\
 .timeline{{width:{width_px}px;border:1px solid #4b4f56;background:#181c20;position:relative;padding:12px 0;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
@@ -3335,11 +3334,11 @@ fn build_window_word_placements(
     run: &SlidingWindowRun,
     chunk_samples: &[f32],
 ) -> Result<Vec<SlidingWordPlacement>> {
-    let generated_transcript = run.chunk_run.transcript.trim();
+    let generated_transcript = normalized_transcript(&run.chunk_run.transcript);
     let replayed_prefix = run
         .replayed_prefix
         .as_ref()
-        .map(|prefix| prefix.text.trim())
+        .map(|prefix| normalized_transcript(&prefix.text))
         .filter(|text| !text.is_empty());
     if generated_transcript.is_empty() && replayed_prefix.is_none() {
         return Ok(Vec::new());
@@ -3687,7 +3686,6 @@ impl ExerciseTui {
     fn new() -> Self {
         let enabled = std::io::stdout().is_terminal();
         let terminal = if enabled {
-            enable_raw_mode().ok();
             let mut stdout = std::io::stdout();
             execute!(stdout, EnterAlternateScreen, Hide).ok();
             let backend = CrosstermBackend::new(stdout);
@@ -3718,7 +3716,6 @@ impl ExerciseTui {
         let _ = self.terminal.take();
         let mut stdout = std::io::stdout();
         let _ = execute!(stdout, Show, LeaveAlternateScreen);
-        let _ = disable_raw_mode();
         self.enabled = false;
     }
 
@@ -3936,7 +3933,7 @@ fn timed_generated_prefix_for_cut(
     chunk_samples: &[f32],
     keep_until_secs: f64,
 ) -> Result<TimedGeneratedPrefix> {
-    let transcript = chunk_run.transcript.trim();
+    let transcript = normalized_transcript(&chunk_run.transcript);
     if transcript.is_empty() {
         return Ok(TimedGeneratedPrefix {
             kept_word_count: 0,
@@ -3959,7 +3956,7 @@ fn timed_generated_prefix_for_cut(
             .get(kept_word_count - 1)
             .map(|word| word.char_range.end)
             .ok_or_else(|| anyhow::anyhow!("missing word range for kept prefix"))?;
-        transcript[..end].trim_end().to_string()
+        transcript[..end].to_string()
     };
 
     let kept_token_count = if kept_text.is_empty() {
@@ -4026,9 +4023,7 @@ fn timed_generated_bridge_for_cuts(
         .filter(|word| word.end_secs <= keep_until_secs)
         .last()
     {
-        combined_transcript[..end_word.char_range.end]
-            .trim()
-            .to_string()
+        combined_transcript[..end_word.char_range.end].to_string()
     } else {
         String::new()
     };
@@ -4048,7 +4043,6 @@ fn timed_generated_bridge_for_cuts(
         CarriedBridge {
             text: combined_transcript
                 [first_bridge_word.char_range.start..last_bridge_word.char_range.end]
-                .trim()
                 .to_string(),
             words: bridge_words,
         }
@@ -4072,9 +4066,7 @@ fn timed_generated_bridge_for_cuts(
             .get(kept_word_count - 1)
             .map(|word| word.char_range.end)
             .ok_or_else(|| anyhow::anyhow!("missing generated kept word range"))?;
-        combined_transcript[generated_start..generated_end]
-            .trim()
-            .to_string()
+        combined_transcript[generated_start..generated_end].to_string()
     };
 
     let kept_token_count = if generated_kept_text.is_empty() {
