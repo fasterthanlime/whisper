@@ -1009,13 +1009,14 @@ fn decode_sliding_window_bridge_replay(
                 keep_until_secs,
                 replay_until_secs,
             )?;
+            let made_progress = split.kept_token_count > 0;
             let rollback_position =
                 chunk_run.start_position + chunk_run.prompt_tokens + split.kept_token_count;
             truncate_cache(&mut cache, rollback_position)?;
             start_position = rollback_position;
             replay_prefix_for_next =
                 (!split.bridge.text.is_empty()).then_some(split.bridge.clone());
-            unresolved_keep_samples = if found_boundary {
+            unresolved_keep_samples = if made_progress {
                 committed_samples
             } else {
                 unresolved_keep_samples + committed_samples
@@ -1048,11 +1049,11 @@ fn decode_sliding_window_bridge_replay(
         }
         next_window_start =
             if let Some(rollback) = window_runs.last().and_then(|run| run.rollback.as_ref()) {
-                if rollback.keep_until_secs > 0.0 {
+                if rollback.kept_token_count > 0 && rollback.keep_until_secs > 0.0 {
                     window.start_sample
                         + ((rollback.keep_until_secs * SAMPLE_RATE as f64).round() as usize)
                 } else {
-                    next_window_start.saturating_add(stride_samples)
+                    window.start_sample
                 }
             } else {
                 next_window_start.saturating_add(stride_samples)
@@ -3547,13 +3548,19 @@ fn timed_generated_bridge_for_cuts(
         generated_transcript[..end].trim_end().to_string()
     };
 
+    let preserve_full_replayed_prefix = generated_kept_text.is_empty() && replayed_prefix.is_some();
+
     let bridge = if let (Some(start_word_index), Some(end_word_index)) =
         (effective_bridge_start_word, effective_bridge_end_word)
     {
-        let start = combined_word_ranges
-            .get(start_word_index)
-            .map(|word| word.char_start)
-            .ok_or_else(|| anyhow::anyhow!("missing effective bridge word start"))?;
+        let start = if preserve_full_replayed_prefix {
+            0
+        } else {
+            combined_word_ranges
+                .get(start_word_index)
+                .map(|word| word.char_start)
+                .ok_or_else(|| anyhow::anyhow!("missing effective bridge word start"))?
+        };
         let end = combined_word_ranges
             .get(end_word_index)
             .map(|word| word.char_end)
@@ -3563,9 +3570,16 @@ fn timed_generated_bridge_for_cuts(
             words: bridge_words,
         }
     } else if bridge_word_count == 0 {
-        CarriedBridge {
-            text: String::new(),
-            words: Vec::new(),
+        if preserve_full_replayed_prefix {
+            CarriedBridge {
+                text: replayed_prefix.unwrap_or_default().to_string(),
+                words: Vec::new(),
+            }
+        } else {
+            CarriedBridge {
+                text: String::new(),
+                words: Vec::new(),
+            }
         }
     } else {
         let start = generated_word_ranges
