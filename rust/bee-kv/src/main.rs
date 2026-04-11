@@ -2489,6 +2489,26 @@ struct CommittedWordPlacement {
     second_bin: usize,
 }
 
+fn committed_words_equivalent(
+    left: &CommittedWordPlacement,
+    right: &CommittedWordPlacement,
+) -> bool {
+    if left.text != right.text {
+        return false;
+    }
+    match (
+        left.start_secs,
+        left.end_secs,
+        right.start_secs,
+        right.end_secs,
+    ) {
+        (Some(left_start), Some(left_end), Some(right_start), Some(right_end)) => {
+            (left_start - right_start).abs() <= 0.12 && (left_end - right_end).abs() <= 0.12
+        }
+        _ => true,
+    }
+}
+
 fn build_word_placements(chunks: &[ChunkRun], samples: &[f32]) -> Result<Vec<WordPlacement>> {
     let combined_transcript = combine_transcripts(chunks);
     let alignment = build_transcript_alignment(&combined_transcript, samples)?;
@@ -2593,16 +2613,16 @@ fn render_sliding_window_timed_rollback_html(
 
     Ok(format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>bee-kv {mode_label}</title><style>\
-body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#111315;color:#ece7dc;padding:24px;}}\
+body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#111315;color:#ece7dc;padding:24px;color-scheme:dark;}}\
 .legend{{margin-bottom:18px;font-size:13px;color:#b9b3a7;}}\
 .audio-panel{{margin:0 0 20px 0;padding:12px 14px;border:1px solid #4b4f56;background:#181c20;width:{width_px}px;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
 .audio-title{{font-weight:700;margin:0 0 8px 0;}}\
-.audio-player{{width:100%;margin:6px 0 0 0;}}\
+.audio-player{{width:100%;margin:6px 0 0 0;color-scheme:dark;accent-color:#d97706;}}\
 .row{{margin-bottom:28px;}}\
 .row-title{{font-weight:700;margin:0 0 6px 0;}}\
 .row-meta{{margin:0 0 8px 0;font-size:13px;color:#b0aa9d;}}\
 .row-audio{{margin:0 0 8px 0;display:flex;align-items:center;gap:10px;}}\
-.row-audio audio{{width:420px;max-width:100%;}}\
+.row-audio audio{{width:420px;max-width:100%;color-scheme:dark;accent-color:#d97706;}}\
 .transcript-line{{width:{width_px}px;margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#ded7ca;}}\
 .timeline{{width:{width_px}px;border:1px solid #4b4f56;background:#181c20;position:relative;padding:12px 0;margin-bottom:8px;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
 .track{{position:relative;width:{width_px}px;height:{row_height_px}px;border-top:1px solid #343940;border-bottom:1px solid #343940;background:linear-gradient(180deg,#1b2024,#14181c);overflow:hidden;}}\
@@ -2706,24 +2726,29 @@ fn collect_committed_word_placements(
     window_runs: &[SlidingWindowRun],
     samples: &[f32],
 ) -> Result<Vec<CommittedWordPlacement>> {
-    let mut placements = Vec::new();
+    let mut placements: Vec<CommittedWordPlacement> = Vec::new();
 
     for run in window_runs {
         let chunk = &run.chunk_run;
         let chunk_samples = &samples[chunk.start_sample..chunk.end_sample];
         let words = build_window_word_placements(run, chunk_samples)?;
         let window_start_secs = chunk.start_sample as f64 / SAMPLE_RATE as f64;
-
-        for word in words
-            .into_iter()
-            .filter(|word| !word.carried && (word.kept || word.bridge))
-        {
+        let keep_word_count = if let Some(rollback) = &run.rollback {
+            sentence_word_tokens(&rollback.kept_text).len()
+        } else {
+            words.len()
+        };
+        if keep_word_count == 0 {
+            continue;
+        }
+        let mut candidate = Vec::new();
+        for word in words.into_iter().take(keep_word_count) {
             let start_secs = word.start_secs.map(|start| window_start_secs + start);
             let end_secs = word.end_secs.map(|end| window_start_secs + end);
             let second_bin = start_secs
                 .map(|start| start.floor() as usize)
                 .unwrap_or_else(|| window_start_secs.floor() as usize);
-            placements.push(CommittedWordPlacement {
+            candidate.push(CommittedWordPlacement {
                 text: word.text,
                 start_secs,
                 end_secs,
@@ -2731,6 +2756,17 @@ fn collect_committed_word_placements(
                 second_bin,
             });
         }
+        let max_overlap = placements.len().min(candidate.len());
+        let overlap = (0..=max_overlap)
+            .rev()
+            .find(|&count| {
+                placements[placements.len().saturating_sub(count)..]
+                    .iter()
+                    .zip(candidate.iter().take(count))
+                    .all(|(left, right)| committed_words_equivalent(left, right))
+            })
+            .unwrap_or(0);
+        placements.extend(candidate.into_iter().skip(overlap));
     }
 
     Ok(placements)
@@ -2813,11 +2849,11 @@ fn render_committed_timeline_html(
 
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>bee-kv {mode_label}</title><style>\
-body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#111315;color:#ece7dc;padding:24px;}}\
+body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#111315;color:#ece7dc;padding:24px;color-scheme:dark;}}\
 .legend{{margin-bottom:18px;font-size:13px;color:#b9b3a7;}}\
 .audio-panel{{margin:0 0 20px 0;padding:12px 14px;border:1px solid #4b4f56;background:#181c20;width:{width_px}px;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
 .audio-title{{font-weight:700;margin:0 0 8px 0;}}\
-.audio-player{{width:100%;margin:6px 0 0 0;}}\
+.audio-player{{width:100%;margin:6px 0 0 0;color-scheme:dark;accent-color:#d97706;}}\
 .transcript-line{{width:{width_px}px;margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#ded7ca;}}\
 .timeline{{width:{width_px}px;border:1px solid #4b4f56;background:#181c20;position:relative;padding:12px 0;margin-bottom:8px;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
 .track{{position:relative;width:{width_px}px;height:{row_height_px}px;border-top:1px solid #343940;border-bottom:1px solid #343940;background:linear-gradient(180deg,#1b2024,#14181c);overflow:hidden;}}\
