@@ -5,45 +5,18 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
-use bee_g2p_charsiu::{
-    CharsiuSidecarClient, PhonemizeTextRequest, ProbeRequest, TranscriptAlignmentInput,
-    TranscriptTokenPieceComparisonRange, TranscriptWordComparisonRange, probe_text_default,
-    token_piece_phones, transcript_alignment_input,
-};
+use bee_g2p::{BeeG2p, token_piece_phones, transcript_alignment_input, transcript_words};
 use bee_phonetic::{
-    align_token_sequences, normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans,
-    parse_reviewed_ipa, sentence_word_tokens,
+    align_token_sequences, normalize_ipa_for_comparison_with_spans, sentence_word_tokens,
 };
 use bee_qwen3_asr::tokenizers::Tokenizer;
 use bee_transcribe::zipa_align::{
     ComparisonRangeTiming, TranscriptAlignment, raw_slice_for_normalized_range,
+    transcript_comparison_input_from_g2p,
 };
 use bee_zipa_mlx::audio::load_wav_mono_f32;
 use bee_zipa_mlx::infer::ZipaInference;
 use serde_json::{Value, json};
-
-#[derive(Clone)]
-struct SentenceTokenMeta {
-    index: usize,
-    label: String,
-    char_start: usize,
-    char_end: usize,
-    surface: String,
-}
-
-#[derive(Clone)]
-struct PieceRow {
-    word: String,
-    token_index: usize,
-    token: String,
-    surface: String,
-    char_start: usize,
-    char_end: usize,
-    comparison_start: usize,
-    comparison_end: usize,
-    g2p_raw: Vec<String>,
-    g2p_normalized: Vec<String>,
-}
 
 fn main() -> Result<()> {
     let args = parse_args()?;
@@ -66,21 +39,6 @@ fn main() -> Result<()> {
         .encode(text.as_str(), false)
         .map_err(|e| anyhow!("encoding text: {e}"))?;
 
-    let sentence_tokens = encoding
-        .get_ids()
-        .iter()
-        .zip(encoding.get_tokens())
-        .zip(encoding.get_offsets())
-        .enumerate()
-        .map(|(index, ((_id, label), (start, end)))| SentenceTokenMeta {
-            index,
-            label: format!("{label}"),
-            char_start: *start,
-            char_end: *end,
-            surface: text.get(*start..*end).unwrap_or_default().to_owned(),
-        })
-        .collect::<Vec<_>>();
-
     let tokens = encoding
         .get_ids()
         .iter()
@@ -99,8 +57,8 @@ fn main() -> Result<()> {
         })
         .collect::<Vec<_>>();
 
-    let words = sentence_word_tokens(&text);
-    let text_segments = text_segments(&text, &words, encoding.get_offsets());
+    let sentence_words = sentence_word_tokens(&text);
+    let text_segments = text_segments(&text, &sentence_words, encoding.get_offsets());
 
     let inference = ZipaInference::load_reference_small_no_diacritics()?;
     let wav = wav_path_for(&default_wav_dir(), &recording.audio_path);
@@ -117,174 +75,40 @@ fn main() -> Result<()> {
         .map(|token| token.token.clone())
         .collect::<Vec<_>>();
 
-    let mut charsiu = CharsiuSidecarClient::spawn_default()
-        .map_err(|e| anyhow!("spawning Charsiu sidecar: {e}"))?;
-    let word_ipas = charsiu
-        .phonemize_text(PhonemizeTextRequest {
-            text: text.clone(),
-            lang_code: "eng-us".to_owned(),
-        })
-        .map_err(|e| anyhow!("phonemizing text with Charsiu: {e}"))?;
-
-    if word_ipas.word_ipas.len() != words.len() {
-        return Err(anyhow!(
-            "word count mismatch: sentence_word_tokens={} charsiu={}",
-            words.len(),
-            word_ipas.word_ipas.len()
-        ));
-    }
-
-    let mut normalized = Vec::new();
-    let mut word_ranges = Vec::new();
-    let mut token_piece_ranges = Vec::new();
-    let mut piece_rows = Vec::new();
-
-    for (word_index, (word, word_ipa)) in words.iter().zip(word_ipas.word_ipas.iter()).enumerate() {
-        let (token_start, token_end) =
-            token_span_for_char_range(word.char_start..word.char_end, encoding.get_offsets());
-        if token_start >= token_end {
-            continue;
-        }
-
-        let word_cmp_start = normalized.len();
-        if token_end - token_start == 1 {
-            let token = sentence_tokens
-                .get(token_start)
-                .ok_or_else(|| anyhow!("missing sentence token {}", token_start))?;
-            let raw = parse_reviewed_ipa(&word_ipa.ipa);
-            let norm = normalize_ipa_for_comparison(&raw);
-            let comparison_start = normalized.len();
-            normalized.extend(norm.iter().cloned());
-            let comparison_end = normalized.len();
-
-            token_piece_ranges.push(TranscriptTokenPieceComparisonRange {
-                token_index: token.index,
-                token: token.label.clone(),
-                token_surface: token.surface.clone(),
-                token_char_start: token.char_start,
-                token_char_end: token.char_end,
-                word_index: Some(word_index),
-                word_surface: Some(word.text.clone()),
-                comparison_start,
-                comparison_end,
-            });
-            piece_rows.push(PieceRow {
-                word: word.text.clone(),
-                token_index: token.index,
-                token: token.label.clone(),
-                surface: token.surface.clone(),
-                char_start: token.char_start,
-                char_end: token.char_end,
-                comparison_start,
-                comparison_end,
-                g2p_raw: raw,
-                g2p_normalized: norm,
-            });
-        } else {
-            let probe_start = sentence_tokens
-                .get(token_start)
-                .map(|token| token.char_start)
-                .ok_or_else(|| anyhow!("missing probe start token {}", token_start))?;
-            let probe_end = sentence_tokens
-                .get(token_end - 1)
-                .map(|token| token.char_end)
-                .ok_or_else(|| anyhow!("missing probe end token {}", token_end - 1))?;
-            let probe_text = text
-                .get(probe_start..probe_end)
-                .ok_or_else(|| anyhow!("invalid probe slice {probe_start}..{probe_end}"))?
-                .to_owned();
-            let probe = probe_text_default(ProbeRequest {
-                text: probe_text,
-                lang_code: "eng-us".to_owned(),
-                top_k: 4,
-            })
-            .map_err(|e| anyhow!("Charsiu probe failed for '{}': {e}", word.text))?;
-            let local_input = transcript_alignment_input(&probe);
-            let local_phones = token_piece_phones(&probe);
-            if local_input.token_pieces.len() != token_end - token_start {
-                return Err(anyhow!(
-                    "token piece mismatch for '{}': global={} local={}",
-                    word.text,
-                    token_end - token_start,
-                    local_input.token_pieces.len()
-                ));
-            }
-            normalized.extend(local_input.normalized.iter().cloned());
-
-            for (offset, (local_piece, local_phone)) in local_input
-                .token_pieces
-                .iter()
-                .zip(local_phones.iter())
-                .enumerate()
-            {
-                let token = sentence_tokens
-                    .get(token_start + offset)
-                    .ok_or_else(|| anyhow!("missing global token {}", token_start + offset))?;
-                let comparison_start = word_cmp_start + local_piece.comparison_start;
-                let comparison_end = word_cmp_start + local_piece.comparison_end;
-                token_piece_ranges.push(TranscriptTokenPieceComparisonRange {
-                    token_index: token.index,
-                    token: token.label.clone(),
-                    token_surface: token.surface.clone(),
-                    token_char_start: token.char_start,
-                    token_char_end: token.char_end,
-                    word_index: Some(word_index),
-                    word_surface: Some(word.text.clone()),
-                    comparison_start,
-                    comparison_end,
-                });
-                piece_rows.push(PieceRow {
-                    word: word.text.clone(),
-                    token_index: token.index,
-                    token: token.label.clone(),
-                    surface: token.surface.clone(),
-                    char_start: token.char_start,
-                    char_end: token.char_end,
-                    comparison_start,
-                    comparison_end,
-                    g2p_raw: local_phone.ipa_tokens.clone(),
-                    g2p_normalized: local_phone.normalized_phones.clone(),
-                });
-            }
-        }
-
-        let word_cmp_end = normalized.len();
-        word_ranges.push(TranscriptWordComparisonRange {
-            word_index,
-            word_surface: word.text.clone(),
-            char_start: word.char_start,
-            char_end: word.char_end,
-            comparison_start: word_cmp_start,
-            comparison_end: word_cmp_end,
-        });
-    }
-
-    let chars_input = TranscriptAlignmentInput {
-        normalized,
-        sequence: bee_g2p_charsiu::TranscriptComparisonSequence {
-            tokens: Vec::new(),
-            provenance: Vec::new(),
-        },
-        words: word_ranges,
-        token_pieces: token_piece_ranges,
-    };
+    let mut g2p = BeeG2p::load_default()?;
+    let analysis = g2p.analyze_text(&text, "eng-us")?;
+    let chars_input = transcript_alignment_input(&analysis);
+    let piece_phones = token_piece_phones(&analysis);
     let alignment = TranscriptAlignment::build_from_comparison_input(
-        bee_transcribe::zipa_align::transcript_comparison_input_from_charsiu(&text, &chars_input),
+        transcript_comparison_input_from_g2p(&text, &chars_input),
         &audio,
         &inference,
     )
     .map_err(|e| anyhow!("building transcript alignment: {e}"))?;
     let piece_timings = alignment.token_piece_timings(&chars_input.token_pieces);
 
-    let token_pieces_json = piece_rows
+    if analysis.token_piece_spans.len() != chars_input.token_pieces.len()
+        || analysis.token_piece_spans.len() != piece_phones.len()
+        || analysis.token_piece_spans.len() != piece_timings.len()
+    {
+        return Err(anyhow!(
+            "token piece pipeline length mismatch: spans={} ranges={} phones={} timings={}",
+            analysis.token_piece_spans.len(),
+            chars_input.token_pieces.len(),
+            piece_phones.len(),
+            piece_timings.len()
+        ));
+    }
+
+    let token_pieces_json = analysis
+        .token_piece_spans
         .iter()
-        .map(|piece| {
-            let timing = piece_timings
-                .iter()
-                .find(|timing| timing.token_index == piece.token_index)
-                .ok_or_else(|| anyhow!("missing token piece timing for {}", piece.token_index))?;
+        .zip(chars_input.token_pieces.iter())
+        .zip(piece_phones.iter())
+        .zip(piece_timings.iter())
+        .map(|(((piece, piece_range), piece_phone), timing)| {
             let projected = alignment
-                .projected_comparison_range(piece.comparison_start..piece.comparison_end);
+                .projected_comparison_range(piece_range.comparison_start..piece_range.comparison_end);
             let (zipa_normalized, zipa_raw_piece, audio_json, projection_label) =
                 match &timing.timing {
                     ComparisonRangeTiming::Aligned(timed) => {
@@ -329,9 +153,11 @@ fn main() -> Result<()> {
                             format!("nt:{}..{}", projected_range.start, projected_range.end),
                         )
                     }
-                    ComparisonRangeTiming::Invalid => (Vec::new(), Vec::new(), None, "invalid".to_owned()),
+                    ComparisonRangeTiming::Invalid => {
+                        (Vec::new(), Vec::new(), None, "invalid".to_owned())
+                    }
                 };
-            let ops_label = align_token_sequences(&piece.g2p_normalized, &zipa_normalized)
+            let ops_label = align_token_sequences(&piece_phone.normalized_phones, &zipa_normalized)
                 .ops
                 .iter()
                 .map(|op| {
@@ -350,20 +176,20 @@ fn main() -> Result<()> {
                 .collect::<Vec<_>>()
                 .join("");
             Ok(json!({
-                "word": piece.word,
+                "word": piece.word_surface,
                 "token_index": piece.token_index,
                 "token": piece.token,
-                "surface": piece.surface,
-                "char_start": piece.char_start,
-                "char_end": piece.char_end,
+                "surface": piece.token_surface,
+                "char_start": piece.token_char_start,
+                "char_end": piece.token_char_end,
                 "token_start": piece.token_index,
                 "token_end": piece.token_index + 1,
-                "comparison_start": piece.comparison_start,
-                "comparison_end": piece.comparison_end,
+                "comparison_start": piece_range.comparison_start,
+                "comparison_end": piece_range.comparison_end,
                 "projected_start": projected.as_ref().map(|range| range.start),
                 "projected_end": projected.as_ref().map(|range| range.end),
-                "g2p_raw": piece.g2p_raw,
-                "g2p_normalized": piece.g2p_normalized,
+                "g2p_raw": piece_phone.ipa_tokens,
+                "g2p_normalized": piece_phone.normalized_phones,
                 "zipa_normalized": zipa_normalized,
                 "zipa_raw": zipa_raw_piece,
                 "audio": audio_json,
@@ -373,13 +199,13 @@ fn main() -> Result<()> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let words_json = words
+    let words_json = transcript_words(&text)
         .iter()
         .map(|word| {
             let (token_start, token_end) =
                 token_span_for_char_range(word.char_start..word.char_end, encoding.get_offsets());
             json!({
-                "word": word.text,
+                "word": word.word,
                 "char_start": word.char_start,
                 "char_end": word.char_end,
                 "token_start": token_start,

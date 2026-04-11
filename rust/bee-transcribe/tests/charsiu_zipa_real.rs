@@ -1,19 +1,15 @@
 use std::fs;
 use std::path::Path;
 
-use bee_g2p_charsiu::{
-    ProbeRequest, TranscriptAlignmentInput, TranscriptComparisonSequence,
-    TranscriptTokenPieceComparisonRange, TranscriptWordComparisonRange, probe_text_default,
-    transcript_alignment_input, transcript_words,
-};
+use bee_g2p::{BeeG2p, TranscriptAlignmentInput, transcript_alignment_input};
 use bee_transcribe::zipa_align::{
-    ComparisonRangeTiming, TranscriptAlignment, transcript_comparison_input_from_charsiu,
+    ComparisonRangeTiming, TranscriptAlignment, transcript_comparison_input_from_g2p,
 };
 use bee_zipa_mlx::audio::load_wav_mono_f32;
 use bee_zipa_mlx::infer::ZipaInference;
 
 #[test]
-#[ignore = "requires local Charsiu sidecar, ZIPA weights, and real artifact WAV"]
+#[ignore = "requires local bee-g2p model, ZIPA weights, and real artifact WAV"]
 fn real_artifact_recovers_some_token_piece_timings() -> Result<(), Box<dyn std::error::Error>> {
     let wav = Path::new(
         "/Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/8453579B.wav",
@@ -23,14 +19,14 @@ fn real_artifact_recovers_some_token_piece_timings() -> Result<(), Box<dyn std::
     );
     let text = extract_transcript_text(transcript_file)?;
 
-    let charsiu_input = build_per_word_alignment_input(&text, "eng-us")?;
-    let align_input = transcript_comparison_input_from_charsiu(&text, &charsiu_input);
+    let g2p_input = build_per_word_alignment_input(&text, "eng-us")?;
+    let align_input = transcript_comparison_input_from_g2p(&text, &g2p_input);
     let audio = load_wav_mono_f32(wav)?;
     let zipa = ZipaInference::load_reference_small_no_diacritics()?;
     let alignment = TranscriptAlignment::build_from_comparison_input(align_input, &audio, &zipa)
         .map_err(|e| format!("build alignment: {e}"))?;
 
-    let tokens = charsiu_input
+    let tokens = g2p_input
         .token_pieces
         .iter()
         .map(|token| {
@@ -53,22 +49,22 @@ fn real_artifact_recovers_some_token_piece_timings() -> Result<(), Box<dyn std::
     assert!(
         tokens
             .iter()
-            .any(|(surface, _, timing)| surface == "There" && timing.is_some())
+            .any(|(surface, _, timing)| surface.trim() == "There" && timing.is_some())
     );
     assert!(
         tokens
             .iter()
-            .any(|(surface, _, timing)| surface == "work" && timing.is_some())
+            .any(|(surface, _, timing)| surface.trim() == "work" && timing.is_some())
     );
 
     let there = tokens
         .iter()
-        .find(|(surface, _, _)| surface == "There")
+        .find(|(surface, _, _)| surface.trim() == "There")
         .and_then(|(_, _, timing)| *timing)
         .expect("There should have timing");
     let work = tokens
         .iter()
-        .find(|(surface, _, _)| surface == "work")
+        .find(|(surface, _, _)| surface.trim() == "work")
         .and_then(|(_, _, timing)| *timing)
         .expect("work should have timing");
 
@@ -102,60 +98,7 @@ fn build_per_word_alignment_input(
     text: &str,
     lang_code: &str,
 ) -> Result<TranscriptAlignmentInput, Box<dyn std::error::Error>> {
-    let words = transcript_words(text);
-    let mut normalized = Vec::new();
-    let mut word_ranges = Vec::new();
-    let mut token_pieces = Vec::new();
-    let mut comparison_cursor = 0usize;
-    let mut token_cursor = 0usize;
-
-    for (word_index, word) in words.iter().enumerate() {
-        let probe = probe_text_default(ProbeRequest {
-            text: word.word.clone(),
-            lang_code: lang_code.to_string(),
-            top_k: 6,
-        })?;
-        let local = transcript_alignment_input(&probe);
-        let word_cmp_start = comparison_cursor;
-        let word_cmp_end = comparison_cursor + local.normalized.len();
-
-        normalized.extend(local.normalized);
-        word_ranges.push(TranscriptWordComparisonRange {
-            word_index,
-            word_surface: word.word.clone(),
-            char_start: word.char_start,
-            char_end: word.char_end,
-            comparison_start: word_cmp_start,
-            comparison_end: word_cmp_end,
-        });
-
-        for token in local.token_pieces {
-            token_pieces.push(TranscriptTokenPieceComparisonRange {
-                token_index: token_cursor,
-                token: token.token,
-                token_surface: text[word.char_start + token.token_char_start
-                    ..word.char_start + token.token_char_end]
-                    .to_string(),
-                token_char_start: word.char_start + token.token_char_start,
-                token_char_end: word.char_start + token.token_char_end,
-                word_index: Some(word_index),
-                word_surface: Some(word.word.clone()),
-                comparison_start: token.comparison_start + word_cmp_start,
-                comparison_end: token.comparison_end + word_cmp_start,
-            });
-            token_cursor += 1;
-        }
-
-        comparison_cursor = word_cmp_end;
-    }
-
-    Ok(TranscriptAlignmentInput {
-        normalized,
-        sequence: TranscriptComparisonSequence {
-            tokens: Vec::new(),
-            provenance: Vec::new(),
-        },
-        words: word_ranges,
-        token_pieces,
-    })
+    let mut g2p = BeeG2p::load_default()?;
+    let analysis = g2p.analyze_text(text, lang_code)?;
+    Ok(transcript_alignment_input(&analysis))
 }

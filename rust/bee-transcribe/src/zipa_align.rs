@@ -162,9 +162,9 @@ pub fn transcript_comparison_input_from_word_raw_ranges(
     }
 }
 
-pub fn transcript_comparison_input_from_charsiu(
+pub fn transcript_comparison_input_from_g2p(
     transcript: &str,
-    input: &bee_g2p_charsiu::TranscriptAlignmentInput,
+    input: &bee_g2p::TranscriptAlignmentInput,
 ) -> TranscriptComparisonInput {
     let word_char_ranges = input
         .words
@@ -1242,7 +1242,7 @@ impl TranscriptAlignment {
 
     pub fn token_piece_timings(
         &self,
-        token_pieces: &[bee_g2p_charsiu::TranscriptTokenPieceComparisonRange],
+        token_pieces: &[bee_g2p::TranscriptTokenPieceComparisonRange],
     ) -> Vec<TokenPieceTiming> {
         token_pieces
             .iter()
@@ -1309,7 +1309,7 @@ mod tests {
         ComparisonRangeTiming, TranscriptAlignment, TranscriptComparisonInput,
         expand_degenerate_projected_range, partition_word_alignment_windows,
         select_segmental_word_windows, timed_range_for_normalized_range,
-        transcript_comparison_input_from_charsiu, transcript_comparison_input_from_word_raw_ranges,
+        transcript_comparison_input_from_g2p, transcript_comparison_input_from_word_raw_ranges,
     };
     use bee_phonetic::{
         AlignmentOp, AlignmentOpKind, ComparisonToken,
@@ -1517,8 +1517,8 @@ mod tests {
     }
 
     #[test]
-    fn transcript_comparison_input_from_charsiu_keeps_word_ranges() {
-        let input = bee_g2p_charsiu::TranscriptAlignmentInput {
+    fn transcript_comparison_input_from_g2p_keeps_word_ranges() {
+        let input = bee_g2p::TranscriptAlignmentInput {
             normalized: vec![
                 "j".to_string(),
                 "ʊ".to_string(),
@@ -1530,12 +1530,12 @@ mod tests {
                 "ə".to_string(),
                 "t".to_string(),
             ],
-            sequence: bee_g2p_charsiu::TranscriptComparisonSequence {
+            sequence: bee_g2p::TranscriptComparisonSequence {
                 tokens: vec![],
                 provenance: vec![],
             },
             words: vec![
-                bee_g2p_charsiu::TranscriptWordComparisonRange {
+                bee_g2p::TranscriptWordComparisonRange {
                     word_index: 0,
                     word_surface: "use".to_string(),
                     char_start: 0,
@@ -1543,7 +1543,7 @@ mod tests {
                     comparison_start: 0,
                     comparison_end: 3,
                 },
-                bee_g2p_charsiu::TranscriptWordComparisonRange {
+                bee_g2p::TranscriptWordComparisonRange {
                     word_index: 1,
                     word_surface: "Facet".to_string(),
                     char_start: 4,
@@ -1555,7 +1555,7 @@ mod tests {
             token_pieces: vec![],
         };
 
-        let converted = transcript_comparison_input_from_charsiu("use Facet", &input);
+        let converted = transcript_comparison_input_from_g2p("use Facet", &input);
         assert_eq!(converted.word_char_ranges, vec![0..3, 4..9]);
         assert_eq!(converted.word_normalized_ranges, vec![0..3, 3..9]);
         assert_eq!(converted.word_tokens[0], vec!["j", "ʊ", "z"]);
@@ -1884,7 +1884,7 @@ mod tests {
 
     #[test]
     fn token_piece_timings_wrap_comparison_ranges() {
-        let input = bee_g2p_charsiu::TranscriptAlignmentInput {
+        let input = bee_g2p::TranscriptAlignmentInput {
             normalized: vec![
                 "f".to_string(),
                 "ɛ".to_string(),
@@ -1893,11 +1893,11 @@ mod tests {
                 "ə".to_string(),
                 "t".to_string(),
             ],
-            sequence: bee_g2p_charsiu::TranscriptComparisonSequence {
+            sequence: bee_g2p::TranscriptComparisonSequence {
                 tokens: vec![],
                 provenance: vec![],
             },
-            words: vec![bee_g2p_charsiu::TranscriptWordComparisonRange {
+            words: vec![bee_g2p::TranscriptWordComparisonRange {
                 word_index: 0,
                 word_surface: "Facet".to_string(),
                 char_start: 0,
@@ -1906,7 +1906,7 @@ mod tests {
                 comparison_end: 6,
             }],
             token_pieces: vec![
-                bee_g2p_charsiu::TranscriptTokenPieceComparisonRange {
+                bee_g2p::TranscriptTokenPieceComparisonRange {
                     token_index: 0,
                     token: "Fac".to_string(),
                     token_surface: "Fac".to_string(),
@@ -1917,7 +1917,7 @@ mod tests {
                     comparison_start: 0,
                     comparison_end: 4,
                 },
-                bee_g2p_charsiu::TranscriptTokenPieceComparisonRange {
+                bee_g2p::TranscriptTokenPieceComparisonRange {
                     token_index: 1,
                     token: "et".to_string(),
                     token_surface: "et".to_string(),
@@ -1931,7 +1931,7 @@ mod tests {
             ],
         };
         let ta = TranscriptAlignment::build_from_comparison_input_and_zipa(
-            transcript_comparison_input_from_charsiu("Facet", &input),
+            transcript_comparison_input_from_g2p("Facet", &input),
             vec![
                 ComparisonToken {
                     token: "f".into(),
