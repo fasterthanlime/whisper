@@ -14,5 +14,6 @@ bee-phonetic = { path = "../bee-phonetic" }
 bee-qwen3-asr = { path = "../bee-qwen3-asr" }
 bee-transcribe = { path = "../bee-transcribe" }
 bee-zipa-mlx = { path = "../bee-zipa-mlx" }
+crossterm = "0.28"
 ctrlc.workspace = true
-indicatif = "0.17"
+ratatui = "0.29"
