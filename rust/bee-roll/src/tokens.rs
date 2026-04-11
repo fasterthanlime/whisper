@@ -368,6 +368,22 @@ impl OutputToken {
     pub fn zipa_timing(&self) -> &ZipaTiming {
         &self.zipa_timing
     }
+
+    pub(crate) fn set_g2p_ipa(&mut self, ipa: Option<CompactString>) {
+        self.g2p_ipa = ipa.map(G2pTokenIpa::new);
+    }
+
+    pub(crate) fn set_transcript_phones(&mut self, phones: Vec<ComparisonPhone>) {
+        self.transcript_phones = phones;
+    }
+
+    pub(crate) fn set_zipa_phone_spans(&mut self, phone_spans: Vec<ZipaPhoneSpan>) {
+        self.zipa_phone_spans = phone_spans;
+    }
+
+    pub(crate) fn set_zipa_timing(&mut self, timing: ZipaTiming) {
+        self.zipa_timing = timing;
+    }
 }
 
 /// Borrowed view of the current utterance output after one feed step.

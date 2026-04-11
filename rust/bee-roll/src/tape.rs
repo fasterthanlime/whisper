@@ -240,6 +240,10 @@ impl Tape {
         self.tokens.as_slice()
     }
 
+    pub(crate) fn token_mut(&mut self, index: usize) -> Option<&mut OutputToken> {
+        self.tokens.tokens.get_mut(index)
+    }
+
     pub(crate) fn detected_language(&self) -> Option<&str> {
         self.detected_language.as_deref()
     }

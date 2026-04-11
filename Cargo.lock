@@ -263,7 +263,10 @@ name = "bee-roll"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bee-g2p",
  "bee-qwen3-asr",
+ "bee-transcribe",
+ "bee-zipa-mlx",
  "compact_str 0.9.0",
 ]
 

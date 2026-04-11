@@ -1,8 +1,10 @@
 use crate::tokens::UtteranceTokenRange;
 use crate::{
-    AsrTokenAlternative, AsrTokenConfidence, AudioBuffer, Cut, FeedOutput, OutputToken,
-    SampleOffset, SampleRange, Tape, TimedToken, TokenId, TokenIndex,
+    AsrTokenAlternative, AsrTokenConfidence, AudioBuffer, ComparisonPhone, Cut, FeedOutput,
+    OutputToken, SampleOffset, SampleRange, Tape, TimeRange, TimedToken, TokenId, TokenIndex,
+    ZipaTiming,
 };
+use bee_g2p::{BeeG2p, token_piece_phones, transcript_alignment_input};
 use bee_qwen3_asr::encoder::EncoderCache;
 use bee_qwen3_asr::generate::{self, ConfidenceMode, TokenConfidence};
 use bee_qwen3_asr::mel::MelExtractor;
@@ -10,6 +12,11 @@ use bee_qwen3_asr::mlx_rs::Array;
 use bee_qwen3_asr::mlx_rs::error::Exception;
 use bee_qwen3_asr::mlx_rs::ops;
 use bee_qwen3_asr::model::Qwen3ASRModel;
+use bee_transcribe::zipa_align::{
+    ComparisonRangeTiming, TranscriptAlignment, transcript_comparison_input_from_g2p,
+};
+use bee_zipa_mlx::audio::AudioBuffer as ZipaAudioBuffer;
+use bee_zipa_mlx::infer::ZipaInference;
 use compact_str::CompactString;
 use std::path::Path;
 use std::sync::Arc;
@@ -46,6 +53,24 @@ struct AsrRuntime {
     max_new_tokens: usize,
 }
 
+struct PhoneticRuntime {
+    g2p: BeeG2p,
+    zipa: ZipaInference,
+    lang_code: CompactString,
+}
+
+struct PreviewRun {
+    transcript: String,
+    token_enrichments: Vec<PreviewTokenEnrichment>,
+}
+
+struct PreviewTokenEnrichment {
+    token_index: usize,
+    g2p_ipa: CompactString,
+    transcript_phones: Vec<ComparisonPhone>,
+    zipa_timing: ZipaTiming,
+}
+
 impl AsrRuntime {
     fn new(
         model: Arc<Qwen3ASRModel>,
@@ -62,6 +87,24 @@ impl AsrRuntime {
             language,
             max_new_tokens,
         }
+    }
+}
+
+impl PhoneticRuntime {
+    fn load(
+        g2p_model_dir: &Path,
+        tokenizer_path: &Path,
+        zipa_bundle_dir: &Path,
+        lang_code: CompactString,
+    ) -> anyhow::Result<Self> {
+        let g2p = BeeG2p::load(g2p_model_dir, tokenizer_path)?;
+        let zipa = ZipaInference::load_quantized_bundle_dir(zipa_bundle_dir)
+            .map_err(|e| anyhow::anyhow!("loading ZIPA bundle: {e}"))?;
+        Ok(Self {
+            g2p,
+            zipa,
+            lang_code,
+        })
     }
 }
 
@@ -142,6 +185,9 @@ pub struct Utterance {
 
     /// Optional ASR runtime used to decode preview on each feed step.
     asr: Option<AsrRuntime>,
+
+    /// Optional phonetic/timing runtime used to enrich the current preview.
+    phonetics: Option<PhoneticRuntime>,
 }
 
 impl Utterance {
@@ -160,6 +206,7 @@ impl Utterance {
             cutter,
             listener,
             asr: None,
+            phonetics: None,
         }
     }
 
@@ -177,6 +224,22 @@ impl Utterance {
             language.into(),
             DEFAULT_MAX_NEW_TOKENS,
         ));
+    }
+
+    pub fn attach_phonetics(
+        &mut self,
+        g2p_model_dir: &Path,
+        tokenizer_path: &Path,
+        zipa_bundle_dir: &Path,
+        lang_code: impl Into<CompactString>,
+    ) -> anyhow::Result<()> {
+        self.phonetics = Some(PhoneticRuntime::load(
+            g2p_model_dir,
+            tokenizer_path,
+            zipa_bundle_dir,
+            lang_code.into(),
+        )?);
+        Ok(())
     }
 
     /// Feeds raw samples into the utterance recording buffer.
@@ -198,6 +261,12 @@ impl Utterance {
             .unwrap_or_else(|e| panic!("bee-roll preview decode failed: {e}"))
         {
             self.apply_decoded_preview(decoded);
+        }
+        if let Some(preview_run) = self
+            .build_preview_run()
+            .unwrap_or_else(|e| panic!("bee-roll preview enrichment failed: {e}"))
+        {
+            self.apply_preview_run(&preview_run);
         }
         // TODO: optionally run cutter and promote stable/carry boundaries
 
@@ -440,6 +509,86 @@ impl Utterance {
             .map(|(&token, &logit)| AsrTokenAlternative::new(TokenId::new(token as u32), logit))
             .collect();
         AsrTokenConfidence::new(confidence.concentration, confidence.margin, alternatives)
+    }
+
+    fn build_preview_run(&mut self) -> anyhow::Result<Option<PreviewRun>> {
+        let Some(phonetics) = self.phonetics.as_mut() else {
+            return Ok(None);
+        };
+        let token_ids = self
+            .tape
+            .tokens()
+            .iter()
+            .map(|token| token.timed_token().token())
+            .collect::<Vec<_>>();
+        if token_ids.is_empty() {
+            return Ok(None);
+        }
+
+        let transcript = crate::decode_token_ids(&token_ids)?;
+        let analysis = phonetics
+            .g2p
+            .analyze_text(&transcript, phonetics.lang_code.as_str())?;
+        let token_piece_phones = token_piece_phones(&analysis);
+        let alignment_input = transcript_alignment_input(&analysis);
+        let comparison_input = transcript_comparison_input_from_g2p(&transcript, &alignment_input);
+        let zipa_audio = ZipaAudioBuffer {
+            samples: self.audio.samples().to_vec(),
+            sample_rate_hz: crate::SAMPLE_RATE,
+        };
+        let alignment = TranscriptAlignment::build_from_comparison_input(
+            comparison_input,
+            &zipa_audio,
+            &phonetics.zipa,
+        )
+        .map_err(|e| anyhow::anyhow!("building transcript alignment: {e}"))?;
+        let timings = alignment.token_piece_timings(&alignment_input.token_pieces);
+
+        let token_enrichments = token_piece_phones
+            .into_iter()
+            .zip(timings)
+            .map(|(phones, timing)| PreviewTokenEnrichment {
+                token_index: phones.token_index,
+                g2p_ipa: CompactString::from(phones.ipa_text),
+                transcript_phones: phones
+                    .normalized_phones
+                    .into_iter()
+                    .map(|phone| ComparisonPhone::new(CompactString::from(phone)))
+                    .collect(),
+                zipa_timing: Self::map_zipa_timing(timing.timing),
+            })
+            .collect();
+
+        Ok(Some(PreviewRun {
+            transcript,
+            token_enrichments,
+        }))
+    }
+
+    fn apply_preview_run(&mut self, preview_run: &PreviewRun) {
+        let _ = &preview_run.transcript;
+        for enrichment in &preview_run.token_enrichments {
+            if let Some(token) = self.tape.token_mut(enrichment.token_index) {
+                token.set_g2p_ipa(Some(enrichment.g2p_ipa.clone()));
+                token.set_transcript_phones(enrichment.transcript_phones.clone());
+                token.set_zipa_timing(enrichment.zipa_timing.clone());
+            }
+        }
+    }
+
+    fn map_zipa_timing(timing: ComparisonRangeTiming) -> ZipaTiming {
+        match timing {
+            ComparisonRangeTiming::Invalid => ZipaTiming::Invalid,
+            ComparisonRangeTiming::Deleted { projected_at } => ZipaTiming::Deleted { projected_at },
+            ComparisonRangeTiming::NoTiming { projected_range } => ZipaTiming::Projected {
+                normalized_start: projected_range.start,
+                normalized_end: projected_range.end,
+            },
+            ComparisonRangeTiming::Aligned(timed) => ZipaTiming::Aligned(TimeRange::new(
+                crate::UtteranceTime::from_secs(timed.start_time_secs),
+                crate::UtteranceTime::from_secs(timed.end_time_secs),
+            )),
+        }
     }
 }
 
