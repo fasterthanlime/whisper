@@ -1,4 +1,4 @@
-extern "C" {
+unsafe extern "C" {
     fn mlx_set_cache_limit(res: *mut usize, limit: usize) -> std::ffi::c_int;
     fn mlx_clear_cache() -> std::ffi::c_int;
 }

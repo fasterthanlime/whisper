@@ -7,10 +7,9 @@ use bee_qwen3_asr::load;
 
 use crate::print::print_usage;
 use crate::{
-    DEFAULT_BRIDGE_MS, DEFAULT_CHUNK_MS, DEFAULT_KEEP_BOUNDARY_POLICY,
-    DEFAULT_LANE_B_FIRST_CHUNK_MS, DEFAULT_LANGUAGE, DEFAULT_MAX_NEW_TOKENS,
-    DEFAULT_MLX_CACHE_LIMIT_MB, DEFAULT_REPLAY_CHUNK_INDEX, DEFAULT_ROLLBACK_MS, DEFAULT_STRIDE_MS,
-    DEFAULT_TRUNCATE_TOKENS, DEFAULT_WAV_RELATIVE_TO_CRATE, MAX_BRIDGE_WINDOWS,
+    DEFAULT_BRIDGE_MS, DEFAULT_CHUNK_MS, DEFAULT_KEEP_BOUNDARY_POLICY, DEFAULT_LANGUAGE,
+    DEFAULT_MAX_NEW_TOKENS, DEFAULT_MLX_CACHE_LIMIT_MB, DEFAULT_ROLLBACK_MS, DEFAULT_STRIDE_MS,
+    DEFAULT_WAV_RELATIVE_TO_CRATE, MAX_BRIDGE_WINDOWS,
 };
 
 /// CLI arguments parsed from `env::args()`.
@@ -27,8 +26,6 @@ pub(crate) struct Args {
     pub(crate) max_new_tokens: usize,
     /// Optional context string injected into the initial prompt.
     pub(crate) context: String,
-    /// Which decode experiment to run.
-    pub(crate) mode: Mode,
     /// Audio chunk duration in milliseconds.
     pub(crate) chunk_ms: usize,
     /// Bridge window duration in milliseconds for bridge-replay mode.
@@ -39,16 +36,8 @@ pub(crate) struct Args {
     pub(crate) stride_ms: Option<usize>,
     /// Policy for snapping the keep boundary to a word edge.
     pub(crate) keep_boundary_policy: KeepBoundaryPolicy,
-    /// Rollback duration in milliseconds for sliding-window modes.
+    /// Rollback duration in milliseconds for sliding-window mode.
     pub(crate) rollback_ms: usize,
-    /// Policy for computing the rollback position.
-    pub(crate) rollback_policy: RollbackPolicy,
-    /// Chunk index at which truncate-replay begins replaying.
-    pub(crate) replay_chunk_index: usize,
-    /// Number of tokens to truncate when replaying from a rollback point.
-    pub(crate) truncate_tokens: usize,
-    /// First-chunk duration in milliseconds for lane B in dual-lane mode.
-    pub(crate) lane_b_first_chunk_ms: usize,
     /// Optional MLX memory cache limit in megabytes.
     pub(crate) mlx_cache_limit_mb: Option<usize>,
 }
@@ -57,7 +46,6 @@ impl Args {
     /// Parses CLI arguments from `env::args()` into an `Args` struct.
     pub(crate) fn parse() -> Result<Self> {
         let mut positional = Vec::new();
-        let mut mode = Mode::Initial;
         let mut context = String::new();
         let mut chunk_ms = DEFAULT_CHUNK_MS;
         let mut bridge_ms = DEFAULT_BRIDGE_MS;
@@ -65,10 +53,6 @@ impl Args {
         let mut stride_ms = DEFAULT_STRIDE_MS;
         let mut keep_boundary_policy = DEFAULT_KEEP_BOUNDARY_POLICY;
         let mut rollback_ms = DEFAULT_ROLLBACK_MS;
-        let mut rollback_policy = RollbackPolicy::TextSuffix;
-        let mut replay_chunk_index = DEFAULT_REPLAY_CHUNK_INDEX;
-        let mut truncate_tokens = DEFAULT_TRUNCATE_TOKENS;
-        let mut lane_b_first_chunk_ms = DEFAULT_LANE_B_FIRST_CHUNK_MS;
         let mut mlx_cache_limit_mb = DEFAULT_MLX_CACHE_LIMIT_MB;
 
         let mut args = env::args().skip(1);
@@ -76,17 +60,6 @@ impl Args {
             if arg == "-h" || arg == "--help" {
                 print_usage();
                 std::process::exit(0);
-            }
-            if let Some(value) = arg.strip_prefix("--mode=") {
-                mode = Mode::parse(value)?;
-                continue;
-            }
-            if arg == "--mode" {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--mode requires a value"))?;
-                mode = Mode::parse(&value)?;
-                continue;
             }
             if let Some(value) = arg.strip_prefix("--context=") {
                 context = value.to_string();
@@ -207,62 +180,6 @@ impl Args {
                 );
                 continue;
             }
-            if let Some(value) = arg.strip_prefix("--rollback-policy=") {
-                rollback_policy = RollbackPolicy::parse(value)?;
-                continue;
-            }
-            if arg == "--rollback-policy" {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--rollback-policy requires a value"))?;
-                rollback_policy = RollbackPolicy::parse(&value)?;
-                continue;
-            }
-            if let Some(value) = arg.strip_prefix("--replay-chunk-index=") {
-                replay_chunk_index = value
-                    .parse::<usize>()
-                    .with_context(|| format!("parsing --replay-chunk-index from '{value}'"))?;
-                continue;
-            }
-            if arg == "--replay-chunk-index" {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--replay-chunk-index requires a value"))?;
-                replay_chunk_index = value
-                    .parse::<usize>()
-                    .with_context(|| format!("parsing --replay-chunk-index from '{value}'"))?;
-                continue;
-            }
-            if let Some(value) = arg.strip_prefix("--truncate-tokens=") {
-                truncate_tokens = value
-                    .parse::<usize>()
-                    .with_context(|| format!("parsing --truncate-tokens from '{value}'"))?;
-                continue;
-            }
-            if arg == "--truncate-tokens" {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--truncate-tokens requires a value"))?;
-                truncate_tokens = value
-                    .parse::<usize>()
-                    .with_context(|| format!("parsing --truncate-tokens from '{value}'"))?;
-                continue;
-            }
-            if let Some(value) = arg.strip_prefix("--lane-b-first-chunk-ms=") {
-                lane_b_first_chunk_ms = value
-                    .parse::<usize>()
-                    .with_context(|| format!("parsing --lane-b-first-chunk-ms from '{value}'"))?;
-                continue;
-            }
-            if arg == "--lane-b-first-chunk-ms" {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--lane-b-first-chunk-ms requires a value"))?;
-                lane_b_first_chunk_ms = value
-                    .parse::<usize>()
-                    .with_context(|| format!("parsing --lane-b-first-chunk-ms from '{value}'"))?;
-                continue;
-            }
             positional.push(arg);
         }
 
@@ -303,97 +220,14 @@ impl Args {
             language,
             max_new_tokens,
             context,
-            mode,
             chunk_ms,
             bridge_ms,
             max_bridge_windows,
             stride_ms,
             keep_boundary_policy,
             rollback_ms,
-            rollback_policy,
-            replay_chunk_index,
-            truncate_tokens,
-            lane_b_first_chunk_ms,
             mlx_cache_limit_mb,
         })
-    }
-}
-
-/// Which decode experiment to run.
-#[derive(Clone, Copy)]
-pub(crate) enum Mode {
-    /// Single full-audio decode with an initial system prompt.
-    Initial,
-    /// Single full-audio decode with a follow-up (continuation) prompt.
-    FollowupFresh,
-    /// Decode with multiple system prompts and compare outputs.
-    SystemCompare,
-    /// Decode audio in fixed-size chunks with follow-up prompts.
-    ChunkedFollowup,
-    /// Re-run each chunk with the previous chunk's transcript as prefix context.
-    PrefixRerun,
-    /// Replay from a rollback point after truncating KV cache tokens.
-    TruncateReplay,
-    /// Sliding window with time-based rollback and KV cache reuse.
-    SlidingWindowTimedRollback,
-    /// Sliding window where each window fully replays all prior context.
-    SlidingWindowFullReplay,
-    /// Sliding window with bridge-region replay for KV cache continuity.
-    SlidingWindowBridgeReplay,
-    /// Two parallel decode lanes with different chunk boundaries for comparison.
-    DualLaneFollowup,
-    /// Merge chunk segments with rollback to test boundary robustness.
-    ChunkSegmentMergeRollback,
-    /// Sweep chunk boundary positions to find optimal merge points.
-    ChunkSegmentMergeBoundarySweep,
-}
-
-impl Mode {
-    /// Parses a CLI mode string into a `Mode` enum variant.
-    pub(crate) fn parse(value: &str) -> Result<Self> {
-        match value {
-            "initial" => Ok(Self::Initial),
-            "followup-fresh" => Ok(Self::FollowupFresh),
-            "system-compare" => Ok(Self::SystemCompare),
-            "chunked-followup" => Ok(Self::ChunkedFollowup),
-            "prefix-rerun" => Ok(Self::PrefixRerun),
-            "truncate-replay" => Ok(Self::TruncateReplay),
-            "sliding-window-timed-rollback" => Ok(Self::SlidingWindowTimedRollback),
-            "sliding-window-full-replay" => Ok(Self::SlidingWindowFullReplay),
-            "sliding-window-bridge-replay" => Ok(Self::SlidingWindowBridgeReplay),
-            "dual-lane-followup" => Ok(Self::DualLaneFollowup),
-            "chunk-segment-merge-rollback" => Ok(Self::ChunkSegmentMergeRollback),
-            "chunk-segment-merge-boundary-sweep" => Ok(Self::ChunkSegmentMergeBoundarySweep),
-            _ => bail!("unknown mode: {value}"),
-        }
-    }
-}
-
-/// How to compute the rollback position when replaying a chunk.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RollbackPolicy {
-    /// Roll back to the longest matching text suffix between chunks.
-    TextSuffix,
-    /// Roll back to the exact chunk segment boundary in the KV cache.
-    ChunkSegment,
-}
-
-impl RollbackPolicy {
-    /// Parses a CLI string into a `RollbackPolicy`.
-    pub(crate) fn parse(value: &str) -> Result<Self> {
-        match value {
-            "text-suffix" => Ok(Self::TextSuffix),
-            "chunk-segment" => Ok(Self::ChunkSegment),
-            _ => bail!("unknown rollback policy: {value}"),
-        }
-    }
-
-    /// Returns the CLI string representation.
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::TextSuffix => "text-suffix",
-            Self::ChunkSegment => "chunk-segment",
-        }
     }
 }
 
@@ -425,18 +259,6 @@ impl KeepBoundaryPolicy {
     }
 }
 
-/// Result of a single full-audio decode experiment.
-pub(crate) struct ExperimentResult {
-    /// Human-readable label describing this experiment.
-    pub(crate) label: String,
-    /// Number of prompt tokens fed to the model.
-    pub(crate) prompt_tokens: usize,
-    /// Number of tokens generated by the model.
-    pub(crate) generated_tokens: usize,
-    /// Decoded transcript text.
-    pub(crate) transcript: String,
-}
-
 /// Summary of model and audio info printed before experiment results.
 pub(crate) struct RunSummary<'a> {
     /// Path to the input WAV file.
@@ -455,30 +277,6 @@ pub(crate) struct RunSummary<'a> {
     pub(crate) mel_frames: usize,
     /// Number of audio tokens produced by the audio encoder.
     pub(crate) audio_tokens: usize,
-}
-
-/// Result of decoding a single audio chunk.
-pub(crate) struct ChunkResult {
-    /// Human-readable label for this chunk.
-    pub(crate) label: String,
-    /// Number of prompt tokens fed to the model for this chunk.
-    pub(crate) prompt_tokens: usize,
-    /// Number of tokens generated for this chunk.
-    pub(crate) generated_tokens: usize,
-    /// Decoded transcript for this chunk.
-    pub(crate) transcript: String,
-    /// Number of audio samples in this chunk.
-    pub(crate) sample_count: usize,
-}
-
-/// Result of a chunked follow-up decode experiment.
-pub(crate) struct ChunkedExperimentResult {
-    /// Chunk duration in milliseconds used for this experiment.
-    pub(crate) chunk_ms: usize,
-    /// Per-chunk decode results.
-    pub(crate) chunk_results: Vec<ChunkResult>,
-    /// Combined transcript from all chunks.
-    pub(crate) combined_transcript: String,
 }
 
 /// Detailed per-chunk decode state including token IDs and timing.
@@ -507,86 +305,6 @@ pub(crate) struct ChunkRun {
     pub(crate) start_sample: usize,
     /// End sample index in the full audio.
     pub(crate) end_sample: usize,
-}
-
-impl ChunkResult {
-    /// Converts a `ChunkRun` into a `ChunkResult`, dropping token-level detail.
-    pub(crate) fn from_run(run: &ChunkRun) -> Self {
-        Self {
-            label: run.label.clone(),
-            prompt_tokens: run.prompt_tokens,
-            generated_tokens: run.generated_tokens,
-            transcript: run.transcript.clone(),
-            sample_count: run.sample_count,
-        }
-    }
-}
-
-/// Result of decoding a chunk with the previous chunk's transcript as prefix.
-pub(crate) struct PrefixResult {
-    /// Human-readable label for this prefix-rerun chunk.
-    pub(crate) label: String,
-    /// Number of prompt tokens (including prefix).
-    pub(crate) prompt_tokens: usize,
-    /// Number of tokens generated.
-    pub(crate) generated_tokens: usize,
-    /// Decoded transcript.
-    pub(crate) transcript: String,
-    /// Number of audio samples in this chunk.
-    pub(crate) sample_count: usize,
-}
-
-/// Result of a prefix-rerun experiment across all chunks.
-pub(crate) struct PrefixRerunExperimentResult {
-    /// Chunk duration in milliseconds.
-    pub(crate) chunk_ms: usize,
-    /// Per-chunk results with prefix context.
-    pub(crate) prefix_results: Vec<PrefixResult>,
-}
-
-/// A single entry in a chunk plan specifying sample boundaries.
-pub(crate) struct ChunkPlanEntry {
-    /// Zero-based index of this chunk.
-    pub(crate) chunk_index: usize,
-    /// Start sample index (inclusive) in the full audio.
-    pub(crate) start_sample: usize,
-    /// End sample index (exclusive) in the full audio.
-    pub(crate) end_sample: usize,
-}
-
-/// Plan for replaying from a specific rollback point.
-#[derive(Clone, Copy)]
-pub(crate) struct ReplayPlan {
-    /// Which rollback strategy to use.
-    pub(crate) rollback_policy: RollbackPolicy,
-    /// Chunk index after which to roll back.
-    pub(crate) rollback_after_chunk_index: usize,
-    /// KV cache position to truncate to.
-    pub(crate) rollback_position: usize,
-    /// Chunk index from which to start replaying.
-    pub(crate) replay_from_chunk_index: usize,
-}
-
-/// Result of a truncate-replay experiment comparing baseline vs replayed chunks.
-pub(crate) struct TruncateReplayExperimentResult {
-    /// Chunk duration in milliseconds.
-    pub(crate) chunk_ms: usize,
-    /// Rollback policy used.
-    pub(crate) rollback_policy: RollbackPolicy,
-    /// Chunk index that was replayed.
-    pub(crate) replay_chunk_index: usize,
-    /// Chunk index from which replay started.
-    pub(crate) replay_from_chunk_index: usize,
-    /// KV cache position that was rolled back to.
-    pub(crate) rollback_position: usize,
-    /// Number of tokens requested to truncate.
-    pub(crate) requested_truncate_tokens: usize,
-    /// Number of tokens actually truncated.
-    pub(crate) applied_truncate_tokens: usize,
-    /// Baseline (no replay) chunk runs.
-    pub(crate) baseline_runs: Vec<ChunkRun>,
-    /// Chunk runs after replaying from the rollback point.
-    pub(crate) replay_runs: Vec<ChunkRun>,
 }
 
 /// Decision about where to keep/rollback in a sliding window.
@@ -691,58 +409,6 @@ pub(crate) struct KeepBoundaryDebug {
     pub(crate) snapped: bool,
     /// The word chosen as the boundary, if any.
     pub(crate) chosen_word: Option<BoundaryWordDebug>,
-}
-
-/// Result of a dual-lane follow-up experiment.
-pub(crate) struct DualLaneFollowupExperimentResult {
-    /// Chunk duration in milliseconds.
-    pub(crate) chunk_ms: usize,
-    /// First-chunk duration in milliseconds for lane B.
-    pub(crate) lane_b_first_chunk_ms: usize,
-    /// Chunk runs from lane A (standard chunking).
-    pub(crate) lane_a_runs: Vec<ChunkRun>,
-    /// Chunk runs from lane B (offset chunking).
-    pub(crate) lane_b_runs: Vec<ChunkRun>,
-}
-
-/// Result of a chunk-segment merge rollback experiment.
-pub(crate) struct ChunkSegmentMergeRollbackExperimentResult {
-    /// Chunk duration in milliseconds.
-    pub(crate) chunk_ms: usize,
-    /// Baseline chunk runs (no merge).
-    pub(crate) baseline_runs: Vec<ChunkRun>,
-    /// Replayed first chunk after rollback.
-    pub(crate) replay_chunk0: ChunkRun,
-    /// Merged chunk that spans the boundary.
-    pub(crate) merged_chunk: ChunkRun,
-    /// Annotated baseline transcript with word timings.
-    pub(crate) baseline_annotated: String,
-    /// Annotated replay transcript with word timings.
-    pub(crate) replay_annotated: String,
-    /// Path to the generated HTML visualization.
-    pub(crate) html_path: PathBuf,
-}
-
-/// Result of sweeping one boundary offset position.
-pub(crate) struct BoundarySweepResult {
-    /// Token offset from the exact chunk boundary.
-    pub(crate) offset: isize,
-    /// KV cache rollback position for this offset.
-    pub(crate) rollback_position: usize,
-    /// Merged chunk decoded at this boundary offset.
-    pub(crate) merged_chunk: ChunkRun,
-}
-
-/// Result of a boundary sweep experiment across multiple offsets.
-pub(crate) struct ChunkSegmentMergeBoundarySweepExperimentResult {
-    /// Chunk duration in milliseconds.
-    pub(crate) chunk_ms: usize,
-    /// Exact chunk boundary position (in KV cache tokens).
-    pub(crate) exact_boundary: usize,
-    /// Baseline chunk runs for reference.
-    pub(crate) baseline_runs: Vec<ChunkRun>,
-    /// Results for each swept boundary offset.
-    pub(crate) sweep_results: Vec<BoundarySweepResult>,
 }
 
 /// Reads a required environment variable as a `PathBuf`.

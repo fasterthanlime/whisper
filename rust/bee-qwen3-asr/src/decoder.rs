@@ -496,7 +496,7 @@ impl TextDecoder {
         let seq_len = h.shape()[1] as usize;
 
         // Build causal mask
-        let mask = if let Some(ref cache) = cache {
+        let mask = if let Some(cache) = cache.as_ref() {
             if cache.offset > 0 {
                 // Decoding with cache: single token needs no mask,
                 // multi-token needs causal mask over prefix

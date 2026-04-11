@@ -207,13 +207,6 @@ pub(crate) fn update_exercise_progress(
     tui.update(phase, chunk_index, committed, draft);
 }
 
-/// Appends `text` to `target` verbatim (no separator logic).
-pub(crate) fn append_exact(target: &mut String, text: &str) {
-    if !text.is_empty() {
-        target.push_str(text);
-    }
-}
-
 /// Appends `text` to `target`, inserting a space if needed to separate words.
 pub(crate) fn append_display_delta(target: &mut String, text: &str) {
     if text.is_empty() {
