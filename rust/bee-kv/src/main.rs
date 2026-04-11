@@ -718,6 +718,8 @@ fn decode_sliding_window_timed_rollback(
                 chunk_samples,
                 keep_until_secs,
             )?;
+            let kept_token_ids = kept_generated_token_ids(&chunk_run, keep.kept_token_count);
+            let kept_text = decode_token_ids(tokenizer, &kept_token_ids)?;
             let rollback_position =
                 chunk_run.start_position + chunk_run.prompt_tokens + keep.kept_token_count;
             truncate_cache(&mut cache, rollback_position)?;
@@ -729,7 +731,8 @@ fn decode_sliding_window_timed_rollback(
                 replay_until_secs: None,
                 kept_word_count: keep.kept_word_count,
                 kept_token_count: keep.kept_token_count,
-                kept_text: keep.kept_text,
+                kept_token_ids,
+                kept_text,
                 bridge_text: None,
                 rollback_position,
                 keep_boundary_debug: KeepBoundaryDebug {
@@ -867,6 +870,8 @@ fn decode_sliding_window_full_replay(
                 chunk_samples,
                 keep_until_secs,
             )?;
+            let kept_token_ids = kept_generated_token_ids(&chunk_run, keep.kept_token_count);
+            let kept_text = decode_token_ids(tokenizer, &kept_token_ids)?;
             let rollback_position =
                 chunk_run.start_position + chunk_run.prompt_tokens + keep.kept_token_count;
             truncate_cache(&mut cache, rollback_position)?;
@@ -878,7 +883,8 @@ fn decode_sliding_window_full_replay(
                 replay_until_secs: None,
                 kept_word_count: keep.kept_word_count,
                 kept_token_count: keep.kept_token_count,
-                kept_text: keep.kept_text,
+                kept_token_ids,
+                kept_text,
                 bridge_text: None,
                 rollback_position,
                 keep_boundary_debug: KeepBoundaryDebug {
@@ -895,7 +901,10 @@ fn decode_sliding_window_full_replay(
         draft_text.clear();
         draft_text.push_str(chunk_run.transcript.as_str());
         if let Some(rollback) = rollback.as_ref() {
-            append_exact(&mut committed_text, rollback.kept_text.as_str());
+            append_exact(
+                &mut committed_text,
+                decode_token_ids(tokenizer, &rollback.kept_token_ids)?.as_str(),
+            );
             draft_text.clear();
         } else {
             append_exact(&mut committed_text, chunk_run.transcript.as_str());
@@ -1170,6 +1179,8 @@ fn decode_sliding_window_bridge_replay(
             if keep_until_secs.is_some() && !split.kept_text.is_empty() {
                 tui.log(format!("kept words: {}", split.kept_text));
             }
+            let kept_token_ids = kept_generated_token_ids(&chunk_run, split.kept_token_count);
+            let kept_text = decode_token_ids(tokenizer, &kept_token_ids)?;
             let rollback_position = if keep_until_secs.is_some() && split.kept_token_count > 0 {
                 chunk_run.start_position + chunk_run.prompt_tokens + split.kept_token_count
             } else {
@@ -1179,27 +1190,30 @@ fn decode_sliding_window_bridge_replay(
             start_position = rollback_position;
             replay_prefix_for_next =
                 (!split.bridge.text.is_empty()).then_some(split.bridge.clone());
-            let delta = suffix_after_prefix(
-                replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
-                split.kept_text.as_str(),
-            );
-            append_exact(&mut committed_text, delta);
-            draft_text.clear();
-            if let Some(prefix) = replay_prefix_for_next.as_ref() {
-                append_exact(&mut draft_text, prefix.text.as_str());
-            }
-            Some(WindowRollbackDecision {
+            let rollback = WindowRollbackDecision {
                 keep_boundary_policy,
                 target_keep_until_secs,
                 keep_until_secs,
                 replay_until_secs: Some(replay_until_secs),
                 kept_word_count: split.kept_word_count,
                 kept_token_count: split.kept_token_count,
-                kept_text: split.kept_text,
+                kept_token_ids,
+                kept_text,
                 bridge_text: (!split.bridge.text.is_empty()).then_some(split.bridge.text.clone()),
                 rollback_position,
                 keep_boundary_debug,
-            })
+            };
+            let kept_exact_text = decode_token_ids(tokenizer, &rollback.kept_token_ids)?;
+            let delta = suffix_after_prefix(
+                replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
+                kept_exact_text.as_str(),
+            );
+            append_exact(&mut committed_text, delta);
+            draft_text.clear();
+            if let Some(prefix) = replay_prefix_for_next.as_ref() {
+                append_exact(&mut draft_text, prefix.text.as_str());
+            }
+            Some(rollback)
         } else {
             start_position = chunk_run.end_position;
             replay_prefix_for_next = None;
@@ -1694,6 +1708,7 @@ fn decode_chunk_followup_step(
         label,
         prompt_tokens: prompt_len,
         generated_tokens: generated.len(),
+        generated_token_ids: token_ids,
         transcript,
         sample_count: chunk_samples.len(),
         decode_ms: decode_start.elapsed().as_secs_f64() * 1000.0,
@@ -1718,6 +1733,17 @@ fn truncate_cache(
 
 fn normalized_transcript(text: &str) -> &str {
     text.trim()
+}
+
+fn decode_token_ids(tokenizer: &Tokenizer, token_ids: &[u32]) -> Result<String> {
+    tokenizer
+        .decode(token_ids, true)
+        .map_err(|e| anyhow::anyhow!("decoding transcript tokens: {e}"))
+}
+
+fn kept_generated_token_ids(chunk_run: &ChunkRun, kept_token_count: usize) -> Vec<u32> {
+    chunk_run.generated_token_ids[..kept_token_count.min(chunk_run.generated_token_ids.len())]
+        .to_vec()
 }
 
 fn combine_transcripts(chunks: &[ChunkRun]) -> String {
@@ -2247,6 +2273,7 @@ struct ChunkRun {
     label: String,
     prompt_tokens: usize,
     generated_tokens: usize,
+    generated_token_ids: Vec<u32>,
     transcript: String,
     sample_count: usize,
     decode_ms: f64,
@@ -2315,6 +2342,7 @@ struct WindowRollbackDecision {
     replay_until_secs: Option<f64>,
     kept_word_count: usize,
     kept_token_count: usize,
+    kept_token_ids: Vec<u32>,
     kept_text: String,
     bridge_text: Option<String>,
     rollback_position: usize,
@@ -2643,6 +2671,7 @@ fn clone_chunk_run(chunk: &ChunkRun) -> ChunkRun {
         label: chunk.label.clone(),
         prompt_tokens: chunk.prompt_tokens,
         generated_tokens: chunk.generated_tokens,
+        generated_token_ids: chunk.generated_token_ids.clone(),
         transcript: chunk.transcript.clone(),
         sample_count: chunk.sample_count,
         decode_ms: chunk.decode_ms,
@@ -3873,7 +3902,6 @@ fn suffix_after_prefix<'a>(prefix: Option<&str>, text: &'a str) -> &'a str {
 struct TimedGeneratedPrefix {
     kept_word_count: usize,
     kept_token_count: usize,
-    kept_text: String,
 }
 
 #[derive(Clone, Debug)]
@@ -3938,7 +3966,6 @@ fn timed_generated_prefix_for_cut(
         return Ok(TimedGeneratedPrefix {
             kept_word_count: 0,
             kept_token_count: 0,
-            kept_text: String::new(),
         });
     }
 
@@ -3971,7 +3998,6 @@ fn timed_generated_prefix_for_cut(
     Ok(TimedGeneratedPrefix {
         kept_word_count,
         kept_token_count,
-        kept_text,
     })
 }
 
