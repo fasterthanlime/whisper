@@ -832,15 +832,25 @@ fn decode_sliding_window_full_replay(
             &committed_text,
             &draft_text,
         );
+        let replayed_prefix_word_count = replayed_prefix
+            .as_ref()
+            .map(|prefix| {
+                if prefix.words.is_empty() {
+                    prefix
+                        .token_ids
+                        .len()
+                        .max(sentence_word_tokens(&prefix.text).len())
+                } else {
+                    prefix.words.len()
+                }
+            })
+            .unwrap_or(0);
         tui.log(format!(
             "decoding chunk {window_index}: audio={}..{}ms samples={} replayed_prefix_words={} start_position={}",
             (window.start_sample * 1000) / SAMPLE_RATE as usize,
             (window.end_sample * 1000) / SAMPLE_RATE as usize,
             chunk_samples.len(),
-            replayed_prefix
-                .as_ref()
-                .map(|prefix| sentence_word_tokens(&prefix.text).len())
-                .unwrap_or(0),
+            replayed_prefix_word_count,
             start_position,
         ));
         let chunk_run = decode_chunk_followup_step(
@@ -873,8 +883,19 @@ fn decode_sliding_window_full_replay(
             )?;
             let kept_token_ids = kept_generated_token_ids(&chunk_run, keep.kept_token_count);
             let kept_text = decode_token_ids(tokenizer, &kept_token_ids)?;
-            let rollback_position =
-                chunk_run.start_position + chunk_run.prompt_tokens + keep.kept_token_count;
+            let carried_token_count =
+                kept_carried_token_count(replayed_prefix.as_ref(), Some(keep_until_secs));
+            let replay_prefix_token_count = replayed_prefix
+                .as_ref()
+                .map(|prefix| prefix.token_ids.len())
+                .unwrap_or(0);
+            let base_prompt_tokens = chunk_run
+                .prompt_tokens
+                .saturating_sub(replay_prefix_token_count);
+            let rollback_position = chunk_run.start_position
+                + base_prompt_tokens
+                + carried_token_count
+                + keep.kept_token_count;
             truncate_cache(&mut cache, rollback_position)?;
             start_position = rollback_position;
             Some(WindowRollbackDecision {
@@ -1175,13 +1196,29 @@ fn decode_sliding_window_bridge_replay(
                 keep_until_secs.unwrap_or(0.0),
                 replay_until_secs,
             )?;
-            if keep_until_secs.is_some() && !split.kept_text.is_empty() {
-                tui.log(format!("kept words: {}", split.kept_text));
-            }
-            let kept_token_ids = kept_generated_token_ids(&chunk_run, split.kept_token_count);
+            let carried_token_count =
+                kept_carried_token_count(replayed_prefix.as_ref(), keep_until_secs);
+            let mut kept_token_ids =
+                kept_carried_token_ids(replayed_prefix.as_ref(), carried_token_count);
+            kept_token_ids.extend(kept_generated_token_ids(&chunk_run, split.kept_token_count));
             let kept_text = decode_token_ids(tokenizer, &kept_token_ids)?;
-            let rollback_position = if keep_until_secs.is_some() && split.kept_token_count > 0 {
-                chunk_run.start_position + chunk_run.prompt_tokens + split.kept_token_count
+            if keep_until_secs.is_some() && !kept_text.is_empty() {
+                tui.log(format!("kept words: {}", kept_text));
+            }
+            let replay_prefix_token_count = replayed_prefix
+                .as_ref()
+                .map(|prefix| prefix.token_ids.len())
+                .unwrap_or(0);
+            let base_prompt_tokens = chunk_run
+                .prompt_tokens
+                .saturating_sub(replay_prefix_token_count);
+            let rollback_position = if keep_until_secs.is_some()
+                && (carried_token_count > 0 || split.kept_token_count > 0)
+            {
+                chunk_run.start_position
+                    + base_prompt_tokens
+                    + carried_token_count
+                    + split.kept_token_count
             } else {
                 chunk_run.start_position
             };
@@ -1200,7 +1237,7 @@ fn decode_sliding_window_bridge_replay(
                 keep_until_secs,
                 replay_until_secs: Some(replay_until_secs),
                 kept_word_count: split.kept_word_count,
-                kept_token_count: split.kept_token_count,
+                kept_token_count: kept_token_ids.len(),
                 kept_token_ids,
                 kept_text,
                 bridge_token_ids: split.bridge.token_ids.clone(),
@@ -1208,12 +1245,7 @@ fn decode_sliding_window_bridge_replay(
                 rollback_position,
                 keep_boundary_debug,
             };
-            let kept_exact_text = decode_token_ids(tokenizer, &rollback.kept_token_ids)?;
-            let delta = suffix_after_prefix(
-                Some(replayed_prefix_text.as_str()),
-                kept_exact_text.as_str(),
-            );
-            append_exact(&mut committed_text, delta);
+            append_exact(&mut committed_text, rollback.kept_text.as_str());
             draft_text.clear();
             if let Some(prefix) = replay_prefix_for_next.as_ref() {
                 append_exact(
@@ -1765,6 +1797,29 @@ fn tokenize_token_ids(tokenizer: &Tokenizer, text: &str) -> Result<Vec<u32>> {
 fn kept_generated_token_ids(chunk_run: &ChunkRun, kept_token_count: usize) -> Vec<u32> {
     chunk_run.generated_token_ids[..kept_token_count.min(chunk_run.generated_token_ids.len())]
         .to_vec()
+}
+
+fn kept_carried_token_ids(prefix: Option<&CarriedBridge>, kept_token_count: usize) -> Vec<u32> {
+    let Some(prefix) = prefix else {
+        return Vec::new();
+    };
+    prefix.token_ids[..kept_token_count.min(prefix.token_ids.len())].to_vec()
+}
+
+fn kept_carried_token_count(prefix: Option<&CarriedBridge>, keep_until_secs: Option<f64>) -> usize {
+    let Some(prefix) = prefix else {
+        return 0;
+    };
+    let Some(keep_until_secs) = keep_until_secs else {
+        return 0;
+    };
+    prefix
+        .words
+        .iter()
+        .take_while(|word| word.end_secs <= keep_until_secs)
+        .last()
+        .map(|word| word.token_range.end)
+        .unwrap_or(0)
 }
 
 fn carried_bridge_text(tokenizer: &Tokenizer, bridge: Option<&CarriedBridge>) -> Result<String> {
@@ -2384,6 +2439,7 @@ struct WindowRollbackDecision {
 #[derive(Clone)]
 struct CarriedBridgeWord {
     text: String,
+    token_range: std::ops::Range<usize>,
     start_secs: f64,
     end_secs: f64,
 }
@@ -4080,23 +4136,31 @@ fn timed_generated_bridge_for_cuts(
         String::new()
     };
 
-    let bridge_words = bridge_words_slice
-        .iter()
-        .map(|word| CarriedBridgeWord {
-            text: word.text.clone(),
-            start_secs: (word.start_secs - keep_until_secs).max(0.0),
-            end_secs: (word.end_secs - keep_until_secs).max(0.0),
-        })
-        .collect();
-
     let bridge = if let (Some(first_bridge_word), Some(last_bridge_word)) =
         (bridge_words_slice.first(), bridge_words_slice.last())
     {
         let text = combined_transcript
             [first_bridge_word.char_range.start..last_bridge_word.char_range.end]
             .to_string();
+        let bridge_char_base = first_bridge_word.char_range.start;
+        let token_ids = tokenize_token_ids(tokenizer, &text)?;
+        let bridge_words = bridge_words_slice
+            .iter()
+            .map(|word| -> Result<CarriedBridgeWord> {
+                let relative_start = word.char_range.start.saturating_sub(bridge_char_base);
+                let relative_end = word.char_range.end.saturating_sub(bridge_char_base);
+                let token_start = tokenize_token_ids(tokenizer, &text[..relative_start])?.len();
+                let token_end = tokenize_token_ids(tokenizer, &text[..relative_end])?.len();
+                Ok(CarriedBridgeWord {
+                    text: word.text.clone(),
+                    token_range: token_start..token_end,
+                    start_secs: (word.start_secs - keep_until_secs).max(0.0),
+                    end_secs: (word.end_secs - keep_until_secs).max(0.0),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         CarriedBridge {
-            token_ids: tokenize_token_ids(tokenizer, &text)?,
+            token_ids,
             text,
             words: bridge_words,
         }
