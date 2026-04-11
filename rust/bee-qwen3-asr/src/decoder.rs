@@ -51,12 +51,10 @@ impl KVCache {
         {
             let key_cache = self.keys[layer_idx].as_mut().unwrap();
             key_cache.index_mut((.., .., current_len as i32..needed_len as i32, ..), key);
-            key_cache.eval()?;
         }
         {
             let value_cache = self.values[layer_idx].as_mut().unwrap();
             value_cache.index_mut((.., .., current_len as i32..needed_len as i32, ..), value);
-            value_cache.eval()?;
         }
         self.lengths[layer_idx] = needed_len;
 
