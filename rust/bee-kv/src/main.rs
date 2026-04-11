@@ -1068,18 +1068,12 @@ fn decode_sliding_window_bridge_replay(
                 keep_until_secs.unwrap_or(0.0),
                 replay_until_secs,
             )?;
-            let made_progress = split.kept_token_count > 0;
             let rollback_position =
                 chunk_run.start_position + chunk_run.prompt_tokens + split.kept_token_count;
             truncate_cache(&mut cache, rollback_position)?;
             start_position = rollback_position;
             replay_prefix_for_next =
                 (!split.bridge.text.is_empty()).then_some(split.bridge.clone());
-            unresolved_keep_samples = if made_progress {
-                committed_samples
-            } else {
-                unresolved_keep_samples + committed_samples
-            };
             Some(WindowRollbackDecision {
                 keep_boundary_policy,
                 target_keep_until_secs,
@@ -1108,11 +1102,18 @@ fn decode_sliding_window_bridge_replay(
         }
         next_window_start =
             if let Some(rollback) = window_runs.last().and_then(|run| run.rollback.as_ref()) {
-                if let Some(keep_until_secs) = rollback.keep_until_secs {
+                let next_start = if let Some(keep_until_secs) = rollback.keep_until_secs {
                     window.start_sample + ((keep_until_secs * SAMPLE_RATE as f64).round() as usize)
                 } else {
                     window.start_sample
-                }
+                };
+                // Preserve the full replay tail after the chosen keep cut, then add one new
+                // committed segment so windows never shrink after snapping the boundary earlier.
+                let replay_tail_samples = window.end_sample.saturating_sub(next_start);
+                unresolved_keep_samples = replay_tail_samples
+                    .saturating_add(committed_samples)
+                    .saturating_sub(bridge_samples + rollback_samples);
+                next_start
             } else {
                 next_window_start.saturating_add(stride_samples)
             };
