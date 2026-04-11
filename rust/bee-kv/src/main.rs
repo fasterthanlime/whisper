@@ -1071,8 +1071,20 @@ fn decode_sliding_window_bridge_replay(
                 keep_until_secs.unwrap_or(0.0),
                 replay_until_secs,
             )?;
-            let rollback_position =
-                chunk_run.start_position + chunk_run.prompt_tokens + split.kept_token_count;
+            if keep_until_secs.is_some() && !split.kept_text.is_empty() {
+                println!(
+                    "{ANSI_BLUE}{ANSI_BOLD}==================== KEPT WORDS ===================={ANSI_RESET}"
+                );
+                println!("{ANSI_BLUE}{ANSI_BOLD}{}{}", split.kept_text, ANSI_RESET);
+                println!(
+                    "{ANSI_BLUE}{ANSI_BOLD}===================================================={ANSI_RESET}"
+                );
+            }
+            let rollback_position = if keep_until_secs.is_some() && split.kept_token_count > 0 {
+                chunk_run.start_position + chunk_run.prompt_tokens + split.kept_token_count
+            } else {
+                chunk_run.start_position
+            };
             truncate_cache(&mut cache, rollback_position)?;
             start_position = rollback_position;
             replay_prefix_for_next =
@@ -2410,7 +2422,7 @@ fn print_sliding_window_timed_rollback_experiment(
                 rollback.rollback_position
             );
             println!("kept_text={}", rollback.kept_text);
-            if rollback.keep_until_secs.is_some() && rollback.kept_word_count > 0 {
+            if rollback.keep_until_secs.is_some() && !rollback.kept_text.is_empty() {
                 println!(
                     "{ANSI_BLUE}{ANSI_BOLD}==================== KEPT WORDS ===================={ANSI_RESET}"
                 );
