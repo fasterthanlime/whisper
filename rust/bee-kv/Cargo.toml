@@ -15,3 +15,4 @@ bee-qwen3-asr = { path = "../bee-qwen3-asr" }
 bee-transcribe = { path = "../bee-transcribe" }
 bee-zipa-mlx = { path = "../bee-zipa-mlx" }
 ctrlc.workspace = true
+indicatif = "0.17"

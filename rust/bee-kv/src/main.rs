@@ -23,6 +23,7 @@ use bee_transcribe::g2p::CachedEspeakG2p;
 use bee_transcribe::zipa_align::{SpanTiming, TranscriptAlignment};
 use bee_zipa_mlx::audio::AudioBuffer as ZipaAudioBuffer;
 use bee_zipa_mlx::infer::ZipaInference;
+use indicatif::{ProgressBar, ProgressStyle};
 
 const DEFAULT_LANGUAGE: &str = "English";
 const DEFAULT_MAX_NEW_TOKENS: usize = 256;
@@ -803,10 +804,17 @@ fn decode_sliding_window_full_replay(
     let mut window_runs = Vec::new();
     let mut replay_prefix_for_next: Option<CarriedBridge> = None;
     let mut align_ctx = AlignmentContext::new()?;
+    let progress = exercise_progress_bar();
 
     for (window_index, window) in window_plan.iter().enumerate() {
         let chunk_samples = &samples[window.start_sample..window.end_sample];
         let replayed_prefix = replay_prefix_for_next.clone();
+        update_exercise_progress(
+            &progress,
+            "Decoding",
+            window_index,
+            &live_composition_text(&window_runs, replayed_prefix.as_ref(), None),
+        );
         let chunk_run = decode_chunk_followup_step(
             model,
             tokenizer,
@@ -861,6 +869,21 @@ fn decode_sliding_window_full_replay(
             None
         };
 
+        update_exercise_progress(
+            &progress,
+            if window_index + 1 < window_plan.len() {
+                "Rolling"
+            } else {
+                "Finalizing"
+            },
+            window_index,
+            &live_composition_text(
+                &window_runs,
+                replayed_prefix.as_ref(),
+                Some(chunk_run.transcript.as_str()),
+            ),
+        );
+
         replay_prefix_for_next = (!chunk_run.transcript.is_empty()).then(|| CarriedBridge {
             text: chunk_run.transcript.clone(),
             words: Vec::new(),
@@ -870,7 +893,12 @@ fn decode_sliding_window_full_replay(
             rollback,
             replayed_prefix,
         });
+        if window_index + 1 == window_plan.len() {
+            print_finalizing_banner();
+        }
     }
+
+    progress.finish_and_clear();
 
     let html_path = write_sliding_window_timed_rollback_html(
         "sliding-window-full-replay",
@@ -972,10 +1000,12 @@ fn decode_sliding_window_bridge_replay(
     let mut unresolved_keep_samples = committed_samples;
     let mut align_ctx = AlignmentContext::new()?;
     let mut interrupted_early = false;
+    let progress = exercise_progress_bar();
 
     while next_window_start < samples.len() {
         if interrupted.load(Ordering::SeqCst) {
             interrupted_early = true;
+            progress.finish_and_clear();
             eprintln!(
                 "interrupt received: stopping before chunk {window_index} and writing reports"
             );
@@ -997,6 +1027,12 @@ fn decode_sliding_window_bridge_replay(
         };
         let chunk_samples = &samples[window.start_sample..window.end_sample];
         let replayed_prefix = replay_prefix_for_next.clone();
+        update_exercise_progress(
+            &progress,
+            "Decoding",
+            window_index,
+            &live_composition_text(&window_runs, replayed_prefix.as_ref(), None),
+        );
         println!(
             "decoding chunk {window_index}: audio={}..{}ms samples={} replayed_prefix_words={} start_position={}",
             (window.start_sample * 1000) / SAMPLE_RATE as usize,
@@ -1031,6 +1067,20 @@ fn decode_sliding_window_bridge_replay(
             chunk_run.end_position,
             chunk_run.generated_tokens,
             chunk_run.stop_reason.as_str(),
+        );
+        update_exercise_progress(
+            &progress,
+            if window.end_sample < samples.len() {
+                "Rolling"
+            } else {
+                "Finalizing"
+            },
+            window_index,
+            &live_composition_text(
+                &window_runs,
+                replayed_prefix.as_ref(),
+                Some(chunk_run.transcript.as_str()),
+            ),
         );
 
         let has_next_window = window.end_sample < samples.len();
@@ -1113,6 +1163,8 @@ fn decode_sliding_window_bridge_replay(
             replayed_prefix,
         });
         if !has_next_window {
+            progress.finish_and_clear();
+            print_finalizing_banner();
             break;
         }
         next_window_start =
@@ -1133,6 +1185,10 @@ fn decode_sliding_window_bridge_replay(
                 next_window_start.saturating_add(stride_samples)
             };
         window_index += 1;
+    }
+
+    if interrupted_early {
+        progress.finish_and_clear();
     }
 
     let html_path = write_sliding_window_timed_rollback_html(
@@ -3523,6 +3579,69 @@ fn print_chunk_run(chunk: &ChunkRun) {
     );
     println!("{}", chunk.transcript);
     println!();
+}
+
+fn print_finalizing_banner() {
+    println!(
+        "{ANSI_BLUE}{ANSI_BOLD}===================== FINALIZING ====================={ANSI_RESET}"
+    );
+}
+
+fn exercise_progress_bar() -> ProgressBar {
+    let progress = ProgressBar::new_spinner();
+    progress.set_style(
+        ProgressStyle::with_template("{spinner} {wide_msg}").expect("valid indicatif template"),
+    );
+    progress.enable_steady_tick(std::time::Duration::from_millis(120));
+    progress
+}
+
+fn push_transcript_text(target: &mut String, text: &str) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if !target.is_empty() {
+        target.push(' ');
+    }
+    target.push_str(trimmed);
+}
+
+fn live_composition_text(
+    window_runs: &[SlidingWindowRun],
+    replayed_prefix: Option<&CarriedBridge>,
+    current_generated: Option<&str>,
+) -> String {
+    let mut composition = String::new();
+    for run in window_runs {
+        if let Some(rollback) = &run.rollback {
+            push_transcript_text(&mut composition, &rollback.kept_text);
+        } else {
+            push_transcript_text(&mut composition, &run.chunk_run.transcript);
+        }
+    }
+    if let Some(prefix) = replayed_prefix {
+        push_transcript_text(&mut composition, &prefix.text);
+    }
+    if let Some(current_generated) = current_generated {
+        push_transcript_text(&mut composition, current_generated);
+    }
+    composition
+}
+
+fn update_exercise_progress(
+    progress: &ProgressBar,
+    phase: &str,
+    chunk_index: usize,
+    composition: &str,
+) {
+    let trimmed = composition.trim();
+    let summary = if trimmed.is_empty() {
+        "[empty]"
+    } else {
+        trimmed
+    };
+    progress.set_message(format!("{phase} chunk {chunk_index} | {summary}"));
 }
 
 struct TimedGeneratedPrefix {
