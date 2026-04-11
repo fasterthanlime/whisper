@@ -1,3 +1,4 @@
+use mlx_rs::Array;
 use mlx_rs::builder::Builder;
 use mlx_rs::error::Exception;
 use mlx_rs::macros::{ModuleParameters, Quantizable};
@@ -10,10 +11,9 @@ use mlx_rs::ops::sum_axes;
 use mlx_rs::ops::tanh;
 use mlx_rs::ops::zeros;
 use mlx_rs::quantization::MaybeQuantized;
-use mlx_rs::Array;
 
 use crate::config::ZipaModelConfig;
-use crate::model::{quantize_linear_adaptive, BiasNorm};
+use crate::model::{BiasNorm, quantize_linear_adaptive};
 
 fn linear_weight_shape(linear: &MaybeQuantized<nn::Linear>) -> Vec<i32> {
     match linear {
@@ -697,15 +697,15 @@ mod tests {
     use crate::config::{ZipaModelConfig, ZipaVariant};
     use crate::load::{
         load_bypass_scale_from_map, load_downsample_weights_from_map,
-        load_stage0_layer_weights_from_map, load_stage_layer_weights_from_map,
+        load_stage_layer_weights_from_map, load_stage0_layer_weights_from_map,
     };
 
     use super::{
-        linear_weight_shape, CompactRelPositionalEncoding, Downsample2, Stage0Encoder,
-        Stage1EncoderPrefix, StageEncoder, ZipformerEncoderLayer,
+        CompactRelPositionalEncoding, Downsample2, Stage0Encoder, Stage1EncoderPrefix,
+        StageEncoder, ZipformerEncoderLayer, linear_weight_shape,
     };
-    use mlx_rs::ops::indexing::IndexOp;
     use mlx_rs::Array;
+    use mlx_rs::ops::indexing::IndexOp;
     use std::path::PathBuf;
 
     #[test]

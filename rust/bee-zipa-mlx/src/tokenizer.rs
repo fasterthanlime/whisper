@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::error::ZipaError;
 use crate::Result;
+use crate::error::ZipaError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenTable {

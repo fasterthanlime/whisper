@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use bee_correct::g2p::CachedEspeakG2p;
 use bee_phonetic::{
     feature_similarity, normalize_ipa_for_comparison, phoneme_similarity, reduce_ipa_tokens,

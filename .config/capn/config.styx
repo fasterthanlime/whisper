@@ -7,7 +7,7 @@ pre-commit {
     // rustfmt false
     // cargo-lock false
     // arborium false
-    edition-2024 false
+    // edition-2024 false
     external-path-deps false
     // internal-dev-deps-release-plz false
 }
@@ -24,4 +24,3 @@ pre-push {
     // doc-test-features (feature1)
     // docs-features (feature1)
 }
-

@@ -710,18 +710,26 @@ mod tests {
 
         let aliases = build_phonetic_lexicon(&vocab, &confusion_forms);
         assert_eq!(aliases.len(), 6, "{aliases:#?}");
-        assert!(aliases
-            .iter()
-            .any(|a| a.alias_source == AliasSource::Canonical));
-        assert!(aliases
-            .iter()
-            .any(|a| a.alias_source == AliasSource::Spoken));
-        assert!(aliases
-            .iter()
-            .any(|a| a.alias_source == AliasSource::Identifier));
-        assert!(aliases
-            .iter()
-            .any(|a| a.alias_source == AliasSource::Confusion));
+        assert!(
+            aliases
+                .iter()
+                .any(|a| a.alias_source == AliasSource::Canonical)
+        );
+        assert!(
+            aliases
+                .iter()
+                .any(|a| a.alias_source == AliasSource::Spoken)
+        );
+        assert!(
+            aliases
+                .iter()
+                .any(|a| a.alias_source == AliasSource::Identifier)
+        );
+        assert!(
+            aliases
+                .iter()
+                .any(|a| a.alias_source == AliasSource::Confusion)
+        );
     }
 
     #[test]

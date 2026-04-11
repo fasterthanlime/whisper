@@ -1,7 +1,7 @@
 [package]
 name = "bee-vad"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Silero VAD v5 voice activity detection via MLX on Apple Silicon"
 license = "MIT"
 

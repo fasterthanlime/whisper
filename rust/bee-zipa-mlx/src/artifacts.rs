@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use crate::Result;
 use crate::config::ZipaVariant;
 use crate::error::ZipaError;
-use crate::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReferenceArtifacts {

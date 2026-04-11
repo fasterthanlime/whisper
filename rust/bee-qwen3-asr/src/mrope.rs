@@ -3,10 +3,10 @@
 //! Critical correctness module. Uses stride-3 interleaving across 3 spatial
 //! dimensions (temporal, height, width) with sections [24, 20, 20].
 
+use mlx_rs::Array;
 use mlx_rs::error::Exception;
 use mlx_rs::ops;
 use mlx_rs::ops::indexing::{IndexOp, NewAxis};
-use mlx_rs::Array;
 
 pub const MROPE_SECTION: [usize; 3] = [24, 20, 20];
 

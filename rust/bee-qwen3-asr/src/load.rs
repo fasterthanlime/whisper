@@ -3,11 +3,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use mlx_rs::Array;
 use mlx_rs::error::Exception;
 use mlx_rs::module::ModuleParameters;
 use mlx_rs::nn::{QuantizedEmbedding, QuantizedLinear};
 use mlx_rs::quantization::MaybeQuantized;
-use mlx_rs::Array;
 
 use crate::model::Qwen3ASRModel;
 

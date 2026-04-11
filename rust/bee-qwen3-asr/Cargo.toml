@@ -1,7 +1,7 @@
 [package]
 name = "bee-qwen3-asr"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Qwen3-ASR inference via MLX on Apple Silicon"
 license = "MIT"
 

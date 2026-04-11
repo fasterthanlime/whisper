@@ -1,4 +1,4 @@
-use rustfft::{num_complex::Complex, FftPlanner};
+use rustfft::{FftPlanner, num_complex::Complex};
 
 use crate::audio::AudioBuffer;
 
@@ -211,11 +211,7 @@ fn get_strided_frames(samples: &[f32], window_length: usize, window_shift: usize
 }
 
 fn next_power_of_two(x: usize) -> usize {
-    if x == 0 {
-        1
-    } else {
-        x.next_power_of_two()
-    }
+    if x == 0 { 1 } else { x.next_power_of_two() }
 }
 
 fn create_frame_window(window_size: usize, window_type: WindowType) -> Vec<f32> {

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use mlx_rs::Array;
 use mlx_rs::error::Exception;
 use mlx_rs::module::ModuleParameters;
-use mlx_rs::Array;
 
 use crate::encoder::{BypassModule, Downsample2, ZipformerEncoderLayer};
 use crate::model::ZipaModel;
@@ -292,8 +292,8 @@ pub struct LoadStats {
 mod tests {
     use std::collections::HashMap;
 
-    use mlx_rs::module::ModuleParameters;
     use mlx_rs::Array;
+    use mlx_rs::module::ModuleParameters;
 
     use crate::config::{ZipaModelConfig, ZipaVariant};
     use crate::load::load_frontend_and_ctc_weights_from_map;

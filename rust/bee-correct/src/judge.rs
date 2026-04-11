@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::time::SystemTime;
 
-use bee_phonetic::{sentence_word_tokens, CandidateFeatureRow};
+use bee_phonetic::{CandidateFeatureRow, sentence_word_tokens};
 // Re-export types that consumers need
 use bee_types::{AliasSource, IdentifierFlags, SentenceWordToken, TranscriptSpan};
 pub use bee_types::{CorrectionEvent, SpanContext};

@@ -1,7 +1,7 @@
 [package]
 name = "bee-correct"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Core correction logic: judge, FTRL optimizer, G2P cache"
 license = "MIT"
 

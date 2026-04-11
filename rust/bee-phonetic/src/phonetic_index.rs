@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use facet::Facet;
 
 use crate::phonetic_lexicon::{
-    derive_identifier_flags, is_identifier_like, looks_like_name, AliasSource, LexiconAlias,
+    AliasSource, LexiconAlias, derive_identifier_flags, is_identifier_like, looks_like_name,
 };
 use crate::word_split::sentence_word_tokens;
 

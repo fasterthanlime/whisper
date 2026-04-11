@@ -6,10 +6,10 @@
 
 use std::path::Path;
 
+use mlx_rs::Array;
 use mlx_rs::error::Exception;
 use mlx_rs::ops;
 use mlx_rs::ops::indexing::IndexOp;
-use mlx_rs::Array;
 
 const CHUNK_SIZE: usize = 512;
 const CONTEXT_SIZE: usize = 64;

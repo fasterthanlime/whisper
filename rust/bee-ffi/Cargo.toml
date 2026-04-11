@@ -1,7 +1,7 @@
 [package]
 name = "bee-ffi"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [package.metadata]
 
@@ -24,4 +24,3 @@ ctor = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 strip-ansi-escapes = "0.2.1"
-

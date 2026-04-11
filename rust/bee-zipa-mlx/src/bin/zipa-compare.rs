@@ -2,8 +2,8 @@ use std::env;
 use std::path::PathBuf;
 
 use bee_zipa_mlx::infer::ZipaInference;
-use mlx_rs::ops::indexing::{argmax_axis, IndexOp};
 use mlx_rs::Array;
+use mlx_rs::ops::indexing::{IndexOp, argmax_axis};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args_os();
