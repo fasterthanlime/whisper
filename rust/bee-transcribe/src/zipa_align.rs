@@ -31,6 +31,14 @@ pub struct TimedZipaRange {
     pub end_time_secs: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ComparisonRangeTiming {
+    Invalid,
+    Deleted { projected_at: usize },
+    NoTiming { projected_range: Range<usize> },
+    Aligned(TimedZipaRange),
+}
+
 #[derive(Debug, Clone)]
 pub struct WordAlignmentWindow {
     pub zipa_norm_range: Range<usize>,
@@ -1178,19 +1186,33 @@ impl TranscriptAlignment {
     }
 
     /// Timed audio span covering transcript normalized phones `[start, end)`.
-    pub fn comparison_range_timing(
-        &self,
-        comparison_range: Range<usize>,
-    ) -> Option<TimedZipaRange> {
+    pub fn comparison_range_timing(&self, comparison_range: Range<usize>) -> ComparisonRangeTiming {
         if comparison_range.start >= comparison_range.end
             || comparison_range.end > self.transcript_normalized_len
         {
-            return None;
+            return ComparisonRangeTiming::Invalid;
         }
-        let projected = self
+        let Some(projected) = self
             .transcript_alignment
-            .project_left_range(comparison_range)?;
-        timed_range_for_normalized_range(&self.zipa_norm_with_spans, &self.phone_spans, projected)
+            .project_left_range(comparison_range)
+        else {
+            return ComparisonRangeTiming::Invalid;
+        };
+        if projected.start >= projected.end {
+            return ComparisonRangeTiming::Deleted {
+                projected_at: projected.start,
+            };
+        }
+        match timed_range_for_normalized_range(
+            &self.zipa_norm_with_spans,
+            &self.phone_spans,
+            projected.clone(),
+        ) {
+            Some(timed) => ComparisonRangeTiming::Aligned(timed),
+            None => ComparisonRangeTiming::NoTiming {
+                projected_range: projected,
+            },
+        }
     }
 
     pub fn projected_comparison_range(
@@ -1253,10 +1275,10 @@ impl TranscriptAlignment {
 #[cfg(test)]
 mod tests {
     use super::{
-        TranscriptAlignment, TranscriptComparisonInput, expand_degenerate_projected_range,
-        partition_word_alignment_windows, select_segmental_word_windows,
-        timed_range_for_normalized_range, transcript_comparison_input_from_charsiu,
-        transcript_comparison_input_from_word_raw_ranges,
+        ComparisonRangeTiming, TranscriptAlignment, TranscriptComparisonInput,
+        expand_degenerate_projected_range, partition_word_alignment_windows,
+        select_segmental_word_windows, timed_range_for_normalized_range,
+        transcript_comparison_input_from_charsiu, transcript_comparison_input_from_word_raw_ranges,
     };
     use bee_phonetic::{
         AlignmentOp, AlignmentOpKind, ComparisonToken,
@@ -1814,12 +1836,16 @@ mod tests {
             phone_spans,
         );
 
-        let fac = ta.comparison_range_timing(3..7).expect("Fac timing");
+        let ComparisonRangeTiming::Aligned(fac) = ta.comparison_range_timing(3..7) else {
+            panic!("Fac timing should align");
+        };
         assert_eq!(fac.raw_phone_range, 3..6);
         assert!((fac.start_time_secs - 0.30).abs() < 1e-6);
         assert!((fac.end_time_secs - 0.60).abs() < 1e-6);
 
-        let et = ta.comparison_range_timing(7..9).expect("et timing");
+        let ComparisonRangeTiming::Aligned(et) = ta.comparison_range_timing(7..9) else {
+            panic!("et timing should align");
+        };
         assert_eq!(et.raw_phone_range, 6..8);
         assert!((et.start_time_secs - 0.60).abs() < 1e-6);
         assert!((et.end_time_secs - 0.80).abs() < 1e-6);

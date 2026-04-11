@@ -6,7 +6,9 @@ use bee_g2p_charsiu::{
     TranscriptTokenPieceComparisonRange, TranscriptWordComparisonRange, probe_text_default,
     transcript_alignment_input, transcript_words,
 };
-use bee_transcribe::zipa_align::{TranscriptAlignment, transcript_comparison_input_from_charsiu};
+use bee_transcribe::zipa_align::{
+    ComparisonRangeTiming, TranscriptAlignment, transcript_comparison_input_from_charsiu,
+};
 use bee_zipa_mlx::audio::load_wav_mono_f32;
 use bee_zipa_mlx::infer::ZipaInference;
 
@@ -32,9 +34,14 @@ fn real_artifact_recovers_some_token_piece_timings() -> Result<(), Box<dyn std::
         .token_pieces
         .iter()
         .map(|token| {
-            let timing = alignment
+            let timing = match alignment
                 .comparison_range_timing(token.comparison_start..token.comparison_end)
-                .map(|timing| (timing.start_time_secs, timing.end_time_secs));
+            {
+                ComparisonRangeTiming::Aligned(timing) => {
+                    Some((timing.start_time_secs, timing.end_time_secs))
+                }
+                _ => None,
+            };
             (
                 token.token_surface.clone(),
                 token.word_surface.clone().unwrap_or_default(),

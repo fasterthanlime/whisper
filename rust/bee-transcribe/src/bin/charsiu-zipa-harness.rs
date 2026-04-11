@@ -7,7 +7,9 @@ use bee_g2p_charsiu::{
     TranscriptTokenPieceComparisonRange, TranscriptWordComparisonRange, probe_text_default,
     transcript_alignment_input, transcript_words,
 };
-use bee_transcribe::zipa_align::{TranscriptAlignment, transcript_comparison_input_from_charsiu};
+use bee_transcribe::zipa_align::{
+    ComparisonRangeTiming, TranscriptAlignment, transcript_comparison_input_from_charsiu,
+};
 use bee_zipa_mlx::audio::load_wav_mono_f32;
 use bee_zipa_mlx::infer::ZipaInference;
 
@@ -66,7 +68,7 @@ fn main() -> anyhow::Result<()> {
 
     for word in &charsiu_input.words {
         match alignment.comparison_range_timing(word.comparison_start..word.comparison_end) {
-            Some(timing) => println!(
+            ComparisonRangeTiming::Aligned(timing) => println!(
                 "word\t{}\tchars={}..{}\tcmp={}..{}\ttime={:.3}..{:.3}",
                 word.word_surface,
                 word.char_start,
@@ -76,7 +78,26 @@ fn main() -> anyhow::Result<()> {
                 timing.start_time_secs,
                 timing.end_time_secs
             ),
-            None => println!(
+            ComparisonRangeTiming::Deleted { projected_at } => println!(
+                "word\t{}\tchars={}..{}\tcmp={}..{}\ttime=<deleted@{}>",
+                word.word_surface,
+                word.char_start,
+                word.char_end,
+                word.comparison_start,
+                word.comparison_end,
+                projected_at
+            ),
+            ComparisonRangeTiming::NoTiming { projected_range } => println!(
+                "word\t{}\tchars={}..{}\tcmp={}..{}\ttime=<no-timing {}..{}>",
+                word.word_surface,
+                word.char_start,
+                word.char_end,
+                word.comparison_start,
+                word.comparison_end,
+                projected_range.start,
+                projected_range.end
+            ),
+            ComparisonRangeTiming::Invalid => println!(
                 "word\t{}\tchars={}..{}\tcmp={}..{}\ttime=<none>",
                 word.word_surface,
                 word.char_start,
@@ -91,7 +112,7 @@ fn main() -> anyhow::Result<()> {
         let projected =
             alignment.projected_comparison_range(token.comparison_start..token.comparison_end);
         match alignment.comparison_range_timing(token.comparison_start..token.comparison_end) {
-            Some(timing) => println!(
+            ComparisonRangeTiming::Aligned(timing) => println!(
                 "token\t{}\tword={}\tchars={}..{}\tcmp={}..{}\tproj={}\ttime={:.3}..{:.3}",
                 token.token_surface,
                 token.word_surface.as_deref().unwrap_or_default(),
@@ -103,8 +124,31 @@ fn main() -> anyhow::Result<()> {
                 timing.start_time_secs,
                 timing.end_time_secs
             ),
-            None => println!(
-                "token\t{}\tword={}\tchars={}..{}\tcmp={}..{}\tproj={}\ttime=<none>",
+            ComparisonRangeTiming::Deleted { projected_at } => println!(
+                "token\t{}\tword={}\tchars={}..{}\tcmp={}..{}\tproj={}\ttime=<deleted@{}>",
+                token.token_surface,
+                token.word_surface.as_deref().unwrap_or_default(),
+                token.token_char_start,
+                token.token_char_end,
+                token.comparison_start,
+                token.comparison_end,
+                format_projected_range(projected.as_ref()),
+                projected_at
+            ),
+            ComparisonRangeTiming::NoTiming { projected_range } => println!(
+                "token\t{}\tword={}\tchars={}..{}\tcmp={}..{}\tproj={}\ttime=<no-timing {}..{}>",
+                token.token_surface,
+                token.word_surface.as_deref().unwrap_or_default(),
+                token.token_char_start,
+                token.token_char_end,
+                token.comparison_start,
+                token.comparison_end,
+                format_projected_range(projected.as_ref()),
+                projected_range.start,
+                projected_range.end
+            ),
+            ComparisonRangeTiming::Invalid => println!(
+                "token\t{}\tword={}\tchars={}..{}\tcmp={}..{}\tproj={}\ttime=<invalid>",
                 token.token_surface,
                 token.word_surface.as_deref().unwrap_or_default(),
                 token.token_char_start,
