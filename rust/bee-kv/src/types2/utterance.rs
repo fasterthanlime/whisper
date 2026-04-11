@@ -68,7 +68,7 @@ impl Utterance {
         }
     }
 
-    /// Appends raw samples to the utterance recording buffer.
+    /// Feeds raw samples into the utterance recording buffer.
     ///
     /// Intent:
     /// - audio is the only public input into utterance state
@@ -76,7 +76,7 @@ impl Utterance {
     /// - utterance timing stays internal and is derived from sample position in this append-only buffer
     /// - future implementations will decide internally when enough audio exists
     ///   to run inference and construct transient [`ChunkInfo`] values
-    pub(crate) fn push_audio(&mut self, samples: Vec<f32>) {
+    pub(crate) fn feed(&mut self, samples: Vec<f32>) {
         assert!(
             self.audio.utterance_start == SampleIndex::new(0),
             "utterance audio buffer must remain anchored at sample 0"

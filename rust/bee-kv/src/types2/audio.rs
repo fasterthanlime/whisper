@@ -1,3 +1,5 @@
+use crate::types2::{TimeRange, UtteranceTime};
+
 /// An utterance-global sample index.
 ///
 /// Invariant:
@@ -16,8 +18,8 @@ impl SampleIndex {
     }
 
     /// Converts this utterance-global sample index into utterance-global time.
-    pub(crate) fn to_time(self) -> super::UtteranceTime {
-        super::UtteranceTime::from_secs(self.0 as f64 / crate::SAMPLE_RATE as f64)
+    pub(crate) fn to_time(self) -> UtteranceTime {
+        UtteranceTime::from_secs(self.0 as f64 / crate::SAMPLE_RATE as f64)
     }
 
     pub(crate) fn saturating_add(self, count: SampleCount) -> Self {
@@ -71,8 +73,8 @@ impl UtteranceSampleRange {
     }
 
     /// Converts this utterance-global sample range into utterance-global time.
-    pub(crate) fn to_time_range(self) -> super::TimeRange {
-        super::TimeRange::new(self.start.to_time(), self.end.to_time())
+    pub(crate) fn to_time_range(self) -> TimeRange {
+        TimeRange::new(self.start.to_time(), self.end.to_time())
     }
 }
 
@@ -116,6 +118,25 @@ impl AudioBuffer {
             self.utterance_start,
             self.utterance_start.saturating_add(self.sample_count()),
         )
+    }
+
+    /// Returns a copied utterance-global slice of this buffer.
+    ///
+    /// Intent:
+    /// - callers can retain or inspect a stable timed audio slice without
+    ///   mutating the source buffer
+    ///
+    /// Invariants:
+    /// - `range` must lie entirely within this buffer's utterance-global span
+    pub(crate) fn slice(&self, range: UtteranceSampleRange) -> Self {
+        let self_range = self.utterance_range();
+        assert!(
+            range.start >= self_range.start && range.end <= self_range.end,
+            "audio slice must lie within the source buffer"
+        );
+        let local_start = range.start.as_usize() - self_range.start.as_usize();
+        let local_end = range.end.as_usize() - self_range.start.as_usize();
+        Self::new(range.start, self.samples[local_start..local_end].to_vec())
     }
 
     /// Appends `other` to the end of this buffer.
