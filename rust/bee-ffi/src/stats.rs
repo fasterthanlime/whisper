@@ -106,7 +106,7 @@ fn process_ram_mb() -> f32 {
         pti_numrunning: i32,
         pti_priority: i32,
     }
-    extern "C" {
+    unsafe extern "C" {
         fn proc_pidinfo(
             pid: i32,
             flavor: i32,
