@@ -3590,7 +3590,7 @@ fn timed_generated_bridge_for_cuts(
             kept_token_count: 0,
             kept_text: String::new(),
             bridge: CarriedBridge {
-                text: String::new(),
+                text: replayed_prefix.unwrap_or_default().to_string(),
                 words: Vec::new(),
             },
         });
@@ -3680,7 +3680,7 @@ fn timed_generated_bridge_for_cuts(
         }
     } else if bridge_word_count == 0 {
         CarriedBridge {
-            text: String::new(),
+            text: replayed_prefix.unwrap_or_default().to_string(),
             words: Vec::new(),
         }
     } else {
