@@ -1,5 +1,16 @@
 use crate::tokens::UtteranceTokenRange;
-use crate::{AudioBuffer, Cut, FeedOutput, OutputToken, SampleOffset, Tape, TokenIndex};
+use crate::{
+    AudioBuffer, ComparisonPhone, Cut, FeedOutput, OutputToken, SampleOffset, SampleRange, Tape,
+    TimedToken, TokenId, TokenIndex, ZipaTiming,
+};
+
+const DEFAULT_PREVIEW_REWRITE_TOKENS: usize = 5;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DecodeMode {
+    RebuildPromptEachFeed,
+    PersistentKv,
+}
 
 /// Policy hook that decides where to cut a ready chunk.
 ///
@@ -61,6 +72,18 @@ pub struct Utterance {
     /// Canonical token-aligned output tape plus synchronized ASR rollback state.
     tape: Tape,
 
+    /// How many tail tokens the next feed may rewrite before a new cut is chosen.
+    preview_rewrite_tokens: usize,
+
+    /// Streaming decode behavior for this utterance.
+    decode_mode: DecodeMode,
+
+    /// Number of feed steps processed so far.
+    feed_count: usize,
+
+    /// Next decoder-visible token position for persistent-KV mode.
+    decoder_position: usize,
+
     /// Boxed cut policy used by this utterance.
     cutter: Box<dyn Cutter>,
 
@@ -78,6 +101,10 @@ impl Utterance {
             stable_through: TokenIndex::new(0),
             carry_through: TokenIndex::new(0),
             tape: Tape::new(num_layers),
+            preview_rewrite_tokens: DEFAULT_PREVIEW_REWRITE_TOKENS,
+            decode_mode: DecodeMode::PersistentKv,
+            feed_count: 0,
+            decoder_position: 0,
             cutter,
             listener,
         }
@@ -93,9 +120,11 @@ impl Utterance {
     ///   to run inference and construct transient token slices for cutting
     pub fn feed(&mut self, samples: Vec<f32>) -> FeedOutput<'_> {
         self.audio.extend_samples(samples);
+        self.feed_count += 1;
 
-        // TODO: decide when to run ASR
-        // TODO: rewrite preview from carry boundary
+        self.rewrite_preview_from_carry();
+        // TODO: decide when enough audio exists to run ASR
+        // TODO: decode preview from carry boundary using `decode_mode`
         // TODO: optionally run cutter and promote stable/carry boundaries
 
         FeedOutput::new(self.tape.tokens(), self.tape.detected_language())
@@ -150,12 +179,29 @@ impl Utterance {
         self.stable_through = stable_through;
         self.carry_through = carry_through;
     }
+
+    /// Rewind the live tail so the next decode pass can regenerate preview from
+    /// the current carry boundary.
+    ///
+    /// Intent:
+    /// - the preview suffix is provisional and can be discarded wholesale
+    /// - stable/carry boundaries remain intact
+    /// - persistent-KV mode tracks the visible decoder position at the carry cut
+    fn rewrite_preview_from_carry(&mut self) {
+        self.tape.truncate_to(self.carry_through);
+        if matches!(self.decode_mode, DecodeMode::PersistentKv) {
+            self.decoder_position = self.carry_through.as_usize();
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Cutter, Listener, Utterance};
-    use crate::Cut;
+    use crate::{
+        ComparisonPhone, Cut, OutputToken, SampleOffset, SampleRange, TimedToken, TokenId,
+        TokenIndex, ZipaTiming,
+    };
 
     struct NoCut;
     impl Cutter for NoCut {
@@ -173,5 +219,46 @@ mod tests {
         assert!(utterance.stable_tokens().is_empty());
         assert!(utterance.carry_tokens().is_empty());
         assert!(utterance.preview_tokens().is_empty());
+    }
+
+    #[test]
+    fn feed_rewrites_preview_from_carry_boundary() {
+        let mut utterance = Utterance::new(2, Box::new(NoCut), Box::new(NullListener));
+        utterance.tape.append(vec![
+            dummy_output_token(0, 10),
+            dummy_output_token(1, 11),
+            dummy_output_token(2, 12),
+            dummy_output_token(3, 13),
+        ]);
+        utterance.set_stable_and_carry(TokenIndex::new(1), TokenIndex::new(3));
+
+        let output_len = {
+            let output = utterance.feed(vec![0.0; 320]);
+            output.tokens().len()
+        };
+
+        assert_eq!(utterance.stable_tokens().len(), 1);
+        assert_eq!(utterance.carry_tokens().len(), 2);
+        assert_eq!(utterance.preview_tokens().len(), 0);
+        assert_eq!(output_len, 3);
+        assert_eq!(utterance.decoder_position, 3);
+    }
+
+    fn dummy_output_token(index: usize, token_id: u32) -> OutputToken {
+        OutputToken::new(
+            TimedToken::new(
+                TokenIndex::new(index),
+                TokenId::new(token_id),
+                SampleRange::new(
+                    SampleOffset::new(index * 160),
+                    SampleOffset::new((index + 1) * 160),
+                ),
+            ),
+            None,
+            None,
+            Vec::<ComparisonPhone>::new(),
+            Vec::new(),
+            ZipaTiming::Invalid,
+        )
     }
 }
