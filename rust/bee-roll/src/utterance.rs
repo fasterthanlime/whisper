@@ -380,9 +380,18 @@ impl Utterance {
     /// - if `stable_through == 0`, then the retained decoder position is also 0
     /// - that is the "no stable prefix yet" case, not a different decode mode
     fn plan_preview_decode(&self) -> PreviewDecodePlan {
+        let decoder_position = self.tape.decoder_position_for_boundary(self.stable_through);
+        tracing::trace!(
+            stable_through = self.stable_through.as_usize(),
+            preview_from = self.preview_from.as_usize(),
+            tape_end = self.tape.end().as_usize(),
+            retained_decoder_position = decoder_position,
+            current_kv_position = self.tape.decoder_position(),
+            "bee_roll.plan_preview_decode"
+        );
         PreviewDecodePlan {
             rollback_to: self.preview_from,
-            decoder_position: self.tape.decoder_position_for_boundary(self.stable_through),
+            decoder_position,
             rewrite_budget_tokens: self.preview_rewrite_tokens,
         }
     }
@@ -394,6 +403,12 @@ impl Utterance {
     /// - `rollback_to` must not precede `preview_from`
     /// - `rollback_to` must lie within the current tape
     fn rewrite_preview(&mut self, rollback_to: TokenIndex, decoder_position: usize) {
+        tracing::trace!(
+            rollback_to = rollback_to.as_usize(),
+            decoder_position,
+            current_kv_position = self.tape.decoder_position(),
+            "bee_roll.rewrite_preview"
+        );
         assert!(
             rollback_to >= self.preview_from,
             "preview rewrites must not cut into carry"
@@ -413,6 +428,11 @@ impl Utterance {
     /// - detected language is updated at the same point as the decode result
     /// - persistent-KV mode adopts the model-reported next decoder position
     fn apply_decoded_preview(&mut self, decoded: DecodedPreview) {
+        self.tape.rebind_carry_boundaries(
+            self.stable_through,
+            self.preview_from,
+            decoded.prompt_end_position,
+        );
         self.tape.set_detected_language(decoded.detected_language);
         self.tape.append_decoded(
             decoded.tokens,
@@ -1384,6 +1404,105 @@ mod tests {
 
         assert_eq!(prefix_len, 0);
         assert_eq!(suffix_len, 3);
+    }
+
+    /// Regression test for the long-run KV truncation crash.
+    ///
+    /// Scenario: carry tokens are replayed in a new prompt, a cut promotes
+    /// one into stable, and the next plan_preview_decode reads the promoted
+    /// boundary.  Before the fix, the promoted boundary held a stale decoder
+    /// position from a previous decode cycle, which could exceed the current
+    /// KV cache length and panic in KvTape::truncate_to.
+    #[test]
+    fn carry_boundary_rebind_after_prompt_replay() {
+        let mut utterance = Utterance::new(2, Cutting::Never);
+
+        // --- Cycle 1: initial decode produces tokens 0..4 ---
+        // Simulate a decode pass where the prompt occupies decoder positions
+        // 0..10 and generates 4 tokens at positions 10..14.
+        let cycle1_prompt_end = 10;
+        let cycle1_next = 14;
+        utterance.tape.append_decoded(
+            (0..4)
+                .map(|i| dummy_output_token(i, 100 + i as u32))
+                .collect(),
+            cycle1_prompt_end,
+            cycle1_next,
+        );
+        // Partition: stable=[0,0), carry=[0,2), preview=[2,4)
+        utterance.set_stable_and_preview(TokenIndex::new(0), TokenIndex::new(2));
+
+        // Verify cycle 1 boundaries: tokens at positions 11,12,13,14
+        assert_eq!(
+            utterance
+                .tape
+                .decoder_position_for_boundary(TokenIndex::new(0)),
+            0
+        );
+        assert_eq!(
+            utterance
+                .tape
+                .decoder_position_for_boundary(TokenIndex::new(1)),
+            11
+        );
+        assert_eq!(
+            utterance
+                .tape
+                .decoder_position_for_boundary(TokenIndex::new(2)),
+            12
+        );
+
+        // --- Cycle 2: rewrite preview, replay carry in new prompt ---
+        // Truncate back to preview_from=2, KV back to stable boundary=0.
+        utterance.rewrite_preview(TokenIndex::new(2), 0);
+        assert_eq!(utterance.tape.decoder_position(), 0);
+
+        // Simulate a new decode: new prompt is 20 tokens (different audio),
+        // carry tokens [0,2) are at the end of the prompt.
+        let cycle2_prompt_end = 20;
+        let cycle2_next = 23; // 3 generated preview tokens
+        utterance.apply_decoded_preview(DecodedPreview {
+            detected_language: None,
+            tokens: (2..5)
+                .map(|i| dummy_output_token(i, 200 + i as u32))
+                .collect(),
+            prompt_end_position: cycle2_prompt_end,
+            next_decoder_position: cycle2_next,
+        });
+
+        // After rebinding, carry boundaries should reflect the new prompt geometry.
+        // carry_len=2, so boundary[1] = 20-2+1 = 19, boundary[2] = 20-2+2 = 20
+        assert_eq!(
+            utterance
+                .tape
+                .decoder_position_for_boundary(TokenIndex::new(1)),
+            19,
+            "carry boundary[1] should be rebound to new prompt position"
+        );
+        assert_eq!(
+            utterance
+                .tape
+                .decoder_position_for_boundary(TokenIndex::new(2)),
+            20,
+            "carry boundary[2] should be rebound to prompt_end_position"
+        );
+
+        // --- Simulate a cut: promote token 1 into stable ---
+        utterance.set_stable_and_preview(TokenIndex::new(1), TokenIndex::new(2));
+
+        // --- Cycle 3: this is the call that used to panic ---
+        // plan_preview_decode reads decoder_boundaries[stable_through=1].
+        // Before the fix, this was 11 (from cycle 1), which could exceed
+        // the KV position after a different truncation sequence.
+        let plan = utterance.plan_preview_decode();
+        assert_eq!(
+            plan.decoder_position, 19,
+            "promoted stable boundary should use rebound decoder position, not stale cycle-1 value"
+        );
+
+        // The rewrite must not panic: 19 <= 23 (current KV position).
+        utterance.rewrite_preview(plan.rollback_to, plan.decoder_position);
+        assert_eq!(utterance.tape.decoder_position(), 19);
     }
 
     fn dummy_output_token(index: usize, token_id: u32) -> OutputToken {

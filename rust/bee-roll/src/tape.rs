@@ -154,6 +154,11 @@ impl KvTape {
     /// Invariants:
     /// - `decoder_position` must not move backward
     pub(crate) fn advance_to(&mut self, decoder_position: usize) {
+        tracing::trace!(
+            from = self.decoder_position,
+            to = decoder_position,
+            "bee_roll.kv_tape.advance_to"
+        );
         assert!(
             decoder_position >= self.decoder_position,
             "KV tape cannot advance backward"
@@ -168,9 +173,16 @@ impl KvTape {
     /// - `decoder_position` must lie within the current cache boundary
     /// - the cache is truncated in lockstep with `self.decoder_position`
     pub(crate) fn truncate_to(&mut self, decoder_position: usize) {
+        tracing::trace!(
+            from = self.decoder_position,
+            to = decoder_position,
+            "bee_roll.kv_tape.truncate_to"
+        );
         assert!(
             decoder_position <= self.decoder_position,
-            "KV tape truncate must lie within the cache"
+            "KV tape truncate must lie within the cache: \
+             requested {decoder_position}, current {}",
+            self.decoder_position,
         );
         if let Some(cache) = self.cache.as_mut() {
             cache.truncate(decoder_position);
@@ -246,11 +258,49 @@ impl Tape {
     /// Invariants:
     /// - `token_end` must lie within the current transcript
     pub(crate) fn truncate_to(&mut self, token_end: TokenIndex, decoder_position: usize) {
+        tracing::trace!(
+            token_end = token_end.as_usize(),
+            decoder_position,
+            current_kv = self.kv.decoder_position(),
+            current_tokens = self.tokens.len().as_usize(),
+            "bee_roll.tape.truncate_to"
+        );
         self.tokens.truncate_to(token_end);
         self.decoder_boundaries.truncate(token_end.as_usize() + 1);
         self.kv.truncate_to(decoder_position);
         if let Some(last) = self.decoder_boundaries.last_mut() {
             *last = decoder_position;
+        }
+    }
+
+    /// Rebind decoder boundaries for the carry region after prompt replay.
+    ///
+    /// After a decode pass replays carry tokens `[carry_start, carry_end)` in the
+    /// prompt, their decoder boundaries must reflect their new positions in the
+    /// current KV cache.  Without this, a later cut that promotes carried tokens
+    /// to stable would read stale decoder positions from a previous decode cycle.
+    pub(crate) fn rebind_carry_boundaries(
+        &mut self,
+        carry_start: TokenIndex,
+        carry_end: TokenIndex,
+        prompt_end_position: usize,
+    ) {
+        let carry_len = carry_end.as_usize() - carry_start.as_usize();
+        if carry_len == 0 {
+            return;
+        }
+        tracing::trace!(
+            carry_start = carry_start.as_usize(),
+            carry_end = carry_end.as_usize(),
+            carry_len,
+            prompt_end_position,
+            old_first = self.decoder_boundaries[carry_start.as_usize() + 1],
+            old_last = self.decoder_boundaries[carry_end.as_usize()],
+            "bee_roll.tape.rebind_carry_boundaries"
+        );
+        for k in 1..=carry_len {
+            let idx = carry_start.as_usize() + k;
+            self.decoder_boundaries[idx] = prompt_end_position - carry_len + k;
         }
     }
 
@@ -319,6 +369,14 @@ impl Tape {
         next_decoder_position: usize,
     ) {
         let generated = tokens.len();
+        tracing::trace!(
+            generated,
+            prompt_end_position,
+            next_decoder_position,
+            current_kv = self.kv.decoder_position(),
+            current_tokens = self.tokens.len().as_usize(),
+            "bee_roll.tape.append_decoded"
+        );
         let expected_end = prompt_end_position.saturating_add(generated);
         assert!(
             expected_end == next_decoder_position,
