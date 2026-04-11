@@ -1,10 +1,10 @@
-import { useRef } from "react";
+import { type UIEvent, useCallback, useEffect, useRef } from "react";
 import type { WordSpan } from "../cut-trace-types";
 
 const LABEL_WIDTH = 72;
 const LANE_HEIGHT = 36;
 const RULER_HEIGHT = 24;
-const PX_PER_SEC = 120;
+const BASE_PX_PER_SEC = 120;
 
 const REGION_STYLE = {
   stable: {
@@ -34,11 +34,38 @@ interface Lane {
 export function CutTimeline({
   wordSpans,
   cutSampleSecs,
+  zoom,
+  viewStartSec,
+  onViewStartSecChange,
 }: {
   wordSpans: WordSpan[];
   cutSampleSecs?: number | null;
+  zoom: number;
+  viewStartSec: number;
+  onViewStartSecChange?: (startSec: number) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const pxPerSec = BASE_PX_PER_SEC * zoom;
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const target = Math.max(0, viewStartSec * pxPerSec);
+    const maxLeft = Math.max(0, el.scrollWidth - el.clientWidth);
+    const clamped = Math.min(maxLeft, target);
+    if (Math.abs(el.scrollLeft - clamped) > 1) {
+      el.scrollLeft = clamped;
+    }
+  }, [pxPerSec, viewStartSec]);
+
+  const handleScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      if (!onViewStartSecChange) return;
+      const el = event.currentTarget;
+      onViewStartSecChange(el.scrollLeft / pxPerSec);
+    },
+    [onViewStartSecChange, pxPerSec],
+  );
 
   // Separate into lanes, keeping only words that have timing
   const lanesMap = new Map<string, WordSpan[]>();
@@ -61,7 +88,7 @@ export function CutTimeline({
   if (cutSampleSecs != null && cutSampleSecs > maxSecs) maxSecs = cutSampleSecs;
   maxSecs = Math.max(maxSecs, 0.5);
 
-  const totalWidth = maxSecs * PX_PER_SEC;
+  const totalWidth = maxSecs * pxPerSec;
   const contentHeight = RULER_HEIGHT + lanes.length * LANE_HEIGHT;
 
   // Ruler ticks at 0.5s intervals, labels at 1s
@@ -71,7 +98,11 @@ export function CutTimeline({
   }
 
   return (
-    <div ref={containerRef} className="timeline hide-scrollbar">
+    <div
+      ref={containerRef}
+      className="timeline hide-scrollbar"
+      onScroll={handleScroll}
+    >
       <div
         className="timeline-inner"
         style={{ width: LABEL_WIDTH + totalWidth, minHeight: contentHeight, position: "relative" }}
@@ -79,12 +110,9 @@ export function CutTimeline({
         {/* Ruler */}
         <div className="timeline-ruler-row" style={{ height: RULER_HEIGHT }}>
           <div className="timeline-ruler-label" style={{ width: LABEL_WIDTH }} />
-          <div
-            className="timeline-ruler"
-            style={{ width: totalWidth, height: RULER_HEIGHT }}
-          >
+          <div className="timeline-ruler" style={{ width: totalWidth, height: RULER_HEIGHT }}>
             {ticks.map((t) => (
-              <div key={t} className="timeline-tick" style={{ left: t * PX_PER_SEC }}>
+              <div key={t} className="timeline-tick" style={{ left: t * pxPerSec }}>
                 {t % 1 === 0 && <span>{t}s</span>}
               </div>
             ))}
@@ -107,9 +135,9 @@ export function CutTimeline({
                 style={{ width: totalWidth, height: 28 }}
               >
                 {words.map((w, i) => {
-                  const left = w.start_secs! * PX_PER_SEC;
+                  const left = w.start_secs! * pxPerSec;
                   const width = Math.max(
-                    (w.end_secs! - w.start_secs!) * PX_PER_SEC,
+                    (w.end_secs! - w.start_secs!) * pxPerSec,
                     2
                   );
                   return (
@@ -141,7 +169,7 @@ export function CutTimeline({
               position: "absolute",
               top: 0,
               bottom: 0,
-              left: LABEL_WIDTH + cutSampleSecs * PX_PER_SEC,
+              left: LABEL_WIDTH + cutSampleSecs * pxPerSec,
               width: 2,
               background: "var(--danger)",
               opacity: 0.8,

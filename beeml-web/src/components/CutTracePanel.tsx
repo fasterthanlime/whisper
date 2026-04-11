@@ -153,10 +153,23 @@ function EventRow({ ev }: { ev: TraceEvent }) {
   );
 }
 
-function FeedDetail({ group }: { group: FeedGroup }) {
+function FeedDetail({
+  group,
+  timelineZoom,
+  timelineViewStartSec,
+  onTimelineZoomChange,
+  onTimelineViewStartSecChange,
+}: {
+  group: FeedGroup;
+  timelineZoom: number;
+  timelineViewStartSec: number;
+  onTimelineZoomChange: (zoom: number) => void;
+  onTimelineViewStartSecChange: (startSec: number) => void;
+}) {
   const fe = group.feedEnd;
   const ca = group.cutApplied;
   const fs = group.feedStart;
+  const zoomOptions = [0.5, 0.75, 1, 1.5, 2, 3, 4];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: 16 }}>
@@ -208,10 +221,39 @@ function FeedDetail({ group }: { group: FeedGroup }) {
 
       {/* Timeline */}
       {fe && (
-        <CutTimeline
-          wordSpans={fe.word_spans}
-          cutSampleSecs={ca?.applied ? ca.cut_sample_secs : null}
-        />
+        <div>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              flexWrap: "wrap",
+              marginBottom: 6,
+            }}
+          >
+            <span style={{ fontSize: 11, color: "var(--text-dim)" }}>zoom</span>
+            {zoomOptions.map((option) => (
+              <button
+                key={option}
+                className={timelineZoom === option ? "primary" : ""}
+                onClick={() => onTimelineZoomChange(option)}
+                style={{
+                  padding: "0.15em 0.4em",
+                  fontSize: "11px",
+                }}
+              >
+                {option}x
+              </button>
+            ))}
+          </div>
+          <CutTimeline
+            wordSpans={fe.word_spans}
+            cutSampleSecs={ca?.applied ? ca.cut_sample_secs : null}
+            zoom={timelineZoom}
+            viewStartSec={timelineViewStartSec}
+            onViewStartSecChange={onTimelineViewStartSecChange}
+          />
+        </div>
       )}
 
       {/* Events table */}
@@ -249,6 +291,8 @@ function FeedDetail({ group }: { group: FeedGroup }) {
 export function CutTracePanel() {
   const { feeds, connected } = useCutTrace();
   const [selectedFeed, setSelectedFeed] = useState<number | null>(null);
+  const [timelineZoom, setTimelineZoom] = useState(1);
+  const [timelineViewStartSec, setTimelineViewStartSec] = useState(0);
 
   const sortedIndices = Array.from(feeds.keys()).sort((a, b) => a - b);
 
@@ -343,7 +387,13 @@ export function CutTracePanel() {
       {/* Detail panel */}
       <div style={{ flex: 1, overflowY: "auto" }}>
         {selectedGroup ? (
-          <FeedDetail group={selectedGroup} />
+          <FeedDetail
+            group={selectedGroup}
+            timelineZoom={timelineZoom}
+            timelineViewStartSec={timelineViewStartSec}
+            onTimelineZoomChange={setTimelineZoom}
+            onTimelineViewStartSecChange={setTimelineViewStartSec}
+          />
         ) : (
           <div
             style={{
