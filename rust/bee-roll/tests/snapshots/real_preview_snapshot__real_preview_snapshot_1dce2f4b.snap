@@ -86,102 +86,102 @@ text I asked Copilot to.
 feed 11  samples=35200  secs=2.200
 lang en
 text I asked Copilot to generate.
- 0 "I"          conf=15.182/15.182 g2p=ˈi phones=ɪ zipa=0.581..0.623
- 1 " asked"     conf=11.895/11.895 g2p=ˈæskt phones=ɛ s k t zipa=0.685..0.975
- 2 " Cop"       conf=6.194/6.194 g2p=kɑp phones=k ɑ p zipa=1.162..1.474
- 3 "ilot"       conf=8.577/8.577 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.453..1.723
+ 0 "I"          conf=14.744/14.744 g2p=ˈi phones=ɪ zipa=0.581..0.623
+ 1 " asked"     conf=11.896/11.896 g2p=ˈæskt phones=ɛ s k t zipa=0.685..0.975
+ 2 " Cop"       conf=6.196/6.196 g2p=kɑp phones=k ɑ p zipa=1.162..1.474
+ 3 "ilot"       conf=8.578/8.578 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.453..1.723
  4 " to"        conf=14.882/14.882 g2p=ˈtu phones=t ʊ zipa=1.826..1.992
- 5 " generate"  conf=5.218/5.218 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.034..2.158
+ 5 " generate"  conf=5.219/5.219 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.034..2.158
  6 "."          conf=3.389/3.389 g2p=- phones=- zipa=invalid
 
 feed 12  samples=38400  secs=2.400
 lang en
 text I asked Copilot to generate.
- 0 "I"          conf=14.905/14.905 g2p=ˈi phones=ɪ zipa=0.579..0.621
- 1 " asked"     conf=12.491/12.491 g2p=ˈæskt phones=ɛ s k t zipa=0.683..0.972
- 2 " Cop"       conf=6.380/6.380 g2p=kɑp phones=k ɑ p zipa=1.159..1.469
- 3 "ilot"       conf=8.502/8.502 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.448..1.717
- 4 " to"        conf=16.911/16.911 g2p=ˈtu phones=t ʊ zipa=1.821..1.986
- 5 " generate"  conf=14.458/14.458 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.028..2.359
- 6 "."          conf=4.239/4.239 g2p=- phones=- zipa=invalid
+ 0 "I"          conf=14.744/14.744 g2p=ˈi phones=ɪ zipa=0.579..0.621
+ 1 " asked"     conf=11.896/11.896 g2p=ˈæskt phones=ɛ s k t zipa=0.683..0.972
+ 2 " Cop"       conf=6.382/6.382 g2p=kɑp phones=k ɑ p zipa=1.159..1.469
+ 3 "ilot"       conf=8.505/8.505 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.448..1.717
+ 4 " to"        conf=16.910/16.910 g2p=ˈtu phones=t ʊ zipa=1.821..1.986
+ 5 " generate"  conf=14.457/14.457 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.028..2.359
+ 6 "."          conf=4.238/4.238 g2p=- phones=- zipa=invalid
 
 feed 13  samples=41600  secs=2.600
 lang en
 text I asked Copilot to generate comments.
- 0 "I"          conf=14.607/14.607 g2p=ˈi phones=ɪ zipa=0.578..0.619
- 1 " asked"     conf=12.614/12.614 g2p=ˈæskt phones=ɛ s k t zipa=0.681..0.970
- 2 " Cop"       conf=6.441/6.441 g2p=kɑp phones=k ɑ p zipa=1.156..1.465
- 3 "ilot"       conf=8.258/8.258 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.444..1.713
- 4 " to"        conf=17.621/17.621 g2p=ˈtu phones=t ʊ zipa=1.816..1.981
- 5 " generate"  conf=16.615/16.615 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.022..2.394
- 6 " comments"  conf=5.722/5.722 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.394..2.600
+ 0 "I"          conf=14.744/14.744 g2p=ˈi phones=ɪ zipa=0.578..0.619
+ 1 " asked"     conf=11.896/11.896 g2p=ˈæskt phones=ɛ s k t zipa=0.681..0.970
+ 2 " Cop"       conf=6.442/6.442 g2p=kɑp phones=k ɑ p zipa=1.156..1.465
+ 3 "ilot"       conf=8.261/8.261 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.444..1.713
+ 4 " to"        conf=17.620/17.620 g2p=ˈtu phones=t ʊ zipa=1.816..1.981
+ 5 " generate"  conf=16.616/16.616 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.022..2.394
+ 6 " comments"  conf=5.721/5.721 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.394..2.600
  7 "."          conf=5.266/5.266 g2p=- phones=- zipa=invalid
 
 feed 14  samples=44800  secs=2.800
 lang en
 text I asked Copilot to generate comments for.
- 0 "I"          conf=14.892/14.892 g2p=ˈi phones=ɪ zipa=0.576..0.618
- 1 " asked"     conf=12.567/12.567 g2p=ˈæskt phones=ɛ s k t zipa=0.679..0.968
- 2 " Cop"       conf=6.259/6.259 g2p=kɑp phones=k ɑ p zipa=1.153..1.462
- 3 "ilot"       conf=8.579/8.579 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.441..1.709
+ 0 "I"          conf=14.744/14.744 g2p=ˈi phones=ɪ zipa=0.576..0.618
+ 1 " asked"     conf=11.896/11.896 g2p=ˈæskt phones=ɛ s k t zipa=0.679..0.968
+ 2 " Cop"       conf=6.261/6.261 g2p=kɑp phones=k ɑ p zipa=1.153..1.462
+ 3 "ilot"       conf=8.582/8.582 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.441..1.709
  4 " to"        conf=16.872/16.872 g2p=ˈtu phones=t ʊ zipa=1.812..1.976
- 5 " generate"  conf=17.056/17.056 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.018..2.388
+ 5 " generate"  conf=17.057/17.057 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.018..2.388
  6 " comments"  conf=10.174/10.174 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.388..2.718
- 7 " for"       conf=5.368/5.368 g2p=ˈfɔɹ phones=f ɔ zipa=2.718..2.800
- 8 "."          conf=4.606/4.606 g2p=- phones=- zipa=invalid
+ 7 " for"       conf=5.367/5.367 g2p=ˈfɔɹ phones=f ɔ zipa=2.718..2.800
+ 8 "."          conf=4.605/4.605 g2p=- phones=- zipa=invalid
 
 feed 15  samples=48000  secs=3.000
 lang en
 text I asked Copilot to generate comments for you.
- 0 "I"          conf=14.065/14.065 g2p=ˈi phones=ɪ zipa=0.575..0.616
- 1 " asked"     conf=12.503/12.503 g2p=ˈæskt phones=ɛ s k t zipa=0.678..0.966
- 2 " Cop"       conf=5.879/5.879 g2p=kɑp phones=k ɑ p zipa=1.151..1.459
- 3 "ilot"       conf=8.237/8.237 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.438..1.705
+ 0 "I"          conf=14.744/14.744 g2p=ˈi phones=ɪ zipa=0.575..0.616
+ 1 " asked"     conf=11.896/11.896 g2p=ˈæskt phones=ɛ s k t zipa=0.678..0.966
+ 2 " Cop"       conf=6.261/6.261 g2p=kɑp phones=k ɑ p zipa=1.151..1.459
+ 3 "ilot"       conf=8.582/8.582 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.438..1.705
  4 " to"        conf=16.958/16.958 g2p=ˈtu phones=t ʊ zipa=1.808..1.973
- 5 " generate"  conf=17.561/17.561 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.014..2.384
+ 5 " generate"  conf=17.559/17.559 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.014..2.384
  6 " comments"  conf=9.390/9.390 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.384..2.733
- 7 " for"       conf=19.166/19.166 g2p=ˈfɔɹ phones=f ɔ zipa=2.753..2.856
- 8 " you"       conf=13.987/13.987 g2p=ˈju phones=j ʊ zipa=2.877..2.959
+ 7 " for"       conf=19.167/19.167 g2p=ˈfɔɹ phones=f ɔ zipa=2.753..2.856
+ 8 " you"       conf=13.985/13.985 g2p=ˈju phones=j ʊ zipa=2.877..2.959
  9 "."          conf=10.997/10.997 g2p=- phones=- zipa=invalid
 
 feed 16  samples=51200  secs=3.200
 lang en
 text I asked Copilot to generate comments for you.
- 0 "I"          conf=14.429/14.429 g2p=ˈi phones=ɪ zipa=0.574..0.615
- 1 " asked"     conf=12.499/12.499 g2p=ˈæskt phones=ɛ s k t zipa=0.677..0.964
- 2 " Cop"       conf=5.605/5.605 g2p=kɑp phones=k ɑ p zipa=1.149..1.456
- 3 "ilot"       conf=8.090/8.090 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.436..1.703
- 4 " to"        conf=17.442/17.442 g2p=ˈtu phones=t ʊ zipa=1.805..1.969
+ 0 "I"          conf=14.744/14.744 g2p=ˈi phones=ɪ zipa=0.574..0.615
+ 1 " asked"     conf=11.896/11.896 g2p=ˈæskt phones=ɛ s k t zipa=0.677..0.964
+ 2 " Cop"       conf=6.261/6.261 g2p=kɑp phones=k ɑ p zipa=1.149..1.456
+ 3 "ilot"       conf=8.582/8.582 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.436..1.703
+ 4 " to"        conf=16.958/16.958 g2p=ˈtu phones=t ʊ zipa=1.805..1.969
  5 " generate"  conf=17.188/17.188 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.010..2.379
- 6 " comments"  conf=9.977/9.977 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.379..2.728
- 7 " for"       conf=19.342/19.342 g2p=ˈfɔɹ phones=f ɔ zipa=2.749..2.872
- 8 " you"       conf=14.445/14.445 g2p=ˈju phones=j ʊ zipa=2.872..2.995
- 9 "."          conf=10.875/10.875 g2p=- phones=- zipa=invalid
+ 6 " comments"  conf=9.976/9.976 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.379..2.728
+ 7 " for"       conf=19.343/19.343 g2p=ˈfɔɹ phones=f ɔ zipa=2.749..2.872
+ 8 " you"       conf=14.443/14.443 g2p=ˈju phones=j ʊ zipa=2.872..2.995
+ 9 "."          conf=10.876/10.876 g2p=- phones=- zipa=invalid
 
 feed 17  samples=54400  secs=3.400
 lang en
 text I asked Copilot to generate comments for you.
- 0 "I"          conf=14.372/14.372 g2p=ˈi phones=ɪ zipa=0.573..0.614
- 1 " asked"     conf=12.441/12.441 g2p=ˈæskt phones=ɛ s k t zipa=0.676..0.963
- 2 " Cop"       conf=5.723/5.723 g2p=kɑp phones=k ɑ p zipa=1.147..1.454
- 3 "ilot"       conf=7.987/7.987 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.434..1.700
- 4 " to"        conf=17.654/17.654 g2p=ˈtu phones=t ʊ zipa=1.802..1.966
+ 0 "I"          conf=14.744/14.744 g2p=ˈi phones=ɪ zipa=0.573..0.614
+ 1 " asked"     conf=11.896/11.896 g2p=ˈæskt phones=ɛ s k t zipa=0.676..0.963
+ 2 " Cop"       conf=6.261/6.261 g2p=kɑp phones=k ɑ p zipa=1.147..1.454
+ 3 "ilot"       conf=8.582/8.582 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.434..1.700
+ 4 " to"        conf=16.958/16.958 g2p=ˈtu phones=t ʊ zipa=1.802..1.966
  5 " generate"  conf=17.190/17.190 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.007..2.376
- 6 " comments"  conf=10.046/10.046 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.376..2.724
+ 6 " comments"  conf=10.045/10.045 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.376..2.724
  7 " for"       conf=19.712/19.712 g2p=ˈfɔɹ phones=f ɔ zipa=2.745..2.847
- 8 " you"       conf=14.609/14.609 g2p=ˈju phones=j ʊ zipa=2.867..2.970
- 9 "."          conf=10.182/10.182 g2p=- phones=- zipa=invalid
+ 8 " you"       conf=14.607/14.607 g2p=ˈju phones=j ʊ zipa=2.867..2.970
+ 9 "."          conf=10.183/10.183 g2p=- phones=- zipa=invalid
 
 feed 18  samples=57600  secs=3.600
 lang en
 text I asked Copilot to generate comments for you.
- 0 "I"          conf=14.463/14.463 g2p=ˈi phones=ɪ zipa=0.572..0.613
- 1 " asked"     conf=12.333/12.333 g2p=ˈæskt phones=ɛ s k t zipa=0.674..0.960
- 2 " Cop"       conf=5.442/5.442 g2p=kɑp phones=k ɑ p zipa=1.144..1.451
- 3 "ilot"       conf=8.137/8.137 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.430..1.696
- 4 " to"        conf=17.831/17.831 g2p=ˈtu phones=t ʊ zipa=1.798..1.962
- 5 " generate"  conf=16.987/16.987 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.003..2.370
- 6 " comments"  conf=9.643/9.643 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.370..2.718
- 7 " for"       conf=19.039/19.039 g2p=ˈfɔɹ phones=f ɔ zipa=2.738..2.840
- 8 " you"       conf=14.387/14.387 g2p=ˈju phones=j ʊ zipa=2.861..2.963
- 9 "."          conf=9.546/9.546 g2p=- phones=- zipa=invalid
+ 0 "I"          conf=14.744/14.744 g2p=ˈi phones=ɪ zipa=0.572..0.613
+ 1 " asked"     conf=11.896/11.896 g2p=ˈæskt phones=ɛ s k t zipa=0.674..0.960
+ 2 " Cop"       conf=6.261/6.261 g2p=kɑp phones=k ɑ p zipa=1.144..1.451
+ 3 "ilot"       conf=8.582/8.582 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.430..1.696
+ 4 " to"        conf=16.958/16.958 g2p=ˈtu phones=t ʊ zipa=1.798..1.962
+ 5 " generate"  conf=16.988/16.988 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.003..2.370
+ 6 " comments"  conf=9.642/9.642 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.370..2.718
+ 7 " for"       conf=19.040/19.040 g2p=ˈfɔɹ phones=f ɔ zipa=2.738..2.840
+ 8 " you"       conf=14.385/14.385 g2p=ˈju phones=j ʊ zipa=2.861..2.963
+ 9 "."          conf=9.547/9.547 g2p=- phones=- zipa=invalid

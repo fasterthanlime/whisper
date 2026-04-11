@@ -88,8 +88,8 @@ calling `feed()` means:
 At that stage, there is no point searching for a new cut yet. The system is
 still just repeatedly rewriting `preview`.
 
-Once `preview` is large enough, `feed()` also asks the `Cutter` to choose a
-good boundary. If a cut is accepted:
+Once `preview` is large enough, `feed()` also runs the built-in `Cutting::Auto`
+policy to choose a good boundary. If a cut is accepted:
 
 - more material moves into `stable`
 - the right edge is repartitioned into a new `carry` and `preview`
@@ -114,7 +114,7 @@ The current demo uses:
 - real words on the transcript row
 - token pieces on the token row
 - `stable` / `carry` / `preview` on the tape rows
-- separate rows for kept KV, replayed carry text, and ASR audio span
+- separate rows for kept KV, replayed carry tokens, and ASR audio span
 
 ```text
 feed(10)  first cut search
@@ -536,15 +536,13 @@ At a high level, `Utterance` owns:
 - the stable/carry/preview partition over the current tape
 - the current token-aligned output tape
 - synchronized rollback state for ASR
-- the cut policy hook
-- the listener/debug hook
+- the built-in cut policy (`Cutting::{Never, Auto}`)
 
 The current public surface is intentionally small:
 
 - `Utterance::{new, feed}`
 - associated token/output types
-- `Cutter`
-- `Listener`
+- `Cutting`
 
 ## Current Status
 

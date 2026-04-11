@@ -412,34 +412,6 @@ impl<'a> FeedOutput<'a> {
     }
 }
 
-/// A cut in utterance-global token space.
-///
-/// Intent:
-/// - `NoCut` means "leave the stable boundary where it already is"
-/// - when the current stable boundary is 0, `NoCut` is effectively the same as
-///   "cut at 0": nothing is promoted, nothing rotates, and the whole utterance
-///   remains live
-/// - `At(index)` means commit everything strictly before `index`
-///
-/// Invariant:
-/// - `index` is an utterance-global token boundary
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Cut {
-    /// No commit/carry boundary was found; the chunk should grow.
-    NoCut,
-    /// Commit everything strictly before this utterance-global token boundary.
-    At(TokenIndex),
-}
-
-impl Cut {
-    pub fn token_index(self) -> Option<TokenIndex> {
-        match self {
-            Self::NoCut => None,
-            Self::At(index) => Some(index),
-        }
-    }
-}
-
 impl fmt::Display for TokenIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)

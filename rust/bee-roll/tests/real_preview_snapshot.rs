@@ -7,23 +7,11 @@ use bee_qwen3_asr::config::AsrConfig;
 use bee_qwen3_asr::load;
 use bee_qwen3_asr::mlx_rs::module::ModuleParametersExt;
 use bee_qwen3_asr::model::Qwen3ASRModel;
-use bee_roll::{Cut, Cutter, FeedOutput, Listener, OutputToken, Utterance, ZipaTiming};
+use bee_roll::{Cutting, FeedOutput, Utterance, ZipaTiming};
 use bee_zipa_mlx::audio::load_wav_mono_f32;
 use tokenizers::Tokenizer;
 
 const CHUNK_SAMPLES: usize = 3_200;
-
-struct NoCutCutter;
-
-impl Cutter for NoCutCutter {
-    fn cut(&mut self, _tokens: &[OutputToken]) -> Cut {
-        Cut::NoCut
-    }
-}
-
-struct NoopListener;
-
-impl Listener for NoopListener {}
 
 #[test]
 fn real_preview_snapshot_8453579b() -> anyhow::Result<()> {
@@ -66,8 +54,7 @@ fn snapshot_for_artifact(stem: &str) -> anyhow::Result<String> {
 
     let mut utterance = Utterance::new(
         asr_config.thinker_config.text_config.num_hidden_layers,
-        Box::new(NoCutCutter),
-        Box::new(NoopListener),
+        Cutting::Never,
     );
     utterance.attach_qwen_asr(
         model,

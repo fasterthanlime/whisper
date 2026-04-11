@@ -17,8 +17,8 @@
 
 use crate::tokens::UtteranceTokenRange;
 use crate::{
-    AsrTokenAlternative, AsrTokenConfidence, AudioBuffer, ComparisonPhone, Cut, FeedOutput,
-    OutputToken, SampleOffset, SampleRange, Tape, TimeRange, TimedToken, TokenId, TokenIndex,
+    AsrTokenAlternative, AsrTokenConfidence, AudioBuffer, ComparisonPhone, FeedOutput, OutputToken,
+    SampleCount, SampleOffset, SampleRange, Tape, TimeRange, TimedToken, TokenId, TokenIndex,
     ZipaTiming,
 };
 use bee_g2p::{BeeG2p, token_piece_phones, transcript_alignment_input};
@@ -44,17 +44,11 @@ const PREVIEW_MAX_NEW_TOKENS_BASE: usize = 2;
 const PREVIEW_TOKENS_PER_SECOND: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DecodeMode {
-    /// Rebuild the entire prompt from scratch on every feed.
-    ///
-    /// This matches the "full audio buffer" path: no retained KV, prefix carried
-    /// explicitly in prompt token IDs.
-    RebuildPromptEachFeed,
-    /// Keep the `stable` prefix alive in KV, replay only `carry` in the prompt,
-    /// and regenerate `preview`.
-    ///
-    /// This mode only makes sense when audio rotation matches the README model.
-    PersistentKv,
+pub enum Cutting {
+    /// Never promote `stable`; this is the effective "cut at 0" case.
+    Never,
+    /// Choose the cut internally from the current carry/preview geometry.
+    Auto,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -142,26 +136,6 @@ impl PhoneticRuntime {
     }
 }
 
-/// Policy hook that decides where to cut a ready chunk.
-///
-/// Intent:
-/// - the cutter owns the small amount of business logic that chooses a cut
-/// - the cutter never mutates utterance state directly
-pub trait Cutter {
-    /// Chooses a cut for `tokens`.
-    ///
-    /// Invariant:
-    /// - returned cuts must refer to utterance-global token coordinates
-    fn cut(&mut self, tokens: &[OutputToken]) -> Cut;
-}
-
-/// Observer hook for utterance lifecycle events.
-///
-/// Intent:
-/// - side effects, logging, debug capture, and inspection live here
-/// - event methods are intentionally deferred until the debug/HTML contract exists
-pub trait Listener {}
-
 /// Streaming utterance state for the next rollback model.
 ///
 /// Intent:
@@ -171,8 +145,7 @@ pub trait Listener {}
 /// - inference and chunk construction happen inside this type
 /// - cut application happens inside this type
 /// - the moving stable/carry/preview boundaries are tracked in token space
-/// - external policy is delegated to [`Cutter`]
-/// - external observation is delegated to [`Listener`]
+/// - cut policy is a small enum, not an external trait
 ///
 /// Non-goals:
 /// - this scaffold does not yet implement decode scheduling or cut application
@@ -208,23 +181,11 @@ pub struct Utterance {
     /// How many tail tokens the next feed may rewrite before a new cut is chosen.
     preview_rewrite_tokens: usize,
 
-    /// Streaming decode behavior for this utterance.
-    ///
-    /// Today the default is `RebuildPromptEachFeed`, because the current path
-    /// still feeds the full utterance audio buffer on every step. The
-    /// `PersistentKv` three-way split belongs to the rotated-audio
-    /// implementation described in the README, not to this temporary full-audio
-    /// path.
-    decode_mode: DecodeMode,
-
     /// Number of feed steps processed so far.
     feed_count: usize,
 
-    /// Boxed cut policy used by this utterance.
-    cutter: Box<dyn Cutter>,
-
-    /// Boxed event sink used by this utterance.
-    listener: Box<dyn Listener>,
+    /// Built-in cut policy.
+    cutting: Cutting,
 
     /// Optional ASR runtime used to decode preview on each feed step.
     asr: Option<AsrRuntime>,
@@ -234,20 +195,16 @@ pub struct Utterance {
 }
 
 impl Utterance {
-    // Boxed trait objects are intentional here. We accept the cost and do not want
-    // further reminders to genericize or optimize this construction path.
     /// Creates a new utterance with empty audio and all token boundaries at 0.
-    pub fn new(num_layers: usize, cutter: Box<dyn Cutter>, listener: Box<dyn Listener>) -> Self {
+    pub fn new(num_layers: usize, cutting: Cutting) -> Self {
         Self {
             audio: AudioBuffer::new(SampleOffset::new(0), Vec::new()),
             stable_through: TokenIndex::new(0),
             preview_from: TokenIndex::new(0),
             tape: Tape::new(num_layers),
             preview_rewrite_tokens: DEFAULT_PREVIEW_REWRITE_TOKENS,
-            decode_mode: DecodeMode::RebuildPromptEachFeed,
             feed_count: 0,
-            cutter,
-            listener,
+            cutting,
             asr: None,
             phonetics: None,
         }
@@ -311,15 +268,8 @@ impl Utterance {
         {
             self.apply_preview_run(&preview_run);
         }
-        // Desired state:
-        // - `feed()` only mutates `stable/carry/preview` through a real rotated-audio
-        //   three-way split
-        // - cut promotion happens only after the left side has been physically
-        //   retired from the active audio window
-        //
-        // Current constraint:
-        // - this full-audio path may rewrite preview, but it must not advance
-        //   `stable_through` / `preview_from`
+        self.update_preview_from();
+        self.apply_cut_if_any();
 
         FeedOutput::new(self.tape.tokens(), self.tape.detected_language())
     }
@@ -469,13 +419,7 @@ impl Utterance {
             .map_err(|e| anyhow::anyhow!("evaluating audio features: {e}"))?;
         let n_audio_tokens = audio_features.shape()[1] as usize;
 
-        let prompt = Self::build_prompt(
-            self.decode_mode,
-            plan,
-            asr,
-            n_audio_tokens,
-            &carry_prompt_tokens,
-        );
+        let prompt = Self::build_prompt(plan, asr, n_audio_tokens, &carry_prompt_tokens);
         let (generated, confidences, next_decoder_position, _) = self
             .tape
             .prefill_and_decode(
@@ -500,7 +444,6 @@ impl Utterance {
     }
 
     fn build_prompt(
-        decode_mode: DecodeMode,
         plan: &PreviewDecodePlan,
         asr: &AsrRuntime,
         n_audio_tokens: usize,
@@ -521,40 +464,25 @@ impl Utterance {
         // - retained decoder position > 0 => follow-up prompt
         // - that rule stays true even when the chosen cut is effectively 0 and
         //   nothing has been promoted yet
-        let mut prompt = match decode_mode {
-            DecodeMode::PersistentKv => {
-                if plan.decoder_position == 0 {
-                    // Initial prompt emits metadata and audio structure only.
-                    // Carry replay is appended below as token IDs so the prompt
-                    // builder never needs string context.
-                    generate::build_initial_prompt(
-                        n_audio_tokens,
-                        asr.language.as_str(),
-                        "",
-                        crate::tokenizer(),
-                    )
-                } else {
-                    // Follow-up prompt assumes the `stable` prefix is already in
-                    // KV. Only the bridge (`carry`) is appended after this base
-                    // prompt, then preview is regenerated.
-                    generate::build_followup_prompt(
-                        n_audio_tokens,
-                        asr.language.as_str(),
-                        crate::tokenizer(),
-                    )
-                }
-            }
-            DecodeMode::RebuildPromptEachFeed => {
-                // Even in fresh-cache mode, we still replay carry as token IDs
-                // after the base prompt. The prompt builder itself should stay
-                // unaware of transcript strings.
-                generate::build_initial_prompt(
-                    n_audio_tokens,
-                    asr.language.as_str(),
-                    "",
-                    crate::tokenizer(),
-                )
-            }
+        let mut prompt = if plan.decoder_position == 0 {
+            // Initial prompt emits metadata and audio structure only.
+            // Carry replay is appended below as token IDs so the prompt
+            // builder never needs string context.
+            generate::build_initial_prompt(
+                n_audio_tokens,
+                asr.language.as_str(),
+                "",
+                crate::tokenizer(),
+            )
+        } else {
+            // Follow-up prompt assumes the stable prefix is already in KV.
+            // Only the bridge (`carry`) is appended after this base prompt,
+            // then preview is regenerated.
+            generate::build_followup_prompt(
+                n_audio_tokens,
+                asr.language.as_str(),
+                crate::tokenizer(),
+            )
         };
         prompt.extend_from_slice(carry_prompt_tokens);
         prompt
@@ -685,30 +613,145 @@ impl Utterance {
             )),
         }
     }
+
+    fn update_preview_from(&mut self) {
+        let target = self
+            .tape
+            .end()
+            .as_usize()
+            .saturating_sub(self.preview_rewrite_tokens);
+        let preview_from = find_word_start_at_or_before(self.tape.tokens(), target)
+            .unwrap_or(self.stable_through.as_usize())
+            .max(self.stable_through.as_usize());
+        self.preview_from = TokenIndex::new(preview_from);
+    }
+
+    fn apply_cut_if_any(&mut self) {
+        let new_stable = match self.cutting {
+            Cutting::Never => TokenIndex::new(0),
+            Cutting::Auto => self.find_auto_cut_boundary().unwrap_or(self.stable_through),
+        };
+        if new_stable <= self.stable_through {
+            return;
+        }
+        let Some(cut_sample) = self.audio_cut_sample_for_boundary(new_stable) else {
+            return;
+        };
+        self.rotate_audio_to(cut_sample);
+        self.set_stable_and_preview(new_stable, self.preview_from);
+    }
+
+    fn find_auto_cut_boundary(&self) -> Option<TokenIndex> {
+        if self.preview_from <= self.stable_through {
+            return None;
+        }
+        let end = self.preview_from.as_usize();
+        if let Some(boundary) = find_word_end_before(self.tape.tokens(), end, self.stable_through) {
+            return Some(boundary);
+        }
+        find_word_end_after(self.tape.tokens(), self.stable_through, end)
+    }
+
+    fn audio_cut_sample_for_boundary(&self, boundary: TokenIndex) -> Option<SampleOffset> {
+        let end = boundary.as_usize().min(self.tape.tokens().len());
+        for token in self.tape.tokens()[..end].iter().rev() {
+            if let ZipaTiming::Aligned(range) = token.zipa_timing() {
+                let sample = (range.end.as_secs() * crate::SAMPLE_RATE as f64).round() as usize;
+                return Some(SampleOffset::new(sample));
+            }
+        }
+        None
+    }
+
+    fn rotate_audio_to(&mut self, cut_sample: SampleOffset) {
+        let current_start = self.audio.utterance_range().start;
+        if cut_sample <= current_start {
+            return;
+        }
+        let drop = SampleCount::new(cut_sample.as_usize() - current_start.as_usize());
+        self.audio.drop_front(drop);
+        if let Some(asr) = self.asr.as_mut() {
+            asr.encoder_cache = EncoderCache::new();
+        }
+    }
+}
+
+fn token_surface(token: &OutputToken) -> Option<String> {
+    let tokenizer = crate::maybe_tokenizer()?;
+    tokenizer
+        .decode(&[token.timed_token().token().as_u32()], true)
+        .ok()
+}
+
+fn token_starts_word(index: usize, token: &OutputToken) -> bool {
+    if index == 0 {
+        return true;
+    }
+    let Some(surface) = token_surface(token) else {
+        return false;
+    };
+    let trimmed = surface.trim_start_matches(char::is_whitespace);
+    if trimmed.is_empty() {
+        return false;
+    }
+    let starts_with_space = trimmed.len() != surface.len();
+    let first = trimmed.chars().next().unwrap_or_default();
+    starts_with_space && first.is_alphanumeric()
+}
+
+fn find_word_start_at_or_before(tokens: &[OutputToken], target: usize) -> Option<usize> {
+    if tokens.is_empty() {
+        return Some(0);
+    }
+    if crate::maybe_tokenizer().is_none() {
+        return Some(target.min(tokens.len()));
+    }
+    let upper = target.min(tokens.len().saturating_sub(1));
+    (0..=upper)
+        .rev()
+        .find(|&index| token_starts_word(index, &tokens[index]))
+        .or(Some(target.min(tokens.len())))
+}
+
+fn find_word_end_before(
+    tokens: &[OutputToken],
+    end: usize,
+    lower_bound: TokenIndex,
+) -> Option<TokenIndex> {
+    if crate::maybe_tokenizer().is_none() {
+        return Some(TokenIndex::new(end));
+    }
+    (lower_bound.as_usize() + 1..end)
+        .rev()
+        .find(|&boundary| boundary < tokens.len() && token_starts_word(boundary, &tokens[boundary]))
+        .map(TokenIndex::new)
+}
+
+fn find_word_end_after(
+    tokens: &[OutputToken],
+    start: TokenIndex,
+    end: usize,
+) -> Option<TokenIndex> {
+    if crate::maybe_tokenizer().is_none() {
+        return Some(start);
+    }
+    (start.as_usize() + 1..end)
+        .find(|&boundary| boundary < tokens.len() && token_starts_word(boundary, &tokens[boundary]))
+        .map(TokenIndex::new)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Cutter, DecodedPreview, Listener, Utterance};
+    use super::{Cutting, DecodedPreview, Utterance};
     use crate::{
-        ComparisonPhone, Cut, OutputToken, SampleOffset, SampleRange, TimedToken, TokenId,
-        TokenIndex, ZipaTiming,
+        ComparisonPhone, OutputToken, SampleOffset, SampleRange, TimedToken, TokenId, TokenIndex,
+        ZipaTiming,
     };
     use compact_str::CompactString;
 
-    struct NoCut;
-    impl Cutter for NoCut {
-        fn cut(&mut self, _tokens: &[crate::OutputToken]) -> Cut {
-            Cut::NoCut
-        }
-    }
-
-    struct NullListener;
-    impl Listener for NullListener {}
-
     #[test]
     fn new_utterance_starts_with_empty_stable_carry_preview() {
-        let utterance = Utterance::new(2, Box::new(NoCut), Box::new(NullListener));
+        let utterance = Utterance::new(2, Cutting::Never);
         assert!(utterance.stable_tokens().is_empty());
         assert!(utterance.carry_tokens().is_empty());
         assert!(utterance.preview_tokens().is_empty());
@@ -716,7 +759,7 @@ mod tests {
 
     #[test]
     fn feed_rewrites_preview_from_preview_boundary() {
-        let mut utterance = Utterance::new(2, Box::new(NoCut), Box::new(NullListener));
+        let mut utterance = Utterance::new(2, Cutting::Never);
         utterance.tape.append_decoded(
             vec![
                 dummy_output_token(0, 10),
@@ -735,15 +778,15 @@ mod tests {
         };
 
         assert_eq!(utterance.stable_tokens().len(), 1);
-        assert_eq!(utterance.carry_tokens().len(), 2);
-        assert_eq!(utterance.preview_tokens().len(), 0);
+        assert_eq!(utterance.carry_tokens().len(), 0);
+        assert_eq!(utterance.preview_tokens().len(), 2);
         assert_eq!(output_len, 3);
         assert_eq!(utterance.tape.decoder_position(), 1);
     }
 
     #[test]
     fn apply_decoded_preview_appends_tokens_and_updates_language() {
-        let mut utterance = Utterance::new(2, Box::new(NoCut), Box::new(NullListener));
+        let mut utterance = Utterance::new(2, Cutting::Never);
         utterance
             .tape
             .append_decoded(vec![dummy_output_token(0, 10)], 0, 1);

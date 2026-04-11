@@ -19,8 +19,6 @@
 //! - every time is relative to the beginning of the utterance
 //! - `TimeRange` values are utterance-global, never window-local
 //! - audio buffers store utterance-global sample start plus owned samples
-//! - `Cut::At(index)` refers to an utterance-global token boundary, not a local
-//!   offset inside a token slice
 //! - there is only one rollback machine:
 //!   - "no cut yet" is just the case where the stable boundary remains at 0
 //!   - prompt choice is driven by the retained decoder position, not by feed
@@ -36,11 +34,10 @@ mod utterance;
 pub(crate) const SAMPLE_RATE: u32 = 16_000;
 
 pub use tokens::{
-    AsrTokenAlternative, AsrTokenConfidence, ComparisonPhone, Cut, FeedOutput, G2pTokenIpa,
-    OutputToken, TimeRange, TimedToken, TokenId, TokenIndex, UtteranceTime, ZipaPhoneSpan,
-    ZipaTiming,
+    AsrTokenAlternative, AsrTokenConfidence, ComparisonPhone, FeedOutput, G2pTokenIpa, OutputToken,
+    TimeRange, TimedToken, TokenId, TokenIndex, UtteranceTime, ZipaPhoneSpan, ZipaTiming,
 };
-pub use utterance::{Cutter, Listener, Utterance};
+pub use utterance::{Cutting, Utterance};
 
 pub(crate) use audio::*;
 pub(crate) use tape::*;
