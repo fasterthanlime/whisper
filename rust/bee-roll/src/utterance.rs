@@ -645,10 +645,24 @@ impl Utterance {
             .end()
             .as_usize()
             .saturating_sub(self.preview_rewrite_tokens);
-        let preview_from = find_word_start_at_or_before(self.tape.tokens(), target)
-            .unwrap_or(self.stable_through.as_usize())
-            .max(self.stable_through.as_usize());
-        self.preview_from = TokenIndex::new(preview_from);
+        let ids = self
+            .tape
+            .tokens()
+            .iter()
+            .map(|token| token.timed_token().token().as_u32())
+            .collect::<Vec<_>>();
+        self.preview_from = TokenIndex::new(find_word_start_at_or_before(
+            &ids,
+            self.stable_through.as_usize(),
+            target,
+        ));
+        tracing::trace!(
+            stable_through = self.stable_through.as_usize(),
+            tape_end = self.tape.end().as_usize(),
+            target,
+            preview_from = self.preview_from.as_usize(),
+            "bee_roll.update_preview_from"
+        );
     }
 
     fn apply_cut_if_any(&mut self) {
@@ -664,14 +678,31 @@ impl Utterance {
             Cutting::Never => TokenIndex::new(0),
             Cutting::Auto => self.find_auto_cut_boundary().unwrap_or(self.stable_through),
         };
+        tracing::trace!(
+            cutting = ?self.cutting,
+            stable_through = self.stable_through.as_usize(),
+            preview_from = self.preview_from.as_usize(),
+            chosen_boundary = new_stable.as_usize(),
+            "bee_roll.apply_cut_if_any.choose"
+        );
         if new_stable <= self.stable_through {
             return;
         }
         let Some(cut_sample) = self.audio_cut_sample_for_boundary(new_stable) else {
+            tracing::trace!(
+                boundary = new_stable.as_usize(),
+                "bee_roll.apply_cut_if_any.no_audio_cut_sample"
+            );
             return;
         };
         self.rotate_audio_to(cut_sample);
         self.set_stable_and_preview(new_stable, self.preview_from);
+        tracing::trace!(
+            stable_through = self.stable_through.as_usize(),
+            preview_from = self.preview_from.as_usize(),
+            cut_sample = cut_sample.as_usize(),
+            "bee_roll.apply_cut_if_any.applied"
+        );
     }
 
     fn find_auto_cut_boundary(&self) -> Option<TokenIndex> {
@@ -687,11 +718,30 @@ impl Utterance {
         if self.preview_from <= self.stable_through {
             return None;
         }
-        let end = self.preview_from.as_usize();
-        if let Some(boundary) = find_word_end_before(self.tape.tokens(), end, self.stable_through) {
-            return Some(boundary);
-        }
-        find_word_end_after(self.tape.tokens(), self.stable_through, end)
+        let ids = self
+            .tape
+            .tokens()
+            .iter()
+            .map(|token| token.timed_token().token().as_u32())
+            .collect::<Vec<_>>();
+        let latest_legal_boundary = self
+            .preview_from
+            .as_usize()
+            .saturating_sub(self.preview_rewrite_tokens);
+        let boundary = find_latest_word_end_at_or_before(
+            &ids,
+            self.stable_through.as_usize(),
+            self.preview_from.as_usize(),
+            latest_legal_boundary,
+        );
+        tracing::trace!(
+            stable_through = self.stable_through.as_usize(),
+            preview_from = self.preview_from.as_usize(),
+            latest_legal_boundary,
+            chosen_boundary = boundary,
+            "bee_roll.find_auto_cut_boundary"
+        );
+        (boundary > self.stable_through.as_usize()).then_some(TokenIndex::new(boundary))
     }
 
     fn audio_cut_sample_for_boundary(&self, boundary: TokenIndex) -> Option<SampleOffset> {
@@ -718,68 +768,100 @@ impl Utterance {
     }
 }
 
-fn token_surface(token: &OutputToken) -> Option<String> {
-    let tokenizer = crate::maybe_tokenizer()?;
-    tokenizer
-        .decode(&[token.timed_token().token().as_u32()], true)
-        .ok()
+fn find_word_start_at_or_before(ids: &[u32], start_boundary: usize, target: usize) -> usize {
+    if ids.is_empty() {
+        return 0;
+    }
+    if target <= start_boundary {
+        return start_boundary;
+    }
+    let target = target.min(ids.len());
+    let mut stream = crate::tokenizer().decode_stream(true);
+    let mut last_word_start = start_boundary;
+    let mut pending_start = start_boundary.min(ids.len());
+
+    for (i, &id) in ids.iter().enumerate().skip(start_boundary) {
+        match stream
+            .step(id)
+            .unwrap_or_else(|e| panic!("decode stream failed: {e}"))
+        {
+            None => {}
+            Some(chunk) => {
+                if chunk.starts_with(' ') || chunk.starts_with('\n') {
+                    tracing::trace!(
+                        start_boundary,
+                        target,
+                        token_index = i,
+                        pending_start,
+                        chunk = %chunk.escape_debug(),
+                        "bee_roll.find_word_start_at_or_before.word_start"
+                    );
+                    if pending_start <= target {
+                        last_word_start = pending_start;
+                    } else {
+                        break;
+                    }
+                }
+                pending_start = i + 1;
+            }
+        }
+    }
+
+    last_word_start
 }
 
-fn token_starts_word(index: usize, token: &OutputToken) -> bool {
-    if index == 0 {
-        return true;
+fn find_latest_word_end_at_or_before(
+    ids: &[u32],
+    start_boundary: usize,
+    end_boundary: usize,
+    target_boundary: usize,
+) -> usize {
+    if start_boundary >= end_boundary || ids.is_empty() {
+        return start_boundary;
     }
-    let Some(surface) = token_surface(token) else {
-        return false;
-    };
-    let trimmed = surface.trim_start_matches(char::is_whitespace);
-    if trimmed.is_empty() {
-        return false;
+    let end_boundary = end_boundary.min(ids.len());
+    let target_boundary = target_boundary.min(end_boundary);
+    if target_boundary <= start_boundary {
+        return start_boundary;
     }
-    let starts_with_space = trimmed.len() != surface.len();
-    let first = trimmed.chars().next().unwrap_or_default();
-    starts_with_space && first.is_alphanumeric()
-}
+    let mut stream = crate::tokenizer().decode_stream(true);
+    let mut last_word_end = start_boundary;
+    let mut pending_start = start_boundary;
 
-fn find_word_start_at_or_before(tokens: &[OutputToken], target: usize) -> Option<usize> {
-    if tokens.is_empty() {
-        return Some(0);
+    for (i, &id) in ids
+        .iter()
+        .enumerate()
+        .take(end_boundary)
+        .skip(start_boundary)
+    {
+        match stream
+            .step(id)
+            .unwrap_or_else(|e| panic!("decode stream failed: {e}"))
+        {
+            None => {}
+            Some(chunk) => {
+                if chunk.starts_with(' ') || chunk.starts_with('\n') {
+                    tracing::trace!(
+                        start_boundary,
+                        end_boundary,
+                        target_boundary,
+                        token_index = i,
+                        pending_start,
+                        chunk = %chunk.escape_debug(),
+                        "bee_roll.find_latest_word_end_at_or_before.word_boundary"
+                    );
+                    if pending_start <= target_boundary {
+                        last_word_end = pending_start;
+                    } else {
+                        break;
+                    }
+                }
+                pending_start = i + 1;
+            }
+        }
     }
-    if crate::maybe_tokenizer().is_none() {
-        return Some(target.min(tokens.len()));
-    }
-    let upper = target.min(tokens.len().saturating_sub(1));
-    (0..=upper)
-        .rev()
-        .find(|&index| token_starts_word(index, &tokens[index]))
-        .or(Some(target.min(tokens.len())))
-}
 
-fn find_word_end_before(
-    tokens: &[OutputToken],
-    end: usize,
-    lower_bound: TokenIndex,
-) -> Option<TokenIndex> {
-    if crate::maybe_tokenizer().is_none() {
-        return Some(TokenIndex::new(end));
-    }
-    (lower_bound.as_usize() + 1..end)
-        .rev()
-        .find(|&boundary| boundary < tokens.len() && token_starts_word(boundary, &tokens[boundary]))
-        .map(TokenIndex::new)
-}
-
-fn find_word_end_after(
-    tokens: &[OutputToken],
-    start: TokenIndex,
-    end: usize,
-) -> Option<TokenIndex> {
-    if crate::maybe_tokenizer().is_none() {
-        return Some(start);
-    }
-    (start.as_usize() + 1..end)
-        .find(|&boundary| boundary < tokens.len() && token_starts_word(boundary, &tokens[boundary]))
-        .map(TokenIndex::new)
+    last_word_end
 }
 
 #[cfg(test)]
@@ -790,6 +872,10 @@ mod tests {
         ZipaTiming,
     };
     use compact_str::CompactString;
+    use std::path::PathBuf;
+    use std::sync::Once;
+
+    static TEST_TOKENIZER: Once = Once::new();
 
     #[test]
     fn new_utterance_starts_with_empty_stable_carry_preview() {
@@ -801,14 +887,15 @@ mod tests {
 
     #[test]
     fn feed_rewrites_preview_from_preview_boundary() {
+        ensure_test_tokenizer();
+        let token_ids = encode_ids("I asked Copilot");
         let mut utterance = Utterance::new(2, Cutting::Never);
         utterance.tape.append_decoded(
-            vec![
-                dummy_output_token(0, 10),
-                dummy_output_token(1, 11),
-                dummy_output_token(2, 12),
-                dummy_output_token(3, 13),
-            ],
+            token_ids
+                .iter()
+                .enumerate()
+                .map(|(index, &token_id)| dummy_output_token(index, token_id))
+                .collect(),
             0,
             4,
         );
@@ -877,5 +964,23 @@ mod tests {
             Vec::new(),
             ZipaTiming::Invalid,
         )
+    }
+
+    fn ensure_test_tokenizer() {
+        TEST_TOKENIZER.call_once(|| {
+            let path =
+                PathBuf::from(std::env::var("BEE_TOKENIZER_PATH").unwrap_or_else(|_| {
+                    panic!("BEE_TOKENIZER_PATH must be set for bee-roll tests")
+                }));
+            crate::init_tokenizer(&path);
+        });
+    }
+
+    fn encode_ids(text: &str) -> Vec<u32> {
+        crate::tokenizer()
+            .encode(text, false)
+            .unwrap_or_else(|e| panic!("encoding {text:?}: {e}"))
+            .get_ids()
+            .to_vec()
     }
 }

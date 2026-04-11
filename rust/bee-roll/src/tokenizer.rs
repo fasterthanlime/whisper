@@ -32,10 +32,6 @@ pub(crate) fn tokenizer() -> &'static Tokenizer {
         .unwrap_or_else(|| panic!("bee-roll tokenizer not initialized"))
 }
 
-pub(crate) fn maybe_tokenizer() -> Option<&'static Tokenizer> {
-    TOKENIZER.get()
-}
-
 pub(crate) fn decode_token_ids(token_ids: &[TokenId]) -> Result<String> {
     let ids: Vec<u32> = token_ids.iter().map(|id| id.as_u32()).collect();
     tokenizer()
