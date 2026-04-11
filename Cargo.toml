@@ -7,6 +7,7 @@ members = [
   "rust/beeml",
   "rust/bee-zipa-mlx",
   "rust/bee-qwen3-asr",
+  "rust/bee-g2p-charsiu",
   "rust/bee-roll",
   "rust/bee-roll-readme",
   "rust/bee-kv",

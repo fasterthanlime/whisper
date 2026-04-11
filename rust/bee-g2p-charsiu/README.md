@@ -1,0 +1,359 @@
+# bee-g2p-charsiu
+
+`bee-g2p-charsiu` is the forward-looking home for Bee's non-GPL G2P story.
+
+Right now it is deliberately a skeleton:
+
+- no real Rust implementation yet
+- Python probes and sidecars are expected here first
+- the immediate job is to understand the model and settle the strategy
+- the later job is to move the useful parts into Rust and eventually MLX
+
+This crate exists so we can stop pretending the current eSpeak-based path is
+good enough.
+
+## Why This Exists
+
+The current G2P path is not where Bee should end up.
+
+Problems with the current path:
+
+- it depends on `espeak-ng`, which is GPL and therefore not suitable as the
+  long-term production dependency for Bee
+- it gives us a word-level IPA result, but not a principled token-level story
+- it encouraged the rest of the alignment stack to drift toward word-level
+  abstractions when Bee actually cares about token-level boundaries
+
+Bee wants:
+
+- non-GPL G2P
+- token-aware phonetic structure
+- a route to token-level timing by combining transcript-side phonetics with
+  ZIPA's audio-side phone timing
+- eventually, a native inference path that fits the rest of the MLX-based
+  stack
+
+## What Charsiu Changes
+
+The imported Charsiu model family is not just "another script that returns
+ IPA".
+
+It changes the shape of the problem:
+
+- it is a seq2seq model, not a rule system
+- it runs on ByT5, so the input is byte-level
+- it predicts IPA as generated output
+- it is intended to run on already-tokenized words with a language prefix
+
+That does **not** mean it directly gives us token timing.
+
+It **does** mean it plausibly gives us a model signal for how the word maps to
+ its pronunciation, which eSpeak never gave us.
+
+The important opportunity is this:
+
+- input side: bytes of the word
+- output side: bytes of the IPA string
+- bridge: encoder-decoder cross-attention
+
+That bridge may be good enough to segment a word's phonemes across Qwen token
+ pieces.
+
+## The Actual Goal
+
+The goal is not merely:
+
+- `word -> ipa`
+
+The goal is:
+
+- `transcript text -> IPA`
+- `transcript text -> token-piece phonetic segmentation`
+- `token-piece phonetic segmentation + ZIPA phone timing -> token-level timing`
+
+That is the real pipeline Bee wants.
+
+In other words:
+
+1. Qwen3 ASR gives us transcript tokens
+2. Charsiu gives us word-level pronunciation
+3. Charsiu internals hopefully give us enough signal to split that
+   pronunciation across token pieces
+4. ZIPA gives us timed phones from audio
+5. the two phonetic views meet in the middle
+6. Bee gets token-level timing and richer phonetic evidence
+
+## Working Vocabulary
+
+We need to be precise about the different layers.
+
+### Word
+
+A word is an orthographic unit like:
+
+- `Facet`
+- `Thursday`
+
+Charsiu expects already-tokenized words.
+
+### Qwen token piece
+
+A Qwen token is a rollback / KV-cache boundary unit.
+
+Examples:
+
+- `ĠThursday` can be one token
+- `Facet` can be split into `ĠFac` + `et`
+
+Bee cares about these boundaries because:
+
+- rollback happens in token space
+- KV truncation happens in token space
+- display and debugging want token-aware structure
+
+### Phone / phoneme sequence
+
+This is the transcript-side or audio-side phonetic material.
+
+Examples:
+
+- transcript-side G2P IPA
+- audio-side ZIPA raw phones
+- normalized comparison phones used for alignment
+
+### Timing
+
+ZIPA gives us timing for phone spans, not for Qwen token pieces.
+
+So token-level timing is **derived** timing.
+
+That derivation must not be fake.
+
+## Current Strategy
+
+The strategy is staged.
+
+### Stage 1: Replace eSpeak as the transcript-side G2P source
+
+This is the immediate migration:
+
+- use Charsiu instead of eSpeak for `word -> IPA`
+- keep the current system working while removing the GPL dependency from the
+  intended future path
+
+At this stage, we are still mostly learning.
+
+### Stage 2: Probe Charsiu internals
+
+This is the critical research step.
+
+We need to answer:
+
+- can we extract encoder-decoder attention or another useful latent signal?
+- can that signal be used to map output IPA bytes back to input word bytes?
+- can we then project those byte spans onto Qwen token-piece boundaries?
+
+If the answer is yes, then Charsiu is not only a G2P replacement.
+It becomes the transcript-side segmentation engine.
+
+### Stage 3: Build token-piece phonetic segmentation
+
+For a word like `Facet`:
+
+- orthographic word: `Facet`
+- Qwen tokens: `ĠFac | et`
+- Charsiu IPA: something like `f a s ɪ t`
+
+The desired output is something like:
+
+- `ĠFac -> f a s`
+- `et -> ɪ t`
+
+This segmentation may not always be perfectly deterministic.
+That is acceptable, as long as it is:
+
+- principled
+- inspectable
+- good enough to support timing and debugging
+
+### Stage 4: Meet ZIPA in phonetic space
+
+Once transcript-side token-piece phonetics exist:
+
+- normalize transcript-side phones
+- normalize ZIPA phones
+- align them
+- project ZIPA timing back onto token pieces
+
+That is the route to token-level timing without inventing boundaries out of
+ thin air.
+
+### Stage 5: Move useful inference into Rust and MLX
+
+Only after the above is understood should we move to:
+
+- Rust wrappers
+- Rust-native interfaces
+- MLX-native inference
+
+The current crate is intentionally earlier than that.
+
+## Current Python Probes
+
+The practical contents of this crate right now are the Python probes in
+[scripts](/Users/amos/bearcove/bee/rust/bee-g2p-charsiu/scripts).
+
+Current inventory:
+
+- `charsiu_g2p_sidecar.py`
+  Minimal JSON sidecar around the Charsiu ByT5 checkpoint.
+- `charsiu_g2p_compare.py`
+  Migration/evaluation helper that compares Charsiu output against the current
+  eSpeak baseline.
+- `charsiu_cross_attention_probe.py`
+  Model-inspection probe for decoder cross-attention over a single word.
+
+That third script is the strategically important one.
+
+It is the first direct probe for this question:
+
+- can Charsiu help us segment a word's pronunciation across Qwen token pieces?
+
+## First Concrete Observation
+
+The first useful sanity check is `Facet`, because Qwen splits it:
+
+```text
+Facet -> Fac | et
+```
+
+The current cross-attention probe reports exactly that token split on the Qwen
+side, together with the Charsiu output:
+
+```text
+word         : Facet
+decoded ipa  : ˈfeɪsət
+qwen pieces  :
+  [0] 'Fac' 0..3 bytes 0..3 -> 'Fac'
+  [1] 'et' 3..5 bytes 3..5 -> 'et'
+```
+
+And the Charsiu decoder cross-attention is not random mush.
+
+At the raw byte level, the strongest decoder steps attach to the actual word
+bytes:
+
+```text
+out[ 2] 'f' -> in[10] 'F' score=0.6479
+out[ 3] 'e' -> in[11] 'a' score=0.5558
+out[ 6] 's' -> in[12] 'c' score=0.5368
+out[ 9] 't' -> in[14] 't' score=0.5959
+```
+
+More importantly, once that attention is summed over the Qwen token-piece byte
+spans, it starts to look like the split we actually want:
+
+```text
+out[ 2] 'f'
+  qwen mass: 0:'Fac'=0.7068 ; 1:'et'=0.0256
+
+out[ 3] 'e'
+  qwen mass: 0:'Fac'=0.7666 ; 1:'et'=0.0366
+
+out[ 6] 's'
+  qwen mass: 0:'Fac'=0.6100 ; 1:'et'=0.1676
+
+out[ 7] ''
+  qwen mass: 0:'Fac'=0.0735 ; 1:'et'=0.6811
+
+out[ 8] ''
+  qwen mass: 0:'Fac'=0.0370 ; 1:'et'=0.7108
+
+out[ 9] 't'
+  qwen mass: 0:'Fac'=0.0350 ; 1:'et'=0.6164
+```
+
+That is still not a finished segmentation story.
+
+It is, however, the first concrete evidence that Charsiu may let us derive a
+split like:
+
+- `Fac -> feɪs`
+- `et -> ət`
+
+That is close enough to the real target to justify continuing down this path.
+
+It is enough to justify the next step:
+
+- inspect Charsiu at the byte/attention level
+- map those byte-level attentions back to Qwen token-piece spans
+- see whether a stable token-piece phonetic segmentation falls out
+
+The corresponding sanity check on a single-token word behaves sensibly too.
+
+For `Wednesday`, Qwen keeps the whole word as one token:
+
+```text
+qwen pieces  :
+  [0] 'Wednesday' 0..9 bytes 0..9 -> 'Wednesday'
+```
+
+And every decoder step simply places its mass onto that one piece:
+
+```text
+out[ 5] 'd'
+  qwen mass: 0:'Wednesday'=0.8631
+
+out[ 9] 's'
+  qwen mass: 0:'Wednesday'=0.8332
+
+out[11] 'i'
+  qwen mass: 0:'Wednesday'=0.8315
+```
+
+That is exactly what we want from the probe:
+
+- split words can show internal structure
+- unsplit words collapse cleanly to one token piece
+
+## What We Are Not Doing
+
+We are not:
+
+- pretending word timings are enough
+- pretending token timing can be guessed visually
+- hardcoding a fake split of IPA across token pieces
+- writing production Rust first and discovering the model later
+
+This crate is for understanding first.
+
+## The Likely Shape Of The Future API
+
+Not final, but the intended direction is roughly:
+
+```text
+word text
+  -> charsiu word ipa
+  -> token-piece segmentation
+  -> normalized comparison phones per token-piece span
+```
+
+And then:
+
+```text
+token-piece phonetic spans
+  + ZIPA normalized phones
+  + ZIPA phone timings
+  -> token-level timing / evidence
+```
+
+The important thing is that the primitive should become token-addressed, even
+if some phonetic payload spans multiple token pieces.
+
+## Immediate Next Experiments
+
+1. run Charsiu on real Bee examples and compare with current eSpeak output
+2. inspect decoder cross-attention for words that split across Qwen tokens
+3. see whether the `Facet -> ĠFac | et` style case can be segmented
+4. test normalization and alignment on those segmented outputs
+5. only then decide what stable Rust types belong in the real runtime crates
