@@ -17,6 +17,7 @@ use bee_zipa_mlx::infer::{PhoneSpan, ZipaInference};
 #[derive(Clone, Debug)]
 pub struct CachedZipaOutput {
     raw_token_count: usize,
+    zipa_raw: Vec<String>,
     zipa_norm_with_spans: Vec<ComparisonToken>,
     phone_spans: Vec<PhoneSpan>,
 }
@@ -28,8 +29,27 @@ impl CachedZipaOutput {
 
     pub fn append(&mut self, tail: CachedZipaOutput) {
         self.raw_token_count += tail.raw_token_count;
+        self.zipa_raw.extend(tail.zipa_raw);
         self.zipa_norm_with_spans.extend(tail.zipa_norm_with_spans);
         self.phone_spans.extend(tail.phone_spans);
+    }
+
+    pub fn trim_front(&mut self, cut_secs: f64) {
+        let drop_count = self
+            .phone_spans
+            .partition_point(|span| span.start_time_secs < cut_secs);
+        if drop_count == 0 {
+            return;
+        }
+
+        self.raw_token_count = self.raw_token_count.saturating_sub(drop_count);
+        self.zipa_raw.drain(..drop_count);
+        self.phone_spans.drain(..drop_count);
+        for span in &mut self.phone_spans {
+            span.start_time_secs -= cut_secs;
+            span.end_time_secs -= cut_secs;
+        }
+        self.zipa_norm_with_spans = normalize_ipa_for_comparison_with_spans(&self.zipa_raw);
     }
 }
 
@@ -1589,6 +1609,7 @@ pub fn infer_cached_zipa_output(
 
     Ok(CachedZipaOutput {
         raw_token_count: zipa_raw.len(),
+        zipa_raw,
         zipa_norm_with_spans,
         phone_spans,
     })
@@ -1597,7 +1618,7 @@ pub fn infer_cached_zipa_output(
 #[cfg(test)]
 mod tests {
     use super::{
-        ComparisonRangeTiming, TranscriptAlignment, TranscriptComparisonInput,
+        CachedZipaOutput, ComparisonRangeTiming, TranscriptAlignment, TranscriptComparisonInput,
         expand_degenerate_projected_range, partition_word_alignment_windows,
         select_segmental_word_windows, timed_range_for_normalized_range,
         transcript_comparison_input_from_g2p, transcript_comparison_input_from_word_raw_ranges,
@@ -1623,6 +1644,69 @@ mod tests {
             right_token: right_token.map(ToOwned::to_owned),
             cost: 0.0,
         }
+    }
+
+    #[test]
+    fn cached_zipa_output_trims_prefix_before_appending_tail() {
+        let mut cache = CachedZipaOutput {
+            raw_token_count: 3,
+            zipa_raw: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            zipa_norm_with_spans: vec![
+                ComparisonToken {
+                    token: "a".to_string(),
+                    source_start: 0,
+                    source_end: 1,
+                },
+                ComparisonToken {
+                    token: "b".to_string(),
+                    source_start: 1,
+                    source_end: 2,
+                },
+                ComparisonToken {
+                    token: "c".to_string(),
+                    source_start: 2,
+                    source_end: 3,
+                },
+            ],
+            phone_spans: vec![
+                PhoneSpan {
+                    token_id: 1,
+                    token: "a".to_string(),
+                    start_frame: 0,
+                    end_frame: 10,
+                    start_time_secs: 0.0,
+                    end_time_secs: 0.5,
+                },
+                PhoneSpan {
+                    token_id: 2,
+                    token: "b".to_string(),
+                    start_frame: 10,
+                    end_frame: 20,
+                    start_time_secs: 0.5,
+                    end_time_secs: 1.0,
+                },
+                PhoneSpan {
+                    token_id: 3,
+                    token: "c".to_string(),
+                    start_frame: 20,
+                    end_frame: 30,
+                    start_time_secs: 1.0,
+                    end_time_secs: 1.5,
+                },
+            ],
+        };
+
+        cache.trim_front(1.0);
+
+        assert_eq!(cache.raw_token_count(), 1);
+        assert_eq!(cache.zipa_raw, vec!["c".to_string()]);
+        assert_eq!(cache.zipa_norm_with_spans.len(), 1);
+        assert_eq!(cache.zipa_norm_with_spans[0].source_start, 0);
+        assert_eq!(cache.zipa_norm_with_spans[0].source_end, 1);
+        assert_eq!(cache.phone_spans.len(), 1);
+        assert_eq!(cache.phone_spans[0].token, "c");
+        assert_eq!(cache.phone_spans[0].start_time_secs, 0.0);
+        assert_eq!(cache.phone_spans[0].end_time_secs, 0.5);
     }
 
     #[test]

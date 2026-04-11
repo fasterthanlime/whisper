@@ -1,4 +1,5 @@
-use rustfft::{FftPlanner, num_complex::Complex};
+use rustfft::{Fft, FftPlanner, num_complex::Complex};
+use std::sync::Arc;
 
 use crate::audio::AudioBuffer;
 
@@ -40,6 +41,7 @@ pub struct FbankExtractor {
     window_length: usize,
     window_shift: usize,
     fft_length: usize,
+    fft: Arc<dyn Fft<f32>>,
     window: Vec<f32>,
     mel_filters: Vec<f32>, // [fft_bins, num_filters]
     fft_bins: usize,
@@ -80,6 +82,8 @@ impl FbankExtractor {
         } else {
             window_length
         };
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(fft_length);
         let fft_bins = fft_length / 2 + 1;
         let window = create_frame_window(window_length, params.window_type);
         let mel_filters = if params.torchaudio_compatible_mel_scale {
@@ -104,6 +108,7 @@ impl FbankExtractor {
             window_length,
             window_shift,
             fft_length,
+            fft,
             window,
             mel_filters,
             fft_bins,
@@ -118,15 +123,16 @@ impl FbankExtractor {
             audio.sample_rate_hz
         );
 
-        let frames = get_strided_frames(&audio.samples, self.window_length, self.window_shift);
-        let num_frames = frames.len();
-        let mut planner = FftPlanner::<f32>::new();
-        let fft = planner.plan_fft_forward(self.fft_length);
+        let padded = get_padded_samples(&audio.samples, self.window_length, self.window_shift);
+        let num_frames = (audio.samples.len() + (self.window_shift / 2)) / self.window_shift;
         let mut fft_input = vec![Complex::<f32>::new(0.0, 0.0); self.fft_length];
+        let mut processed = vec![0.0f32; self.window_length];
         let mut data = vec![0.0f32; num_frames * self.params.num_filters];
 
-        for (frame_idx, frame) in frames.iter().enumerate() {
-            let mut processed = frame.clone();
+        for frame_idx in 0..num_frames {
+            let start = frame_idx * self.window_shift;
+            let frame = &padded[start..start + self.window_length];
+            processed.copy_from_slice(frame);
 
             if self.params.remove_dc_offset {
                 let mean = processed.iter().sum::<f32>() / processed.len() as f32;
@@ -147,6 +153,7 @@ impl FbankExtractor {
 
             for (dst, (&sample, &window)) in fft_input
                 .iter_mut()
+                .take(self.window_length)
                 .zip(processed.iter().zip(self.window.iter()))
             {
                 *dst = Complex::new(sample * window, 0.0);
@@ -155,7 +162,7 @@ impl FbankExtractor {
                 *dst = Complex::new(0.0, 0.0);
             }
 
-            fft.process(&mut fft_input);
+            self.fft.process(&mut fft_input);
 
             for filter_idx in 0..self.params.num_filters {
                 let mut energy = 0.0f32;
@@ -182,7 +189,7 @@ impl FbankExtractor {
     }
 }
 
-fn get_strided_frames(samples: &[f32], window_length: usize, window_shift: usize) -> Vec<Vec<f32>> {
+fn get_padded_samples(samples: &[f32], window_length: usize, window_shift: usize) -> Vec<f32> {
     let num_samples = samples.len();
     let num_frames = (num_samples + (window_shift / 2)) / window_shift;
     let new_num_samples = (num_frames.saturating_sub(1)) * window_shift + window_length;
@@ -202,12 +209,7 @@ fn get_strided_frames(samples: &[f32], window_length: usize, window_shift: usize
         );
     }
 
-    (0..num_frames)
-        .map(|frame_idx| {
-            let start = frame_idx * window_shift;
-            padded[start..start + window_length].to_vec()
-        })
-        .collect()
+    padded
 }
 
 fn next_power_of_two(x: usize) -> usize {

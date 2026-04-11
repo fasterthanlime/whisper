@@ -41,6 +41,7 @@ use bee_zipa_mlx::infer::ZipaInference;
 use compact_str::CompactString;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 const DEFAULT_PREVIEW_REWRITE_TOKENS: usize = 5;
 const DEFAULT_MAX_NEW_TOKENS: usize = 256;
@@ -99,6 +100,7 @@ struct PreviewRun {
 
 #[derive(Clone, Debug)]
 struct ZipaPreviewCache {
+    audio_start: SampleOffset,
     audio_end: SampleOffset,
     output: CachedZipaOutput,
 }
@@ -297,9 +299,7 @@ impl Utterance {
             self.apply_preview_run(&preview_run);
         }
         self.update_preview_from();
-        if self.apply_cut_if_any() {
-            self.zipa_cache = None;
-        }
+        let _ = self.apply_cut_if_any();
 
         FeedOutput::new(self.tape.tokens(), self.tape.detected_language())
     }
@@ -571,9 +571,9 @@ impl Utterance {
         // - ZIPA must exist
         // Nothing meaningful happens without those three components.
         //
-        // Stable tokens are treated as frozen here. Only the mutable seam
-        // (`carry` + `preview`, i.e. `[stable_through, tape.end())`) is
-        // re-decoded, re-phoneticized, and re-aligned on each feed.
+        // Stable tokens are treated as frozen here. ZIPA runs only on the
+        // audio suffix that has not already been cached, and the cache is
+        // trimmed forward when a cut drops settled audio from the front.
         let Some(_) = self.phonetics.as_ref() else {
             return Ok(None);
         };
@@ -603,6 +603,7 @@ impl Utterance {
         let token_piece_phones = token_piece_phones(&analysis);
         let alignment_input = transcript_alignment_input(&analysis);
         let comparison_input = transcript_comparison_input_from_g2p(&transcript, &alignment_input);
+        let current_audio_start = self.audio.utterance_range().start;
         let current_audio_end = self.audio.utterance_range().end;
         let zipa_output = {
             let audio = &self.audio;
@@ -613,9 +614,27 @@ impl Utterance {
                 .phonetics
                 .as_ref()
                 .expect("phonetics presence checked above");
-            infer_zipa_output_for_current_audio(audio, cache, &phonetics.zipa, current_audio_end)?
+            let zipa_start = Instant::now();
+            let output = infer_zipa_output_for_current_audio(
+                audio,
+                cache,
+                &phonetics.zipa,
+                current_audio_end,
+            )?;
+            tracing::trace!(
+                target: "bee_phase",
+                component = "bee_roll",
+                phase = "zipa_infer",
+                cached = cache.is_some(),
+                audio_start = current_audio_start.as_usize(),
+                audio_end = current_audio_end.as_usize(),
+                ms = zipa_start.elapsed().as_secs_f64() * 1000.0,
+                "phase timing"
+            );
+            output
         };
         self.zipa_cache = Some(ZipaPreviewCache {
+            audio_start: current_audio_start,
             audio_end: current_audio_end,
             output: zipa_output.clone(),
         });
@@ -729,6 +748,7 @@ impl Utterance {
             return false;
         };
         self.rotate_audio_to(cut_sample);
+        self.trim_zipa_cache_to(cut_sample);
         self.set_stable_and_preview(new_stable, self.preview_from);
         tracing::trace!(
             stable_through = self.stable_through.as_usize(),
@@ -738,6 +758,19 @@ impl Utterance {
             "bee_roll.apply_cut_if_any.applied"
         );
         true
+    }
+
+    fn trim_zipa_cache_to(&mut self, audio_start: SampleOffset) {
+        let Some(cache) = self.zipa_cache.as_mut() else {
+            return;
+        };
+        if audio_start <= cache.audio_start {
+            return;
+        }
+
+        let cut_secs = audio_start.as_usize() as f64 / crate::SAMPLE_RATE as f64;
+        cache.output.trim_front(cut_secs);
+        cache.audio_start = audio_start;
     }
 
     fn find_auto_cut_boundary(&self) -> Option<TokenIndex> {
