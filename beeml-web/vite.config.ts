@@ -10,6 +10,10 @@ export default defineConfig({
         secure: true,
         changeOrigin: true,
       },
+      "/cut-trace-api": {
+        target: "http://localhost:7701",
+        changeOrigin: true,
+      },
     },
   },
 });

@@ -86,3 +86,6 @@ run("beeml", "zsh", [
   ].join(" "),
 ]);
 run("web", "pnpm", ["--dir", "beeml-web", "dev"]);
+if (process.env.BEE_ROLL_CUT_TRACE) {
+  run("cut-trace", "node", ["debug/cut-trace-server.js"]);
+}

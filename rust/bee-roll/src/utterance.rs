@@ -19,6 +19,7 @@
 //! - cut promotion only belongs in the real rotated-audio path described in the
 //!   README; the current full-audio path must not pretend otherwise
 
+use crate::cut_trace::{CutTracer, WordSpan};
 use crate::tokens::UtteranceTokenRange;
 use crate::{
     AsrTokenAlternative, AsrTokenConfidence, AudioBuffer, ComparisonPhone, FeedOutput, OutputToken,
@@ -230,6 +231,9 @@ pub struct Utterance {
 
     /// Cached transcript word/IPA pairs for the most recent preview feed.
     preview_g2p_cache: Option<PreviewG2pCache>,
+
+    /// Optional structured cut-decision trace writer (env-var driven).
+    cut_tracer: CutTracer,
 }
 
 impl Utterance {
@@ -247,6 +251,7 @@ impl Utterance {
             phonetics: None,
             zipa_cache: None,
             preview_g2p_cache: None,
+            cut_tracer: CutTracer::from_env(),
         }
     }
 
@@ -294,8 +299,32 @@ impl Utterance {
         self.audio.extend_samples(samples);
         self.feed_count += 1;
 
+        if self.cut_tracer.is_active() {
+            let audio_end_secs =
+                self.audio.utterance_range().end.as_usize() as f64 / crate::SAMPLE_RATE as f64;
+            self.cut_tracer.feed_start(self.feed_count, audio_end_secs);
+        }
+
         let plan = self.plan_preview_decode();
+
+        if self.cut_tracer.is_active() {
+            self.cut_tracer.plan_preview_decode(
+                self.feed_count,
+                self.stable_through.as_usize(),
+                self.preview_from.as_usize(),
+                self.tape.end().as_usize(),
+                plan.decoder_position,
+                self.tape.decoder_position(),
+            );
+            self.cut_tracer.rewrite_preview(
+                self.feed_count,
+                plan.rollback_to.as_usize(),
+                plan.decoder_position,
+                self.tape.decoder_position(),
+            );
+        }
         self.rewrite_preview(plan.rollback_to, plan.decoder_position);
+
         if let Some(decoded) = self
             .decode_preview(&plan)
             .unwrap_or_else(|e| panic!("bee-roll preview decode failed: {e}"))
@@ -310,6 +339,73 @@ impl Utterance {
         }
         self.update_preview_from();
         let _ = self.apply_cut_if_any();
+
+        if self.cut_tracer.is_active() {
+            let ids: Vec<u32> = self
+                .tape
+                .tokens()
+                .iter()
+                .map(|t| t.timed_token().token().as_u32())
+                .collect();
+            let transcript = crate::decode_token_ids(
+                &self
+                    .tape
+                    .tokens()
+                    .iter()
+                    .map(|t| t.timed_token().token())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap_or_default();
+            let tokens = self.tape.tokens();
+            let stable = self.stable_through.as_usize();
+            let pfrom = self.preview_from.as_usize();
+            let spans: Vec<WordSpan> = streamed_word_spans(&ids, 0, ids.len())
+                .into_iter()
+                .map(|(start, end, text)| {
+                    let region = if end <= stable {
+                        "stable"
+                    } else if start < pfrom {
+                        "carry"
+                    } else {
+                        "preview"
+                    };
+                    let start_secs = tokens[start..end.min(tokens.len())].iter().find_map(|t| {
+                        if let ZipaTiming::Aligned(r) = t.zipa_timing() {
+                            Some(r.start.as_secs())
+                        } else {
+                            None
+                        }
+                    });
+                    let end_secs =
+                        tokens[start..end.min(tokens.len())]
+                            .iter()
+                            .rev()
+                            .find_map(|t| {
+                                if let ZipaTiming::Aligned(r) = t.zipa_timing() {
+                                    Some(r.end.as_secs())
+                                } else {
+                                    None
+                                }
+                            });
+                    WordSpan {
+                        start,
+                        end,
+                        text,
+                        start_secs,
+                        end_secs,
+                        region,
+                    }
+                })
+                .collect();
+            self.cut_tracer.feed_end(
+                self.feed_count,
+                self.stable_through.as_usize(),
+                self.preview_from.as_usize(),
+                self.tape.end().as_usize(),
+                &transcript,
+                spans,
+            );
+        }
 
         FeedOutput::new(self.tape.tokens(), self.tape.detected_language())
     }
@@ -821,6 +917,13 @@ impl Utterance {
             preview_from = self.preview_from.as_usize(),
             "bee_roll.update_preview_from"
         );
+        self.cut_tracer.update_preview_from(
+            self.feed_count,
+            self.stable_through.as_usize(),
+            self.tape.end().as_usize(),
+            target,
+            self.preview_from.as_usize(),
+        );
     }
 
     fn apply_cut_if_any(&mut self) -> bool {
@@ -832,9 +935,13 @@ impl Utterance {
         // - the rest of the machine derives naturally from the chosen boundary:
         //   retained decoder position, prompt choice, audio rotation, and tape
         //   partitioning must not branch on "zero means no cut"
+        let auto_candidate = match self.cutting {
+            Cutting::Never => None,
+            Cutting::Auto => self.find_auto_cut_boundary(),
+        };
         let new_stable = match self.cutting {
             Cutting::Never => TokenIndex::new(0),
-            Cutting::Auto => self.find_auto_cut_boundary().unwrap_or(self.stable_through),
+            Cutting::Auto => auto_candidate.unwrap_or(self.stable_through),
         };
         let cut_context = self.cut_context_debug(new_stable);
         tracing::trace!(
@@ -845,17 +952,55 @@ impl Utterance {
             context = %cut_context,
             "bee_roll.apply_cut_if_any.choose"
         );
+
+        // Structured trace: cut candidate (only when Auto policy is active)
+        if let Cutting::Auto = self.cutting {
+            let latest_legal = self
+                .preview_from
+                .as_usize()
+                .saturating_sub(self.preview_rewrite_tokens);
+            self.cut_tracer.cut_candidate(
+                self.feed_count,
+                self.stable_through.as_usize(),
+                self.preview_from.as_usize(),
+                latest_legal,
+                auto_candidate.map(|b| b.as_usize()),
+            );
+        }
+
         if new_stable <= self.stable_through {
+            self.cut_tracer.cut_applied(
+                self.feed_count,
+                self.stable_through.as_usize(),
+                self.preview_from.as_usize(),
+                new_stable.as_usize(),
+                None,
+                false,
+                cut_context,
+            );
             return false;
         }
-        let Some(cut_sample) = self.audio_cut_sample_for_boundary(new_stable) else {
+        let cut_sample = self.audio_cut_sample_for_boundary(new_stable);
+        if cut_sample.is_none() {
             tracing::trace!(
                 boundary = new_stable.as_usize(),
                 context = %self.cut_context_debug(new_stable),
                 "bee_roll.apply_cut_if_any.no_audio_cut_sample"
             );
+            self.cut_tracer.cut_applied(
+                self.feed_count,
+                self.stable_through.as_usize(),
+                self.preview_from.as_usize(),
+                new_stable.as_usize(),
+                None,
+                false,
+                cut_context,
+            );
             return false;
-        };
+        }
+        let cut_sample = cut_sample.unwrap();
+        let prev_stable_through = self.stable_through.as_usize();
+        let prev_preview_from = self.preview_from.as_usize();
         self.rotate_audio_to(cut_sample);
         self.trim_zipa_cache_to(cut_sample);
         self.set_stable_and_preview(new_stable, self.preview_from);
@@ -865,6 +1010,15 @@ impl Utterance {
             cut_sample = cut_sample.as_usize(),
             context = %self.cut_context_debug(new_stable),
             "bee_roll.apply_cut_if_any.applied"
+        );
+        self.cut_tracer.cut_applied(
+            self.feed_count,
+            prev_stable_through,
+            prev_preview_from,
+            new_stable.as_usize(),
+            Some(cut_sample.as_usize()),
+            true,
+            cut_context,
         );
         true
     }

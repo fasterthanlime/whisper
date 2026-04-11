@@ -9,6 +9,7 @@ import { CorrectionReviewPanel } from "./components/CorrectionReviewPanel";
 import { PhoneticComparisonPanel } from "./components/PhoneticComparisonPanel";
 import { CorpusCapturePanel } from "./components/CorpusCapturePanel";
 import { CorpusAlignmentEvalPanel } from "./components/CorpusAlignmentEvalPanel";
+import { CutTracePanel } from "./components/CutTracePanel";
 
 const WS_URL = "ws://127.0.0.1:9944";
 const TAB_ROUTES = {
@@ -21,6 +22,7 @@ const TAB_ROUTES = {
   transcribe: "/transcribe",
   corpus: "/corpus",
   "corpus-eval": "/corpus-eval",
+  "cut-trace": "/cut-trace",
 } as const;
 type TabKey = keyof typeof TAB_ROUTES;
 const ROUTE_TABS = Object.fromEntries(
@@ -151,6 +153,14 @@ export default function App() {
           >
             Corpus Eval
           </button>
+          <button
+            role="tab"
+            aria-selected={tab === "cut-trace"}
+            className={tab === "cut-trace" ? "primary" : ""}
+            onClick={() => selectTab("cut-trace")}
+          >
+            Cut Trace
+          </button>
         </div>
       </header>
       <main className="app-main">
@@ -171,6 +181,8 @@ export default function App() {
             <OfflineJudgeEvalPanel wsUrl={WS_URL} />
           ) : tab === "phonetics" ? (
             <PhoneticComparisonPanel wsUrl={WS_URL} />
+          ) : tab === "cut-trace" ? (
+            <CutTracePanel />
           ) : (
             <RetrievalPrototypeLab wsUrl={WS_URL} />
           )}

@@ -270,6 +270,8 @@ dependencies = [
  "bee-zipa-mlx",
  "compact_str 0.9.0",
  "insta",
+ "serde",
+ "serde_json",
  "tokenizers",
  "tracing",
  "tracing-subscriber",

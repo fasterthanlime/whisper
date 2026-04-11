@@ -25,6 +25,7 @@
 //!     count or a separate "initial vs followup mode"
 
 mod audio;
+pub(crate) mod cut_trace;
 mod tape;
 mod tokenizer;
 mod tokens;
