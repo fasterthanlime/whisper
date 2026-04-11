@@ -207,7 +207,7 @@ function FeedDetail({ group }: { group: FeedGroup }) {
       )}
 
       {/* Timeline */}
-      {fe?.word_spans && fe.word_spans.length > 0 && (
+      {fe && (
         <CutTimeline
           wordSpans={fe.word_spans}
           cutSampleSecs={ca?.applied ? ca.cut_sample_secs : null}

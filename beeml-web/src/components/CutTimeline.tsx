@@ -70,14 +70,6 @@ export function CutTimeline({
     ticks.push(parseFloat(t.toFixed(2)));
   }
 
-  if (lanes.length === 0) {
-    return (
-      <div className="timeline-empty">
-        No ZIPA-timed words — timeline unavailable
-      </div>
-    );
-  }
-
   return (
     <div ref={containerRef} className="timeline hide-scrollbar">
       <div
