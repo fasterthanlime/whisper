@@ -733,6 +733,7 @@ fn decode_sliding_window_timed_rollback(
                 kept_token_count: keep.kept_token_count,
                 kept_token_ids,
                 kept_text,
+                bridge_token_ids: Vec::new(),
                 bridge_text: None,
                 rollback_position,
                 keep_boundary_debug: KeepBoundaryDebug {
@@ -856,7 +857,7 @@ fn decode_sliding_window_full_replay(
             start_position,
             window.start_sample,
             window.end_sample,
-            replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
+            replayed_prefix.as_ref(),
         )?;
 
         let rollback = if window_index + 1 < window_plan.len() {
@@ -885,6 +886,7 @@ fn decode_sliding_window_full_replay(
                 kept_token_count: keep.kept_token_count,
                 kept_token_ids,
                 kept_text,
+                bridge_token_ids: Vec::new(),
                 bridge_text: None,
                 rollback_position,
                 keep_boundary_debug: KeepBoundaryDebug {
@@ -931,10 +933,12 @@ fn decode_sliding_window_full_replay(
             &draft_text,
         );
 
-        replay_prefix_for_next = (!chunk_run.transcript.is_empty()).then(|| CarriedBridge {
-            text: chunk_run.transcript.clone(),
-            words: Vec::new(),
-        });
+        replay_prefix_for_next =
+            (!chunk_run.generated_token_ids.is_empty()).then(|| CarriedBridge {
+                token_ids: chunk_run.generated_token_ids.clone(),
+                text: chunk_run.transcript.clone(),
+                words: Vec::new(),
+            });
         window_runs.push(SlidingWindowRun {
             chunk_run,
             rollback,
@@ -1077,6 +1081,7 @@ fn decode_sliding_window_bridge_replay(
         };
         let chunk_samples = &samples[window.start_sample..window.end_sample];
         let replayed_prefix = replay_prefix_for_next.clone();
+        let replayed_prefix_text = carried_bridge_text(tokenizer, replayed_prefix.as_ref())?;
         update_exercise_progress(
             &mut tui,
             "Decoding",
@@ -1089,10 +1094,7 @@ fn decode_sliding_window_bridge_replay(
             (window.start_sample * 1000) / SAMPLE_RATE as usize,
             (window.end_sample * 1000) / SAMPLE_RATE as usize,
             chunk_samples.len(),
-            replayed_prefix
-                .as_ref()
-                .map(|prefix| sentence_word_tokens(&prefix.text).len())
-                .unwrap_or(0),
+            sentence_word_tokens(&replayed_prefix_text).len(),
             start_position,
         ));
         let chunk_run = decode_chunk_followup_step(
@@ -1109,7 +1111,7 @@ fn decode_sliding_window_bridge_replay(
             start_position,
             window.start_sample,
             window.end_sample,
-            replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
+            replayed_prefix.as_ref(),
         )?;
         tui.log(format!(
             "decoded chunk {window_index}: decode_ms={:.1} start_position={} end_position={} generated_tokens={} stop_reason={}",
@@ -1120,9 +1122,7 @@ fn decode_sliding_window_bridge_replay(
             chunk_run.stop_reason.as_str(),
         ));
         draft_text.clear();
-        if let Some(prefix) = replayed_prefix.as_ref() {
-            append_exact(&mut draft_text, prefix.text.as_str());
-        }
+        append_exact(&mut draft_text, replayed_prefix_text.as_str());
         append_exact(&mut draft_text, chunk_run.transcript.as_str());
         update_exercise_progress(
             &mut tui,
@@ -1139,16 +1139,15 @@ fn decode_sliding_window_bridge_replay(
         let has_next_window = window.end_sample < samples.len();
         let rollback = if has_next_window {
             let generated_transcript = normalized_transcript(&chunk_run.transcript);
-            let combined_transcript = match replayed_prefix
-                .as_ref()
-                .map(|prefix| normalized_transcript(&prefix.text))
-            {
-                Some(prefix) if !prefix.is_empty() && !generated_transcript.is_empty() => {
-                    format!("{prefix} {generated_transcript}")
-                }
-                Some(prefix) if !prefix.is_empty() => prefix.to_string(),
-                _ => generated_transcript.to_string(),
-            };
+            let normalized_replayed_prefix = normalized_transcript(&replayed_prefix_text);
+            let combined_transcript =
+                match Some(normalized_replayed_prefix).filter(|text| !text.is_empty()) {
+                    Some(prefix) if !prefix.is_empty() && !generated_transcript.is_empty() => {
+                        format!("{prefix} {generated_transcript}")
+                    }
+                    Some(prefix) if !prefix.is_empty() => prefix.to_string(),
+                    _ => generated_transcript.to_string(),
+                };
             let alignment =
                 build_transcript_alignment(&mut align_ctx, &combined_transcript, chunk_samples)?;
             let target_keep_until_secs = unresolved_keep_samples as f64 / SAMPLE_RATE as f64;
@@ -1199,28 +1198,30 @@ fn decode_sliding_window_bridge_replay(
                 kept_token_count: split.kept_token_count,
                 kept_token_ids,
                 kept_text,
+                bridge_token_ids: split.bridge.token_ids.clone(),
                 bridge_text: (!split.bridge.text.is_empty()).then_some(split.bridge.text.clone()),
                 rollback_position,
                 keep_boundary_debug,
             };
             let kept_exact_text = decode_token_ids(tokenizer, &rollback.kept_token_ids)?;
             let delta = suffix_after_prefix(
-                replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
+                Some(replayed_prefix_text.as_str()),
                 kept_exact_text.as_str(),
             );
             append_exact(&mut committed_text, delta);
             draft_text.clear();
             if let Some(prefix) = replay_prefix_for_next.as_ref() {
-                append_exact(&mut draft_text, prefix.text.as_str());
+                append_exact(
+                    &mut draft_text,
+                    carried_bridge_text(tokenizer, Some(prefix))?.as_str(),
+                );
             }
             Some(rollback)
         } else {
             start_position = chunk_run.end_position;
             replay_prefix_for_next = None;
-            let delta = suffix_after_prefix(
-                replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
-                draft_text.as_str(),
-            );
+            let delta =
+                suffix_after_prefix(Some(replayed_prefix_text.as_str()), draft_text.as_str());
             append_exact(&mut committed_text, delta);
             draft_text.clear();
             None
@@ -1655,7 +1656,7 @@ fn decode_chunk_followup_step(
     start_position: usize,
     start_sample: usize,
     end_sample: usize,
-    replay_text_prefix: Option<&str>,
+    replay_prefix: Option<&CarriedBridge>,
 ) -> Result<ChunkRun> {
     let decode_start = Instant::now();
     let (mel_data, n_mels, n_frames) = mel_extractor
@@ -1680,8 +1681,8 @@ fn decode_chunk_followup_step(
             build_followup_prompt(n_audio_tokens, language, tokenizer),
         )
     };
-    if let Some(prefix) = replay_text_prefix.filter(|prefix| !prefix.is_empty()) {
-        prompt_tokens.extend(tokenize_prompt_text(tokenizer, prefix)?);
+    if let Some(prefix) = replay_prefix.filter(|prefix| !prefix.token_ids.is_empty()) {
+        prompt_tokens.extend(prompt_tokens_from_token_ids(&prefix.token_ids)?);
     }
 
     let prompt_len = prompt_tokens.len();
@@ -1741,9 +1742,34 @@ fn decode_token_ids(tokenizer: &Tokenizer, token_ids: &[u32]) -> Result<String> 
         .map_err(|e| anyhow::anyhow!("decoding transcript tokens: {e}"))
 }
 
+fn prompt_tokens_from_token_ids(token_ids: &[u32]) -> Result<Vec<i32>> {
+    token_ids
+        .iter()
+        .map(|&id| i32::try_from(id).context("prompt token id overflow"))
+        .collect()
+}
+
+fn tokenize_token_ids(tokenizer: &Tokenizer, text: &str) -> Result<Vec<u32>> {
+    Ok(tokenizer
+        .encode_fast(text, false)
+        .map_err(|e| anyhow::anyhow!("encoding prompt text: {e}"))?
+        .get_ids()
+        .to_vec())
+}
+
 fn kept_generated_token_ids(chunk_run: &ChunkRun, kept_token_count: usize) -> Vec<u32> {
     chunk_run.generated_token_ids[..kept_token_count.min(chunk_run.generated_token_ids.len())]
         .to_vec()
+}
+
+fn carried_bridge_text(tokenizer: &Tokenizer, bridge: Option<&CarriedBridge>) -> Result<String> {
+    match bridge {
+        Some(bridge) if !bridge.token_ids.is_empty() => {
+            decode_token_ids(tokenizer, &bridge.token_ids)
+        }
+        Some(bridge) => Ok(bridge.text.clone()),
+        None => Ok(String::new()),
+    }
 }
 
 fn combine_transcripts(chunks: &[ChunkRun]) -> String {
@@ -2344,6 +2370,7 @@ struct WindowRollbackDecision {
     kept_token_count: usize,
     kept_token_ids: Vec<u32>,
     kept_text: String,
+    bridge_token_ids: Vec<u32>,
     bridge_text: Option<String>,
     rollback_position: usize,
     keep_boundary_debug: KeepBoundaryDebug,
@@ -2358,6 +2385,7 @@ struct CarriedBridgeWord {
 
 #[derive(Clone)]
 struct CarriedBridge {
+    token_ids: Vec<u32>,
     text: String,
     words: Vec<CarriedBridgeWord>,
 }
@@ -3599,16 +3627,6 @@ fn file_url_for_path(path: &Path) -> Result<String> {
     Ok(format!("file://{}", absolute.display()))
 }
 
-fn tokenize_prompt_text(tokenizer: &Tokenizer, text: &str) -> Result<Vec<i32>> {
-    tokenizer
-        .encode_fast(text, false)
-        .map_err(|e| anyhow::anyhow!("encoding prompt text: {e}"))?
-        .get_ids()
-        .iter()
-        .map(|&id| i32::try_from(id).context("prompt token id overflow"))
-        .collect()
-}
-
 struct AlignmentContext {
     g2p: CachedEspeakG2p,
     zipa: ZipaInference,
@@ -4011,6 +4029,7 @@ fn timed_generated_bridge_for_cuts(
 ) -> Result<TimedGeneratedBridge> {
     if timed_words.is_empty() {
         let bridge = replayed_prefix.cloned().unwrap_or_else(|| CarriedBridge {
+            token_ids: Vec::new(),
             text: String::new(),
             words: Vec::new(),
         });
@@ -4066,14 +4085,17 @@ fn timed_generated_bridge_for_cuts(
     let bridge = if let (Some(first_bridge_word), Some(last_bridge_word)) =
         (bridge_words_slice.first(), bridge_words_slice.last())
     {
+        let text = combined_transcript
+            [first_bridge_word.char_range.start..last_bridge_word.char_range.end]
+            .to_string();
         CarriedBridge {
-            text: combined_transcript
-                [first_bridge_word.char_range.start..last_bridge_word.char_range.end]
-                .to_string(),
+            token_ids: tokenize_token_ids(tokenizer, &text)?,
+            text,
             words: bridge_words,
         }
     } else if bridge_words_slice.is_empty() {
         CarriedBridge {
+            token_ids: Vec::new(),
             text: String::new(),
             words: Vec::new(),
         }
