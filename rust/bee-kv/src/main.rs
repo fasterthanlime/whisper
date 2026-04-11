@@ -3098,7 +3098,7 @@ body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#111315
 .audio-panel{{margin:0 0 20px 0;padding:12px 14px;border:1px solid #4b4f56;background:#181c20;max-width:900px;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
 .audio-title{{font-weight:700;margin:0 0 8px 0;}}\
 .audio-player{{width:100%;margin:6px 0 0 0;color-scheme:dark;accent-color:#d97706;}}\
-.current-word-display{{font-size:52px;font-weight:700;text-align:center;min-height:72px;color:#f6f1e5;margin:16px 0;letter-spacing:0.02em;line-height:1.2;}}\
+.current-word-display{{font-family:\"SF Pro Display\",\"SF Pro\",ui-sans-serif,-apple-system,sans-serif;font-size:80px;font-weight:700;height:110px;display:flex;align-items:center;justify-content:center;color:#f6f1e5;margin:20px 0;letter-spacing:-0.01em;flex-shrink:0;}}\
 .timeline-scroll{{overflow-x:auto;margin-bottom:8px;}}\
 .transcript-line{{width:{width_px}px;margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#ded7ca;}}\
 .timeline{{width:{width_px}px;border:1px solid #4b4f56;background:#181c20;position:relative;padding:12px 0;box-shadow:0 10px 30px rgba(0,0,0,0.22);}}\
