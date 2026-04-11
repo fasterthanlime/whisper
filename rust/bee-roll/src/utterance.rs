@@ -31,6 +31,7 @@ pub(crate) trait Listener {
 /// Intent:
 /// - audio is the only public ingress
 /// - utterance audio is append-only and remains anchored at utterance sample 0
+/// - utterance-owned token, commit, and ASR state stay synchronized under one owner
 /// - inference and chunk construction happen inside this type
 /// - cut application happens inside this type
 /// - the moving committed boundary is tracked in token space
@@ -45,24 +46,28 @@ pub(crate) struct Utterance {
     /// Invariant:
     /// - this buffer remains anchored at utterance sample 0
     pub(crate) audio: AudioBuffer,
+
     /// Token boundary through which the utterance has been committed.
     ///
     /// Invariant:
+    /// - zero means no tokens are committed yet
     /// - this is the primary moving boundary in utterance state
     /// - any sample/time boundaries are derived from this token boundary, not stored separately
-    pub(crate) committed_through: Option<TokenIndex>,
+    pub(crate) committed_through: TokenIndex,
+
     /// Boxed cut policy used by this utterance.
     pub(crate) cutter: Box<dyn Cutter>,
+
     /// Boxed event sink used by this utterance.
     pub(crate) listener: Box<dyn Listener>,
 }
 
 impl Utterance {
-    /// Creates a new utterance with empty audio and no committed tokens yet.
+    /// Creates a new utterance with empty audio and committed boundary 0.
     pub(crate) fn new(cutter: Box<dyn Cutter>, listener: Box<dyn Listener>) -> Self {
         Self {
             audio: AudioBuffer::new(SampleOffset::new(0), Vec::new()),
-            committed_through: None,
+            committed_through: TokenIndex::new(0),
             cutter,
             listener,
         }
@@ -75,7 +80,7 @@ impl Utterance {
     /// - callers provide only raw samples, never timed audio buffers
     /// - utterance timing stays internal and is derived from sample position in this append-only buffer
     /// - future implementations will decide internally when enough audio exists
-    ///   to run inference and construct transient [`ChunkInfo`] values
+    ///   to run inference and construct transient token slices for cutting
     pub(crate) fn feed(&mut self, samples: Vec<f32>) {
         assert!(
             self.audio.utterance_start == SampleOffset::new(0),

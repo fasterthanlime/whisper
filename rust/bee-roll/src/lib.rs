@@ -6,8 +6,8 @@
 //! - one cut in token space
 //! - no window-relative or carry-relative coordinates
 //! - one tokenizer slot initialized once at process startup
-//! - sample space is canonical for audio; time is derived from samples
-//! - transcript token state and KV state can be owned under one truncation boundary
+//! - sample space is canonical for audio; time is a derived view used for visualization
+//! - `Utterance` is the owning boundary for synchronized rollback state
 //!
 //! Non-goals:
 //! - this module tree does not describe the current `bee-kv` implementation
@@ -20,9 +20,6 @@
 //! - `TimeRange` values are utterance-global, never window-local
 //! - audio buffers store utterance-global sample start plus owned samples
 //! - `ChunkInfo.tokens` is the single source of truth for chunk token order
-//! - `TimedToken.starts_word_len` is present only on the first token of a word
-//! - if `TimedToken.starts_word_len` is `Some(len)`, then the next `len` tokens in the
-//!   same `ChunkInfo` belong to that word
 //! - `Cut::At(index)` refers to an utterance-global token boundary, not a local
 //!   offset inside a chunk
 

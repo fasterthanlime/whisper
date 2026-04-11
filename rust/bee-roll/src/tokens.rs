@@ -132,8 +132,6 @@ impl UtteranceTokenRange {
 /// Invariants:
 /// - `index` is utterance-global
 /// - `span` is utterance-global
-/// - `starts_word_len` is only populated on the first token of a word
-/// - `starts_word_len`, when present, is the number of tokens in that word
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TimedToken {
     /// Utterance-global token index for this token.
@@ -142,8 +140,6 @@ pub(crate) struct TimedToken {
     pub(crate) token: TokenId,
     /// Utterance-global sample span associated with this token.
     pub(crate) span: SampleRange,
-    /// Present only on the first token of a word; gives the word length in tokens.
-    pub(crate) starts_word_len: Option<TokenCount>,
 }
 
 /// The canonical aligned token sequence for a decodeable utterance slice.
