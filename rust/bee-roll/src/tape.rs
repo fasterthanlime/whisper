@@ -1,7 +1,8 @@
 use bee_qwen3_asr::decoder::KVCache;
+use compact_str::CompactString;
 
 use crate::tokens::{TokenCount, UtteranceTokenRange, decode_timed_tokens};
-use crate::{TimedToken, TokenIndex};
+use crate::{OutputToken, TokenIndex};
 
 /// Canonical utterance-global token storage with a 1:1 mapping between
 /// vector position and utterance token index.
@@ -16,7 +17,7 @@ use crate::{TimedToken, TokenIndex};
 /// - token order is utterance-global and never rebased
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TokenTape {
-    tokens: Vec<TimedToken>,
+    tokens: Vec<OutputToken>,
 }
 
 impl TokenTape {
@@ -41,7 +42,7 @@ impl TokenTape {
     }
 
     /// Returns the full tape as a slice.
-    pub(crate) fn as_slice(&self) -> &[TimedToken] {
+    pub(crate) fn as_slice(&self) -> &[OutputToken] {
         &self.tokens
     }
 
@@ -49,7 +50,7 @@ impl TokenTape {
     ///
     /// Invariants:
     /// - `range` must lie within this tape
-    pub(crate) fn slice(&self, range: UtteranceTokenRange) -> &[TimedToken] {
+    pub(crate) fn slice(&self, range: UtteranceTokenRange) -> &[OutputToken] {
         assert!(
             range.start <= range.end && range.end <= self.end(),
             "token tape slice must lie within the tape"
@@ -64,15 +65,15 @@ impl TokenTape {
     /// Invariants:
     /// - appended tokens must begin exactly at the current end index
     /// - appended token indices must continue contiguously
-    pub(crate) fn append(&mut self, tokens: Vec<TimedToken>) {
+    pub(crate) fn append(&mut self, tokens: Vec<OutputToken>) {
         let expected_start = self.end();
         for (offset, token) in tokens.iter().enumerate() {
             let expected = TokenIndex::new(expected_start.as_usize() + offset);
             assert!(
-                token.index() == expected,
+                token.timed_token().index() == expected,
                 "token tape append requires token index {}, got {}",
                 expected,
-                token.index()
+                token.timed_token().index()
             );
         }
         self.tokens.extend(tokens);
@@ -92,7 +93,12 @@ impl TokenTape {
 
     /// Decodes all stored tokens on demand.
     pub(crate) fn decode_text(&self) -> anyhow::Result<String> {
-        decode_timed_tokens(&self.tokens)
+        let timed: Vec<_> = self
+            .tokens
+            .iter()
+            .map(|token| token.timed_token())
+            .collect();
+        decode_timed_tokens(&timed)
     }
 }
 
@@ -154,19 +160,21 @@ impl KvTape {
 ///
 /// Invariants:
 /// - `tokens.end() == kv.end()`
-pub(crate) struct Transcript {
+pub(crate) struct Tape {
     /// Canonical utterance-global token sequence.
     tokens: TokenTape,
     /// KV cache state synchronized to the token sequence.
     kv: KvTape,
+    detected_language: Option<CompactString>,
 }
 
-impl Transcript {
+impl Tape {
     /// Creates an empty transcript at utterance token boundary 0.
     pub(crate) fn new(num_layers: usize) -> Self {
         Self {
             tokens: TokenTape::new(),
             kv: KvTape::new(num_layers),
+            detected_language: None,
         }
     }
 
@@ -182,7 +190,7 @@ impl Transcript {
     }
 
     /// Returns a borrowed token slice over an utterance-global token range.
-    pub(crate) fn slice(&self, range: UtteranceTokenRange) -> &[TimedToken] {
+    pub(crate) fn slice(&self, range: UtteranceTokenRange) -> &[OutputToken] {
         self.tokens.slice(range)
     }
 
@@ -192,7 +200,7 @@ impl Transcript {
     /// - the appended tokens must continue contiguously from the current end
     /// - callers must only use this after the raw KV cache has already been
     ///   advanced by the matching decode step
-    pub(crate) fn append(&mut self, tokens: Vec<TimedToken>) {
+    pub(crate) fn append(&mut self, tokens: Vec<OutputToken>) {
         self.tokens.append(tokens);
         self.kv.advance_to(self.tokens.end());
     }
@@ -204,5 +212,13 @@ impl Transcript {
     pub(crate) fn truncate_to(&mut self, end: TokenIndex) {
         self.tokens.truncate_to(end);
         self.kv.truncate_to(end);
+    }
+
+    pub(crate) fn tokens(&self) -> &[OutputToken] {
+        self.tokens.as_slice()
+    }
+
+    pub(crate) fn detected_language(&self) -> Option<&str> {
+        self.detected_language.as_deref()
     }
 }

@@ -23,9 +23,9 @@
 //!   offset inside a token slice
 
 mod audio;
+mod tape;
 mod tokenizer;
 mod tokens;
-mod transcript;
 mod utterance;
 
 /// Audio sample rate in Hz expected by the ASR tokenizer/audio helpers.
@@ -38,4 +38,5 @@ pub use tokens::{
 pub use utterance::{Cutter, Listener, Utterance};
 
 pub(crate) use audio::*;
+pub(crate) use tape::*;
 pub(crate) use tokenizer::*;

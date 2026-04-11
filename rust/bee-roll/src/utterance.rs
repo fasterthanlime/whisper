@@ -1,4 +1,4 @@
-use crate::{AudioBuffer, Cut, SampleOffset, TimedToken, TokenIndex};
+use crate::{AudioBuffer, Cut, FeedOutput, OutputToken, SampleOffset, Tape, TokenIndex};
 
 /// Policy hook that decides where to cut a ready chunk.
 ///
@@ -10,7 +10,7 @@ pub trait Cutter {
     ///
     /// Invariant:
     /// - returned cuts must refer to utterance-global token coordinates
-    fn cut(&mut self, tokens: &[TimedToken]) -> Cut;
+    fn cut(&mut self, tokens: &[OutputToken]) -> Cut;
 }
 
 /// Observer hook for utterance lifecycle events.
@@ -49,6 +49,9 @@ pub struct Utterance {
     /// - any sample/time boundaries are derived from this token boundary, not stored separately
     committed_through: TokenIndex,
 
+    /// Canonical token-aligned output tape plus synchronized ASR rollback state.
+    tape: Tape,
+
     /// Boxed cut policy used by this utterance.
     cutter: Box<dyn Cutter>,
 
@@ -60,10 +63,11 @@ impl Utterance {
     // Boxed trait objects are intentional here. We accept the cost and do not want
     // further reminders to genericize or optimize this construction path.
     /// Creates a new utterance with empty audio and committed boundary 0.
-    pub fn new(cutter: Box<dyn Cutter>, listener: Box<dyn Listener>) -> Self {
+    pub fn new(num_layers: usize, cutter: Box<dyn Cutter>, listener: Box<dyn Listener>) -> Self {
         Self {
             audio: AudioBuffer::new(SampleOffset::new(0), Vec::new()),
             committed_through: TokenIndex::new(0),
+            tape: Tape::new(num_layers),
             cutter,
             listener,
         }
@@ -77,7 +81,12 @@ impl Utterance {
     /// - utterance timing stays internal and is derived from sample position in this append-only buffer
     /// - future implementations will decide internally when enough audio exists
     ///   to run inference and construct transient token slices for cutting
-    pub fn feed(&mut self, samples: Vec<f32>) {
+    pub fn feed(&mut self, samples: Vec<f32>) -> FeedOutput<'_> {
         self.audio.extend_samples(samples);
+
+        // TODO: decide when to run ASR
+        // TODO: optionally run cutter/rollback
+
+        FeedOutput::new(self.tape.tokens(), self.tape.detected_language())
     }
 }
