@@ -1,12 +1,15 @@
+use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use crate::g2p::CachedEspeakG2p;
+use crate::timing::{log_phase_chunk, phase_start};
 use bee_phonetic::{
     AlignmentOp, ComparisonToken, TokenAlignment, align_token_sequences,
-    align_token_sequences_with_left_word_boundaries, feature_similarity,
-    feature_similarity_for_tokens, normalize_ipa_for_comparison,
-    normalize_ipa_for_comparison_with_spans, phoneme_similarity, sentence_word_tokens,
-    top_right_anchor_windows,
+    align_token_sequences_with_left_word_boundaries, feature_similarity_for_tokens,
+    normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans, phoneme_similarity,
+    sentence_word_tokens, top_right_anchor_windows,
 };
 use bee_zipa_mlx::audio::AudioBuffer as ZipaAudioBuffer;
 use bee_zipa_mlx::infer::{PhoneSpan, ZipaInference};
@@ -85,12 +88,37 @@ pub struct TranscriptComparisonInput {
     pub transcript_normalized: Vec<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct WordSegmentCandidate {
     zipa_norm_range: Range<usize>,
     alignment: TokenAlignment,
     local_score: f32,
 }
+
+#[derive(Debug, Default)]
+struct SegmentalWindowStats {
+    candidate_counts_before: Vec<usize>,
+    candidate_counts_after: Vec<usize>,
+    dp_states_explored: usize,
+    token_affinity_ms: f64,
+}
+
+#[derive(Debug, Default)]
+struct CandidateBuildStats {
+    raw_candidate_count: usize,
+    pruned_candidate_count: usize,
+    prune_ms: f64,
+}
+
+#[derive(Debug, Default)]
+struct CandidateBuildResult {
+    stats: CandidateBuildStats,
+    candidates: Vec<WordSegmentCandidate>,
+}
+
+static SMALL_FEATURE_SIMILARITY_CACHE: OnceLock<
+    Mutex<HashMap<(Vec<String>, Vec<String>), Option<f32>>>,
+> = OnceLock::new();
 
 pub fn transcript_word_raw_ranges(
     g2p: &mut CachedEspeakG2p,
@@ -332,30 +360,50 @@ pub fn select_segmental_word_windows(
     utterance_zipa_normalized: &[String],
     utterance_alignment: &TokenAlignment,
 ) -> Vec<Option<WordAlignmentWindow>> {
+    let mut stats = SegmentalWindowStats::default();
     if transcript_word_tokens.is_empty() {
         return Vec::new();
     }
 
+    let build_start = phase_start();
+    let mut candidate_build_ms = 0.0f64;
+    let mut candidate_prune_ms = 0.0f64;
     let candidates_per_word = transcript_word_tokens
         .iter()
         .enumerate()
         .map(|(word_index, transcript_tokens)| {
+            let candidate_start = Instant::now();
             let candidates = build_word_segment_candidates(
                 transcript_tokens,
                 transcript_token_ranges.get(word_index).cloned(),
                 utterance_zipa_normalized,
                 utterance_alignment,
             );
+            candidate_build_ms += candidate_start.elapsed().as_secs_f64() * 1000.0;
+            candidate_prune_ms += candidates.stats.prune_ms;
+            stats
+                .candidate_counts_before
+                .push(candidates.stats.raw_candidate_count);
+            stats
+                .candidate_counts_after
+                .push(candidates.stats.pruned_candidate_count);
             tracing::debug!(
                 word_index,
                 transcript_tokens = %transcript_tokens.join(" "),
                 token_range = ?transcript_token_ranges.get(word_index),
-                candidates = candidates.len(),
+                candidates_before = candidates.stats.raw_candidate_count,
+                candidates_after = candidates.stats.pruned_candidate_count,
                 "select_segmental_word_windows: word candidates"
             );
-            candidates
+            candidates.candidates
         })
         .collect::<Vec<_>>();
+    log_phase_chunk(
+        "zipa_align",
+        "select_segmental_word_windows_candidates",
+        candidates_per_word.len(),
+        build_start,
+    );
 
     if candidates_per_word
         .iter()
@@ -384,11 +432,13 @@ pub fn select_segmental_word_windows(
             - gap_penalty(&utterance_zipa_normalized[..candidate.zipa_norm_range.start]);
     }
 
+    let dp_start = phase_start();
     for word_index in 1..candidates_per_word.len() {
         for (candidate_index, candidate) in candidates_per_word[word_index].iter().enumerate() {
             let mut best_score = f32::NEG_INFINITY;
             let mut best_prev = None;
             for (prev_index, prev) in candidates_per_word[word_index - 1].iter().enumerate() {
+                stats.dp_states_explored += 1;
                 if prev.zipa_norm_range.end > candidate.zipa_norm_range.start {
                     continue;
                 }
@@ -400,6 +450,7 @@ pub fn select_segmental_word_windows(
                         candidate,
                         transcript_word_tokens[word_index - 1].as_slice(),
                         transcript_word_tokens[word_index].as_slice(),
+                        &mut stats,
                     )
                     + candidate.local_score;
                 if transition_score > best_score {
@@ -429,6 +480,21 @@ pub fn select_segmental_word_windows(
             None => tracing::debug!(word_index, "DP: all candidates NEG_INFINITY for word"),
         }
     }
+    log_phase_chunk(
+        "zipa_align",
+        "select_segmental_word_windows_dp",
+        candidates_per_word.len(),
+        dp_start,
+    );
+    tracing::debug!(
+        candidate_counts_before = ?stats.candidate_counts_before,
+        candidate_counts_after = ?stats.candidate_counts_after,
+        candidate_build_ms,
+        candidate_prune_ms,
+        dp_states_explored = stats.dp_states_explored,
+        token_affinity_ms = stats.token_affinity_ms,
+        "select_segmental_word_windows: summary"
+    );
 
     // Find the last word index that has at least one finite DP score.
     // Words after it couldn't be placed (audio too short) and stay None.
@@ -638,29 +704,34 @@ fn build_word_segment_candidates(
     transcript_token_range: Option<Range<usize>>,
     utterance_zipa_normalized: &[String],
     utterance_alignment: &TokenAlignment,
-) -> Vec<WordSegmentCandidate> {
+) -> CandidateBuildResult {
     if transcript_tokens.is_empty() || utterance_zipa_normalized.is_empty() {
-        return Vec::new();
+        return CandidateBuildResult::default();
     }
 
     let mut candidate_ranges = Vec::<Range<usize>>::new();
+    candidate_ranges.reserve(32);
+    let projected_range = transcript_token_range
+        .clone()
+        .and_then(|transcript_token_range| {
+            utterance_alignment
+                .project_left_range(transcript_token_range)
+                .map(|range| {
+                    expand_degenerate_projected_range(
+                        range,
+                        transcript_tokens.len(),
+                        utterance_zipa_normalized.len(),
+                    )
+                })
+        });
     if let Some(transcript_token_range) = transcript_token_range.clone() {
-        let projected = utterance_alignment
-            .project_left_range(transcript_token_range.clone())
-            .map(|range| {
-                expand_degenerate_projected_range(
-                    range,
-                    transcript_tokens.len(),
-                    utterance_zipa_normalized.len(),
-                )
-            });
         tracing::debug!(
             tokens = %transcript_tokens.join(" "),
             token_range = ?transcript_token_range,
-            projected_range = ?projected,
+            projected_range = ?projected_range,
             "build_word_segment_candidates: projection"
         );
-        if let Some(projected_range) = projected {
+        if let Some(projected_range) = projected_range.clone() {
             candidate_ranges.push(projected_range);
         }
     }
@@ -676,37 +747,39 @@ fn build_word_segment_candidates(
             .into_iter()
             .map(|window| window.right_start as usize..window.right_end as usize),
     );
-    let expanded = candidate_ranges
-        .iter()
-        .flat_map(|range| {
-            let mut variants = vec![range.clone()];
-            for shift in 1..=3 {
-                variants.push(range.start.saturating_sub(shift)..range.end);
-                variants
-                    .push(range.start..(range.end + shift).min(utterance_zipa_normalized.len()));
-                variants.push(
-                    range.start.saturating_sub(shift)
-                        ..(range.end + shift).min(utterance_zipa_normalized.len()),
-                );
-                if range.start + shift < range.end {
-                    variants.push((range.start + shift)..range.end);
-                }
-                if range.end > range.start + shift {
-                    variants.push(range.start..(range.end - shift));
-                }
-                if range.start + shift < range.end {
-                    variants.push(
-                        (range.start + shift)..(range.end - shift).max(range.start + shift + 1),
-                    );
-                }
+    for range in candidate_ranges.clone() {
+        for shift in 1..=3 {
+            candidate_ranges.push(range.start.saturating_sub(shift)..range.end);
+            candidate_ranges
+                .push(range.start..(range.end + shift).min(utterance_zipa_normalized.len()));
+            candidate_ranges.push(
+                range.start.saturating_sub(shift)
+                    ..(range.end + shift).min(utterance_zipa_normalized.len()),
+            );
+            if range.start + shift < range.end {
+                candidate_ranges.push((range.start + shift)..range.end);
             }
-            variants
-        })
-        .collect::<Vec<_>>();
-    candidate_ranges.extend(expanded);
+            if range.end > range.start + shift {
+                candidate_ranges.push(range.start..(range.end - shift));
+            }
+            if range.start + shift < range.end {
+                candidate_ranges
+                    .push((range.start + shift)..(range.end - shift).max(range.start + shift + 1));
+            }
+        }
+    }
     dedup_candidate_ranges(&mut candidate_ranges, utterance_zipa_normalized.len());
+    let raw_candidate_count = candidate_ranges.len();
+    let prune_start = Instant::now();
+    let candidate_ranges = prune_candidate_ranges(
+        candidate_ranges,
+        transcript_tokens,
+        projected_range.as_ref(),
+        utterance_zipa_normalized,
+    );
+    let prune_ms = prune_start.elapsed().as_secs_f64() * 1000.0;
 
-    candidate_ranges
+    let candidates = candidate_ranges
         .into_iter()
         .filter_map(|range| {
             let zipa_normalized = utterance_zipa_normalized.get(range.clone())?.to_vec();
@@ -722,7 +795,16 @@ fn build_word_segment_candidates(
                 local_score,
             })
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    CandidateBuildResult {
+        stats: CandidateBuildStats {
+            raw_candidate_count,
+            pruned_candidate_count: candidates.len(),
+            prune_ms,
+        },
+        candidates,
+    }
 }
 
 fn expand_degenerate_projected_range(
@@ -784,20 +866,20 @@ fn segment_local_alignment_score(
 
     if let Some(first) = transcript_tokens.first() {
         if let Some(first_right) = ops.iter().find_map(|op| op.right_token.as_deref()) {
-            score += token_affinity(first, first_right) * 0.18;
+            score += token_affinity_cached(first, first_right) * 0.18;
         }
     }
     if let Some(last) = transcript_tokens.last() {
         if let Some(last_right) = ops.iter().rev().find_map(|op| op.right_token.as_deref()) {
-            score += token_affinity(last, last_right) * 0.18;
+            score += token_affinity_cached(last, last_right) * 0.18;
         }
     }
 
     if let Some((first_left, first_right)) = first_aligned_pair(ops) {
-        score += token_affinity(first_left, first_right) * 0.15;
+        score += token_affinity_cached(first_left, first_right) * 0.15;
     }
     if let Some((last_left, last_right)) = last_aligned_pair(ops) {
-        score += token_affinity(last_left, last_right) * 0.15;
+        score += token_affinity_cached(last_left, last_right) * 0.15;
     }
 
     score
@@ -809,17 +891,18 @@ fn boundary_gap_penalty(
     next: &WordSegmentCandidate,
     prev_transcript: &[String],
     next_transcript: &[String],
+    stats: &mut SegmentalWindowStats,
 ) -> f32 {
     let mut penalty = gap_penalty(gap_tokens) * 1.35;
     if let (Some(last_gap), Some(prev_last)) = (gap_tokens.last(), prev_transcript.last()) {
-        penalty += token_affinity(last_gap, prev_last) * 0.45;
+        penalty += token_affinity(last_gap, prev_last, stats) * 0.45;
     }
     if let (Some(first_gap), Some(next_first)) = (gap_tokens.first(), next_transcript.first()) {
-        penalty += token_affinity(first_gap, next_first) * 0.75;
+        penalty += token_affinity(first_gap, next_first, stats) * 0.75;
     }
     if gap_tokens.len() >= 2 {
-        let prefix_affinity = gap_prefix_affinity(gap_tokens, next_transcript);
-        let suffix_affinity = gap_suffix_affinity(gap_tokens, prev_transcript);
+        let prefix_affinity = gap_prefix_affinity(gap_tokens, next_transcript, stats);
+        let suffix_affinity = gap_suffix_affinity(gap_tokens, prev_transcript, stats);
         penalty += prefix_affinity * 0.55;
         penalty += suffix_affinity * 0.35;
     }
@@ -864,7 +947,14 @@ fn insert_run_penalty<'a>(tokens: impl Iterator<Item = &'a str>) -> f32 {
         .sum()
 }
 
-fn token_affinity(left: &str, right: &str) -> f32 {
+fn token_affinity(left: &str, right: &str, stats: &mut SegmentalWindowStats) -> f32 {
+    let started = Instant::now();
+    let score = token_affinity_cached(left, right);
+    stats.token_affinity_ms += started.elapsed().as_secs_f64() * 1000.0;
+    score
+}
+
+fn token_affinity_cached(left: &str, right: &str) -> f32 {
     feature_similarity_for_tokens(left, right)
         .or_else(|| phoneme_similarity(&[left.to_string()], &[right.to_string()]))
         .unwrap_or(0.0)
@@ -882,25 +972,33 @@ fn last_aligned_pair<'a>(ops: &'a [AlignmentOp]) -> Option<(&'a str, &'a str)> {
         .find_map(|op| Some((op.left_token.as_deref()?, op.right_token.as_deref()?)))
 }
 
-fn gap_prefix_affinity(gap_tokens: &[String], next_transcript: &[String]) -> f32 {
+fn gap_prefix_affinity(
+    gap_tokens: &[String],
+    next_transcript: &[String],
+    stats: &mut SegmentalWindowStats,
+) -> f32 {
     let take = gap_tokens.len().min(next_transcript.len()).min(2);
     if take == 0 {
         return 0.0;
     }
-    feature_similarity(&gap_tokens[..take], &next_transcript[..take])
+    small_feature_similarity_timed(&gap_tokens[..take], &next_transcript[..take], stats)
         .or_else(|| phoneme_similarity(&gap_tokens[..take], &next_transcript[..take]))
         .unwrap_or(0.0)
         .max(0.0)
 }
 
-fn gap_suffix_affinity(gap_tokens: &[String], prev_transcript: &[String]) -> f32 {
+fn gap_suffix_affinity(
+    gap_tokens: &[String],
+    prev_transcript: &[String],
+    stats: &mut SegmentalWindowStats,
+) -> f32 {
     let take = gap_tokens.len().min(prev_transcript.len()).min(2);
     if take == 0 {
         return 0.0;
     }
     let gap_slice = &gap_tokens[gap_tokens.len() - take..];
     let prev_slice = &prev_transcript[prev_transcript.len() - take..];
-    feature_similarity(gap_slice, prev_slice)
+    small_feature_similarity_timed(gap_slice, prev_slice, stats)
         .or_else(|| phoneme_similarity(gap_slice, prev_slice))
         .unwrap_or(0.0)
         .max(0.0)
@@ -978,10 +1076,151 @@ fn boundary_side_affinity(
         &right_tokens[right_tokens.len() - take..]
     };
 
-    feature_similarity(right_slice, neighbor_slice)
+    small_feature_similarity_cached(right_slice, neighbor_slice)
         .or_else(|| phoneme_similarity(right_slice, neighbor_slice))
         .unwrap_or(0.0)
         .max(0.0)
+}
+
+fn small_feature_similarity_timed(
+    a: &[String],
+    b: &[String],
+    stats: &mut SegmentalWindowStats,
+) -> Option<f32> {
+    let started = Instant::now();
+    let result = small_feature_similarity_cached(a, b);
+    stats.token_affinity_ms += started.elapsed().as_secs_f64() * 1000.0;
+    result
+}
+
+fn small_feature_similarity_cached(a: &[String], b: &[String]) -> Option<f32> {
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+
+    if a.len() == 1 && b.len() == 1 {
+        feature_similarity_for_tokens(&a[0], &b[0])
+    } else {
+        let key = if a <= b {
+            (a.to_vec(), b.to_vec())
+        } else {
+            (b.to_vec(), a.to_vec())
+        };
+        let cache = SMALL_FEATURE_SIMILARITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        {
+            let guard = cache
+                .lock()
+                .expect("small feature similarity cache poisoned");
+            if let Some(cached) = guard.get(&key) {
+                return *cached;
+            }
+        }
+        let similarity = bee_phonetic::feature_similarity(a, b);
+        cache
+            .lock()
+            .expect("small feature similarity cache poisoned")
+            .insert(key, similarity);
+        similarity
+    }
+}
+
+fn prune_candidate_ranges(
+    candidate_ranges: Vec<Range<usize>>,
+    transcript_tokens: &[String],
+    projected_range: Option<&Range<usize>>,
+    utterance_zipa_normalized: &[String],
+) -> Vec<Range<usize>> {
+    if candidate_ranges.len() <= candidate_cap_for_word(transcript_tokens.len()) {
+        return candidate_ranges;
+    }
+
+    let mut scored = candidate_ranges
+        .into_iter()
+        .map(|range| {
+            let score = candidate_range_pre_score(
+                transcript_tokens,
+                utterance_zipa_normalized,
+                &range,
+                projected_range,
+            );
+            (range, score)
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by(|a, b| {
+        b.1.total_cmp(&a.1)
+            .then_with(|| a.0.start.cmp(&b.0.start))
+            .then_with(|| a.0.end.cmp(&b.0.end))
+    });
+    let cap = candidate_cap_for_word(transcript_tokens.len()).min(scored.len());
+    scored.truncate(cap);
+    scored
+        .into_iter()
+        .map(|(range, _)| range)
+        .collect::<Vec<_>>()
+}
+
+fn candidate_cap_for_word(word_len: usize) -> usize {
+    match word_len {
+        0..=2 => 6,
+        3..=4 => 8,
+        5..=7 => 10,
+        _ => 12,
+    }
+}
+
+fn candidate_range_pre_score(
+    transcript_tokens: &[String],
+    utterance_zipa_normalized: &[String],
+    range: &Range<usize>,
+    projected_range: Option<&Range<usize>>,
+) -> f32 {
+    let candidate = &utterance_zipa_normalized[range.clone()];
+    let mut score = 0.0;
+
+    let length_delta = (candidate.len() as isize - transcript_tokens.len() as isize).abs() as f32;
+    score -= length_delta * 0.4;
+    score -= (range.start as f32) * 0.01;
+
+    if let Some(projected_range) = projected_range {
+        let overlap_start = range.start.max(projected_range.start);
+        let overlap_end = range.end.min(projected_range.end);
+        if overlap_start < overlap_end {
+            score += (overlap_end - overlap_start) as f32 * 0.8;
+        }
+        let range_center = (range.start + range.end) as f32 * 0.5;
+        let projected_center = (projected_range.start + projected_range.end) as f32 * 0.5;
+        score -= (range_center - projected_center).abs() * 0.12;
+        if range.start == projected_range.start && range.end == projected_range.end {
+            score += 8.0;
+        }
+    }
+
+    if let Some(first) = transcript_tokens.first() {
+        if let Some(candidate_first) = candidate.first() {
+            score += token_affinity_cached(first, candidate_first) * 0.45;
+        }
+    }
+    if let Some(last) = transcript_tokens.last() {
+        if let Some(candidate_last) = candidate.last() {
+            score += token_affinity_cached(last, candidate_last) * 0.45;
+        }
+    }
+
+    let take = transcript_tokens.len().min(candidate.len()).min(2);
+    if take > 1 {
+        let transcript_prefix = &transcript_tokens[..take];
+        let candidate_prefix = &candidate[..take];
+        let transcript_suffix = &transcript_tokens[transcript_tokens.len() - take..];
+        let candidate_suffix = &candidate[candidate.len() - take..];
+        score += small_feature_similarity_cached(transcript_prefix, candidate_prefix)
+            .unwrap_or(0.0)
+            * 0.25;
+        score += small_feature_similarity_cached(transcript_suffix, candidate_suffix)
+            .unwrap_or(0.0)
+            * 0.25;
+    }
+
+    score
 }
 
 fn normalize_candidate_ranges(ranges: &mut Vec<Range<usize>>, utterance_len: usize) {
