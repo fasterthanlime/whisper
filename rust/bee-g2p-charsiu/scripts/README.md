@@ -3,6 +3,9 @@
 This directory is for Python probes and sidecars while the strategy is still
 being worked out.
 
+The current target model for those experiments lives in
+[MODEL.md](/Users/amos/bearcove/bee/rust/bee-g2p-charsiu/MODEL.md).
+
 The near-term plan is:
 
 - inspect Charsiu's byte-level encoder/decoder behavior
@@ -48,7 +51,12 @@ Examples:
 eval "$(direnv export bash)"
 uv run rust/bee-g2p-charsiu/scripts/charsiu_cross_attention_probe.py --word Facet --lang-code eng-us
 uv run rust/bee-g2p-charsiu/scripts/charsiu_cross_attention_probe.py --word Wednesday --lang-code eng-us
+uv run rust/bee-g2p-charsiu/scripts/charsiu_cross_attention_probe.py --text "For Jason, this Thursday, use Facet." --lang-code eng-us --summary
 ```
 
 This probe expects `BEE_ASR_MODEL_DIR` to be present so it can load the local
 Qwen tokenizer and report Qwen token-piece spans for the test word.
+
+Use `--summary` for longer phrases or chunks. It suppresses the full per-step
+dump and prints only the decoded IPA plus the per-phone top word and top Qwen
+token-piece ownership.

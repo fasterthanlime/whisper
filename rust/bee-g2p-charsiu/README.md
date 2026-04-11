@@ -12,6 +12,9 @@ Right now it is deliberately a skeleton:
 This crate exists so we can stop pretending the current eSpeak-based path is
 good enough.
 
+The concrete intermediate model now lives in
+[MODEL.md](/Users/amos/bearcove/bee/rust/bee-g2p-charsiu/MODEL.md).
+
 ## Why This Exists
 
 The current G2P path is not where Bee should end up.
@@ -57,7 +60,7 @@ The important opportunity is this:
 - bridge: encoder-decoder cross-attention
 
 That bridge may be good enough to segment a word's phonemes across Qwen token
- pieces.
+pieces inside a single word.
 
 ## The Actual Goal
 
@@ -76,12 +79,13 @@ That is the real pipeline Bee wants.
 In other words:
 
 1. Qwen3 ASR gives us transcript tokens
-2. Charsiu gives us word-level pronunciation
-3. Charsiu internals hopefully give us enough signal to split that
-   pronunciation across token pieces
-4. ZIPA gives us timed phones from audio
-5. the two phonetic views meet in the middle
-6. Bee gets token-level timing and richer phonetic evidence
+2. those tokens are grouped into words
+3. Charsiu gives us word-level pronunciation
+4. Charsiu internals hopefully give us enough signal to split that
+   pronunciation across token pieces inside each word
+5. ZIPA gives us timed phones from audio
+6. the two phonetic views meet in the middle
+7. Bee gets token-level timing and richer phonetic evidence
 
 ## Working Vocabulary
 
@@ -151,7 +155,8 @@ We need to answer:
 
 - can we extract encoder-decoder attention or another useful latent signal?
 - can that signal be used to map output IPA bytes back to input word bytes?
-- can we then project those byte spans onto Qwen token-piece boundaries?
+- can we then project those byte spans onto Qwen token-piece boundaries inside
+  each word?
 
 If the answer is yes, then Charsiu is not only a G2P replacement.
 It becomes the transcript-side segmentation engine.
@@ -315,6 +320,157 @@ That is exactly what we want from the probe:
 
 - split words can show internal structure
 - unsplit words collapse cleanly to one token piece
+
+## Phrase-Level Prompting Is Still Research Only
+
+The obvious objection to all of the above is that probing isolated words may
+throw away useful contextual pronunciation.
+
+So the next question is: can we feed a short phrase, keep the contextual IPA,
+and still recover useful ownership by word span and Qwen token-piece span?
+
+The current probe now supports that shape too.
+
+For `For Jason`, Charsiu produces one phrase-level IPA string:
+
+```text
+text         : For Jason
+decoded ipa  : ˈfɔɹˈdʒeɪsən
+word spans   :
+  [0] 'For'
+  [1] 'Jason'
+qwen pieces  :
+  [0] 'For'
+  [1] 'ĠJason'
+```
+
+And the teacher-forced cross-attention mass moves from the first word to the
+second in exactly the way we would want:
+
+```text
+out[ 2] 'f'
+  word mass : 0:'For'=0.6933 ; 1:'Jason'=0.0372
+  qwen mass: 0:'For'=0.6933 ; 1:'ĠJason'=0.1197
+
+out[ 9] 'd'
+  word mass : 0:'For'=0.0234 ; 1:'Jason'=0.7041
+  qwen mass: 0:'For'=0.0234 ; 1:'ĠJason'=0.8185
+
+out[18] 'n'
+  word mass : 0:'For'=0.0193 ; 1:'Jason'=0.6696
+  qwen mass: 0:'For'=0.0193 ; 1:'ĠJason'=0.6989
+```
+
+That is the first good sign that phrase-level prompting does not immediately
+destroy recoverable boundaries.
+
+More importantly, the contextual case still works when one of the words splits
+internally across Qwen token pieces.
+
+For `use Facet`, Qwen tokenizes the second word as `ĠFac | et`:
+
+```text
+text         : use Facet
+decoded ipa  : ˈjuzˈfeɪsət
+word spans   :
+  [0] 'use'
+  [1] 'Facet'
+qwen pieces  :
+  [0] 'use'
+  [1] 'ĠFac'
+  [2] 'et'
+```
+
+The phrase-level probe shows three useful phases:
+
+```text
+out[ 2] 'j'
+  word mass : 0:'use'=0.6606 ; 1:'Facet'=0.0250
+  qwen mass: 0:'use'=0.6606 ; 1:'ĠFac'=0.1096 ; 2:'et'=0.0184
+
+out[ 8] 'e'
+  word mass : 0:'use'=0.0493 ; 1:'Facet'=0.7882
+  qwen mass: 0:'use'=0.0493 ; 1:'ĠFac'=0.7699 ; 2:'et'=0.0335
+
+out[14] 't'
+  word mass : 0:'use'=0.0143 ; 1:'Facet'=0.6712
+  qwen mass: 0:'use'=0.0143 ; 1:'ĠFac'=0.0634 ; 2:'et'=0.6294
+```
+
+So the current evidence points in the direction we actually want:
+
+- phrase-level prompting gives contextual pronunciation
+- word ownership is still recoverable
+- Qwen token-piece ownership inside a word is still visible
+
+That does not prove the whole strategy.
+
+It does make the research path more concrete: run Charsiu on chunks, then use
+teacher-forced cross-attention to project the generated IPA back onto word and
+token spans.
+
+## Longer Chunks Still Carry Recoverable Ownership
+
+The next obvious question is whether that phrase-level story survives a more
+realistic short chunk.
+
+For:
+
+```text
+For Jason, this Thursday, use Facet.
+```
+
+the model output is already a little ugly:
+the model output differs from the per-word baseline:
+
+```text
+decoded ipa : ˌfɔɹˈdʒeɪsənˈtʰɪtʰɝsdaɪˈjuzəˌfeɪst
+```
+
+So this is not evidence that chunk-level prompting is "solved".
+
+It is evidence that ownership is still mostly recoverable even when the
+phrase-level output diverges from the per-word baseline.
+
+The compact ownership trace from the probe looks like this:
+
+```text
+out[ 2] 'f' word[0]='For'       qwen[0]='For'
+out[ 9] 'd' word[1]='Jason'     qwen[1]='ĠJason'
+out[21] 't' word[2]='this'      qwen[3]='Ġthis'
+out[31] 's' word[3]='Thursday'  qwen[4]='ĠThursday'
+out[38] 'j' word[4]='use'       qwen[6]='Ġuse'
+out[45] 'f' word[5]='Facet'     qwen[7]='ĠFac'
+out[50] 't' word[5]='Facet'     qwen[8]='et'
+```
+
+That is the important result.
+
+Even on this longer chunk:
+
+- the rough word-level handoff remains intact
+- the rough Qwen token-piece handoff remains intact
+- the internal `ĠFac | et` split is still visible inside the phrase
+
+So the current evidence points to a specific tradeoff:
+
+- chunk-level prompting improves contextuality
+- longer chunks may diverge from the per-word baseline
+- but cross-attention ownership can stay useful even before IPA quality is
+  fully settled
+
+That is enough to keep pursuing chunk-level prompting as a research path.
+
+It is **not** enough to make chunk-level prompting the baseline.
+
+The current baseline remains:
+
+- invoke Charsiu per word
+- recover token-piece ownership inside that word
+- build token-level timing on top of that
+
+The phrase/chunk work is useful because it tells us what extra contextual
+signal may exist, not because it has displaced the per-word plan.
 
 ## What We Are Not Doing
 
