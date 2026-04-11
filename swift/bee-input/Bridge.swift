@@ -5,8 +5,9 @@ import InputMethodKit
 
 // MARK: - Bridge State
 
-/// Tracks which client owns the current dictation route and replays/flushes
-/// pending text when that same client becomes reachable again.
+/// Tracks which client owns the current dictation route and renders marked text
+/// locally inside the IME, including dictation/finalization adornments and text
+/// animation.
 @MainActor
 final class Bridge: NSObject {
     static let shared = Bridge()
@@ -31,19 +32,28 @@ final class Bridge: NSObject {
         case idle
         case live(
             stickyClientID: String,
-            markedText: String,
+            targetText: String,
+            displayedText: String,
             phase: ImePhase
         )
         case pendingTerminal(stickyClientID: String, action: PendingTerminalAction)
     }
 
     static let noClientID = "-"
-    private static let finalizingSpinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    private static let finalizingSpinnerFrames = [
+        "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+    ]
+
+    private let animationMorphSpeed: Float = 1.0
+    private let animationAppendSpeed: Float = 1.0
 
     private var state: DictationRouteState = .idle
     private weak var controller: BeeInputController?
+
     private var finalizingSpinnerFrameIndex = 0
     private var spinnerTask: Task<Void, Never>?
+    private var textAnimationTask: Task<Void, Never>?
 
     // MARK: - Derived state
 
@@ -51,21 +61,30 @@ final class Bridge: NSObject {
         switch state {
         case .idle:
             return nil
-        case .live(let stickyClientID, _, _):
+        case .live(let stickyClientID, _, _, _):
             return stickyClientID
         case .pendingTerminal(let stickyClientID, _):
             return stickyClientID
         }
     }
 
-    private var currentMarkedText: String? {
-        guard case .live(_, let markedText, _) = state else { return nil }
-        return markedText
+    private var currentTargetText: String? {
+        guard case .live(_, let targetText, _, _) = state else { return nil }
+        return targetText
+    }
+
+    private var currentDisplayedText: String? {
+        guard case .live(_, _, let displayedText, _) = state else { return nil }
+        return displayedText
     }
 
     private var currentPhase: ImePhase? {
-        guard case .live(_, _, let phase) = state else { return nil }
+        guard case .live(_, _, _, let phase) = state else { return nil }
         return phase
+    }
+
+    private var isStickyRouteAvailable: Bool {
+        activeClientID() == stickyClientID
     }
 
     // MARK: - State transitions
@@ -85,7 +104,7 @@ final class Bridge: NSObject {
             )
             return .none
 
-        case .live(let stickyClientID, let markedText, let phase):
+        case .live(let stickyClientID, let targetText, _, let phase):
             guard normalizedClientID == stickyClientID else {
                 beeInputLog(
                     "🚫 ACTIVATE ignored pid=\(pid.map(String.init) ?? "nil") client=\(normalizedClientID) bundle=\(bundleID) sticky=\(stickyClientID)"
@@ -94,9 +113,10 @@ final class Bridge: NSObject {
             }
 
             beeInputLog(
-                "🟡 ACTIVATE sticky restored pid=\(pid.map(String.init) ?? "nil") client=\(normalizedClientID) bundle=\(bundleID) replaying markedText phase=\(phase)"
+                "🟡 ACTIVATE sticky restored pid=\(pid.map(String.init) ?? "nil") client=\(normalizedClientID) bundle=\(bundleID) phase=\(phase) replaying display"
             )
-            replayMarkedText(markedText)
+            renderCurrentDisplay()
+            restartTextAnimationIfNeeded()
             startSpinnerIfNeeded()
             return .stickyRouteRestored
 
@@ -113,14 +133,14 @@ final class Bridge: NSObject {
                 beeInputLog(
                     "🟢 ACTIVATE sticky restored pid=\(pid.map(String.init) ?? "nil") client=\(normalizedClientID) bundle=\(bundleID) flushing delayed commit"
                 )
-                stopSpinner()
+                stopAnimations()
                 deliverCommitText(text)
                 state = .idle
             case .clear:
                 beeInputLog(
                     "🟢 ACTIVATE sticky restored pid=\(pid.map(String.init) ?? "nil") client=\(normalizedClientID) bundle=\(bundleID) flushing delayed clear"
                 )
-                stopSpinner()
+                stopAnimations()
                 deliverClearMarkedText()
                 state = .idle
             }
@@ -133,15 +153,13 @@ final class Bridge: NSObject {
 
         switch state {
         case .idle:
-            beeInputLog(
-                "⏭️ DEACTIVATE idle client=\(normalizedClientID)"
-            )
+            beeInputLog("⏭️ DEACTIVATE idle client=\(normalizedClientID)")
             return .none
 
-        case .live(let stickyClientID, let markedText, _):
+        case .live(let stickyClientID, let targetText, _, _):
             if normalizedClientID == stickyClientID {
                 beeInputLog(
-                    "🟡 DEACTIVATE sticky client=\(normalizedClientID) markedTextLen=\((markedText as NSString).length) keeping route sticky"
+                    "🟡 DEACTIVATE sticky client=\(normalizedClientID) targetTextLen=\((targetText as NSString).length) keeping route sticky"
                 )
                 return .stickyRouteUnavailable(hadMarkedText: true)
             } else {
@@ -180,33 +198,26 @@ final class Bridge: NSObject {
                 return
             }
 
-            if phase == .finalizing {
-                finalizingSpinnerFrameIndex = 0
-            } else {
-                stopSpinner()
-            }
-
+            prepareForPhaseChange(from: nil, to: phase)
             state = .live(
                 stickyClientID: normalizedCurrentClientID,
-                markedText: "",
+                targetText: "",
+                displayedText: "",
                 phase: phase
             )
             beeInputLog(
                 "🟢 setPhase phase=\(phase) sticky claimed client=\(normalizedCurrentClientID)"
             )
-            replayMarkedText("")
+            renderCurrentDisplay()
+            restartTextAnimationIfNeeded()
             startSpinnerIfNeeded()
 
-        case .live(let stickyClientID, let markedText, let previousPhase):
-            if phase == .finalizing && previousPhase != .finalizing {
-                finalizingSpinnerFrameIndex = 0
-            } else if phase == .dictating {
-                stopSpinner()
-            }
-
+        case .live(let stickyClientID, let targetText, let displayedText, let previousPhase):
+            prepareForPhaseChange(from: previousPhase, to: phase)
             state = .live(
                 stickyClientID: stickyClientID,
-                markedText: markedText,
+                targetText: targetText,
+                displayedText: displayedText,
                 phase: phase
             )
 
@@ -214,7 +225,8 @@ final class Bridge: NSObject {
                 beeInputLog(
                     "🟡 setPhase phase=\(phase) client=\(normalizedCurrentClientID) sticky=\(stickyClientID)"
                 )
-                replayMarkedText(markedText)
+                renderCurrentDisplay()
+                restartTextAnimationIfNeeded()
                 startSpinnerIfNeeded()
             } else {
                 beeInputLog(
@@ -224,15 +236,11 @@ final class Bridge: NSObject {
             }
 
         case .pendingTerminal(let stickyClientID, _):
-            if phase == .finalizing {
-                finalizingSpinnerFrameIndex = 0
-            } else {
-                stopSpinner()
-            }
-
+            prepareForPhaseChange(from: nil, to: phase)
             state = .live(
                 stickyClientID: stickyClientID,
-                markedText: "",
+                targetText: "",
+                displayedText: "",
                 phase: phase
             )
 
@@ -240,7 +248,8 @@ final class Bridge: NSObject {
                 beeInputLog(
                     "🟡 setPhase phase=\(phase) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) resuming live dictation"
                 )
-                replayMarkedText("")
+                renderCurrentDisplay()
+                restartTextAnimationIfNeeded()
                 startSpinnerIfNeeded()
             } else {
                 beeInputLog(
@@ -254,34 +263,6 @@ final class Bridge: NSObject {
     func setMarkedText(_ text: String) {
         let normalizedCurrentClientID = activeClientID()
 
-        if text.isEmpty {
-            switch state {
-            case .idle:
-                beeInputLog(
-                    "⏭️ setMarkedText empty ignored client=\(normalizedCurrentClientID) state=idle"
-                )
-
-            case .live(let stickyClientID, _, let phase):
-                state = .live(
-                    stickyClientID: stickyClientID,
-                    markedText: "",
-                    phase: phase
-                )
-                beeInputLog(
-                    "🟡 setMarkedText empty client=\(normalizedCurrentClientID) sticky=\(stickyClientID) phase=\(phase)"
-                )
-                if normalizedCurrentClientID == stickyClientID {
-                    replayMarkedText("")
-                }
-
-            case .pendingTerminal(let stickyClientID, _):
-                beeInputLog(
-                    "⏭️ setMarkedText empty ignored client=\(normalizedCurrentClientID) sticky=\(stickyClientID) state=pendingTerminal"
-                )
-            }
-            return
-        }
-
         switch state {
         case .idle:
             guard normalizedCurrentClientID != Self.noClientID else {
@@ -293,19 +274,21 @@ final class Bridge: NSObject {
 
             state = .live(
                 stickyClientID: normalizedCurrentClientID,
-                markedText: text,
+                targetText: text,
+                displayedText: "",
                 phase: .dictating
             )
             beeInputLog(
                 "🟢 setMarkedText text=\(text) sticky claimed client=\(normalizedCurrentClientID) phase=dictating"
             )
-            replayMarkedText(text)
+            restartTextAnimationIfNeeded()
             startSpinnerIfNeeded()
 
-        case .live(let stickyClientID, _, let phase):
+        case .live(let stickyClientID, _, let displayedText, let phase):
             state = .live(
                 stickyClientID: stickyClientID,
-                markedText: text,
+                targetText: text,
+                displayedText: displayedText,
                 phase: phase
             )
 
@@ -313,7 +296,7 @@ final class Bridge: NSObject {
                 beeInputLog(
                     "🟡 setMarkedText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) phase=\(phase)"
                 )
-                replayMarkedText(text)
+                restartTextAnimationIfNeeded()
                 startSpinnerIfNeeded()
             } else {
                 beeInputLog(
@@ -324,7 +307,8 @@ final class Bridge: NSObject {
         case .pendingTerminal(let stickyClientID, _):
             state = .live(
                 stickyClientID: stickyClientID,
-                markedText: text,
+                targetText: text,
+                displayedText: "",
                 phase: .dictating
             )
 
@@ -332,7 +316,7 @@ final class Bridge: NSObject {
                 beeInputLog(
                     "🟡 setMarkedText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) phase=dictating resuming live dictation"
                 )
-                replayMarkedText(text)
+                restartTextAnimationIfNeeded()
                 startSpinnerIfNeeded()
             } else {
                 beeInputLog(
@@ -351,7 +335,7 @@ final class Bridge: NSObject {
                 "⏭️ commitText ignored text=\(text) client=\(normalizedCurrentClientID) state=idle"
             )
 
-        case .live(let stickyClientID, _, _):
+        case .live(let stickyClientID, _, _, _):
             let action: PendingTerminalAction = text.isEmpty ? .clear : .commit(text)
             state = .pendingTerminal(stickyClientID: stickyClientID, action: action)
             beeInputLog(
@@ -359,7 +343,7 @@ final class Bridge: NSObject {
                     ? "🟢 commitText empty client=\(normalizedCurrentClientID) sticky=\(stickyClientID) pending clear"
                     : "🟢 commitText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) pending commit"
             )
-            stopSpinner()
+            stopAnimations()
             flushPendingTerminalIfPossible()
 
         case .pendingTerminal(let stickyClientID, _):
@@ -370,7 +354,7 @@ final class Bridge: NSObject {
                     ? "🟢 commitText empty client=\(normalizedCurrentClientID) sticky=\(stickyClientID) replacing pending terminal action with clear"
                     : "🟢 commitText text=\(text) client=\(normalizedCurrentClientID) sticky=\(stickyClientID) replacing pending terminal action with commit"
             )
-            stopSpinner()
+            stopAnimations()
             flushPendingTerminalIfPossible()
         }
     }
@@ -386,17 +370,154 @@ final class Bridge: NSObject {
         return clientID
     }
 
-    private func replayMarkedText(_ text: String) {
-        guard activeClientID() == stickyClientID else {
-            beeInputLog(
-                "🚫 BLOCKED replayMarkedText client=\(activeClientID()) sticky=\(stickyClientID ?? Self.noClientID)"
-            )
+    private func prepareForPhaseChange(from oldPhase: ImePhase?, to newPhase: ImePhase) {
+        if newPhase == .finalizing && oldPhase != .finalizing {
+            finalizingSpinnerFrameIndex = 0
+        }
+        if newPhase == .dictating {
+            stopSpinner()
+        }
+    }
+
+    private func stopAnimations() {
+        stopSpinner()
+        stopTextAnimation()
+    }
+
+    private func stopTextAnimation() {
+        textAnimationTask?.cancel()
+        textAnimationTask = nil
+    }
+
+    private func restartTextAnimationIfNeeded() {
+        guard case .live(_, let targetText, let displayedText, _) = state else {
+            stopTextAnimation()
             return
         }
 
-        let renderedText = adorn(text)
+        if displayedText == targetText {
+            if isStickyRouteAvailable {
+                renderCurrentDisplay()
+            }
+            stopTextAnimation()
+            return
+        }
+
+        guard isStickyRouteAvailable else {
+            return
+        }
+
+        stopTextAnimation()
+        textAnimationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runTextAnimation()
+        }
+    }
+
+    private func runTextAnimation() async {
+        defer { textAnimationTask = nil }
+
+        while !Task.isCancelled {
+            guard
+                case .live(let stickyClientID, let targetText, let displayedText, let phase) = state
+            else { return }
+            guard activeClientID() == stickyClientID else { return }
+            guard displayedText != targetText else {
+                renderCurrentDisplay()
+                return
+            }
+
+            let nextText = nextAnimatedText(from: displayedText, to: targetText)
+            state = .live(
+                stickyClientID: stickyClientID,
+                targetText: targetText,
+                displayedText: nextText,
+                phase: phase
+            )
+            renderCurrentDisplay()
+
+            let didAppend = nextText.count > displayedText.count
+            let speed = didAppend ? animationAppendSpeed : animationMorphSpeed
+            if speed <= 0 {
+                state = .live(
+                    stickyClientID: stickyClientID,
+                    targetText: targetText,
+                    displayedText: targetText,
+                    phase: phase
+                )
+                renderCurrentDisplay()
+                return
+            }
+
+            let baseMs = nextText.count > displayedText.count ? 18 : 25
+            let delayMs = max(1, Int(Float(baseMs) / speed))
+
+            do {
+                try await Task.sleep(for: .milliseconds(delayMs))
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func nextAnimatedText(from old: String, to target: String) -> String {
+        if old == target { return target }
+
+        var chars = Array(old)
+        let targetChars = Array(target)
+
+        let canAppend = chars.count < targetChars.count
+        let canTrim = chars.count > targetChars.count
+        let wrongIndices = (0..<min(chars.count, targetChars.count)).filter {
+            chars[$0] != targetChars[$0]
+        }
+
+        if wrongIndices.isEmpty && !canAppend && !canTrim {
+            return target
+        }
+
+        let morphWeight = wrongIndices.count
+        let appendWeight = canAppend ? max(1, wrongIndices.count / 2) : 0
+        let trimWeight = canTrim ? max(1, wrongIndices.count / 2) : 0
+        let total = morphWeight + appendWeight + trimWeight
+        let roll = Int.random(in: 0..<max(total, 1))
+
+        if roll < morphWeight && !wrongIndices.isEmpty {
+            let idx = wrongIndices.randomElement()!
+            chars[idx] = targetChars[idx]
+            return String(chars)
+        }
+
+        if roll < morphWeight + appendWeight && canAppend {
+            chars.append(targetChars[chars.count])
+            return String(chars)
+        }
+
+        if canTrim {
+            chars.removeLast()
+            return String(chars)
+        }
+
+        if canAppend {
+            chars.append(targetChars[chars.count])
+            return String(chars)
+        }
+
+        if !wrongIndices.isEmpty {
+            let idx = wrongIndices.randomElement()!
+            chars[idx] = targetChars[idx]
+            return String(chars)
+        }
+
+        return target
+    }
+
+    private func renderCurrentDisplay() {
+        guard let renderedText = renderedMarkedText() else { return }
+        guard isStickyRouteAvailable else { return }
+
         beeInputLog(
-            "🟡 replayMarkedText phase=\(currentPhase.map(String.init(describing:)) ?? "nil") text=\(renderedText)"
+            "🟡 renderCurrentDisplay phase=\(currentPhase.map(String.init(describing:)) ?? "nil") text=\(renderedText)"
         )
         controller?.client().setMarkedText(
             renderedText,
@@ -405,8 +526,25 @@ final class Bridge: NSObject {
         )
     }
 
+    private func renderedMarkedText() -> String? {
+        guard let displayedText = currentDisplayedText else { return nil }
+        switch currentPhase {
+        case .dictating:
+            return displayedText.isEmpty ? "🐝" : "\(displayedText) 🐝"
+        case .finalizing:
+            let frame = Self.finalizingSpinnerFrames[
+                finalizingSpinnerFrameIndex % Self.finalizingSpinnerFrames.count
+            ]
+            return displayedText.isEmpty ? frame : "\(displayedText) \(frame)"
+        case .none:
+            return nil
+        @unknown default:
+            return displayedText
+        }
+    }
+
     private func startSpinnerIfNeeded() {
-        guard case .live(_, _, let phase) = state else {
+        guard case .live(_, _, _, let phase) = state else {
             stopSpinner()
             return
         }
@@ -424,13 +562,15 @@ final class Bridge: NSObject {
                     break
                 }
 
-                guard case .live(_, let currentMarkedText, let currentPhase) = self.state else {
+                guard case .live(let stickyClientID, _, _, let phase) = self.state else {
                     break
                 }
-                guard currentPhase == .finalizing else { break }
-                guard self.activeClientID() == self.stickyClientID else { continue }
+                guard phase == .finalizing else { break }
+                guard self.activeClientID() == stickyClientID else { continue }
 
-                self.replayMarkedText(currentMarkedText)
+                self.finalizingSpinnerFrameIndex =
+                    (self.finalizingSpinnerFrameIndex + 1) % Self.finalizingSpinnerFrames.count
+                self.renderCurrentDisplay()
             }
 
             self?.spinnerTask = nil
@@ -443,7 +583,7 @@ final class Bridge: NSObject {
     }
 
     private func deliverCommitText(_ text: String) {
-        guard activeClientID() == stickyClientID else {
+        guard isStickyRouteAvailable else {
             beeInputLog(
                 "🚫 BLOCKED commitText delivery client=\(activeClientID()) sticky=\(stickyClientID ?? Self.noClientID)"
             )
@@ -458,7 +598,7 @@ final class Bridge: NSObject {
     }
 
     private func deliverClearMarkedText() {
-        guard activeClientID() == stickyClientID else {
+        guard isStickyRouteAvailable else {
             beeInputLog(
                 "🚫 BLOCKED clear delivery client=\(activeClientID()) sticky=\(stickyClientID ?? Self.noClientID)"
             )
@@ -474,7 +614,7 @@ final class Bridge: NSObject {
     }
 
     private func flushPendingTerminalIfPossible() {
-        guard activeClientID() == stickyClientID else {
+        guard isStickyRouteAvailable else {
             beeInputLog(
                 "🟡 pending terminal retained client=\(activeClientID()) sticky=\(stickyClientID ?? Self.noClientID)"
             )
@@ -490,27 +630,10 @@ final class Bridge: NSObject {
                 deliverClearMarkedText()
             }
             state = .idle
-            stopSpinner()
+            stopAnimations()
 
         case .idle, .live:
             break
-        }
-    }
-
-    private func adorn(_ text: String) -> String {
-        switch currentPhase {
-        case .dictating:
-            return text.isEmpty ? "🐝" : "\(text) 🐝"
-        case .finalizing:
-            let frame = Self.finalizingSpinnerFrames[
-                finalizingSpinnerFrameIndex % Self.finalizingSpinnerFrames.count
-            ]
-            finalizingSpinnerFrameIndex += 1
-            return text.isEmpty ? frame : "\(text) \(frame)"
-        case .none:
-            return text
-        @unknown default:
-            return text
         }
     }
 
