@@ -61,6 +61,7 @@ build-bee-release/
 .venv/
 venv/
 node_modules/
+cut-trace-web/dist/
 profile.json.gz
 
 # souuunds

@@ -1,7 +1,7 @@
 # Cut-Trace Viewer
 
-Structured per-feed trace of every cut decision in bee-roll, with a live
-React viewer built into beeml-web.
+Structured per-feed trace of every cut decision in bee-roll, with a dedicated
+Vite viewer kept separate from beeml-web.
 
 ## Enable the trace
 
@@ -31,17 +31,20 @@ field (`"stable"`, `"carry"`, or `"preview"`).
 
 ## Open the viewer
 
-In two terminals:
+In one terminal:
 
 ```sh
-# Terminal 1 — SSE server (reads the trace file)
-BEE_ROLL_CUT_TRACE=/tmp/cuts.jsonl node debug/cut-trace-server.js
-
-# Terminal 2 — beeml-web dev server
-pnpm --dir beeml-web dev
+pnpm run dev:cut-trace
 ```
 
-Then open: **http://localhost:5173/cut-trace**
+Then open: **http://localhost:5174**
+
+If you want the pieces separately:
+
+```sh
+BEE_ROLL_CUT_TRACE=/tmp/cuts.jsonl node debug/cut-trace-server.js
+pnpm --dir cut-trace-web dev
+```
 
 The viewer connects over SSE and updates the moment the trace file changes —
 no reload or manual refresh needed. Run bee-roll in a third terminal and watch

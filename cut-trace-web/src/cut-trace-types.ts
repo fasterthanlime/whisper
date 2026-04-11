@@ -2,11 +2,11 @@
 // Keep in sync with rust/bee-roll/src/cut_trace.rs
 
 export interface WordSpan {
-  start: number; // start token index (utterance-global, inclusive)
-  end: number; // end token index (utterance-global, exclusive)
+  start: number;
+  end: number;
   text: string;
-  start_secs: number | null; // ZIPA-aligned start time
-  end_secs: number | null; // ZIPA-aligned end time
+  start_secs: number | null;
+  end_secs: number | null;
   region: "stable" | "carry" | "preview";
 }
 
@@ -107,12 +107,12 @@ export function groupByFeed(events: TraceEvent[]): Map<number, FeedGroup> {
         cutCandidate: null,
       });
     }
-    const g = map.get(fi)!;
-    g.events.push(ev);
-    if (ev.event === "feed_start") g.feedStart = ev;
-    if (ev.event === "feed_end") g.feedEnd = ev;
-    if (ev.event === "cut_applied") g.cutApplied = ev;
-    if (ev.event === "cut_candidate") g.cutCandidate = ev;
+    const group = map.get(fi)!;
+    group.events.push(ev);
+    if (ev.event === "feed_start") group.feedStart = ev;
+    if (ev.event === "feed_end") group.feedEnd = ev;
+    if (ev.event === "cut_applied") group.cutApplied = ev;
+    if (ev.event === "cut_candidate") group.cutCandidate = ev;
   }
   return map;
 }

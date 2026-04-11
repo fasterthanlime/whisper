@@ -5,9 +5,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      "/api": {
-        target: "https://souffle.dropbear-piranha.ts.net",
-        secure: true,
+      "/cut-trace-api": {
+        target: "http://localhost:7701",
         changeOrigin: true,
       },
     },

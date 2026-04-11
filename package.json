@@ -3,6 +3,7 @@
   "scripts": {
     "dev": "node scripts/dev-beeml.mjs",
     "dev:web": "pnpm --dir beeml-web dev",
+    "dev:cut-trace": "node scripts/dev-cut-trace.mjs",
     "dev:server": "zsh -lc 'source .envrc && cargo watch -w rust -w data/phonetic-seed -x \"run -p beeml\"'"
   }
 }

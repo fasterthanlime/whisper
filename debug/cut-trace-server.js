@@ -3,7 +3,7 @@
  * debug/cut-trace-server.js
  *
  * Serves bee-roll cut-trace events over SSE at http://localhost:7701/cut-trace-api/events
- * The beeml-web Vite dev server proxies /cut-trace-api → here.
+ * The cut-trace-web Vite dev server proxies /cut-trace-api → here.
  *
  * Usage:
  *   BEE_ROLL_CUT_TRACE=/tmp/cuts.jsonl node debug/cut-trace-server.js
@@ -103,6 +103,6 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`\nCut-trace SSE server listening on port ${PORT}`);
   console.log(`Trace file: ${TRACE_FILE}`);
   console.log(
-    `\nOpen the viewer: http://localhost:5173/cut-trace  (requires beeml-web dev server)\n`
+    `\nOpen the viewer: http://localhost:5174  (requires cut-trace-web dev server)\n`
   );
 });
