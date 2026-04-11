@@ -44,7 +44,7 @@ data/*
 !data/phonetic-seed/audio/*.ogg
 training/data/
 training/adapters/
-scripts/__pycache__/
+__pycache__/
 .artifacts
 .playwright-mcp
 

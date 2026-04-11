@@ -1,0 +1,18 @@
+[package]
+name = "bee-roll-readme"
+version = "0.1.0"
+edition = "2024"
+
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
+[dependencies]
+anyhow.workspace = true
+bee-correct = { path = "../bee-correct" }
+bee-phonetic = { path = "../bee-phonetic" }
+bee-qwen3-asr = { path = "../bee-qwen3-asr" }
+bee-transcribe = { path = "../bee-transcribe" }
+bee-zipa-mlx = { path = "../bee-zipa-mlx" }
+serde_json.workspace = true

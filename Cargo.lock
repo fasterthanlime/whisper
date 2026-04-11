@@ -236,6 +236,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bee-roll-readme"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bee-correct",
+ "bee-phonetic",
+ "bee-qwen3-asr",
+ "bee-transcribe",
+ "bee-zipa-mlx",
+ "serde_json",
+]
+
+[[package]]
 name = "bee-rpc"
 version = "0.1.0"
 dependencies = [

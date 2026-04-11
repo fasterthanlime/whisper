@@ -1,0 +1,15 @@
+{
+  "title": "One raw ZIPA span can expand into multiple normalized comparison tokens",
+  "ms_per_col": 1,
+  "raw_spans": [
+    { "token": "t", "start_ms": 100, "end_ms": 120 },
+    { "token": "ʃ", "start_ms": 120, "end_ms": 140 },
+    { "token": "aɪ", "start_ms": 140, "end_ms": 150 }
+  ],
+  "normalized_tokens": [
+    { "token": "t", "source_start": 0, "source_end": 1 },
+    { "token": "ʃ", "source_start": 1, "source_end": 2 },
+    { "token": "a", "source_start": 2, "source_end": 3 },
+    { "token": "ɪ", "source_start": 2, "source_end": 3 }
+  ]
+}
