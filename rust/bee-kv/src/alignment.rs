@@ -37,8 +37,6 @@ pub(crate) struct TimedGeneratedPrefix {
 /// A word from a transcript with character offsets and ZIPA-derived timing.
 #[derive(Clone, Debug)]
 pub(crate) struct TimedWord {
-    /// The word text.
-    pub(crate) text: String,
     /// Character range this word occupies in the combined transcript.
     pub(crate) char_range: std::ops::Range<usize>,
     /// Start time in seconds (relative to the chunk/window start).
@@ -49,8 +47,6 @@ pub(crate) struct TimedWord {
 
 /// Result of computing a bridge cut: kept prefix plus a bridge to carry forward.
 pub(crate) struct TimedGeneratedBridge {
-    /// Number of newly generated words kept (excluding carried prefix words).
-    pub(crate) kept_word_count: usize,
     /// Number of tokens spanning the kept generated words.
     pub(crate) kept_token_count: usize,
     /// Full kept text (including carried prefix).
@@ -87,7 +83,6 @@ pub(crate) fn timed_aligned_words_for_alignment(
         };
 
         timed_words.push(TimedWord {
-            text: word_timing.word.to_string(),
             char_range: word_range.char_start..word_range.char_end,
             start_secs,
             end_secs,
@@ -168,7 +163,6 @@ pub(crate) fn timed_generated_bridge_for_cuts(
             words: Vec::new(),
         });
         return Ok(TimedGeneratedBridge {
-            kept_word_count: 0,
             kept_token_count: 0,
             kept_text: String::new(),
             bridge,
@@ -226,9 +220,7 @@ pub(crate) fn timed_generated_bridge_for_cuts(
                 let token_start = tokenize_token_ids(tokenizer, &text[..relative_start])?.len();
                 let token_end = tokenize_token_ids(tokenizer, &text[..relative_end])?.len();
                 Ok(CarriedBridgeWord {
-                    text: word.text.clone(),
                     token_range: token_start..token_end,
-                    start_secs: (word.start_secs - keep_until_secs).max(0.0),
                     end_secs: (word.end_secs - keep_until_secs).max(0.0),
                 })
             })
@@ -272,7 +264,6 @@ pub(crate) fn timed_generated_bridge_for_cuts(
     };
 
     Ok(TimedGeneratedBridge {
-        kept_word_count,
         kept_token_count,
         kept_text,
         bridge,

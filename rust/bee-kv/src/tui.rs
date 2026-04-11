@@ -135,7 +135,7 @@ impl ExerciseTui {
                     ),
                     Span::raw("  "),
                     Span::styled(
-                        format!("{phase}"),
+                        phase.to_string(),
                         Style::default()
                             .fg(Color::Yellow)
                             .add_modifier(Modifier::BOLD),

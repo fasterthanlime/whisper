@@ -620,12 +620,8 @@ pub(crate) struct WindowRollbackDecision {
 /// A single word within a carried bridge, with its token range and timing.
 #[derive(Clone)]
 pub(crate) struct CarriedBridgeWord {
-    /// The word text.
-    pub(crate) text: String,
     /// Range of token indices this word spans within the bridge token IDs.
     pub(crate) token_range: std::ops::Range<usize>,
-    /// Start time in seconds (relative to the window start).
-    pub(crate) start_secs: f64,
     /// End time in seconds (relative to the window start).
     pub(crate) end_secs: f64,
 }
