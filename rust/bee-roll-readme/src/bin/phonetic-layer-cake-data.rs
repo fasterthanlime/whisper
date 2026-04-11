@@ -11,8 +11,8 @@ use bee_g2p_charsiu::{
     token_piece_phones, transcript_alignment_input,
 };
 use bee_phonetic::{
-    normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans, parse_reviewed_ipa,
-    sentence_word_tokens,
+    align_token_sequences, normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans,
+    parse_reviewed_ipa, sentence_word_tokens,
 };
 use bee_qwen3_asr::tokenizers::Tokenizer;
 use bee_transcribe::zipa_align::{
@@ -285,7 +285,7 @@ fn main() -> Result<()> {
                 .ok_or_else(|| anyhow!("missing token piece timing for {}", piece.token_index))?;
             let projected = alignment
                 .projected_comparison_range(piece.comparison_start..piece.comparison_end);
-            let (zipa_normalized, zipa_raw_piece, audio_json, alignment_label) =
+            let (zipa_normalized, zipa_raw_piece, audio_json, projection_label) =
                 match &timing.timing {
                     ComparisonRangeTiming::Aligned(timed) => {
                         let audio = json!({
@@ -331,6 +331,24 @@ fn main() -> Result<()> {
                     }
                     ComparisonRangeTiming::Invalid => (Vec::new(), Vec::new(), None, "invalid".to_owned()),
                 };
+            let ops_label = align_token_sequences(&piece.g2p_normalized, &zipa_normalized)
+                .ops
+                .iter()
+                .map(|op| {
+                    if op.left_index.is_some() && op.right_index.is_some() {
+                        if op.left_token == op.right_token {
+                            "|"
+                        } else {
+                            "x"
+                        }
+                    } else if op.left_index.is_some() {
+                        "<"
+                    } else {
+                        ">"
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("");
             Ok(json!({
                 "word": piece.word,
                 "token_index": piece.token_index,
@@ -349,7 +367,8 @@ fn main() -> Result<()> {
                 "zipa_normalized": zipa_normalized,
                 "zipa_raw": zipa_raw_piece,
                 "audio": audio_json,
-                "alignment": alignment_label,
+                "proj": projection_label,
+                "ops": ops_label,
             }))
         })
         .collect::<Result<Vec<_>>>()?;

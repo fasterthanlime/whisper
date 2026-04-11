@@ -39,6 +39,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--term", default="serde", help="Recording example term")
     parser.add_argument(
+        "--mode",
+        choices=["proj", "ops"],
+        default="proj",
+        help="Show token-piece projection ranges or local phoneme alignment ops",
+    )
+    parser.add_argument(
         "--use-text",
         action="store_true",
         help="Use recording example text instead of the transcript",
@@ -115,25 +121,27 @@ def token_piece_row(data: dict, name: str, field: str) -> Row:
     )
 
 
-def alignment_row(data: dict) -> Row:
+def middle_row(data: dict, mode: str) -> Row:
+    field = mode
+    row_name = "proj" if mode == "proj" else "ops"
     return Row(
-        "align",
+        row_name,
         [
-            Span(piece["token_start"], piece["token_end"], piece["alignment"])
+            Span(piece["token_start"], piece["token_end"], piece[field])
             for piece in data["token_pieces"]
-            if piece["token_start"] < piece["token_end"] and piece["alignment"]
+            if piece["token_start"] < piece["token_end"] and piece[field]
         ],
     )
 
 
-def build_rows(data: dict) -> list[Row]:
+def build_rows(data: dict, mode: str) -> list[Row]:
     return [
         text_row(data),
         audio_row(data, "audio top"),
         token_row(data),
         token_piece_row(data, "G2P IPA", "g2p_raw"),
         token_piece_row(data, "G2P norm", "g2p_normalized"),
-        alignment_row(data),
+        middle_row(data, mode),
         token_piece_row(data, "ZIPA norm", "zipa_normalized"),
         token_piece_row(data, "ZIPA raw", "zipa_raw"),
         audio_row(data, "audio bot"),
@@ -187,8 +195,8 @@ def render_span_line(widths: list[int], row: Row) -> str:
     return "".join(canvas).rstrip()
 
 
-def render(data: dict) -> str:
-    rows = build_rows(data)
+def render(data: dict, mode: str) -> str:
+    rows = build_rows(data, mode)
     widths = [max(4, len(token["label"])) for token in data["tokens"]]
     grow_widths(widths, rows)
 
@@ -206,7 +214,7 @@ def render(data: dict) -> str:
 def main() -> int:
     args = parse_args()
     data = load_data(args.term, args.use_text)
-    print(render(data), end="")
+    print(render(data, args.mode), end="")
     return 0
 
 
