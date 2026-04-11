@@ -47,6 +47,18 @@ impl CachedZipaOutput {
         self.phone_spans.drain(..drop_count);
         self.zipa_norm_with_spans = normalize_ipa_for_comparison_with_spans(&self.zipa_raw);
     }
+
+    pub fn debug_phone_span_window(&self, center_secs: f64, context: usize) -> Vec<PhoneSpan> {
+        if self.phone_spans.is_empty() {
+            return Vec::new();
+        }
+        let center = self
+            .phone_spans
+            .partition_point(|span| span.end_time_secs <= center_secs);
+        let start = center.saturating_sub(context);
+        let end = (center + context).min(self.phone_spans.len());
+        self.phone_spans[start..end].to_vec()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +105,21 @@ pub struct TokenPieceTiming {
     pub word_index: Option<usize>,
     pub word_surface: Option<String>,
     pub timing: ComparisonRangeTiming,
+}
+
+#[derive(Debug, Clone)]
+pub struct TokenPieceDetail {
+    pub token_index: usize,
+    pub token: String,
+    pub token_surface: String,
+    pub token_char_start: usize,
+    pub token_char_end: usize,
+    pub word_index: Option<usize>,
+    pub word_surface: Option<String>,
+    pub timing: ComparisonRangeTiming,
+    pub projected_range: Option<Range<usize>>,
+    pub raw_phone_range: Option<Range<usize>>,
+    pub phone_spans: Vec<PhoneSpan>,
 }
 
 #[derive(Debug, Clone)]
@@ -1522,6 +1549,40 @@ impl TranscriptAlignment {
                 word_index: token.word_index,
                 word_surface: token.word_surface.clone(),
                 timing: self.comparison_range_timing(token.comparison_start..token.comparison_end),
+            })
+            .collect()
+    }
+
+    pub fn token_piece_details(
+        &self,
+        token_pieces: &[bee_g2p::TranscriptTokenPieceComparisonRange],
+    ) -> Vec<TokenPieceDetail> {
+        token_pieces
+            .iter()
+            .map(|token| {
+                let projected_range =
+                    self.projected_comparison_range(token.comparison_start..token.comparison_end);
+                let raw_phone_range = projected_range.clone().and_then(|range| {
+                    raw_phone_range_for_normalized_range(&self.zipa_norm_with_spans, range)
+                });
+                let phone_spans = raw_phone_range
+                    .clone()
+                    .map(|range| self.phone_spans.get(range).unwrap_or(&[]).to_vec())
+                    .unwrap_or_default();
+                TokenPieceDetail {
+                    token_index: token.token_index,
+                    token: token.token.clone(),
+                    token_surface: token.token_surface.clone(),
+                    token_char_start: token.token_char_start,
+                    token_char_end: token.token_char_end,
+                    word_index: token.word_index,
+                    word_surface: token.word_surface.clone(),
+                    timing: self
+                        .comparison_range_timing(token.comparison_start..token.comparison_end),
+                    projected_range,
+                    raw_phone_range,
+                    phone_spans,
+                }
             })
             .collect()
     }

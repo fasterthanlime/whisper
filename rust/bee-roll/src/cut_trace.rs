@@ -10,6 +10,46 @@ use std::io::{BufWriter, Write as _};
 
 use serde::Serialize;
 
+#[derive(Serialize, Clone)]
+pub(crate) struct ZipaTimingTrace {
+    pub kind: &'static str,
+    pub start_secs: Option<f64>,
+    pub end_secs: Option<f64>,
+    pub projected_at: Option<usize>,
+    pub normalized_start: Option<usize>,
+    pub normalized_end: Option<usize>,
+}
+
+#[derive(Serialize, Clone)]
+pub(crate) struct AsrAlternativeTrace {
+    pub token_id: u32,
+    pub token_text: String,
+    pub logit: f32,
+}
+
+#[derive(Serialize, Clone)]
+pub(crate) struct ZipaPhoneSpanTrace {
+    pub phone: String,
+    pub start_secs: f64,
+    pub end_secs: f64,
+}
+
+#[derive(Serialize, Clone)]
+pub(crate) struct WordTokenTrace {
+    pub token_index: usize,
+    pub token_text: String,
+    pub token_surface: String,
+    pub token_start_secs: f64,
+    pub token_end_secs: f64,
+    pub asr_margin: Option<f32>,
+    pub asr_concentration: Option<f32>,
+    pub asr_alternatives: Vec<AsrAlternativeTrace>,
+    pub g2p_ipa: Option<String>,
+    pub transcript_phones: Vec<String>,
+    pub zipa_phone_spans: Vec<ZipaPhoneSpanTrace>,
+    pub zipa_timing: ZipaTimingTrace,
+}
+
 /// One word span in the decoded transcript.
 #[derive(Serialize)]
 pub(crate) struct WordSpan {
@@ -24,6 +64,8 @@ pub(crate) struct WordSpan {
     pub end_secs: Option<f64>,
     /// Which partition this word falls in: "stable", "carry", or "preview".
     pub region: &'static str,
+    /// Per-token detail for this word span.
+    pub tokens: Vec<WordTokenTrace>,
 }
 
 // ── Per-event payload structs ────────────────────────────────────────────────
@@ -93,6 +135,37 @@ struct CutAppliedEvent {
     applied: bool,
     /// Compact debug context string (window of tokens around the boundary).
     context_debug: String,
+}
+
+#[derive(Serialize)]
+struct PreviewApplyEvent {
+    event: &'static str,
+    feed_index: usize,
+    stable_through: usize,
+    preview_from: usize,
+    changed_tokens: Vec<PreviewApplyTokenChange>,
+}
+
+#[derive(Serialize, Clone)]
+pub(crate) struct PreviewApplyTokenChange {
+    pub token_index: usize,
+    pub token_text: String,
+    pub old_timing: ZipaTimingTrace,
+    pub new_timing: ZipaTimingTrace,
+}
+
+#[derive(Serialize)]
+struct ZipaCacheTrimEvent {
+    event: &'static str,
+    feed_index: usize,
+    cut_sample: usize,
+    cut_sample_secs: f64,
+    before_audio_start_secs: f64,
+    before_audio_end_secs: f64,
+    after_audio_start_secs: f64,
+    after_audio_end_secs: f64,
+    before_spans: Vec<ZipaPhoneSpanTrace>,
+    after_spans: Vec<ZipaPhoneSpanTrace>,
 }
 
 #[derive(Serialize)]
@@ -245,6 +318,22 @@ impl CutTracer {
         });
     }
 
+    pub(crate) fn preview_apply(
+        &mut self,
+        feed_index: usize,
+        stable_through: usize,
+        preview_from: usize,
+        changed_tokens: Vec<PreviewApplyTokenChange>,
+    ) {
+        self.emit(&PreviewApplyEvent {
+            event: "preview_apply",
+            feed_index,
+            stable_through,
+            preview_from,
+            changed_tokens,
+        });
+    }
+
     pub(crate) fn cut_applied(
         &mut self,
         feed_index: usize,
@@ -266,6 +355,31 @@ impl CutTracer {
             cut_sample_secs,
             applied,
             context_debug,
+        });
+    }
+
+    pub(crate) fn zipa_cache_trim(
+        &mut self,
+        feed_index: usize,
+        cut_sample: usize,
+        before_audio_start_secs: f64,
+        before_audio_end_secs: f64,
+        after_audio_start_secs: f64,
+        after_audio_end_secs: f64,
+        before_spans: Vec<ZipaPhoneSpanTrace>,
+        after_spans: Vec<ZipaPhoneSpanTrace>,
+    ) {
+        self.emit(&ZipaCacheTrimEvent {
+            event: "zipa_cache_trim",
+            feed_index,
+            cut_sample,
+            cut_sample_secs: cut_sample as f64 / crate::SAMPLE_RATE as f64,
+            before_audio_start_secs,
+            before_audio_end_secs,
+            after_audio_start_secs,
+            after_audio_end_secs,
+            before_spans,
+            after_spans,
         });
     }
 

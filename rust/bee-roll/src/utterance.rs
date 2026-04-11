@@ -19,12 +19,15 @@
 //! - cut promotion only belongs in the real rotated-audio path described in the
 //!   README; the current full-audio path must not pretend otherwise
 
-use crate::cut_trace::{CutTracer, WordSpan};
+use crate::cut_trace::{
+    AsrAlternativeTrace, CutTracer, PreviewApplyTokenChange, WordSpan, WordTokenTrace,
+    ZipaPhoneSpanTrace, ZipaTimingTrace,
+};
 use crate::tokens::UtteranceTokenRange;
 use crate::{
     AsrTokenAlternative, AsrTokenConfidence, AudioBuffer, ComparisonPhone, FeedOutput, OutputToken,
     SampleCount, SampleOffset, SampleRange, Tape, TimeRange, TimedToken, TokenId, TokenIndex,
-    ZipaTiming,
+    ZipaPhoneSpan, ZipaTiming,
 };
 use bee_g2p::{BeeG2p, token_piece_phones, transcript_alignment_input, transcript_words};
 use bee_qwen3_asr::encoder::EncoderCache;
@@ -117,6 +120,7 @@ struct PreviewTokenEnrichment {
     token_index: usize,
     g2p_ipa: CompactString,
     transcript_phones: Vec<ComparisonPhone>,
+    zipa_phone_spans: Vec<ZipaPhoneSpan>,
     zipa_timing: ZipaTiming,
 }
 
@@ -401,6 +405,10 @@ impl Utterance {
                         start_secs,
                         end_secs,
                         region,
+                        tokens: tokens[start..end.min(tokens.len())]
+                            .iter()
+                            .map(word_token_trace)
+                            .collect(),
                     }
                 })
                 .collect();
@@ -851,12 +859,12 @@ impl Utterance {
             output: zipa_output.clone(),
         });
         let alignment = TranscriptAlignment::build_from_cached_zipa(comparison_input, zipa_output);
-        let timings = alignment.token_piece_timings(&alignment_input.token_pieces);
+        let token_details = alignment.token_piece_details(&alignment_input.token_pieces);
 
         let token_enrichments = token_piece_phones
             .into_iter()
-            .zip(timings)
-            .map(|(phones, timing)| PreviewTokenEnrichment {
+            .zip(token_details)
+            .map(|(phones, detail)| PreviewTokenEnrichment {
                 token_index: seam_start + phones.token_index,
                 g2p_ipa: CompactString::from(phones.ipa_text),
                 transcript_phones: phones
@@ -864,7 +872,18 @@ impl Utterance {
                     .into_iter()
                     .map(|phone| ComparisonPhone::new(CompactString::from(phone)))
                     .collect(),
-                zipa_timing: Self::map_zipa_timing(timing.timing),
+                zipa_phone_spans: detail
+                    .phone_spans
+                    .into_iter()
+                    .map(|span| {
+                        ZipaPhoneSpan::new(
+                            CompactString::from(span.token),
+                            crate::UtteranceTime::from_secs(span.start_time_secs),
+                            crate::UtteranceTime::from_secs(span.end_time_secs),
+                        )
+                    })
+                    .collect(),
+                zipa_timing: Self::map_zipa_timing(detail.timing),
             })
             .collect();
 
@@ -876,12 +895,39 @@ impl Utterance {
 
     fn apply_preview_run(&mut self, preview_run: &PreviewRun) {
         let _ = &preview_run.transcript;
+        let mut changed_tokens = Vec::new();
+        let preview_start = self.preview_from.as_usize();
         for enrichment in &preview_run.token_enrichments {
             if let Some(token) = self.tape.token_mut(enrichment.token_index) {
-                token.set_g2p_ipa(Some(enrichment.g2p_ipa.clone()));
-                token.set_transcript_phones(enrichment.transcript_phones.clone());
-                token.set_zipa_timing(enrichment.zipa_timing.clone());
+                let in_preview = enrichment.token_index >= preview_start;
+                if in_preview {
+                    let old_timing = token.zipa_timing().clone();
+                    token.set_g2p_ipa(Some(enrichment.g2p_ipa.clone()));
+                    token.set_transcript_phones(enrichment.transcript_phones.clone());
+                    token.set_zipa_phone_spans(enrichment.zipa_phone_spans.clone());
+                    token.set_zipa_timing(enrichment.zipa_timing.clone());
+                    if old_timing != enrichment.zipa_timing {
+                        changed_tokens.push(PreviewApplyTokenChange {
+                            token_index: enrichment.token_index,
+                            token_text: token
+                                .timed_token()
+                                .token()
+                                .decode()
+                                .unwrap_or_else(|e| format!("<decode-error:{e}>")),
+                            old_timing: zipa_timing_trace(&old_timing),
+                            new_timing: zipa_timing_trace(&enrichment.zipa_timing),
+                        });
+                    }
+                }
             }
+        }
+        if self.cut_tracer.is_active() {
+            self.cut_tracer.preview_apply(
+                self.feed_count,
+                self.stable_through.as_usize(),
+                self.preview_from.as_usize(),
+                changed_tokens,
+            );
         }
     }
 
@@ -1038,9 +1084,29 @@ impl Utterance {
             return;
         }
 
+        let before_audio_start = cache.audio_start;
+        let before_audio_end = cache.audio_end;
         let cut_secs = audio_start.as_usize() as f64 / crate::SAMPLE_RATE as f64;
+        let before_spans = cache.output.debug_phone_span_window(cut_secs, 4);
         cache.output.trim_front(cut_secs);
         cache.audio_start = audio_start;
+        if self.cut_tracer.is_active() {
+            self.cut_tracer.zipa_cache_trim(
+                self.feed_count,
+                audio_start.as_usize(),
+                before_audio_start.as_usize() as f64 / crate::SAMPLE_RATE as f64,
+                before_audio_end.as_usize() as f64 / crate::SAMPLE_RATE as f64,
+                cache.audio_start.as_usize() as f64 / crate::SAMPLE_RATE as f64,
+                cache.audio_end.as_usize() as f64 / crate::SAMPLE_RATE as f64,
+                before_spans.into_iter().map(phone_span_trace).collect(),
+                cache
+                    .output
+                    .debug_phone_span_window(cut_secs, 4)
+                    .into_iter()
+                    .map(phone_span_trace)
+                    .collect(),
+            );
+        }
     }
 
     fn find_auto_cut_boundary(&self) -> Option<TokenIndex> {
@@ -1229,6 +1295,113 @@ fn debug_token_window(tokens: &[OutputToken], start: usize, end: usize) -> Strin
         .map(|token| debug_token(token))
         .collect::<Vec<_>>()
         .join(" | ")
+}
+
+fn word_token_trace(token: &OutputToken) -> WordTokenTrace {
+    let timed = token.timed_token();
+    let token_range = timed.time_range();
+    WordTokenTrace {
+        token_index: timed.index().as_usize(),
+        token_text: timed
+            .token()
+            .decode()
+            .unwrap_or_else(|e| format!("<decode-error:{e}>")),
+        token_surface: timed
+            .token()
+            .decode()
+            .unwrap_or_else(|e| format!("<decode-error:{e}>")),
+        token_start_secs: token_range.start.as_secs(),
+        token_end_secs: token_range.end.as_secs(),
+        asr_margin: token.asr_confidence().map(|confidence| confidence.margin()),
+        asr_concentration: token
+            .asr_confidence()
+            .map(|confidence| confidence.concentration()),
+        asr_alternatives: token
+            .asr_confidence()
+            .map(|confidence| {
+                confidence
+                    .alternatives()
+                    .iter()
+                    .map(asr_alternative_trace)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        g2p_ipa: token.g2p_ipa().map(|ipa| ipa.as_str().to_owned()),
+        transcript_phones: token
+            .transcript_phones()
+            .iter()
+            .map(|phone| phone.as_str().to_owned())
+            .collect(),
+        zipa_phone_spans: token
+            .zipa_phone_spans()
+            .iter()
+            .map(|span| ZipaPhoneSpanTrace {
+                phone: span.phone().to_owned(),
+                start_secs: span.time_range().start.as_secs(),
+                end_secs: span.time_range().end.as_secs(),
+            })
+            .collect(),
+        zipa_timing: zipa_timing_trace(token.zipa_timing()),
+    }
+}
+
+fn asr_alternative_trace(alternative: &AsrTokenAlternative) -> AsrAlternativeTrace {
+    AsrAlternativeTrace {
+        token_id: alternative.token().as_u32(),
+        token_text: alternative
+            .token()
+            .decode()
+            .unwrap_or_else(|e| format!("<decode-error:{e}>")),
+        logit: alternative.logit(),
+    }
+}
+
+fn zipa_timing_trace(timing: &ZipaTiming) -> ZipaTimingTrace {
+    match timing {
+        ZipaTiming::Aligned(range) => ZipaTimingTrace {
+            kind: "aligned",
+            start_secs: Some(range.start.as_secs()),
+            end_secs: Some(range.end.as_secs()),
+            projected_at: None,
+            normalized_start: None,
+            normalized_end: None,
+        },
+        ZipaTiming::Deleted { projected_at } => ZipaTimingTrace {
+            kind: "deleted",
+            start_secs: None,
+            end_secs: None,
+            projected_at: Some(*projected_at),
+            normalized_start: None,
+            normalized_end: None,
+        },
+        ZipaTiming::Projected {
+            normalized_start,
+            normalized_end,
+        } => ZipaTimingTrace {
+            kind: "projected",
+            start_secs: None,
+            end_secs: None,
+            projected_at: None,
+            normalized_start: Some(*normalized_start),
+            normalized_end: Some(*normalized_end),
+        },
+        ZipaTiming::Invalid => ZipaTimingTrace {
+            kind: "invalid",
+            start_secs: None,
+            end_secs: None,
+            projected_at: None,
+            normalized_start: None,
+            normalized_end: None,
+        },
+    }
+}
+
+fn phone_span_trace(span: bee_zipa_mlx::infer::PhoneSpan) -> ZipaPhoneSpanTrace {
+    ZipaPhoneSpanTrace {
+        phone: span.token,
+        start_secs: span.start_time_secs,
+        end_secs: span.end_time_secs,
+    }
 }
 
 fn debug_token(token: &OutputToken) -> String {
@@ -1453,8 +1626,8 @@ fn find_latest_word_end_at_or_before(
 mod tests {
     use super::{Cutting, DecodedPreview, Utterance};
     use crate::{
-        ComparisonPhone, OutputToken, SampleOffset, SampleRange, TimedToken, TokenId, TokenIndex,
-        ZipaTiming,
+        ComparisonPhone, OutputToken, SampleOffset, SampleRange, TimeRange, TimedToken, TokenId,
+        TokenIndex, UtteranceTime, ZipaPhoneSpan, ZipaTiming,
     };
     use bee_g2p::TranscriptWord;
     use compact_str::CompactString;
@@ -1664,6 +1837,92 @@ mod tests {
         // The rewrite must not panic: 19 <= 23 (current KV position).
         utterance.rewrite_preview(plan.rollback_to, plan.decoder_position);
         assert_eq!(utterance.tape.decoder_position(), 19);
+    }
+
+    #[test]
+    fn apply_preview_run_preserves_carry_timing_and_spans() {
+        ensure_test_tokenizer();
+        let mut utterance = Utterance::new(2, Cutting::Never);
+        utterance.tape.append_decoded(
+            vec![
+                dummy_output_token(0, 10),
+                dummy_output_token(1, 11),
+                dummy_output_token(2, 12),
+            ],
+            0,
+            3,
+        );
+        utterance.set_stable_and_preview(TokenIndex::new(0), TokenIndex::new(1));
+
+        let carry_timing = aligned_timing(2.0, 2.3);
+        let carry_spans = vec![zipa_span("k", 2.0, 2.3)];
+        {
+            let carry = utterance
+                .tape
+                .token_mut(0)
+                .expect("carry token should exist");
+            carry.set_zipa_timing(carry_timing.clone());
+            carry.set_zipa_phone_spans(carry_spans.clone());
+        }
+
+        let preview_old_timing = aligned_timing(3.0, 3.2);
+        {
+            let preview = utterance
+                .tape
+                .token_mut(1)
+                .expect("preview token should exist");
+            preview.set_zipa_timing(preview_old_timing);
+        }
+
+        utterance.apply_preview_run(&super::PreviewRun {
+            transcript: "carry preview".to_owned(),
+            token_enrichments: vec![
+                super::PreviewTokenEnrichment {
+                    token_index: 0,
+                    g2p_ipa: CompactString::from("carry"),
+                    transcript_phones: vec![ComparisonPhone::new(CompactString::from("K"))],
+                    zipa_phone_spans: vec![zipa_span("early", 0.4, 0.6)],
+                    zipa_timing: aligned_timing(0.4, 0.6),
+                },
+                super::PreviewTokenEnrichment {
+                    token_index: 1,
+                    g2p_ipa: CompactString::from("preview"),
+                    transcript_phones: vec![ComparisonPhone::new(CompactString::from("P"))],
+                    zipa_phone_spans: vec![zipa_span("new", 3.4, 3.7)],
+                    zipa_timing: aligned_timing(3.4, 3.7),
+                },
+            ],
+        });
+
+        let carry = &utterance.tape.tokens()[0];
+        assert_eq!(carry.zipa_timing(), &carry_timing);
+        assert_eq!(carry.zipa_phone_spans(), carry_spans.as_slice());
+
+        let preview = &utterance.tape.tokens()[1];
+        assert_eq!(preview.zipa_timing(), &aligned_timing(3.4, 3.7));
+        assert_eq!(preview.zipa_phone_spans(), [zipa_span("new", 3.4, 3.7)]);
+        assert_eq!(
+            preview
+                .g2p_ipa()
+                .expect("preview g2p should be set")
+                .as_str(),
+            "preview"
+        );
+    }
+
+    fn aligned_timing(start_secs: f64, end_secs: f64) -> ZipaTiming {
+        ZipaTiming::Aligned(TimeRange::new(
+            UtteranceTime::from_secs(start_secs),
+            UtteranceTime::from_secs(end_secs),
+        ))
+    }
+
+    fn zipa_span(phone: &str, start_secs: f64, end_secs: f64) -> ZipaPhoneSpan {
+        ZipaPhoneSpan::new(
+            CompactString::from(phone),
+            UtteranceTime::from_secs(start_secs),
+            UtteranceTime::from_secs(end_secs),
+        )
     }
 
     fn dummy_output_token(index: usize, token_id: u32) -> OutputToken {
