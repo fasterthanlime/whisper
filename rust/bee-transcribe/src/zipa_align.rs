@@ -11,6 +11,25 @@ use bee_phonetic::{
 use bee_zipa_mlx::audio::AudioBuffer as ZipaAudioBuffer;
 use bee_zipa_mlx::infer::{PhoneSpan, ZipaInference};
 
+#[derive(Clone, Debug)]
+pub struct CachedZipaOutput {
+    raw_token_count: usize,
+    zipa_norm_with_spans: Vec<ComparisonToken>,
+    phone_spans: Vec<PhoneSpan>,
+}
+
+impl CachedZipaOutput {
+    pub fn raw_token_count(&self) -> usize {
+        self.raw_token_count
+    }
+
+    pub fn append(&mut self, tail: CachedZipaOutput) {
+        self.raw_token_count += tail.raw_token_count;
+        self.zipa_norm_with_spans.extend(tail.zipa_norm_with_spans);
+        self.phone_spans.extend(tail.phone_spans);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SpanAlignmentSelection {
     pub range: Range<usize>,
@@ -1119,31 +1138,24 @@ impl TranscriptAlignment {
         }
     }
 
+    pub fn build_from_cached_zipa(
+        input: TranscriptComparisonInput,
+        cached_zipa: CachedZipaOutput,
+    ) -> Self {
+        Self::build_from_comparison_input_and_zipa(
+            input,
+            cached_zipa.zipa_norm_with_spans,
+            cached_zipa.phone_spans,
+        )
+    }
+
     pub fn build_from_comparison_input(
         input: TranscriptComparisonInput,
         audio: &ZipaAudioBuffer,
         zipa: &ZipaInference,
     ) -> Result<Self, AlignmentError> {
-        let utterance = zipa
-            .infer_audio_greedy(audio)
-            .map_err(|e| AlignmentError::Zipa(e.to_string()))?;
-
-        let duration = audio.samples.len() as f64 / audio.sample_rate_hz as f64;
-
-        let phone_spans: Vec<PhoneSpan> = utterance
-            .derive_phone_spans(&zipa.tokens, duration, 0)
-            .into_iter()
-            .filter(|s| s.token != "▁")
-            .collect();
-
-        let zipa_raw: Vec<String> = utterance.tokens.into_iter().filter(|t| t != "▁").collect();
-        let zipa_norm_with_spans = normalize_ipa_for_comparison_with_spans(&zipa_raw);
-
-        Ok(Self::build_from_comparison_input_and_zipa(
-            input,
-            zipa_norm_with_spans,
-            phone_spans,
-        ))
+        let cached = infer_cached_zipa_output(audio, zipa, 0, 0.0)?;
+        Ok(Self::build_from_cached_zipa(input, cached))
     }
 
     /// Run ZIPA inference + G2P + DP alignment for `transcript` over `audio`.
@@ -1301,6 +1313,46 @@ impl TranscriptAlignment {
             None => SpanTiming::NoTiming,
         }
     }
+}
+
+pub fn infer_cached_zipa_output(
+    audio: &ZipaAudioBuffer,
+    zipa: &ZipaInference,
+    raw_token_offset: usize,
+    time_offset_secs: f64,
+) -> Result<CachedZipaOutput, AlignmentError> {
+    let utterance = zipa
+        .infer_audio_greedy(audio)
+        .map_err(|e| AlignmentError::Zipa(e.to_string()))?;
+
+    let duration = audio.samples.len() as f64 / audio.sample_rate_hz as f64;
+
+    let phone_spans: Vec<PhoneSpan> = utterance
+        .derive_phone_spans(&zipa.tokens, duration, 0)
+        .into_iter()
+        .filter(|s| s.token != "▁")
+        .map(|span| PhoneSpan {
+            start_time_secs: span.start_time_secs + time_offset_secs,
+            end_time_secs: span.end_time_secs + time_offset_secs,
+            ..span
+        })
+        .collect();
+
+    let zipa_raw: Vec<String> = utterance.tokens.into_iter().filter(|t| t != "▁").collect();
+    let zipa_norm_with_spans = normalize_ipa_for_comparison_with_spans(&zipa_raw)
+        .into_iter()
+        .map(|mut token| {
+            token.source_start += raw_token_offset;
+            token.source_end += raw_token_offset;
+            token
+        })
+        .collect();
+
+    Ok(CachedZipaOutput {
+        raw_token_count: zipa_raw.len(),
+        zipa_norm_with_spans,
+        phone_spans,
+    })
 }
 
 #[cfg(test)]
