@@ -45,10 +45,6 @@ impl CachedZipaOutput {
         self.raw_token_count = self.raw_token_count.saturating_sub(drop_count);
         self.zipa_raw.drain(..drop_count);
         self.phone_spans.drain(..drop_count);
-        for span in &mut self.phone_spans {
-            span.start_time_secs -= cut_secs;
-            span.end_time_secs -= cut_secs;
-        }
         self.zipa_norm_with_spans = normalize_ipa_for_comparison_with_spans(&self.zipa_raw);
     }
 }
@@ -1722,8 +1718,8 @@ mod tests {
         assert_eq!(cache.zipa_norm_with_spans[0].source_end, 1);
         assert_eq!(cache.phone_spans.len(), 1);
         assert_eq!(cache.phone_spans[0].token, "c");
-        assert_eq!(cache.phone_spans[0].start_time_secs, 0.0);
-        assert_eq!(cache.phone_spans[0].end_time_secs, 0.5);
+        assert_eq!(cache.phone_spans[0].start_time_secs, 1.0);
+        assert_eq!(cache.phone_spans[0].end_time_secs, 1.5);
     }
 
     #[test]
