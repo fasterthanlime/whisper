@@ -884,7 +884,7 @@ fn decode_sliding_window_full_replay(
             let kept_token_ids = kept_generated_token_ids(&chunk_run, keep.kept_token_count);
             let kept_text = decode_token_ids(tokenizer, &kept_token_ids)?;
             let carried_token_count =
-                kept_carried_token_count(replayed_prefix.as_ref(), Some(keep_until_secs));
+                kept_carried_token_count(replayed_prefix.as_ref(), Some(keep_until_secs), None);
             let replay_prefix_token_count = replayed_prefix
                 .as_ref()
                 .map(|prefix| prefix.token_ids.len())
@@ -1074,6 +1074,8 @@ fn decode_sliding_window_bridge_replay(
     let mut align_ctx = AlignmentContext::new()?;
     let mut interrupted_early = false;
     let mut tui = ExerciseTui::new();
+    let mut committed_token_ids: Vec<u32> = Vec::new();
+    let mut draft_token_ids: Vec<u32> = Vec::new();
     let mut committed_text = String::new();
     let mut draft_text = String::new();
 
@@ -1142,9 +1144,14 @@ fn decode_sliding_window_bridge_replay(
             chunk_run.generated_tokens,
             chunk_run.stop_reason.as_str(),
         ));
+        draft_token_ids.clear();
+        if let Some(prefix) = replayed_prefix.as_ref() {
+            draft_token_ids.extend_from_slice(&prefix.token_ids);
+        }
+        draft_token_ids.extend_from_slice(&chunk_run.generated_token_ids);
         draft_text.clear();
-        append_exact(&mut draft_text, replayed_prefix_text.as_str());
-        append_exact(&mut draft_text, chunk_run.transcript.as_str());
+        append_display_delta(&mut draft_text, replayed_prefix_text.as_str());
+        append_display_delta(&mut draft_text, chunk_run.transcript.as_str());
         update_exercise_progress(
             &mut tui,
             if window.end_sample < samples.len() {
@@ -1195,13 +1202,17 @@ fn decode_sliding_window_bridge_replay(
                 &timed_words,
                 keep_until_secs.unwrap_or(0.0),
                 replay_until_secs,
+                keep_boundary_debug.chosen_word.as_ref(),
             )?;
-            let carried_token_count =
-                kept_carried_token_count(replayed_prefix.as_ref(), keep_until_secs);
+            let carried_token_count = kept_carried_token_count(
+                replayed_prefix.as_ref(),
+                keep_until_secs,
+                keep_boundary_debug.chosen_word.as_ref(),
+            );
             let mut kept_token_ids =
                 kept_carried_token_ids(replayed_prefix.as_ref(), carried_token_count);
             kept_token_ids.extend(kept_generated_token_ids(&chunk_run, split.kept_token_count));
-            let kept_text = decode_token_ids(tokenizer, &kept_token_ids)?;
+            let kept_text = split.kept_text.clone();
             if keep_until_secs.is_some() && !kept_text.is_empty() {
                 tui.log(format!("kept words: {}", kept_text));
             }
@@ -1236,7 +1247,7 @@ fn decode_sliding_window_bridge_replay(
                 target_keep_until_secs,
                 keep_until_secs,
                 replay_until_secs: Some(replay_until_secs),
-                kept_word_count: split.kept_word_count,
+                kept_word_count: sentence_word_tokens(&kept_text).len(),
                 kept_token_count: kept_token_ids.len(),
                 kept_token_ids,
                 kept_text,
@@ -1245,10 +1256,21 @@ fn decode_sliding_window_bridge_replay(
                 rollback_position,
                 keep_boundary_debug,
             };
-            append_exact(&mut committed_text, rollback.kept_text.as_str());
+            committed_token_ids.extend_from_slice(&rollback.kept_token_ids);
+            draft_token_ids.clear();
+            let committed_delta = if rollback.keep_until_secs.is_some() {
+                suffix_after_prefix(
+                    Some(replayed_prefix_text.as_str()),
+                    rollback.kept_text.as_str(),
+                )
+            } else {
+                ""
+            };
+            append_display_delta(&mut committed_text, committed_delta);
             draft_text.clear();
             if let Some(prefix) = replay_prefix_for_next.as_ref() {
-                append_exact(
+                draft_token_ids.extend_from_slice(&prefix.token_ids);
+                append_display_delta(
                     &mut draft_text,
                     carried_bridge_text(tokenizer, Some(prefix))?.as_str(),
                 );
@@ -1257,9 +1279,13 @@ fn decode_sliding_window_bridge_replay(
         } else {
             start_position = chunk_run.end_position;
             replay_prefix_for_next = None;
-            let delta =
-                suffix_after_prefix(Some(replayed_prefix_text.as_str()), draft_text.as_str());
-            append_exact(&mut committed_text, delta);
+            if let Some(prefix) = replayed_prefix.as_ref() {
+                committed_token_ids.extend_from_slice(&prefix.token_ids);
+                append_display_delta(&mut committed_text, replayed_prefix_text.as_str());
+            }
+            committed_token_ids.extend_from_slice(&chunk_run.generated_token_ids);
+            append_display_delta(&mut committed_text, chunk_run.transcript.as_str());
+            draft_token_ids.clear();
             draft_text.clear();
             None
         };
@@ -1806,10 +1832,19 @@ fn kept_carried_token_ids(prefix: Option<&CarriedBridge>, kept_token_count: usiz
     prefix.token_ids[..kept_token_count.min(prefix.token_ids.len())].to_vec()
 }
 
-fn kept_carried_token_count(prefix: Option<&CarriedBridge>, keep_until_secs: Option<f64>) -> usize {
+fn kept_carried_token_count(
+    prefix: Option<&CarriedBridge>,
+    keep_until_secs: Option<f64>,
+    chosen_word: Option<&BoundaryWordDebug>,
+) -> usize {
     let Some(prefix) = prefix else {
         return 0;
     };
+    if let Some(chosen_word) = chosen_word {
+        if chosen_word.word_index < prefix.words.len() {
+            return prefix.words[chosen_word.word_index].token_range.end;
+        }
+    }
     let Some(keep_until_secs) = keep_until_secs else {
         return 0;
     };
@@ -2470,6 +2505,7 @@ struct SlidingWindowTimedRollbackExperimentResult {
 
 #[derive(Clone)]
 struct BoundaryWordDebug {
+    word_index: usize,
     text: String,
     start_secs: f64,
     end_secs: f64,
@@ -3184,8 +3220,8 @@ fn render_committed_timeline_html(
                 (left, width, lane_index)
             }
             _ => {
-                let left = fallback_x;
-                fallback_x += 90.0;
+                let left = lane_end_x.iter().copied().fold(fallback_x, f64::max);
+                fallback_x = left + 90.0;
                 (left, 84.0, 2)
             }
         };
@@ -3373,8 +3409,8 @@ fn render_sliding_window_row(
                 (left, width, lane_index)
             }
             _ => {
-                let left = fallback_x;
-                fallback_x += 90.0;
+                let left = lane_end_x.iter().copied().fold(fallback_x, f64::max);
+                fallback_x = left + 90.0;
                 (left, 84.0, 2)
             }
         };
@@ -3505,7 +3541,6 @@ fn build_window_word_placements(
                 bee_transcribe::zipa_align::AlignmentQuality::NoWindow => (None, None, "no-window"),
                 bee_transcribe::zipa_align::AlignmentQuality::NoTiming => (None, None, "no-timing"),
             };
-            let generated_index = index.saturating_sub(carried_word_count);
             let carried = index < carried_word_count;
             let cut_word = match (&chosen_cut, start_secs, end_secs) {
                 (Some(chosen), Some(start), Some(end)) => {
@@ -3521,10 +3556,8 @@ fn build_window_word_placements(
                 end_secs,
                 quality_label,
                 carried,
-                kept: !carried && generated_index < kept_word_count,
-                bridge: !carried
-                    && generated_index >= kept_word_count
-                    && generated_index < replay_word_count,
+                kept: index < kept_word_count,
+                bridge: index >= kept_word_count && index < replay_word_count,
                 cut_word,
             }
         })
@@ -3652,8 +3685,8 @@ fn render_word_row(
                 (left, width, lane_index)
             }
             _ => {
-                let left = fallback_x;
-                fallback_x += 90.0;
+                let left = lane_end_x.iter().copied().fold(fallback_x, f64::max);
+                fallback_x = left + 90.0;
                 (left, 84.0, 2)
             }
         };
@@ -3969,6 +4002,19 @@ fn append_exact(target: &mut String, text: &str) {
     }
 }
 
+fn append_display_delta(target: &mut String, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    let needs_space = !target.is_empty()
+        && !target.chars().last().is_some_and(char::is_whitespace)
+        && !text.chars().next().is_some_and(char::is_whitespace);
+    if needs_space {
+        target.push(' ');
+    }
+    target.push_str(text);
+}
+
 fn suffix_after_prefix<'a>(prefix: Option<&str>, text: &'a str) -> &'a str {
     let Some(prefix) = prefix else {
         return text;
@@ -4089,6 +4135,7 @@ fn timed_generated_bridge_for_cuts(
     timed_words: &[TimedWord],
     keep_until_secs: f64,
     replay_until_secs: f64,
+    chosen_word: Option<&BoundaryWordDebug>,
 ) -> Result<TimedGeneratedBridge> {
     if timed_words.is_empty() {
         let bridge = replayed_prefix.cloned().unwrap_or_else(|| CarriedBridge {
@@ -4114,11 +4161,15 @@ fn timed_generated_bridge_for_cuts(
         })
         .unwrap_or(0);
     let generated_words = &timed_words[carried_word_count.min(timed_words.len())..];
-    let kept_word_count = generated_words
-        .iter()
-        .take_while(|word| word.end_secs <= keep_until_secs)
-        .count();
-    let bridge_start_index = timed_words.partition_point(|word| word.start_secs < keep_until_secs);
+    let chosen_word_index = chosen_word.map(|chosen| chosen.word_index);
+    let full_kept_word_count = chosen_word_index.map(|index| index + 1).unwrap_or_else(|| {
+        timed_words
+            .iter()
+            .take_while(|word| word.end_secs <= keep_until_secs)
+            .count()
+    });
+    let kept_word_count = full_kept_word_count.saturating_sub(carried_word_count);
+    let bridge_start_index = full_kept_word_count;
     let bridge_end_index = timed_words.partition_point(|word| word.start_secs < replay_until_secs);
     let bridge_words_slice = if bridge_start_index <= bridge_end_index {
         &timed_words[bridge_start_index..bridge_end_index]
@@ -4126,23 +4177,22 @@ fn timed_generated_bridge_for_cuts(
         &timed_words[0..0]
     };
 
-    let kept_text = if let Some(end_word) = timed_words
-        .iter()
-        .filter(|word| word.end_secs <= keep_until_secs)
-        .last()
-    {
-        combined_transcript[..end_word.char_range.end].to_string()
-    } else {
-        String::new()
-    };
+    let kept_text = timed_words
+        .get(full_kept_word_count.saturating_sub(1))
+        .map(|end_word| combined_transcript[..end_word.char_range.end].to_string())
+        .unwrap_or_default();
 
     let bridge = if let (Some(first_bridge_word), Some(last_bridge_word)) =
         (bridge_words_slice.first(), bridge_words_slice.last())
     {
-        let text = combined_transcript
-            [first_bridge_word.char_range.start..last_bridge_word.char_range.end]
-            .to_string();
-        let bridge_char_base = first_bridge_word.char_range.start;
+        let mut bridge_char_base = first_bridge_word.char_range.start;
+        while bridge_char_base > 0
+            && combined_transcript.as_bytes()[bridge_char_base - 1].is_ascii_whitespace()
+        {
+            bridge_char_base -= 1;
+        }
+        let text =
+            combined_transcript[bridge_char_base..last_bridge_word.char_range.end].to_string();
         let token_ids = tokenize_token_ids(tokenizer, &text)?;
         let bridge_words = bridge_words_slice
             .iter()
@@ -4226,7 +4276,7 @@ fn adjust_keep_boundary_secs(
     let mut best_candidate = None;
     let mut best_distance = f64::INFINITY;
 
-    for word_timing in alignment.word_timings() {
+    for (word_index, word_timing) in alignment.word_timings().iter().enumerate() {
         if let bee_transcribe::zipa_align::AlignmentQuality::Aligned {
             start_secs,
             end_secs,
@@ -4242,6 +4292,7 @@ fn adjust_keep_boundary_secs(
             if distance < best_distance {
                 best_distance = distance;
                 best_candidate = Some(BoundaryWordDebug {
+                    word_index,
                     text: word_timing.word.to_string(),
                     start_secs,
                     end_secs,
