@@ -25,7 +25,7 @@ use crate::{
     SampleCount, SampleOffset, SampleRange, Tape, TimeRange, TimedToken, TokenId, TokenIndex,
     ZipaTiming,
 };
-use bee_g2p::{BeeG2p, token_piece_phones, transcript_alignment_input};
+use bee_g2p::{BeeG2p, token_piece_phones, transcript_alignment_input, transcript_words};
 use bee_qwen3_asr::encoder::EncoderCache;
 use bee_qwen3_asr::generate::{self, ConfidenceMode, TokenConfidence};
 use bee_qwen3_asr::mel::MelExtractor;
@@ -96,6 +96,12 @@ struct PhoneticRuntime {
 struct PreviewRun {
     transcript: String,
     token_enrichments: Vec<PreviewTokenEnrichment>,
+}
+
+#[derive(Clone, Debug)]
+struct PreviewG2pCache {
+    words: Vec<String>,
+    ipas: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -221,6 +227,9 @@ pub struct Utterance {
 
     /// Cached ZIPA acoustic output for the most recently inferred audio prefix.
     zipa_cache: Option<ZipaPreviewCache>,
+
+    /// Cached transcript word/IPA pairs for the most recent preview feed.
+    preview_g2p_cache: Option<PreviewG2pCache>,
 }
 
 impl Utterance {
@@ -237,6 +246,7 @@ impl Utterance {
             asr: None,
             phonetics: None,
             zipa_cache: None,
+            preview_g2p_cache: None,
         }
     }
 
@@ -591,15 +601,82 @@ impl Utterance {
             .collect::<Vec<_>>();
 
         let transcript = crate::decode_token_ids(&token_ids)?;
+        let current_words = transcript_words(&transcript);
+        let previous_cache = self.preview_g2p_cache.clone();
+        let reused_prefix_words = previous_cache
+            .as_ref()
+            .map(|cache| common_word_prefix_len(&cache.words, &current_words))
+            .unwrap_or(0);
+        let reused_suffix_words = previous_cache
+            .as_ref()
+            .map(|cache| common_word_suffix_len(&cache.words, &current_words, reused_prefix_words))
+            .unwrap_or(0);
+        let requested_word_count = current_words
+            .len()
+            .saturating_sub(reused_prefix_words + reused_suffix_words);
+        tracing::trace!(
+            target: "bee_phase",
+            component = "bee_roll",
+            phase = "g2p_select",
+            transcript_words = current_words.len(),
+            reused_prefix_words,
+            reused_suffix_words,
+            requested_word_count,
+            "word selection"
+        );
+
+        let g2p_start = Instant::now();
         let analysis = {
             let phonetics = self
                 .phonetics
                 .as_mut()
                 .expect("phonetics presence checked above");
-            phonetics
-                .g2p
-                .analyze_text(&transcript, phonetics.lang_code.as_str())?
+            let lang_code = phonetics.lang_code.as_str();
+            let mut ipas = Vec::with_capacity(current_words.len());
+            if let Some(cache) = previous_cache.as_ref() {
+                ipas.extend(cache.ipas[..reused_prefix_words].iter().cloned());
+            }
+
+            let middle_start = reused_prefix_words;
+            let middle_end = current_words.len() - reused_suffix_words;
+            if middle_start < middle_end {
+                let middle_refs = current_words[middle_start..middle_end]
+                    .iter()
+                    .map(|word| word.word.as_str())
+                    .collect::<Vec<_>>();
+                ipas.extend(phonetics.g2p.g2p_words(&middle_refs, lang_code)?);
+            }
+
+            if let Some(cache) = previous_cache.as_ref() {
+                let suffix_start = cache.ipas.len().saturating_sub(reused_suffix_words);
+                ipas.extend(cache.ipas[suffix_start..].iter().cloned());
+            }
+
+            let analysis = phonetics.g2p.analyze_text_with_ipas(
+                &transcript,
+                &current_words,
+                &ipas,
+                lang_code,
+            )?;
+
+            self.preview_g2p_cache = Some(PreviewG2pCache {
+                words: current_words.iter().map(|word| word.word.clone()).collect(),
+                ipas,
+            });
+
+            analysis
         };
+        tracing::trace!(
+            target: "bee_phase",
+            component = "bee_roll",
+            phase = "g2p_analyze_text",
+            transcript_words = current_words.len(),
+            reused_prefix_words,
+            reused_suffix_words,
+            requested_word_count,
+            ms = g2p_start.elapsed().as_secs_f64() * 1000.0,
+            "phase timing"
+        );
         let token_piece_phones = token_piece_phones(&analysis);
         let alignment_input = transcript_alignment_input(&analysis);
         let comparison_input = transcript_comparison_input_from_g2p(&transcript, &alignment_input);
@@ -963,6 +1040,33 @@ fn format_zipa_timing(timing: &ZipaTiming) -> String {
     }
 }
 
+fn common_word_prefix_len(previous: &[String], current: &[bee_g2p::TranscriptWord]) -> usize {
+    previous
+        .iter()
+        .zip(current.iter())
+        .take_while(|(previous_word, current_word)| previous_word.as_str() == current_word.word)
+        .count()
+}
+
+fn common_word_suffix_len(
+    previous: &[String],
+    current: &[bee_g2p::TranscriptWord],
+    prefix_len: usize,
+) -> usize {
+    let previous_available = previous.len().saturating_sub(prefix_len);
+    let current_available = current.len().saturating_sub(prefix_len);
+    let mut suffix_len = 0usize;
+    while suffix_len < previous_available && suffix_len < current_available {
+        let previous_index = previous.len() - 1 - suffix_len;
+        let current_index = current.len() - 1 - suffix_len;
+        if previous[previous_index].as_str() != current[current_index].word {
+            break;
+        }
+        suffix_len += 1;
+    }
+    suffix_len
+}
+
 fn streamed_word_spans(
     ids: &[u32],
     start_boundary: usize,
@@ -1119,6 +1223,7 @@ mod tests {
         ComparisonPhone, OutputToken, SampleOffset, SampleRange, TimedToken, TokenId, TokenIndex,
         ZipaTiming,
     };
+    use bee_g2p::TranscriptWord;
     use compact_str::CompactString;
     use std::path::PathBuf;
     use std::sync::Once;
@@ -1194,6 +1299,39 @@ mod tests {
             Utterance::preview_max_new_tokens_for_samples(320_000, 12),
             12
         );
+    }
+
+    #[test]
+    fn common_word_prefix_and_suffix_detect_overlapping_reuse() {
+        let previous = vec![
+            "I".to_owned(),
+            "asked".to_owned(),
+            "Copilot".to_owned(),
+            "to".to_owned(),
+        ];
+        let current = vec![
+            TranscriptWord {
+                word: "asked".to_owned(),
+                char_start: 0,
+                char_end: 5,
+            },
+            TranscriptWord {
+                word: "Copilot".to_owned(),
+                char_start: 6,
+                char_end: 13,
+            },
+            TranscriptWord {
+                word: "to".to_owned(),
+                char_start: 14,
+                char_end: 16,
+            },
+        ];
+
+        let prefix_len = super::common_word_prefix_len(&previous, &current);
+        let suffix_len = super::common_word_suffix_len(&previous, &current, prefix_len);
+
+        assert_eq!(prefix_len, 0);
+        assert_eq!(suffix_len, 3);
     }
 
     fn dummy_output_token(index: usize, token_id: u32) -> OutputToken {

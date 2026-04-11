@@ -211,6 +211,7 @@ dependencies = [
  "mlx-rs",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]

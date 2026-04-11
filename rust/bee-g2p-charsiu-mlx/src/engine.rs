@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Instant;
 
 use anyhow::{Result, bail};
 use mlx_rs::ops::flatten;
@@ -91,36 +92,59 @@ impl G2pEngine {
     /// Batch G2P: compute IPA for multiple words, using cache where possible.
     /// Returns one IPA string per word, in the same order.
     pub fn g2p_batch(&mut self, words: &[&str], lang_code: &str) -> Result<Vec<String>> {
+        let start = Instant::now();
         // Split into cached and uncached
         let mut results = vec![String::new(); words.len()];
-        let mut uncached_indices = Vec::new();
-        let mut uncached_words = Vec::new();
+        let mut cache_hits = 0usize;
+        let mut uncached_unique_indices = HashMap::<&str, usize>::new();
+        let mut uncached_unique_words = Vec::new();
+        let mut uncached_unique_positions = Vec::<Vec<usize>>::new();
 
         for (i, word) in words.iter().enumerate() {
             let key = (lang_code.to_string(), word.to_string());
             if let Some(cached) = self.ipa_cache.get(&key) {
                 results[i] = cached.clone();
+                cache_hits += 1;
             } else {
-                uncached_indices.push(i);
-                uncached_words.push(*word);
+                let unique_index = *uncached_unique_indices.entry(*word).or_insert_with(|| {
+                    let unique_index = uncached_unique_words.len();
+                    uncached_unique_words.push(*word);
+                    uncached_unique_positions.push(Vec::new());
+                    unique_index
+                });
+                uncached_unique_positions[unique_index].push(i);
             }
         }
 
-        if !uncached_words.is_empty() {
-            let prompts: Vec<String> = uncached_words
+        if !uncached_unique_words.is_empty() {
+            let prompts: Vec<String> = uncached_unique_words
                 .iter()
                 .map(|w| tokenize::format_g2p_input(w, lang_code))
                 .collect();
             let input_ids = tokenize::encode_batch_to_array(&prompts)?;
             let batch_results = self.model.generate_batch(&input_ids, 64)?;
 
-            for (j, idx) in uncached_indices.into_iter().enumerate() {
+            for (j, word) in uncached_unique_words.iter().enumerate() {
                 let ipa = tokenize::decode_byt5(&batch_results[j]);
-                let key = (lang_code.to_string(), uncached_words[j].to_string());
+                let key = (lang_code.to_string(), (*word).to_string());
                 self.ipa_cache.insert(key, ipa.clone());
-                results[idx] = ipa;
+                for &idx in &uncached_unique_positions[j] {
+                    results[idx] = ipa.clone();
+                }
             }
         }
+
+        tracing::trace!(
+            target: "bee_phase",
+            component = "g2p",
+            phase = "g2p_batch",
+            words_seen = words.len(),
+            cache_hits,
+            unique_uncached_words = uncached_unique_words.len(),
+            duplicate_uncached_words = words.len().saturating_sub(cache_hits + uncached_unique_words.len()),
+            ms = start.elapsed().as_secs_f64() * 1000.0,
+            "batch timing"
+        );
 
         Ok(results)
     }

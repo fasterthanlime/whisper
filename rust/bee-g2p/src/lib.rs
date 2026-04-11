@@ -192,6 +192,23 @@ impl BeeG2p {
             .map(|word| word.word.as_str())
             .collect::<Vec<_>>();
         let ipas = self.g2p_words(&word_refs, lang_code)?;
+        self.analyze_text_with_ipas(text, &words, &ipas, lang_code)
+    }
+
+    pub fn analyze_text_with_ipas(
+        &mut self,
+        text: &str,
+        words: &[TranscriptWord],
+        ipas: &[String],
+        lang_code: &str,
+    ) -> Result<TextAnalysis> {
+        anyhow::ensure!(
+            words.len() == ipas.len(),
+            "word/IPA length mismatch: {} words vs {} ipas",
+            words.len(),
+            ipas.len()
+        );
+
         let word_ipas = words
             .iter()
             .zip(ipas.iter())
