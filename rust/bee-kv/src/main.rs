@@ -38,12 +38,6 @@ const DEFAULT_CHUNK_MS: usize = 2_000;
 const DEFAULT_ROLLBACK_MS: usize = 1_000;
 /// Default bridge window duration in milliseconds for bridge-replay mode.
 const DEFAULT_BRIDGE_MS: usize = 1_000;
-/// Optional explicit stride between chunks; `None` means stride = chunk size - rollback.
-const DEFAULT_STRIDE_MS: Option<usize> = None;
-/// Default policy for snapping the keep boundary to a word edge.
-const DEFAULT_KEEP_BOUNDARY_POLICY: KeepBoundaryPolicy = KeepBoundaryPolicy::Fixed;
-/// Optional MLX memory cache limit in megabytes; `None` means unlimited.
-const DEFAULT_MLX_CACHE_LIMIT_MB: Option<usize> = None;
 /// Minimum audio duration (in seconds) that must be kept when adjusting chunk boundaries.
 const KEEP_BOUNDARY_MIN_KEPT_SECS: f64 = 0.200;
 /// Maximum number of bridge windows before forcing a full decode reset.
@@ -115,23 +109,25 @@ fn main() -> Result<()> {
         audio_tokens: 0,
     };
 
-    let experiment = decode_sliding_window_bridge_replay(
-        &model,
-        &tokenizer,
-        &samples,
-        &thinker,
-        &args.language,
-        &args.context,
-        args.max_new_tokens,
-        args.chunk_ms,
-        args.bridge_ms,
-        args.max_bridge_windows,
-        args.stride_ms,
-        args.keep_boundary_policy,
-        args.rollback_ms,
-        &args.wav_path,
-        &interrupted,
-    )?;
+    let experiment = match args.mode {
+        Mode::SlidingWindowBridgeReplay => decode_sliding_window_bridge_replay(
+            &model,
+            &tokenizer,
+            &samples,
+            &thinker,
+            &args.language,
+            &args.context,
+            args.max_new_tokens,
+            args.chunk_ms,
+            args.bridge_ms,
+            args.max_bridge_windows,
+            args.stride_ms,
+            args.keep_boundary_policy,
+            args.rollback_ms,
+            &args.wav_path,
+            &interrupted,
+        )?,
+    };
     print_summary(&summary);
     print_sliding_window_timed_rollback_experiment(&experiment);
 

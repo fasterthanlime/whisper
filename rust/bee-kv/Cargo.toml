@@ -10,6 +10,7 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
 anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
 bee-phonetic = { path = "../bee-phonetic" }
 bee-qwen3-asr = { path = "../bee-qwen3-asr" }
 bee-transcribe = { path = "../bee-transcribe" }

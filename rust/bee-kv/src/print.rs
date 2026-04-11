@@ -1,29 +1,5 @@
-use crate::types::default_wav_path;
 use crate::types::{ChunkRun, RunSummary, SlidingWindowTimedRollbackExperimentResult};
-use crate::{
-    ANSI_BLUE, ANSI_BOLD, ANSI_RESET, DEFAULT_BRIDGE_MS, DEFAULT_CHUNK_MS, DEFAULT_LANGUAGE,
-    DEFAULT_MAX_NEW_TOKENS, DEFAULT_ROLLBACK_MS, MAX_BRIDGE_WINDOWS, SAMPLE_RATE,
-};
-
-/// Prints CLI usage information to stderr.
-pub(crate) fn print_usage() {
-    eprintln!(
-        "usage: bee-kv --mode sliding-window-bridge-replay [--context TEXT] [--chunk-ms N] [--bridge-ms N] [--rollback-ms N] [wav-path] [language] [max-new-tokens]\n\
-         defaults:\n\
-           wav-path = {}\n\
-           language = {DEFAULT_LANGUAGE}\n\
-           max-new-tokens = {DEFAULT_MAX_NEW_TOKENS}\n\
-           mode = sliding-window-bridge-replay\n\
-           chunk-ms = {DEFAULT_CHUNK_MS}\n\
-           bridge-ms = {DEFAULT_BRIDGE_MS}\n\
-           max-bridge-windows = {MAX_BRIDGE_WINDOWS}\n\
-           rollback-ms = {DEFAULT_ROLLBACK_MS}\n\
-         environment:\n\
-           BEE_ASR_MODEL_DIR\n\
-           BEE_TOKENIZER_PATH (optional; defaults to $BEE_ASR_MODEL_DIR/tokenizer.json)",
-        default_wav_path().display()
-    );
-}
+use crate::{ANSI_BLUE, ANSI_BOLD, ANSI_RESET, SAMPLE_RATE};
 
 /// Prints results of a sliding-window timed-rollback experiment.
 pub(crate) fn print_sliding_window_timed_rollback_experiment(

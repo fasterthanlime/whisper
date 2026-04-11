@@ -4,235 +4,98 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use bee_qwen3_asr::generate::DecodeStopReason;
 use bee_qwen3_asr::load;
+use clap::{Parser, ValueEnum};
 
-use crate::print::print_usage;
 use crate::{
-    DEFAULT_BRIDGE_MS, DEFAULT_CHUNK_MS, DEFAULT_KEEP_BOUNDARY_POLICY, DEFAULT_LANGUAGE,
-    DEFAULT_MAX_NEW_TOKENS, DEFAULT_MLX_CACHE_LIMIT_MB, DEFAULT_ROLLBACK_MS, DEFAULT_STRIDE_MS,
-    DEFAULT_WAV_RELATIVE_TO_CRATE, MAX_BRIDGE_WINDOWS,
+    DEFAULT_BRIDGE_MS, DEFAULT_CHUNK_MS, DEFAULT_LANGUAGE, DEFAULT_MAX_NEW_TOKENS,
+    DEFAULT_ROLLBACK_MS, DEFAULT_WAV_RELATIVE_TO_CRATE, MAX_BRIDGE_WINDOWS,
 };
 
-/// CLI arguments parsed from `env::args()`.
+/// CLI arguments parsed from `clap`.
+#[derive(Debug, Parser)]
+#[command(
+    name = "bee-kv",
+    version,
+    about = "Sliding-window bridge replay for bee-kv",
+    after_help = "Environment:\n  BEE_ASR_MODEL_DIR\n  BEE_TOKENIZER_PATH (optional; defaults to $BEE_ASR_MODEL_DIR/tokenizer.json)"
+)]
 pub(crate) struct Args {
-    /// Path to the input WAV file.
-    pub(crate) wav_path: PathBuf,
-    /// Directory containing the ASR model weights and config.
-    pub(crate) model_dir: PathBuf,
-    /// Path to the tokenizer JSON file.
-    pub(crate) tokenizer_path: PathBuf,
-    /// Language hint passed to the ASR model prompt.
-    pub(crate) language: String,
-    /// Maximum number of tokens the model may generate per decode call.
-    pub(crate) max_new_tokens: usize,
+    /// Decoding mode.
+    #[arg(long, value_enum, default_value_t = Mode::SlidingWindowBridgeReplay)]
+    pub(crate) mode: Mode,
     /// Optional context string injected into the initial prompt.
+    #[arg(long, default_value_t = String::new())]
     pub(crate) context: String,
     /// Audio chunk duration in milliseconds.
+    #[arg(long = "chunk-ms", default_value_t = DEFAULT_CHUNK_MS)]
     pub(crate) chunk_ms: usize,
     /// Bridge window duration in milliseconds for bridge-replay mode.
+    #[arg(long = "bridge-ms", default_value_t = DEFAULT_BRIDGE_MS)]
     pub(crate) bridge_ms: usize,
     /// Maximum number of bridge windows before forcing a full reset.
+    #[arg(long = "max-bridge-windows", default_value_t = MAX_BRIDGE_WINDOWS)]
     pub(crate) max_bridge_windows: usize,
     /// Optional explicit stride between chunks in milliseconds.
+    #[arg(long = "stride-ms")]
     pub(crate) stride_ms: Option<usize>,
     /// Policy for snapping the keep boundary to a word edge.
+    #[arg(long = "keep-boundary", value_enum, default_value_t = KeepBoundaryPolicy::Fixed)]
     pub(crate) keep_boundary_policy: KeepBoundaryPolicy,
     /// Rollback duration in milliseconds for sliding-window mode.
+    #[arg(long = "rollback-ms", default_value_t = DEFAULT_ROLLBACK_MS)]
     pub(crate) rollback_ms: usize,
     /// Optional MLX memory cache limit in megabytes.
+    #[arg(long = "mlx-cache-limit-mb")]
     pub(crate) mlx_cache_limit_mb: Option<usize>,
+    /// Path to the input WAV file.
+    #[arg(index = 1, value_name = "WAV_PATH", default_value_os_t = default_wav_path())]
+    pub(crate) wav_path: PathBuf,
+    /// Language hint passed to the ASR model prompt.
+    #[arg(index = 2, value_name = "LANGUAGE", default_value_t = String::from(DEFAULT_LANGUAGE))]
+    pub(crate) language: String,
+    /// Maximum number of tokens the model may generate per decode call.
+    #[arg(index = 3, value_name = "MAX_NEW_TOKENS", default_value_t = DEFAULT_MAX_NEW_TOKENS)]
+    pub(crate) max_new_tokens: usize,
+    /// Directory containing the ASR model weights and config.
+    #[arg(skip = PathBuf::new())]
+    pub(crate) model_dir: PathBuf,
+    /// Path to the tokenizer JSON file.
+    #[arg(skip = PathBuf::new())]
+    pub(crate) tokenizer_path: PathBuf,
 }
 
 impl Args {
     /// Parses CLI arguments from `env::args()` into an `Args` struct.
     pub(crate) fn parse() -> Result<Self> {
-        let mut positional = Vec::new();
-        let mut context = String::new();
-        let mut chunk_ms = DEFAULT_CHUNK_MS;
-        let mut bridge_ms = DEFAULT_BRIDGE_MS;
-        let mut max_bridge_windows = MAX_BRIDGE_WINDOWS;
-        let mut stride_ms = DEFAULT_STRIDE_MS;
-        let mut keep_boundary_policy = DEFAULT_KEEP_BOUNDARY_POLICY;
-        let mut rollback_ms = DEFAULT_ROLLBACK_MS;
-        let mut mlx_cache_limit_mb = DEFAULT_MLX_CACHE_LIMIT_MB;
+        let mut args = <Self as Parser>::parse();
+        args.model_dir = env_path("BEE_ASR_MODEL_DIR")?;
+        args.tokenizer_path = env_path("BEE_TOKENIZER_PATH")
+            .unwrap_or_else(|_| args.model_dir.join("tokenizer.json"));
 
-        let mut args = env::args().skip(1);
-        while let Some(arg) = args.next() {
-            if arg == "-h" || arg == "--help" {
-                print_usage();
-                std::process::exit(0);
-            }
-            if let Some(value) = arg.strip_prefix("--context=") {
-                context = value.to_string();
-                continue;
-            }
-            if arg == "--context" {
-                context = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--context requires a value"))?;
-                continue;
-            }
-            if let Some(value) = arg.strip_prefix("--chunk-ms=") {
-                chunk_ms = value
-                    .parse::<usize>()
-                    .with_context(|| format!("parsing --chunk-ms from '{value}'"))?;
-                continue;
-            }
-            if arg == "--chunk-ms" {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--chunk-ms requires a value"))?;
-                chunk_ms = value
-                    .parse::<usize>()
-                    .with_context(|| format!("parsing --chunk-ms from '{value}'"))?;
-                continue;
-            }
-            if let Some(value) = arg.strip_prefix("--bridge-ms=") {
-                bridge_ms = value
-                    .parse::<usize>()
-                    .with_context(|| format!("parsing --bridge-ms from '{value}'"))?;
-                continue;
-            }
-            if arg == "--bridge-ms" {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--bridge-ms requires a value"))?;
-                bridge_ms = value
-                    .parse::<usize>()
-                    .with_context(|| format!("parsing --bridge-ms from '{value}'"))?;
-                continue;
-            }
-            if let Some(value) = arg.strip_prefix("--max-bridge-windows=") {
-                max_bridge_windows = value
-                    .parse::<usize>()
-                    .with_context(|| format!("parsing --max-bridge-windows from '{value}'"))?;
-                continue;
-            }
-            if arg == "--max-bridge-windows" {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--max-bridge-windows requires a value"))?;
-                max_bridge_windows = value
-                    .parse::<usize>()
-                    .with_context(|| format!("parsing --max-bridge-windows from '{value}'"))?;
-                continue;
-            }
-            if let Some(value) = arg.strip_prefix("--stride-ms=") {
-                stride_ms = Some(
-                    value
-                        .parse::<usize>()
-                        .with_context(|| format!("parsing --stride-ms from '{value}'"))?,
-                );
-                continue;
-            }
-            if arg == "--stride-ms" {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--stride-ms requires a value"))?;
-                stride_ms = Some(
-                    value
-                        .parse::<usize>()
-                        .with_context(|| format!("parsing --stride-ms from '{value}'"))?,
-                );
-                continue;
-            }
-            if let Some(value) = arg.strip_prefix("--keep-boundary=") {
-                keep_boundary_policy = KeepBoundaryPolicy::parse(value)?;
-                continue;
-            }
-            if arg == "--keep-boundary" {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--keep-boundary requires a value"))?;
-                keep_boundary_policy = KeepBoundaryPolicy::parse(&value)?;
-                continue;
-            }
-            if let Some(value) = arg.strip_prefix("--rollback-ms=") {
-                rollback_ms = value
-                    .parse::<usize>()
-                    .with_context(|| format!("parsing --rollback-ms from '{value}'"))?;
-                continue;
-            }
-            if arg == "--rollback-ms" {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--rollback-ms requires a value"))?;
-                rollback_ms = value
-                    .parse::<usize>()
-                    .with_context(|| format!("parsing --rollback-ms from '{value}'"))?;
-                continue;
-            }
-            if let Some(value) = arg.strip_prefix("--mlx-cache-limit-mb=") {
-                mlx_cache_limit_mb = Some(
-                    value
-                        .parse::<usize>()
-                        .with_context(|| format!("parsing --mlx-cache-limit-mb from '{value}'"))?,
-                );
-                continue;
-            }
-            if arg == "--mlx-cache-limit-mb" {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--mlx-cache-limit-mb requires a value"))?;
-                mlx_cache_limit_mb = Some(
-                    value
-                        .parse::<usize>()
-                        .with_context(|| format!("parsing --mlx-cache-limit-mb from '{value}'"))?,
-                );
-                continue;
-            }
-            positional.push(arg);
+        if !args.wav_path.is_file() {
+            bail!("wav file not found: {}", args.wav_path.display());
         }
-
-        let wav_path = positional
-            .first()
-            .map(PathBuf::from)
-            .unwrap_or_else(default_wav_path);
-        let model_dir = env_path("BEE_ASR_MODEL_DIR")?;
-        let tokenizer_path =
-            env_path("BEE_TOKENIZER_PATH").unwrap_or_else(|_| model_dir.join("tokenizer.json"));
-        let language = positional
-            .get(1)
-            .cloned()
-            .unwrap_or_else(|| DEFAULT_LANGUAGE.to_string());
-        let max_new_tokens = positional
-            .get(2)
-            .map(|s| {
-                s.parse::<usize>()
-                    .with_context(|| format!("parsing max_new_tokens from '{s}'"))
-            })
-            .transpose()?
-            .unwrap_or(DEFAULT_MAX_NEW_TOKENS);
-
-        if !wav_path.is_file() {
-            bail!("wav file not found: {}", wav_path.display());
+        if !args.model_dir.is_dir() {
+            bail!("model dir not found: {}", args.model_dir.display());
         }
-        if !model_dir.is_dir() {
-            bail!("model dir not found: {}", model_dir.display());
+        if !args.tokenizer_path.is_file() {
+            bail!("tokenizer not found: {}", args.tokenizer_path.display());
         }
-        if !tokenizer_path.is_file() {
-            bail!("tokenizer not found: {}", tokenizer_path.display());
-        }
-
-        Ok(Self {
-            wav_path,
-            model_dir,
-            tokenizer_path,
-            language,
-            max_new_tokens,
-            context,
-            chunk_ms,
-            bridge_ms,
-            max_bridge_windows,
-            stride_ms,
-            keep_boundary_policy,
-            rollback_ms,
-            mlx_cache_limit_mb,
-        })
+        Ok(args)
     }
 }
 
+/// Available CLI modes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub(crate) enum Mode {
+    /// Sliding-window bridge replay mode.
+    SlidingWindowBridgeReplay,
+}
+
 /// Policy for snapping the keep boundary to a word edge.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
 pub(crate) enum KeepBoundaryPolicy {
     /// Keep boundary at the exact time-based position (no snapping).
     Fixed,
@@ -241,15 +104,6 @@ pub(crate) enum KeepBoundaryPolicy {
 }
 
 impl KeepBoundaryPolicy {
-    /// Parses a CLI string into a `KeepBoundaryPolicy`.
-    pub(crate) fn parse(value: &str) -> Result<Self> {
-        match value {
-            "fixed" => Ok(Self::Fixed),
-            "nearest-word-end" => Ok(Self::NearestWordEnd),
-            _ => bail!("unknown keep boundary policy: {value}"),
-        }
-    }
-
     /// Returns the CLI string representation.
     pub(crate) fn as_str(self) -> &'static str {
         match self {
