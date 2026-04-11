@@ -180,6 +180,117 @@ That is the geometry `bee-roll` is trying to express:
 - when `preview` gets large enough, the cutter promotes more of the right
   edge into `stable` and chooses a new `carry`
 
+## How Qwen3 Prompting Works Right Now
+
+This section describes the current local implementation in
+`bee-qwen3-asr` and `bee-kv`. It is not a theory section.
+
+Two details matter up front:
+
+1. the decoder is driven with chat-style prompt tokens
+2. the prompt contains audio placeholders, but the model does not consume
+   raw PCM "as tokens"
+
+The real flow is:
+
+1. audio samples are converted into mel features
+2. the audio encoder turns those into audio feature vectors
+3. the prompt contains `<|audio_pad|>` placeholders
+4. at prefill time, those placeholder embedding positions are replaced with
+   the encoded audio features
+
+So the prompt is text-and-special-tokens structure around an injected audio
+feature sequence.
+
+### Initial Prompt
+
+For the first decode step, `bee-qwen3-asr` builds this shape:
+
+```text
+<|im_start|>system
+{context}
+<|im_end|>
+<|im_start|>user
+<|audio_start|><|audio_pad|>*N<|audio_end|>
+<|im_end|>
+<|im_start|>assistant
+[language {lang}<asr_text>]
+```
+
+Notes:
+
+- `{context}` is optional
+- the `language {lang}<asr_text>` header is only present when language is
+  non-empty
+- `N` is the number of audio feature positions produced by the audio encoder,
+  not the number of PCM samples
+
+This is built by:
+
+- [generate.rs](/Users/amos/bearcove/bee/rust/bee-qwen3-asr/src/generate.rs)
+
+### Follow-Up Prompt
+
+For later decode steps, the base follow-up prompt is:
+
+```text
+<|im_end|>
+<|im_start|>user
+<|audio_start|><|audio_pad|>*N<|audio_end|>
+<|im_end|>
+<|im_start|>assistant
+[language {lang}<asr_text>]
+```
+
+That means the follow-up prompt explicitly closes the previous assistant
+turn, opens a new user turn with the next audio chunk, then opens a new
+assistant turn.
+
+### Where `carry` Goes
+
+The replayed `carry` text is not baked into `build_followup_prompt()`
+itself.
+
+Instead, `bee-kv` appends the carried token IDs after the follow-up prompt
+has been built:
+
+```text
+followup prompt
++ replayed carry token ids
+--------------------------------
+final prefill prompt for this step
+```
+
+So the effective follow-up prompt shape is:
+
+```text
+<|im_end|>
+<|im_start|>user
+<|audio_start|><|audio_pad|>*N<|audio_end|>
+<|im_end|>
+<|im_start|>assistant
+[language {lang}<asr_text>]
+{carry token ids}
+```
+
+That is the concrete mechanism behind the `stable / carry / preview` model:
+
+- `stable` survives in KV and is not replayed as text
+- `carry` is replayed as prompt tokens
+- `preview` is generated again after that prompt
+
+### Why This Matters For `bee-roll`
+
+`bee-roll` should model the actual split implied by the current decoder
+setup:
+
+- preserved prefix in KV
+- replayed bridge text in prompt tokens
+- regenerated right edge after the prompt
+
+That is why `carry` is a distinct region instead of just "the first part of
+preview".
+
 ## Why We Return More Than Text
 
 Text alone is not enough.
