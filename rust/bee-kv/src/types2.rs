@@ -18,10 +18,10 @@
 //! - every time is relative to the beginning of the utterance
 //! - `TimeRange` values are utterance-global, never window-local
 //! - audio buffers store utterance-global sample start plus owned samples
-//! - `TokenTrace.tokens` is the single source of truth for token order
+//! - `ChunkInfo.tokens` is the single source of truth for chunk token order
 //! - `TimedToken.starts_word` is present only on the first token of a word
 //! - if `TimedToken.starts_word` is `Some(len)`, then the next `len` tokens in the
-//!   same `TokenTrace` belong to that word
+//!   same `ChunkInfo` belong to that word
 //! - `Cut::At(index)` refers to an utterance-global token boundary, not a local
 //!   offset inside a chunk
 
@@ -346,24 +346,24 @@ pub(crate) struct TimedToken {
     pub(crate) starts_word_len: Option<TokenCount>,
 }
 
-/// The canonical token sequence for some utterance or utterance slice.
+/// The canonical aligned token sequence for a decodeable utterance slice.
 ///
 /// Invariants:
 /// - `tokens` is ordered by increasing `TimedToken.index`
 /// - indices are monotonically increasing without rebase
 /// - this vector is the single source of truth for token order
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct TokenTrace {
+pub(crate) struct ChunkInfo {
     /// Canonical utterance-global token sequence in strictly increasing index order.
     pub(crate) tokens: Vec<TimedToken>,
 }
 
-impl TokenTrace {
+impl ChunkInfo {
     pub(crate) fn new(tokens: Vec<TimedToken>) -> Self {
         for pair in tokens.windows(2) {
             assert!(
                 pair[0].index < pair[1].index,
-                "token trace indices must increase strictly"
+                "chunk token indices must increase strictly"
             );
         }
         Self { tokens }
@@ -373,14 +373,14 @@ impl TokenTrace {
         self.tokens.is_empty()
     }
 
-    /// Returns the utterance-global token span covered by this trace.
+    /// Returns the utterance-global token span covered by this chunk.
     pub(crate) fn token_range(&self) -> Option<UtteranceTokenRange> {
         let start = self.tokens.first()?.index;
         let end = TokenIndex::new(self.tokens.last()?.index.as_usize() + 1);
         Some(UtteranceTokenRange::new(start, end))
     }
 
-    /// Returns the utterance-global time span covered by this trace.
+    /// Returns the utterance-global time span covered by this chunk.
     pub(crate) fn time_range(&self) -> Option<TimeRange> {
         Some(TimeRange::new(
             self.tokens.first()?.span.start,
@@ -388,22 +388,22 @@ impl TokenTrace {
         ))
     }
 
-    /// Decodes the entire trace on demand through the process-global tokenizer.
+    /// Decodes the entire chunk on demand through the process-global tokenizer.
     pub(crate) fn decode_text(&self) -> Result<String> {
         decode_timed_tokens(&self.tokens)
     }
 
-    /// Decodes a sub-range of this trace on demand through the process-global tokenizer.
+    /// Decodes a sub-range of this chunk on demand through the process-global tokenizer.
     ///
     /// Invariants:
-    /// - `range` must lie within this trace's utterance-global token span
+    /// - `range` must lie within this chunk's utterance-global token span
     pub(crate) fn decode_range(&self, range: UtteranceTokenRange) -> Result<String> {
         let trace_range = self
             .token_range()
-            .ok_or_else(|| anyhow::anyhow!("cannot decode range from empty token trace"))?;
+            .ok_or_else(|| anyhow::anyhow!("cannot decode range from empty chunk"))?;
         if range.start < trace_range.start || range.end > trace_range.end {
             bail!(
-                "decode range {}..{} lies outside trace range {}..{}",
+                "decode range {}..{} lies outside chunk range {}..{}",
                 range.start,
                 range.end,
                 trace_range.start,
@@ -413,6 +413,80 @@ impl TokenTrace {
         let local_start = range.start.as_usize() - trace_range.start.as_usize();
         let local_end = range.end.as_usize() - trace_range.start.as_usize();
         decode_timed_tokens(&self.tokens[local_start..local_end])
+    }
+}
+
+/// Policy hook that decides where to cut a ready chunk.
+///
+/// Intent:
+/// - the cutter owns the small amount of business logic that chooses a cut
+/// - the cutter never mutates utterance state directly
+pub(crate) trait Cutter {
+    /// Chooses a cut for `chunk`.
+    ///
+    /// Invariant:
+    /// - returned cuts must refer to utterance-global token coordinates
+    fn cut(&mut self, chunk: &ChunkInfo) -> Cut;
+}
+
+/// Observer hook for utterance lifecycle events.
+///
+/// Intent:
+/// - side effects, logging, debug capture, and inspection live here
+/// - listeners observe state transitions; they do not decide cuts
+pub(crate) trait Listener {
+    /// Called when the utterance has produced a new chunk ready for a cut decision.
+    fn on_chunk(&mut self, _chunk: &ChunkInfo) {}
+
+    /// Called immediately after the utterance applies a cut.
+    fn on_cut(&mut self, _chunk: &ChunkInfo, _cut: Cut) {}
+}
+
+/// Streaming utterance state for the next rollback model.
+///
+/// Intent:
+/// - audio is the only public ingress
+/// - inference and chunk construction happen inside this type
+/// - cut application happens inside this type
+/// - external policy is delegated to [`Cutter`]
+/// - external observation is delegated to [`Listener`]
+///
+/// Non-goals:
+/// - this scaffold does not yet implement decode scheduling or cut application
+pub(crate) struct Utterance {
+    /// Buffered audio owned in utterance-global sample space.
+    pub(crate) audio: AudioBuffer,
+    /// Most recent chunk information made available for cutting.
+    pub(crate) chunk: Option<ChunkInfo>,
+    /// Boxed cut policy used by this utterance.
+    pub(crate) cutter: Box<dyn Cutter>,
+    /// Boxed event sink used by this utterance.
+    pub(crate) listener: Box<dyn Listener>,
+}
+
+impl Utterance {
+    /// Creates a new utterance with empty audio and no chunk yet.
+    pub(crate) fn new(cutter: Box<dyn Cutter>, listener: Box<dyn Listener>) -> Self {
+        Self {
+            audio: AudioBuffer::new(SampleIndex::new(0), Vec::new()),
+            chunk: None,
+            cutter,
+            listener,
+        }
+    }
+
+    /// Appends audio to the utterance.
+    ///
+    /// Intent:
+    /// - audio is the only public input into utterance state
+    /// - future implementations will decide internally when enough audio exists
+    ///   to run inference and refresh [`ChunkInfo`]
+    pub(crate) fn push_audio(&mut self, buffer: AudioBuffer) {
+        if self.audio.is_empty() {
+            self.audio = buffer;
+        } else {
+            self.audio.push_end(buffer);
+        }
     }
 }
 
