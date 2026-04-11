@@ -6,7 +6,7 @@ use mlx_rs::module::Module;
 use mlx_rs::nn;
 use mlx_rs::ops;
 use mlx_rs::ops::concatenate_axis;
-use mlx_rs::ops::indexing::{IndexOp, argmax_axis};
+use mlx_rs::ops::indexing::{IndexOp, TryIndexMutOp, argmax_axis};
 
 use crate::config::T5Config;
 
@@ -63,24 +63,33 @@ impl KvCache {
         }
 
         let new_len = k.shape()[2];
+        let start = self.len;
+        let end = start + new_len;
 
-        match (&self.keys, &self.values) {
-            (Some(_buf_k), Some(_buf_v)) if self.len > 0 => {
-                // Append to existing cache via concatenation on the preallocated buffer
+        match (&mut self.keys, &mut self.values) {
+            (Some(buf_k), Some(buf_v)) if buf_k.shape()[2] >= end && buf_v.shape()[2] >= end => {
+                buf_k.try_index_mut((.., .., start..end, ..), &k)?;
+                buf_v.try_index_mut((.., .., start..end, ..), &v)?;
+                self.len = end;
+                let filled_k = buf_k.index((.., .., ..end, ..));
+                let filled_v = buf_v.index((.., .., ..end, ..));
+                Ok((filled_k, filled_v))
+            }
+            (Some(_), Some(_)) if self.len > 0 => {
+                // Fallback for dynamically grown caches without spare capacity.
                 let prev_k = self.keys.take().unwrap();
                 let prev_v = self.values.take().unwrap();
-                // Slice to filled portion and concatenate
                 let filled_k = prev_k.index((.., .., ..self.len, ..));
                 let filled_v = prev_v.index((.., .., ..self.len, ..));
                 let new_k = concatenate_axis(&[filled_k, k], 2)?;
                 let new_v = concatenate_axis(&[filled_v, v], 2)?;
-                self.len += new_len;
+                self.len = end;
                 self.keys = Some(new_k.clone());
                 self.values = Some(new_v.clone());
                 Ok((new_k, new_v))
             }
             _ => {
-                self.len = new_len;
+                self.len = end;
                 self.keys = Some(k.clone());
                 self.values = Some(v.clone());
                 Ok((k, v))
@@ -127,6 +136,26 @@ impl DecoderCache {
             layers,
             position_bias: None,
         }
+    }
+
+    pub fn with_preallocated_self_attn(
+        num_layers: usize,
+        batch_size: i32,
+        num_heads: i32,
+        max_len: i32,
+        d_kv: i32,
+    ) -> Result<Self, Exception> {
+        let mut layers = Vec::with_capacity(num_layers);
+        for _ in 0..num_layers {
+            layers.push(DecoderLayerCache {
+                self_attn: KvCache::preallocated(batch_size, num_heads, max_len, d_kv)?,
+                cross_attn: KvCache::default(),
+            });
+        }
+        Ok(Self {
+            layers,
+            position_bias: None,
+        })
     }
 }
 
@@ -967,7 +996,13 @@ impl T5ForConditionalGeneration {
         let encoder_output = self.encode(input_ids)?;
         encoder_output.eval()?;
 
-        let mut cache = DecoderCache::new(self.config.num_decoder_layers as usize);
+        let mut cache = DecoderCache::with_preallocated_self_attn(
+            self.config.num_decoder_layers as usize,
+            1,
+            self.config.num_heads,
+            max_length,
+            self.config.d_kv,
+        )?;
         let mut generated = Vec::new();
         let start_token = self.config.decoder_start_token_id;
         let mut current_ids = Array::from_int(start_token).reshape(&[1, 1])?;
@@ -1015,7 +1050,13 @@ impl T5ForConditionalGeneration {
             ops::r#where(&mask_2d.as_type::<bool>()?, &zero, &neg_inf)?
         };
 
-        let mut cache = DecoderCache::new(self.config.num_decoder_layers as usize);
+        let mut cache = DecoderCache::with_preallocated_self_attn(
+            self.config.num_decoder_layers as usize,
+            batch_size as i32,
+            self.config.num_heads,
+            max_length,
+            self.config.d_kv,
+        )?;
         let mut generated: Vec<Vec<i32>> = vec![Vec::new(); batch_size];
         let mut finished = vec![false; batch_size];
 
@@ -1034,13 +1075,14 @@ impl T5ForConditionalGeneration {
             )?;
             let logits = self.lm_head.forward(&hidden)?;
             // next_ids: [batch, 1]
-            let next_ids = argmax_axis(&logits.index((.., -1, ..)), -1, None)?;
+            let next_ids = argmax_axis(&logits.index((.., -1, ..)), -1, None)?.as_type::<i32>()?;
             next_ids.eval()?;
+            let next_ids_host = next_ids.as_slice::<i32>();
 
             let mut all_done = true;
             let mut next_tokens = Vec::with_capacity(batch_size);
             for i in 0..batch_size {
-                let token_id: i32 = next_ids.index((i as i32,)).item();
+                let token_id = next_ids_host[i];
                 if !finished[i] {
                     if token_id == self.config.eos_token_id {
                         finished[i] = true;
