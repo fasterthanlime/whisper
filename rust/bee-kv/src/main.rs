@@ -3512,10 +3512,10 @@ fn timed_generated_bridge_for_cuts(
                 start_secs,
                 end_secs,
             } => {
-                if start_secs < keep_until_secs {
+                if end_secs <= keep_until_secs {
                     effective_kept_end_word = Some(index);
                 }
-                if end_secs > keep_until_secs && start_secs < replay_until_secs {
+                if start_secs >= keep_until_secs && start_secs < replay_until_secs {
                     effective_bridge_start_word.get_or_insert(index);
                     effective_bridge_end_word = Some(index);
                 }
@@ -3523,7 +3523,7 @@ fn timed_generated_bridge_for_cuts(
                     if end_secs <= keep_until_secs {
                         kept_word_count += 1;
                     }
-                    if end_secs > keep_until_secs && start_secs < replay_until_secs {
+                    if start_secs >= keep_until_secs && start_secs < replay_until_secs {
                         bridge_word_count += 1;
                         bridge_words.push(CarriedBridgeWord {
                             text: word_timing.word.to_string(),
@@ -3559,20 +3559,13 @@ fn timed_generated_bridge_for_cuts(
         generated_transcript[..end].trim_end().to_string()
     };
 
-    let stalled_on_carried_prefix =
-        generated_kept_text.is_empty() && !kept_text.is_empty() && replayed_prefix.is_some();
-
     let bridge = if let (Some(start_word_index), Some(end_word_index)) =
         (effective_bridge_start_word, effective_bridge_end_word)
     {
-        let start = if stalled_on_carried_prefix {
-            0
-        } else {
-            combined_word_ranges
-                .get(start_word_index)
-                .map(|word| word.char_start)
-                .ok_or_else(|| anyhow::anyhow!("missing effective bridge word start"))?
-        };
+        let start = combined_word_ranges
+            .get(start_word_index)
+            .map(|word| word.char_start)
+            .ok_or_else(|| anyhow::anyhow!("missing effective bridge word start"))?;
         let end = combined_word_ranges
             .get(end_word_index)
             .map(|word| word.char_end)
@@ -3582,16 +3575,9 @@ fn timed_generated_bridge_for_cuts(
             words: bridge_words,
         }
     } else if bridge_word_count == 0 {
-        if stalled_on_carried_prefix {
-            CarriedBridge {
-                text: replayed_prefix.unwrap_or_default().to_string(),
-                words: Vec::new(),
-            }
-        } else {
-            CarriedBridge {
-                text: String::new(),
-                words: Vec::new(),
-            }
+        CarriedBridge {
+            text: String::new(),
+            words: Vec::new(),
         }
     } else {
         let start = generated_word_ranges
