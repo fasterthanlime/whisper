@@ -161,7 +161,9 @@ impl TimedToken {
 /// One ASR alternative for a decoded token.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AsrTokenAlternative {
+    /// Candidate token ID proposed by the ASR decoder for this position.
     token: TokenId,
+    /// Raw decoder logit for this candidate.
     logit: f32,
 }
 
@@ -182,8 +184,11 @@ impl AsrTokenAlternative {
 /// Token-level ASR confidence and candidate data.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AsrTokenConfidence {
+    /// Winner-vs-pack confidence signal derived from the ASR top-k logits.
     concentration: f32,
+    /// Difference between the top-1 and top-2 logits.
     margin: f32,
+    /// Ranked decoder alternatives for this token position.
     alternatives: Vec<AsrTokenAlternative>,
 }
 
@@ -216,6 +221,7 @@ impl AsrTokenConfidence {
 /// G2P-derived IPA for one decoded token.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct G2pTokenIpa {
+    /// IPA string derived from the decoded token text through G2P.
     ipa: CompactString,
 }
 
@@ -232,8 +238,11 @@ impl G2pTokenIpa {
 /// One ZIPA phone span aligned back onto a decoded token.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ZipaPhoneSpan {
+    /// Acoustic phone label produced by ZIPA for this span.
     phone: CompactString,
+    /// Utterance-global start time of this phone span.
     start: UtteranceTime,
+    /// Utterance-global end time of this phone span.
     end: UtteranceTime,
 }
 
@@ -259,9 +268,13 @@ impl ZipaPhoneSpan {
 /// - no parallel public slices
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutputToken {
+    /// Canonical utterance-global token and timing anchor.
     timed_token: TimedToken,
+    /// Token-level ASR confidence and ranked alternatives for this token, when available.
     asr_confidence: Option<AsrTokenConfidence>,
+    /// G2P-derived IPA for this token, when available.
     g2p_ipa: Option<G2pTokenIpa>,
+    /// One or more ZIPA phone spans aligned back onto this token.
     zipa_phone_spans: Vec<ZipaPhoneSpan>,
 }
 
@@ -300,7 +313,9 @@ impl OutputToken {
 /// Borrowed view of the current utterance output after one feed step.
 #[derive(Clone, Copy, Debug)]
 pub struct FeedOutput<'a> {
+    /// Full current token-aligned output tape after the feed step.
     tokens: &'a [OutputToken],
+    /// Detected language for the current utterance state, when available.
     detected_language: Option<&'a str>,
 }
 
