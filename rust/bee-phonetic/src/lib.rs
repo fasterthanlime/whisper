@@ -20,8 +20,8 @@ pub use dataset::{
 };
 pub use feature_view::{
     FeatureEditKind, FeatureEditOp, FeatureSimilarityDetails, feature_similarity,
-    feature_similarity_from_vectors, feature_tokens_for_ipa, feature_vector_for_token,
-    feature_vectors_for_ipa,
+    feature_similarity_for_tokens, feature_similarity_from_vectors, feature_tokens_for_ipa,
+    feature_vector_for_token, feature_vectors_for_ipa,
 };
 pub use phonetic_index::{
     IndexView, PhoneticIndex, RetrievalCandidate, RetrievalQuery, build_index, query_index,

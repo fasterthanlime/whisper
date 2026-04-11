@@ -36,6 +36,12 @@ pub struct InferenceOutput {
     pub tokens: Vec<String>,
 }
 
+pub struct GreedyInferenceOutput {
+    pub frame_count: usize,
+    pub token_ids: Vec<usize>,
+    pub tokens: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PhoneSpan {
     pub token_id: usize,
@@ -161,7 +167,7 @@ impl ZipaInference {
         ))
     }
 
-    pub fn forward_features(&self, features: &Array) -> Result<(Array, usize)> {
+    fn forward_encoder(&self, features: &Array) -> Result<Array> {
         let mut x = self.model.forward_frontend(features)?;
         x = x.transpose_axes(&[1, 0, 2])?;
         let mut outputs = Vec::with_capacity(6);
@@ -173,7 +179,11 @@ impl ZipaInference {
             x = stage.forward(&x)?;
             outputs.push(x.clone());
         }
-        let full_dim = get_full_dim_output(&outputs, &self.config.encoder_dim)?;
+        get_full_dim_output(&outputs, &self.config.encoder_dim)
+    }
+
+    pub fn forward_features(&self, features: &Array) -> Result<(Array, usize)> {
+        let full_dim = self.forward_encoder(features)?;
         let log_probs = self
             .model
             .ctc_head
@@ -193,6 +203,16 @@ impl ZipaInference {
         self.infer_audio(&audio)
     }
 
+    pub fn infer_audio_greedy(&self, audio: &AudioBuffer) -> Result<GreedyInferenceOutput> {
+        let features = self.features_from_audio(audio)?;
+        self.infer_features_greedy(&features)
+    }
+
+    pub fn infer_wav_greedy(&self, wav_path: impl AsRef<Path>) -> Result<GreedyInferenceOutput> {
+        let audio = load_wav_mono_f32(wav_path)?;
+        self.infer_audio_greedy(&audio)
+    }
+
     pub fn infer_features(&self, features: &Array) -> Result<InferenceOutput> {
         let (log_probs, log_probs_len) = self.forward_features(features)?;
         let best_ids = argmax_axis(log_probs.index((0, .., ..)), -1, false)?;
@@ -205,6 +225,28 @@ impl ZipaInference {
         Ok(InferenceOutput {
             log_probs,
             log_probs_len,
+            token_ids,
+            tokens,
+        })
+    }
+
+    pub fn infer_features_greedy(&self, features: &Array) -> Result<GreedyInferenceOutput> {
+        let full_dim = self.forward_encoder(features)?;
+        let frame_count = full_dim.shape()[0] as usize;
+        let logits = self
+            .model
+            .ctc_head
+            .forward_logits(&full_dim)?
+            .transpose_axes(&[1, 0, 2])?;
+        let best_ids = argmax_axis(logits.index((0, .., ..)), -1, false)?;
+        let token_ids = best_ids
+            .as_slice::<u32>()
+            .iter()
+            .map(|&id| id as usize)
+            .collect::<Vec<_>>();
+        let tokens = self.tokens.decode_ctc_greedy(&token_ids, 0);
+        Ok(GreedyInferenceOutput {
+            frame_count,
             token_ids,
             tokens,
         })
@@ -266,55 +308,88 @@ impl InferenceOutput {
         total_duration_secs: f64,
         blank_id: usize,
     ) -> Vec<PhoneSpan> {
-        if self.log_probs_len == 0 || self.token_ids.is_empty() || total_duration_secs <= 0.0 {
-            return Vec::new();
-        }
-
-        let seconds_per_frame = total_duration_secs / self.log_probs_len as f64;
-        let mut spans = Vec::new();
-        let mut frame = 0usize;
-        let mut prev_nonblank = None;
-
-        while frame < self.token_ids.len() {
-            let token_id = self.token_ids[frame];
-            if token_id == blank_id {
-                prev_nonblank = None;
-                frame += 1;
-                continue;
-            }
-
-            if prev_nonblank == Some(token_id) {
-                frame += 1;
-                continue;
-            }
-
-            let start_frame = frame;
-            frame += 1;
-            while frame < self.token_ids.len() && self.token_ids[frame] == token_id {
-                frame += 1;
-            }
-            let end_frame = frame;
-            prev_nonblank = Some(token_id);
-
-            let Some(token) = token_table.get(token_id) else {
-                continue;
-            };
-            if token.is_empty() {
-                continue;
-            }
-
-            spans.push(PhoneSpan {
-                token_id,
-                token: token.to_owned(),
-                start_frame,
-                end_frame,
-                start_time_secs: start_frame as f64 * seconds_per_frame,
-                end_time_secs: end_frame as f64 * seconds_per_frame,
-            });
-        }
-
-        spans
+        derive_phone_spans_from_ids(
+            self.log_probs_len,
+            &self.token_ids,
+            token_table,
+            total_duration_secs,
+            blank_id,
+        )
     }
+}
+
+impl GreedyInferenceOutput {
+    pub fn derive_phone_spans(
+        &self,
+        token_table: &TokenTable,
+        total_duration_secs: f64,
+        blank_id: usize,
+    ) -> Vec<PhoneSpan> {
+        derive_phone_spans_from_ids(
+            self.frame_count,
+            &self.token_ids,
+            token_table,
+            total_duration_secs,
+            blank_id,
+        )
+    }
+}
+
+fn derive_phone_spans_from_ids(
+    frame_count: usize,
+    token_ids: &[usize],
+    token_table: &TokenTable,
+    total_duration_secs: f64,
+    blank_id: usize,
+) -> Vec<PhoneSpan> {
+    if frame_count == 0 || token_ids.is_empty() || total_duration_secs <= 0.0 {
+        return Vec::new();
+    }
+
+    let seconds_per_frame = total_duration_secs / frame_count as f64;
+    let mut spans = Vec::new();
+    let mut frame = 0usize;
+    let mut prev_nonblank = None;
+
+    while frame < token_ids.len() {
+        let token_id = token_ids[frame];
+        if token_id == blank_id {
+            prev_nonblank = None;
+            frame += 1;
+            continue;
+        }
+
+        if prev_nonblank == Some(token_id) {
+            frame += 1;
+            continue;
+        }
+
+        let start_frame = frame;
+        frame += 1;
+        while frame < token_ids.len() && token_ids[frame] == token_id {
+            frame += 1;
+        }
+        let end_frame = frame;
+        prev_nonblank = Some(token_id);
+
+        let Some(token) = token_table.get(token_id) else {
+            continue;
+        };
+        if token.is_empty() {
+            continue;
+        }
+
+        spans.push(PhoneSpan {
+            token_id,
+            token: token.to_owned(),
+            start_frame,
+            end_frame,
+            start_time_secs: start_frame as f64 * seconds_per_frame,
+            end_time_secs: end_frame as f64 * seconds_per_frame,
+        });
+    }
+
+    spans
 }
 
 fn collect_prefixed_parameters<M: ModuleParameters>(

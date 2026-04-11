@@ -4,8 +4,9 @@ use crate::g2p::CachedEspeakG2p;
 use bee_phonetic::{
     AlignmentOp, ComparisonToken, TokenAlignment, align_token_sequences,
     align_token_sequences_with_left_word_boundaries, feature_similarity,
-    normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans, phoneme_similarity,
-    sentence_word_tokens, top_right_anchor_windows,
+    feature_similarity_for_tokens, normalize_ipa_for_comparison,
+    normalize_ipa_for_comparison_with_spans, phoneme_similarity, sentence_word_tokens,
+    top_right_anchor_windows,
 };
 use bee_zipa_mlx::audio::AudioBuffer as ZipaAudioBuffer;
 use bee_zipa_mlx::infer::{PhoneSpan, ZipaInference};
@@ -754,7 +755,7 @@ fn insert_run_penalty<'a>(tokens: impl Iterator<Item = &'a str>) -> f32 {
 }
 
 fn token_affinity(left: &str, right: &str) -> f32 {
-    feature_similarity(&[left.to_string()], &[right.to_string()])
+    feature_similarity_for_tokens(left, right)
         .or_else(|| phoneme_similarity(&[left.to_string()], &[right.to_string()]))
         .unwrap_or(0.0)
         .max(0.0)
@@ -996,7 +997,7 @@ impl TranscriptAlignment {
         zipa: &ZipaInference,
     ) -> Result<Self, AlignmentError> {
         let utterance = zipa
-            .infer_audio(audio)
+            .infer_audio_greedy(audio)
             .map_err(|e| AlignmentError::Zipa(e.to_string()))?;
 
         let duration = audio.samples.len() as f64 / audio.sample_rate_hz as f64;

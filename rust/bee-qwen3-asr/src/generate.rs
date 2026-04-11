@@ -34,6 +34,27 @@ pub enum ConfidenceMode {
     Full,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodeStopReason {
+    EosFirstToken,
+    MaxNewTokensFirstToken,
+    Eos,
+    Repetition,
+    MaxNewTokens,
+}
+
+impl DecodeStopReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DecodeStopReason::EosFirstToken => "eos_first_token",
+            DecodeStopReason::MaxNewTokensFirstToken => "max_new_tokens_first_token",
+            DecodeStopReason::Eos => "eos",
+            DecodeStopReason::Repetition => "repetition",
+            DecodeStopReason::MaxNewTokens => "max_new_tokens",
+        }
+    }
+}
+
 /// Per-token confidence information extracted during decoding.
 ///
 /// Stores the top-k token alternatives and their raw logits.
@@ -209,7 +230,7 @@ pub fn prefill_and_decode(
     start_position: usize,
     max_new_tokens: usize,
     confidence_mode: ConfidenceMode,
-) -> Result<(Vec<TokenId>, Vec<TokenConfidence>, usize), Exception> {
+) -> Result<(Vec<TokenId>, Vec<TokenConfidence>, usize, DecodeStopReason), Exception> {
     let seq_len = prompt_tokens.len();
     let input_ids = Array::from_slice(prompt_tokens, &[1, seq_len as i32]);
 
@@ -245,11 +266,17 @@ pub fn prefill_and_decode(
             generated.push(token);
             confidences.push(tlp);
         }
-        return Ok((generated, confidences, position));
+        let stop_reason = if is_eos(token) {
+            DecodeStopReason::EosFirstToken
+        } else {
+            DecodeStopReason::MaxNewTokensFirstToken
+        };
+        return Ok((generated, confidences, position, stop_reason));
     }
 
     generated.push(token);
     confidences.push(tlp);
+    let mut stop_reason = DecodeStopReason::MaxNewTokens;
 
     // Autoregressive decode — each step adds the token to the cache
     for _ in 1..max_new_tokens {
@@ -266,6 +293,7 @@ pub fn prefill_and_decode(
         token = tlp.token_id;
 
         if is_eos(token) {
+            stop_reason = DecodeStopReason::Eos;
             break; // EOS not fed into cache
         }
 
@@ -273,6 +301,7 @@ pub fn prefill_and_decode(
         confidences.push(tlp);
 
         if detect_repetition(&generated) {
+            stop_reason = DecodeStopReason::Repetition;
             break;
         }
 
@@ -281,7 +310,7 @@ pub fn prefill_and_decode(
         }
     }
 
-    Ok((generated, confidences, position))
+    Ok((generated, confidences, position, stop_reason))
 }
 
 /// Score an existing generated continuation against a prompt.

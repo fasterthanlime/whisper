@@ -7,6 +7,8 @@ use rspanphon::featuretable::FeatureTable;
 
 static FEATURE_TABLE: OnceLock<FeatureTable> = OnceLock::new();
 static FEATURE_VECTOR_CACHE: OnceLock<Mutex<HashMap<String, Option<Vec<f32>>>>> = OnceLock::new();
+static TOKEN_SIMILARITY_CACHE: OnceLock<Mutex<HashMap<(String, String), Option<f32>>>> =
+    OnceLock::new();
 
 pub fn feature_tokens_for_ipa(ipa_tokens: &[String]) -> Vec<String> {
     let table = FEATURE_TABLE.get_or_init(FeatureTable::new);
@@ -24,9 +26,41 @@ pub fn feature_similarity(a: &[String], b: &[String]) -> Option<f32> {
         return None;
     }
 
+    if a.len() == 1 && b.len() == 1 {
+        return feature_similarity_for_tokens(&a[0], &b[0]);
+    }
+
     let a_vecs = feature_vectors_for_ipa(a);
     let b_vecs = feature_vectors_for_ipa(b);
     feature_similarity_from_vectors(&a_vecs, &b_vecs, a.len().max(b.len()))
+}
+
+pub fn feature_similarity_for_tokens(left: &str, right: &str) -> Option<f32> {
+    let key = if left <= right {
+        (left.to_string(), right.to_string())
+    } else {
+        (right.to_string(), left.to_string())
+    };
+    let cache = TOKEN_SIMILARITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    {
+        let guard = cache.lock().expect("token similarity cache poisoned");
+        if let Some(cached) = guard.get(&key) {
+            return *cached;
+        }
+    }
+
+    let left_vec = feature_vector_for_token(left)?;
+    let right_vec = feature_vector_for_token(right)?;
+    let similarity = feature_similarity_from_vectors(
+        std::slice::from_ref(&left_vec),
+        std::slice::from_ref(&right_vec),
+        1,
+    );
+    cache
+        .lock()
+        .expect("token similarity cache poisoned")
+        .insert(key, similarity);
+    similarity
 }
 
 pub fn feature_vectors_for_ipa(ipa_tokens: &[String]) -> Vec<Vec<f32>> {

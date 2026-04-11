@@ -612,7 +612,7 @@ impl DecodeSession {
         // Generate
         let generate_start = phase_start();
         let mut cache = None;
-        let (generated, logprobs, _) = generate::prefill_and_decode(
+        let (generated, logprobs, _, _) = generate::prefill_and_decode(
             model,
             &prompt,
             audio_features,
@@ -688,7 +688,7 @@ impl DecodeSession {
 
         let generate_start = phase_start();
         let token_start = self.tokens.len();
-        let (generated, logprobs, next_position) = generate::prefill_and_decode(
+        let (generated, logprobs, next_position, _) = generate::prefill_and_decode(
             model,
             &prompt,
             audio_features,

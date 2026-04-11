@@ -51,10 +51,12 @@ impl KVCache {
         {
             let key_cache = self.keys[layer_idx].as_mut().unwrap();
             key_cache.index_mut((.., .., current_len as i32..needed_len as i32, ..), key);
+            key_cache.eval()?;
         }
         {
             let value_cache = self.values[layer_idx].as_mut().unwrap();
             value_cache.index_mut((.., .., current_len as i32..needed_len as i32, ..), value);
+            value_cache.eval()?;
         }
         self.lengths[layer_idx] = needed_len;
 
@@ -98,6 +100,16 @@ impl KVCache {
         while new_capacity < needed_len {
             new_capacity *= 2;
         }
+        tracing::info!(
+            target: "bee_kv_cache",
+            layer_idx,
+            current_capacity,
+            current_len = self.lengths[layer_idx],
+            append_len = key_shape[2] as usize,
+            needed_len,
+            new_capacity,
+            "kv cache resize"
+        );
 
         let mut new_keys = ops::zeros_dtype(
             &[

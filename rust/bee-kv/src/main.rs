@@ -1,12 +1,16 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use bee_phonetic::sentence_word_tokens;
 use bee_qwen3_asr::config::AsrConfig;
 use bee_qwen3_asr::generate::{
-    ConfidenceMode, build_followup_prompt, build_initial_prompt, prefill_and_decode,
+    ConfidenceMode, DecodeStopReason, build_followup_prompt, build_initial_prompt,
+    prefill_and_decode,
 };
 use bee_qwen3_asr::load;
 use bee_qwen3_asr::mel::{MelExtractor, load_audio};
@@ -42,6 +46,13 @@ const BOUNDARY_SWEEP_OFFSETS: [isize; 13] =
     [-48, -44, -40, -36, -32, -28, -24, -20, -16, -12, -8, -4, 0];
 
 fn main() -> Result<()> {
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let interrupted_for_handler = Arc::clone(&interrupted);
+    ctrlc::set_handler(move || {
+        interrupted_for_handler.store(true, Ordering::SeqCst);
+    })
+    .context("installing Ctrl-C handler")?;
+
     let args = Args::parse()?;
     if let Some(limit_mb) = args.mlx_cache_limit_mb {
         let limit_bytes = limit_mb
@@ -243,10 +254,12 @@ fn main() -> Result<()> {
                 args.max_new_tokens,
                 args.chunk_ms,
                 args.bridge_ms,
+                args.max_bridge_windows,
                 args.stride_ms,
                 args.keep_boundary_policy,
                 args.rollback_ms,
                 &args.wav_path,
+                &interrupted,
             )?;
             print_summary(&summary);
             print_sliding_window_timed_rollback_experiment(&experiment);
@@ -350,7 +363,7 @@ fn decode_prompt(
     label: String,
 ) -> Result<ExperimentResult> {
     let mut cache = None;
-    let (generated, _confidence, _next_position) = prefill_and_decode(
+    let (generated, _confidence, _next_position, _stop_reason) = prefill_and_decode(
         model,
         &prompt_tokens,
         audio_features,
@@ -745,6 +758,7 @@ fn decode_sliding_window_timed_rollback(
         window_runs,
         html_path,
         committed_timeline_path,
+        interrupted_early: false,
     })
 }
 
@@ -876,6 +890,7 @@ fn decode_sliding_window_full_replay(
         window_runs,
         html_path,
         committed_timeline_path,
+        interrupted_early: false,
     })
 }
 
@@ -889,10 +904,12 @@ fn decode_sliding_window_bridge_replay(
     max_new_tokens: usize,
     chunk_ms: usize,
     bridge_ms: usize,
+    max_bridge_windows: usize,
     stride_ms: Option<usize>,
     keep_boundary_policy: KeepBoundaryPolicy,
     rollback_ms: usize,
     wav_path: &Path,
+    interrupted: &Arc<AtomicBool>,
 ) -> Result<SlidingWindowTimedRollbackExperimentResult> {
     let window_samples = ms_to_samples(chunk_ms)?;
     let rollback_samples = ms_to_samples(rollback_ms)?;
@@ -951,13 +968,21 @@ fn decode_sliding_window_bridge_replay(
     let mut window_index = 0usize;
     let mut unresolved_keep_samples = committed_samples;
     let mut align_ctx = AlignmentContext::new()?;
+    let mut interrupted_early = false;
 
     while next_window_start < samples.len() {
-        if window_index >= MAX_BRIDGE_WINDOWS {
+        if interrupted.load(Ordering::SeqCst) {
+            interrupted_early = true;
+            eprintln!(
+                "interrupt received: stopping before chunk {window_index} and writing reports"
+            );
+            break;
+        }
+        if window_index >= max_bridge_windows {
             bail!(
                 "bridge replay reached {} windows, exceeding limit of {}; increase stride or chunk size",
                 window_index,
-                MAX_BRIDGE_WINDOWS
+                max_bridge_windows
             );
         }
 
@@ -970,14 +995,15 @@ fn decode_sliding_window_bridge_replay(
         let chunk_samples = &samples[window.start_sample..window.end_sample];
         let replayed_prefix = replay_prefix_for_next.clone();
         println!(
-            "decoding chunk {window_index}: audio={}..{}ms samples={} replayed_prefix_words={}",
+            "decoding chunk {window_index}: audio={}..{}ms samples={} replayed_prefix_words={} start_position={}",
             (window.start_sample * 1000) / SAMPLE_RATE as usize,
             (window.end_sample * 1000) / SAMPLE_RATE as usize,
             chunk_samples.len(),
             replayed_prefix
                 .as_ref()
                 .map(|prefix| sentence_word_tokens(&prefix.text).len())
-                .unwrap_or(0)
+                .unwrap_or(0),
+            start_position,
         );
         let chunk_run = decode_chunk_followup_step(
             model,
@@ -995,18 +1021,34 @@ fn decode_sliding_window_bridge_replay(
             window.end_sample,
             replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
         )?;
+        println!(
+            "decoded chunk {window_index}: decode_ms={:.1} start_position={} end_position={} generated_tokens={} stop_reason={}",
+            chunk_run.decode_ms,
+            chunk_run.start_position,
+            chunk_run.end_position,
+            chunk_run.generated_tokens,
+            chunk_run.stop_reason.as_str(),
+        );
 
         let has_next_window = window.end_sample < samples.len();
         let rollback = if has_next_window {
+            let generated_transcript = chunk_run.transcript.trim();
+            let combined_transcript =
+                match replayed_prefix.as_ref().map(|prefix| prefix.text.trim()) {
+                    Some(prefix) if !prefix.is_empty() && !generated_transcript.is_empty() => {
+                        format!("{prefix} {generated_transcript}")
+                    }
+                    Some(prefix) if !prefix.is_empty() => prefix.to_string(),
+                    _ => generated_transcript.to_string(),
+                };
+            let alignment =
+                build_transcript_alignment(&mut align_ctx, &combined_transcript, chunk_samples)?;
             let target_keep_until_secs = unresolved_keep_samples as f64 / SAMPLE_RATE as f64;
             let replay_until_secs =
                 (unresolved_keep_samples + bridge_samples) as f64 / SAMPLE_RATE as f64;
             let (candidate_keep_until_secs, keep_boundary_debug) = adjust_keep_boundary_secs(
-                &mut align_ctx,
                 keep_boundary_policy,
-                replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
-                &chunk_run,
-                chunk_samples,
+                &alignment,
                 target_keep_until_secs,
                 replay_until_secs,
             )?;
@@ -1018,11 +1060,11 @@ fn decode_sliding_window_bridge_replay(
                 None
             };
             let split = timed_generated_bridge_for_cuts(
-                &mut align_ctx,
                 tokenizer,
                 replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
-                &chunk_run,
-                chunk_samples,
+                generated_transcript,
+                &combined_transcript,
+                &alignment,
                 keep_until_secs.unwrap_or(0.0),
                 replay_until_secs,
             )?;
@@ -1098,6 +1140,7 @@ fn decode_sliding_window_bridge_replay(
         window_runs,
         html_path,
         committed_timeline_path,
+        interrupted_early,
     })
 }
 
@@ -1475,6 +1518,7 @@ fn decode_chunk_followup_step(
     end_sample: usize,
     replay_text_prefix: Option<&str>,
 ) -> Result<ChunkRun> {
+    let decode_start = Instant::now();
     let (mel_data, n_mels, n_frames) = mel_extractor
         .extract(chunk_samples)
         .with_context(|| format!("extracting log-mel for chunk {chunk_index}"))?;
@@ -1502,7 +1546,7 @@ fn decode_chunk_followup_step(
     }
 
     let prompt_len = prompt_tokens.len();
-    let (generated, _confidence, end_position) = prefill_and_decode(
+    let (generated, _confidence, end_position, stop_reason) = prefill_and_decode(
         model,
         &prompt_tokens,
         &audio_features,
@@ -1529,6 +1573,8 @@ fn decode_chunk_followup_step(
         generated_tokens: generated.len(),
         transcript,
         sample_count: chunk_samples.len(),
+        decode_ms: decode_start.elapsed().as_secs_f64() * 1000.0,
+        stop_reason,
         start_position,
         end_position,
         start_sample,
@@ -1683,6 +1729,7 @@ struct Args {
     mode: Mode,
     chunk_ms: usize,
     bridge_ms: usize,
+    max_bridge_windows: usize,
     stride_ms: Option<usize>,
     keep_boundary_policy: KeepBoundaryPolicy,
     rollback_ms: usize,
@@ -1700,6 +1747,7 @@ impl Args {
         let mut context = String::new();
         let mut chunk_ms = DEFAULT_CHUNK_MS;
         let mut bridge_ms = DEFAULT_BRIDGE_MS;
+        let mut max_bridge_windows = MAX_BRIDGE_WINDOWS;
         let mut stride_ms = DEFAULT_STRIDE_MS;
         let mut keep_boundary_policy = DEFAULT_KEEP_BOUNDARY_POLICY;
         let mut rollback_ms = DEFAULT_ROLLBACK_MS;
@@ -1764,6 +1812,21 @@ impl Args {
                 bridge_ms = value
                     .parse::<usize>()
                     .with_context(|| format!("parsing --bridge-ms from '{value}'"))?;
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--max-bridge-windows=") {
+                max_bridge_windows = value
+                    .parse::<usize>()
+                    .with_context(|| format!("parsing --max-bridge-windows from '{value}'"))?;
+                continue;
+            }
+            if arg == "--max-bridge-windows" {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--max-bridge-windows requires a value"))?;
+                max_bridge_windows = value
+                    .parse::<usize>()
+                    .with_context(|| format!("parsing --max-bridge-windows from '{value}'"))?;
                 continue;
             }
             if let Some(value) = arg.strip_prefix("--stride-ms=") {
@@ -1929,6 +1992,7 @@ impl Args {
             mode,
             chunk_ms,
             bridge_ms,
+            max_bridge_windows,
             stride_ms,
             keep_boundary_policy,
             rollback_ms,
@@ -2061,6 +2125,8 @@ struct ChunkRun {
     generated_tokens: usize,
     transcript: String,
     sample_count: usize,
+    decode_ms: f64,
+    stop_reason: DecodeStopReason,
     start_position: usize,
     end_position: usize,
     start_sample: usize,
@@ -2158,6 +2224,7 @@ struct SlidingWindowTimedRollbackExperimentResult {
     window_runs: Vec<SlidingWindowRun>,
     html_path: PathBuf,
     committed_timeline_path: Option<PathBuf>,
+    interrupted_early: bool,
 }
 
 #[derive(Clone)]
@@ -2224,6 +2291,7 @@ fn print_usage() {
            mode = initial\n\
            chunk-ms = {DEFAULT_CHUNK_MS}\n\
            bridge-ms = {DEFAULT_BRIDGE_MS}\n\
+           max-bridge-windows = {MAX_BRIDGE_WINDOWS}\n\
            rollback-ms = {DEFAULT_ROLLBACK_MS}\n\
          modes:\n\
            initial\n\
@@ -2321,6 +2389,7 @@ fn print_sliding_window_timed_rollback_experiment(
     println!("chunk_ms={}", experiment.chunk_ms);
     println!("rollback_ms={}", experiment.rollback_ms);
     println!("stride_ms={}", experiment.stride_ms);
+    println!("interrupted_early={}", experiment.interrupted_early);
     println!();
 
     for run in &experiment.window_runs {
@@ -2443,6 +2512,8 @@ fn clone_chunk_run(chunk: &ChunkRun) -> ChunkRun {
         generated_tokens: chunk.generated_tokens,
         transcript: chunk.transcript.clone(),
         sample_count: chunk.sample_count,
+        decode_ms: chunk.decode_ms,
+        stop_reason: chunk.stop_reason,
         start_position: chunk.start_position,
         end_position: chunk.end_position,
         start_sample: chunk.start_sample,
@@ -3414,12 +3485,14 @@ fn print_lane_row(label: &str, chunks: &[ChunkRun]) {
 fn print_chunk_run(chunk: &ChunkRun) {
     println!("--- {} ---", chunk.label);
     println!(
-        "samples={} audio={}..{}ms prompt_tokens={} generated_tokens={} start_position={} end_position={}",
+        "samples={} audio={}..{}ms prompt_tokens={} generated_tokens={} decode_ms={:.1} stop_reason={} start_position={} end_position={}",
         chunk.sample_count,
         (chunk.start_sample * 1000) / SAMPLE_RATE as usize,
         (chunk.end_sample * 1000) / SAMPLE_RATE as usize,
         chunk.prompt_tokens,
         chunk.generated_tokens,
+        chunk.decode_ms,
+        chunk.stop_reason.as_str(),
         chunk.start_position,
         chunk.end_position
     );
@@ -3499,15 +3572,14 @@ fn timed_generated_prefix_for_cut(
 }
 
 fn timed_generated_bridge_for_cuts(
-    align_ctx: &mut AlignmentContext,
     tokenizer: &Tokenizer,
     replayed_prefix_text: Option<&str>,
-    chunk_run: &ChunkRun,
-    chunk_samples: &[f32],
+    generated_transcript: &str,
+    combined_transcript: &str,
+    alignment: &TranscriptAlignment,
     keep_until_secs: f64,
     replay_until_secs: f64,
 ) -> Result<TimedGeneratedBridge> {
-    let generated_transcript = chunk_run.transcript.trim();
     let replayed_prefix = replayed_prefix_text
         .map(str::trim)
         .filter(|text| !text.is_empty());
@@ -3523,11 +3595,6 @@ fn timed_generated_bridge_for_cuts(
         });
     }
 
-    let combined_transcript = match replayed_prefix {
-        Some(prefix) => format!("{prefix} {generated_transcript}"),
-        None => generated_transcript.to_string(),
-    };
-    let alignment = build_transcript_alignment(align_ctx, &combined_transcript, chunk_samples)?;
     let word_timings = alignment.word_timings();
     let combined_word_ranges = sentence_word_tokens(&combined_transcript);
     let generated_word_ranges = sentence_word_tokens(generated_transcript);
@@ -3648,11 +3715,8 @@ fn timed_generated_bridge_for_cuts(
 }
 
 fn adjust_keep_boundary_secs(
-    align_ctx: &mut AlignmentContext,
     policy: KeepBoundaryPolicy,
-    replayed_prefix_text: Option<&str>,
-    chunk_run: &ChunkRun,
-    chunk_samples: &[f32],
+    alignment: &TranscriptAlignment,
     target_keep_until_secs: f64,
     replay_until_secs: f64,
 ) -> Result<(f64, KeepBoundaryDebug)> {
@@ -3666,19 +3730,6 @@ fn adjust_keep_boundary_secs(
         return Ok((target_keep_until_secs, fixed_debug));
     }
 
-    let generated_transcript = chunk_run.transcript.trim();
-    let replayed_prefix = replayed_prefix_text
-        .map(str::trim)
-        .filter(|text| !text.is_empty());
-    if generated_transcript.is_empty() {
-        return Ok((target_keep_until_secs, fixed_debug));
-    }
-
-    let combined_transcript = match replayed_prefix {
-        Some(prefix) => format!("{prefix} {generated_transcript}"),
-        None => generated_transcript.to_string(),
-    };
-    let alignment = build_transcript_alignment(align_ctx, &combined_transcript, chunk_samples)?;
     let min_keep_secs = KEEP_BOUNDARY_MIN_KEPT_SECS.min(target_keep_until_secs);
     let earliest_candidate_secs = min_keep_secs;
     let mut best_candidate = None;

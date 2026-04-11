@@ -1,3 +1,4 @@
+use mlx_rs::Array;
 use mlx_rs::builder::Builder;
 use mlx_rs::error::Exception;
 use mlx_rs::macros::{ModuleParameters, Quantizable};
@@ -8,7 +9,6 @@ use mlx_rs::nn::QuantizedLinear;
 use mlx_rs::ops;
 use mlx_rs::ops::zeros;
 use mlx_rs::quantization::MaybeQuantized;
-use mlx_rs::Array;
 
 use crate::config::{ZipaModelConfig, ZipaVariant};
 
@@ -176,6 +176,10 @@ impl CtcHead {
         nn::log_softmax(self.linear.forward(x)?, -1)
     }
 
+    pub fn forward_logits(&self, x: &Array) -> Result<Array, Exception> {
+        self.linear.forward(x)
+    }
+
     pub fn quantize_linears(&mut self, max_group_size: i32, bits: i32) -> Result<(), Exception> {
         quantize_linear_adaptive(&mut self.linear, max_group_size, bits)?;
         Ok(())
@@ -277,12 +281,12 @@ pub(crate) fn swoosh_r(x: &Array) -> Result<Array, Exception> {
 
 #[cfg(test)]
 mod tests {
-    use super::{linear_weight_shape, EncoderEmbed, ZipaModel};
+    use super::{EncoderEmbed, ZipaModel, linear_weight_shape};
     use crate::config::{ZipaModelConfig, ZipaVariant};
     use crate::load::load_frontend_and_ctc_weights;
+    use mlx_rs::Array;
     use mlx_rs::array;
     use mlx_rs::module::ModuleParameters;
-    use mlx_rs::Array;
     use std::path::PathBuf;
 
     #[test]

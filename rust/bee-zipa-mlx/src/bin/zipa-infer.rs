@@ -77,7 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let infer_start = Instant::now();
-    let output = inference.infer_wav(&wav)?;
+    let output = inference.infer_wav_greedy(&wav)?;
     let infer_elapsed = infer_start.elapsed();
 
     println!("wav: {}", wav.display());
@@ -93,7 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("quantized_group_size: {}", group_size.unwrap_or(64));
     }
     println!("infer_ms: {:.3}", infer_elapsed.as_secs_f64() * 1_000.0);
-    println!("frames: {}", output.log_probs_len);
+    println!("frames: {}", output.frame_count);
     println!("tokens: {}", output.tokens.join(" "));
     Ok(())
 }

@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use facet::Facet;
 
-use crate::feature_view::feature_similarity;
+use crate::feature_view::feature_similarity_for_tokens;
 
 #[derive(Debug, Clone, Facet, PartialEq, Eq)]
 pub struct ComparisonToken {
@@ -387,7 +387,7 @@ fn substitution_cost(left: &str, right: &str) -> f32 {
     if left == right {
         return 0.0;
     }
-    feature_similarity(&[left.to_string()], &[right.to_string()])
+    feature_similarity_for_tokens(left, right)
         .map(|similarity| (1.0 - similarity).clamp(0.0, 1.0))
         .unwrap_or(1.0)
 }
