@@ -4,6 +4,8 @@ use std::sync::OnceLock;
 use anyhow::Result;
 use bee_qwen3_asr::tokenizers::Tokenizer;
 
+use crate::types2::TokenId;
+
 static TOKENIZER: OnceLock<Tokenizer> = OnceLock::new();
 
 /// Loads the tokenizer from `path` and installs it into the process-global slot.
@@ -30,7 +32,7 @@ pub(crate) fn tokenizer() -> &'static Tokenizer {
         .unwrap_or_else(|| panic!("types2 tokenizer not initialized"))
 }
 
-pub(crate) fn decode_token_ids(token_ids: &[super::TokenId]) -> Result<String> {
+pub(crate) fn decode_token_ids(token_ids: &[TokenId]) -> Result<String> {
     let ids: Vec<u32> = token_ids.iter().map(|id| id.as_u32()).collect();
     tokenizer()
         .decode(&ids, true)
