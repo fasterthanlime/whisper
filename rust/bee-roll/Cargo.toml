@@ -1,0 +1,14 @@
+[package]
+name = "bee-roll"
+version = "0.1.0"
+edition = "2024"
+
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
+[dependencies]
+anyhow.workspace = true
+bee-qwen3-asr = { path = "../bee-qwen3-asr" }
+

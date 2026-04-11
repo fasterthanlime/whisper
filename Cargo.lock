@@ -227,6 +227,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bee-roll"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bee-qwen3-asr",
+]
+
+[[package]]
 name = "bee-rpc"
 version = "0.1.0"
 dependencies = [

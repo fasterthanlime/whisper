@@ -1,6 +1,6 @@
 use bee_qwen3_asr::decoder::KVCache;
 
-use crate::types2::{ChunkInfo, TimedToken, TokenCount, TokenId, TokenIndex, UtteranceTokenRange};
+use crate::{ChunkInfo, TimedToken, TokenCount, TokenId, TokenIndex, UtteranceTokenRange};
 
 /// Canonical utterance-global token storage with a 1:1 mapping between
 /// vector position and utterance token index.
@@ -104,7 +104,7 @@ impl TokenTape {
     /// Decodes all stored tokens on demand.
     pub(crate) fn decode_text(&self) -> anyhow::Result<String> {
         let ids: Vec<TokenId> = self.tokens.iter().map(|token| token.token).collect();
-        crate::types2::decode_token_ids(&ids)
+        crate::decode_token_ids(&ids)
     }
 }
 

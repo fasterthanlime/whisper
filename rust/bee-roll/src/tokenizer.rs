@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 use anyhow::Result;
 use bee_qwen3_asr::tokenizers::Tokenizer;
 
-use crate::types2::TokenId;
+use crate::TokenId;
 
 static TOKENIZER: OnceLock<Tokenizer> = OnceLock::new();
 
@@ -12,13 +12,13 @@ static TOKENIZER: OnceLock<Tokenizer> = OnceLock::new();
 ///
 /// Invariants:
 /// - initialization happens exactly once
-/// - every decode helper in `types2` reads from the same tokenizer instance
+/// - every decode helper in this crate reads from the same tokenizer instance
 pub(crate) fn init_tokenizer(path: &Path) -> &'static Tokenizer {
     let loaded =
         Tokenizer::from_file(path).unwrap_or_else(|e| panic!("loading {}: {e}", path.display()));
     TOKENIZER
         .set(loaded)
-        .unwrap_or_else(|_| panic!("types2 tokenizer already initialized"));
+        .unwrap_or_else(|_| panic!("bee-roll tokenizer already initialized"));
     tokenizer()
 }
 
@@ -29,7 +29,7 @@ pub(crate) fn init_tokenizer(path: &Path) -> &'static Tokenizer {
 pub(crate) fn tokenizer() -> &'static Tokenizer {
     TOKENIZER
         .get()
-        .unwrap_or_else(|| panic!("types2 tokenizer not initialized"))
+        .unwrap_or_else(|| panic!("bee-roll tokenizer not initialized"))
 }
 
 pub(crate) fn decode_token_ids(token_ids: &[TokenId]) -> Result<String> {

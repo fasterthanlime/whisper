@@ -1,4 +1,4 @@
-use crate::types2::{AudioBuffer, ChunkInfo, Cut, SampleOffset, TokenIndex};
+use crate::{AudioBuffer, ChunkInfo, Cut, SampleOffset, TokenIndex};
 
 /// Policy hook that decides where to cut a ready chunk.
 ///

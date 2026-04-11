@@ -1,4 +1,4 @@
-use crate::types2::{TimeRange, UtteranceTime};
+use crate::{TimeRange, UtteranceTime};
 
 /// An utterance-global sample offset.
 ///

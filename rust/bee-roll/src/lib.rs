@@ -32,10 +32,11 @@ mod tokens;
 mod transcript;
 mod utterance;
 
+/// Audio sample rate in Hz expected by the ASR tokenizer/audio helpers.
+pub(crate) const SAMPLE_RATE: u32 = 16_000;
+
 pub(crate) use audio::*;
 pub(crate) use tokenizer::*;
 pub(crate) use tokens::*;
-#[allow(unused_imports)]
 pub(crate) use transcript::*;
-#[allow(unused_imports)]
 pub(crate) use utterance::*;

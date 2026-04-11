@@ -2,7 +2,7 @@ use std::fmt;
 
 use anyhow::{Result, bail};
 
-use crate::types2::{SampleRange, decode_token_ids};
+use crate::{SampleRange, decode_token_ids};
 
 /// A model token ID.
 ///
