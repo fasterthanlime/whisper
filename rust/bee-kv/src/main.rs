@@ -42,6 +42,9 @@ const DEFAULT_TRUNCATE_TOKENS: usize = 4;
 const DEFAULT_MLX_CACHE_LIMIT_MB: Option<usize> = None;
 const KEEP_BOUNDARY_MIN_KEPT_SECS: f64 = 0.200;
 const MAX_BRIDGE_WINDOWS: usize = 50;
+const ANSI_BLUE: &str = "\x1b[34m";
+const ANSI_BOLD: &str = "\x1b[1m";
+const ANSI_RESET: &str = "\x1b[0m";
 const BOUNDARY_SWEEP_OFFSETS: [isize; 13] =
     [-48, -44, -40, -36, -32, -28, -24, -20, -16, -12, -8, -4, 0];
 
@@ -2407,6 +2410,15 @@ fn print_sliding_window_timed_rollback_experiment(
                 rollback.rollback_position
             );
             println!("kept_text={}", rollback.kept_text);
+            if rollback.keep_until_secs.is_some() && rollback.kept_word_count > 0 {
+                println!(
+                    "{ANSI_BLUE}{ANSI_BOLD}==================== KEPT WORDS ===================={ANSI_RESET}"
+                );
+                println!("{ANSI_BLUE}{ANSI_BOLD}{}{}", rollback.kept_text, ANSI_RESET);
+                println!(
+                    "{ANSI_BLUE}{ANSI_BOLD}===================================================={ANSI_RESET}"
+                );
+            }
             if let Some(replay_until_secs) = rollback.replay_until_secs {
                 println!("replay_until={:.3}s", replay_until_secs);
             }
