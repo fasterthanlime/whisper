@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1055,6 +1056,8 @@ fn decode_sliding_window_bridge_replay(
                 target_keep_until_secs,
                 replay_until_secs,
             )?;
+            let timed_words =
+                timed_aligned_words_for_alignment(tokenizer, &combined_transcript, &alignment)?;
             let found_boundary =
                 keep_boundary_policy == KeepBoundaryPolicy::Fixed || keep_boundary_debug.snapped;
             let keep_until_secs = if found_boundary {
@@ -1063,11 +1066,9 @@ fn decode_sliding_window_bridge_replay(
                 None
             };
             let split = timed_generated_bridge_for_cuts(
-                tokenizer,
-                replayed_prefix.as_ref().map(|prefix| prefix.text.as_str()),
-                generated_transcript,
                 &combined_transcript,
-                &alignment,
+                replayed_prefix.as_ref(),
+                &timed_words,
                 keep_until_secs.unwrap_or(0.0),
                 replay_until_secs,
             )?;
@@ -3531,11 +3532,72 @@ struct TimedGeneratedPrefix {
     kept_text: String,
 }
 
+#[derive(Clone, Debug)]
+struct TimedWord {
+    text: String,
+    token_range: Range<usize>,
+    char_range: Range<usize>,
+    start_secs: f64,
+    end_secs: f64,
+}
+
 struct TimedGeneratedBridge {
     kept_word_count: usize,
     kept_token_count: usize,
     kept_text: String,
     bridge: CarriedBridge,
+}
+
+fn timed_aligned_words_for_alignment(
+    tokenizer: &Tokenizer,
+    transcript: &str,
+    alignment: &TranscriptAlignment,
+) -> Result<Vec<TimedWord>> {
+    let word_ranges = sentence_word_tokens(transcript);
+    let word_timings = alignment.word_timings();
+    if word_ranges.len() != word_timings.len() {
+        bail!(
+            "alignment word count mismatch: transcript has {} words, alignment has {}",
+            word_ranges.len(),
+            word_timings.len()
+        );
+    }
+
+    let mut timed_words = Vec::with_capacity(word_ranges.len());
+    for (index, (word_range, word_timing)) in
+        word_ranges.iter().zip(word_timings.iter()).enumerate()
+    {
+        let bee_transcribe::zipa_align::AlignmentQuality::Aligned {
+            start_secs,
+            end_secs,
+        } = word_timing.quality
+        else {
+            break;
+        };
+
+        let token_start = if index == 0 {
+            0
+        } else {
+            tokenizer
+                .encode_fast(&transcript[..word_range.char_start], false)
+                .map_err(|e| anyhow::anyhow!("encoding transcript prefix for word {index}: {e}"))?
+                .len()
+        };
+        let token_end = tokenizer
+            .encode_fast(&transcript[..word_range.char_end], false)
+            .map_err(|e| anyhow::anyhow!("encoding transcript slice for word {index}: {e}"))?
+            .len();
+
+        timed_words.push(TimedWord {
+            text: word_timing.word.to_string(),
+            token_range: token_start..token_end,
+            char_range: word_range.char_start..word_range.char_end,
+            start_secs,
+            end_secs,
+        });
+    }
+
+    Ok(timed_words)
 }
 
 fn timed_generated_prefix_for_cut(
@@ -3555,39 +3617,26 @@ fn timed_generated_prefix_for_cut(
     }
 
     let alignment = build_transcript_alignment(align_ctx, transcript, chunk_samples)?;
-    let word_timings = alignment.word_timings();
-    let word_ranges = sentence_word_tokens(transcript);
-    let mut kept_word_count = 0usize;
-
-    for word_timing in &word_timings {
-        match word_timing.quality {
-            bee_transcribe::zipa_align::AlignmentQuality::Aligned { end_secs, .. }
-                if end_secs <= keep_until_secs =>
-            {
-                kept_word_count += 1;
-            }
-            _ => break,
-        }
-    }
+    let timed_words = timed_aligned_words_for_alignment(tokenizer, transcript, &alignment)?;
+    let kept_word_count = timed_words
+        .iter()
+        .take_while(|word| word.end_secs <= keep_until_secs)
+        .count();
 
     let kept_text = if kept_word_count == 0 {
         String::new()
     } else {
-        let end = word_ranges
+        let end = timed_words
             .get(kept_word_count - 1)
-            .map(|word| word.char_end)
+            .map(|word| word.char_range.end)
             .ok_or_else(|| anyhow::anyhow!("missing word range for kept prefix"))?;
         transcript[..end].trim_end().to_string()
     };
 
-    let kept_token_count = if kept_text.is_empty() {
-        0
-    } else {
-        tokenizer
-            .encode_fast(kept_text.as_str(), false)
-            .map_err(|e| anyhow::anyhow!("encoding kept prefix: {e}"))?
-            .len()
-    };
+    let kept_token_count = timed_words
+        .get(kept_word_count.saturating_sub(1))
+        .map(|word| word.token_range.end)
+        .unwrap_or(0);
 
     Ok(TimedGeneratedPrefix {
         kept_word_count,
@@ -3597,139 +3646,91 @@ fn timed_generated_prefix_for_cut(
 }
 
 fn timed_generated_bridge_for_cuts(
-    tokenizer: &Tokenizer,
-    replayed_prefix_text: Option<&str>,
-    generated_transcript: &str,
     combined_transcript: &str,
-    alignment: &TranscriptAlignment,
+    replayed_prefix: Option<&CarriedBridge>,
+    timed_words: &[TimedWord],
     keep_until_secs: f64,
     replay_until_secs: f64,
 ) -> Result<TimedGeneratedBridge> {
-    let replayed_prefix = replayed_prefix_text
-        .map(str::trim)
-        .filter(|text| !text.is_empty());
-    if generated_transcript.is_empty() {
+    if timed_words.is_empty() {
+        let bridge = replayed_prefix.cloned().unwrap_or_else(|| CarriedBridge {
+            text: String::new(),
+            words: Vec::new(),
+        });
         return Ok(TimedGeneratedBridge {
             kept_word_count: 0,
             kept_token_count: 0,
             kept_text: String::new(),
-            bridge: CarriedBridge {
-                text: replayed_prefix.unwrap_or_default().to_string(),
-                words: Vec::new(),
-            },
+            bridge,
         });
     }
 
-    let word_timings = alignment.word_timings();
-    let combined_word_ranges = sentence_word_tokens(&combined_transcript);
-    let generated_word_ranges = sentence_word_tokens(generated_transcript);
     let carried_word_count = replayed_prefix
-        .map(sentence_word_tokens)
-        .map(|words| words.len())
-        .unwrap_or(0);
-    let mut kept_word_count = 0usize;
-    let mut bridge_word_count = 0usize;
-    let mut bridge_words = Vec::new();
-    let mut effective_kept_end_word = None;
-    let mut effective_bridge_start_word = None;
-    let mut effective_bridge_end_word = None;
-
-    for (index, word_timing) in word_timings.iter().enumerate() {
-        match word_timing.quality {
-            bee_transcribe::zipa_align::AlignmentQuality::Aligned {
-                start_secs,
-                end_secs,
-            } => {
-                if end_secs <= keep_until_secs {
-                    effective_kept_end_word = Some(index);
-                }
-                if start_secs >= keep_until_secs && start_secs < replay_until_secs {
-                    effective_bridge_start_word.get_or_insert(index);
-                    effective_bridge_end_word = Some(index);
-                }
-                if index >= carried_word_count {
-                    if end_secs <= keep_until_secs {
-                        kept_word_count += 1;
-                    }
-                    if start_secs >= keep_until_secs && start_secs < replay_until_secs {
-                        bridge_word_count += 1;
-                        bridge_words.push(CarriedBridgeWord {
-                            text: word_timing.word.to_string(),
-                            start_secs: (start_secs - keep_until_secs).max(0.0),
-                            end_secs: (end_secs - keep_until_secs).max(0.0),
-                        });
-                    }
-                }
-                if start_secs >= replay_until_secs {
-                    break;
-                }
+        .map(|prefix| {
+            if prefix.words.is_empty() {
+                sentence_word_tokens(&prefix.text).len()
+            } else {
+                prefix.words.len()
             }
-            _ => break,
-        }
-    }
-
-    let kept_text = if let Some(end_word_index) = effective_kept_end_word {
-        let word = combined_word_ranges
-            .get(end_word_index)
-            .ok_or_else(|| anyhow::anyhow!("missing effective kept word range"))?;
-        combined_transcript[..word.char_end].trim().to_string()
+        })
+        .unwrap_or(0);
+    let generated_words = &timed_words[carried_word_count.min(timed_words.len())..];
+    let kept_word_count = generated_words
+        .iter()
+        .take_while(|word| word.end_secs <= keep_until_secs)
+        .count();
+    let replay_word_count =
+        generated_words.partition_point(|word| word.start_secs < replay_until_secs);
+    let bridge_words_slice = if kept_word_count <= replay_word_count {
+        &generated_words[kept_word_count..replay_word_count]
     } else {
-        String::new()
+        &generated_words[0..0]
     };
 
-    let generated_kept_text = if kept_word_count == 0 {
-        String::new()
-    } else {
-        let end = generated_word_ranges
-            .get(kept_word_count - 1)
-            .map(|word| word.char_end)
-            .ok_or_else(|| anyhow::anyhow!("missing generated kept word range"))?;
-        generated_transcript[..end].trim_end().to_string()
-    };
-
-    let bridge = if let (Some(start_word_index), Some(end_word_index)) =
-        (effective_bridge_start_word, effective_bridge_end_word)
+    let kept_text = if let Some(end_word) = timed_words
+        .iter()
+        .filter(|word| word.end_secs <= keep_until_secs)
+        .last()
     {
-        let start = combined_word_ranges
-            .get(start_word_index)
-            .map(|word| word.char_start)
-            .ok_or_else(|| anyhow::anyhow!("missing effective bridge word start"))?;
-        let end = combined_word_ranges
-            .get(end_word_index)
-            .map(|word| word.char_end)
-            .ok_or_else(|| anyhow::anyhow!("missing effective bridge word end"))?;
-        CarriedBridge {
-            text: combined_transcript[start..end].trim().to_string(),
-            words: bridge_words,
-        }
-    } else if bridge_word_count == 0 {
-        CarriedBridge {
-            text: replayed_prefix.unwrap_or_default().to_string(),
-            words: Vec::new(),
-        }
+        combined_transcript[..end_word.char_range.end]
+            .trim()
+            .to_string()
     } else {
-        let start = generated_word_ranges
-            .get(kept_word_count)
-            .map(|word| word.char_start)
-            .ok_or_else(|| anyhow::anyhow!("missing bridge word start"))?;
-        let end = generated_word_ranges
-            .get(kept_word_count + bridge_word_count - 1)
-            .map(|word| word.char_end)
-            .ok_or_else(|| anyhow::anyhow!("missing bridge word end"))?;
-        CarriedBridge {
-            text: generated_transcript[start..end].trim().to_string(),
-            words: bridge_words,
-        }
+        String::new()
     };
 
-    let kept_token_count = if generated_kept_text.is_empty() {
-        0
+    let bridge_words = bridge_words_slice
+        .iter()
+        .map(|word| CarriedBridgeWord {
+            text: word.text.clone(),
+            start_secs: (word.start_secs - keep_until_secs).max(0.0),
+            end_secs: (word.end_secs - keep_until_secs).max(0.0),
+        })
+        .collect();
+
+    let bridge = if let (Some(first_bridge_word), Some(last_bridge_word)) =
+        (bridge_words_slice.first(), bridge_words_slice.last())
+    {
+        CarriedBridge {
+            text: combined_transcript
+                [first_bridge_word.char_range.start..last_bridge_word.char_range.end]
+                .trim()
+                .to_string(),
+            words: bridge_words,
+        }
+    } else if bridge_words_slice.is_empty() {
+        replayed_prefix.cloned().unwrap_or_else(|| CarriedBridge {
+            text: String::new(),
+            words: Vec::new(),
+        })
     } else {
-        tokenizer
-            .encode_fast(generated_kept_text.as_str(), false)
-            .map_err(|e| anyhow::anyhow!("encoding kept bridge prefix: {e}"))?
-            .len()
+        unreachable!()
     };
+
+    let kept_token_count = generated_words
+        .get(kept_word_count.saturating_sub(1))
+        .map(|word| word.token_range.end)
+        .unwrap_or(0);
 
     Ok(TimedGeneratedBridge {
         kept_word_count,
