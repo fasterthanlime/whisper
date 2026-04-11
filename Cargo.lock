@@ -272,7 +272,7 @@ name = "bee-roll-readme"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bee-correct",
+ "bee-g2p",
  "bee-g2p-charsiu",
  "bee-phonetic",
  "bee-qwen3-asr",
