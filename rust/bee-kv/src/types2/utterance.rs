@@ -68,18 +68,19 @@ impl Utterance {
         }
     }
 
-    /// Appends audio to the utterance.
+    /// Appends raw samples to the utterance recording buffer.
     ///
     /// Intent:
     /// - audio is the only public input into utterance state
-    /// - incoming audio is appended to the utterance-global recording buffer
+    /// - callers provide only raw samples, never timed audio buffers
+    /// - utterance timing stays internal and is derived from sample position in this append-only buffer
     /// - future implementations will decide internally when enough audio exists
-    ///   to run inference and refresh [`ChunkInfo`]
-    pub(crate) fn push_audio(&mut self, buffer: AudioBuffer) {
-        if self.audio.is_empty() {
-            self.audio = buffer;
-        } else {
-            self.audio.push_end(buffer);
-        }
+    ///   to run inference and construct transient [`ChunkInfo`] values
+    pub(crate) fn push_audio(&mut self, samples: Vec<f32>) {
+        assert!(
+            self.audio.utterance_start == SampleIndex::new(0),
+            "utterance audio buffer must remain anchored at sample 0"
+        );
+        self.audio.samples.extend(samples);
     }
 }
