@@ -1,3 +1,17 @@
+//! `Tape` is the synchronization point between transcript tokens and decoder KV.
+//!
+//! Desired state from the README:
+//! - token boundaries remain the canonical cut/replay coordinates
+//! - `stable` may stay alive in KV across feeds
+//! - `carry` is replayed in prompt token IDs, not kept as independent KV state
+//! - `preview` is truncated and regenerated
+//!
+//! That means `Tape` must remember both:
+//! - utterance token boundaries
+//! - decoder-visible positions for those boundaries
+//!
+//! The two are related but not interchangeable.
+
 use bee_qwen3_asr::decoder::KVCache;
 use bee_qwen3_asr::generate::{self, ConfidenceMode, DecodeStopReason, TokenConfidence};
 use bee_qwen3_asr::mlx_rs::Array;
@@ -168,24 +182,28 @@ impl KvTape {
 /// The synchronized token/KV state that moves forward and rolls back together.
 ///
 /// Intent:
-/// - all token-space cuts happen here
-/// - transcript rollback and KV rollback share one operation
-/// - higher-level utterance code should not truncate tokens and KV separately
+/// - token-space rollback is chosen at the utterance layer
+/// - transcript rollback and KV rollback are applied here as one operation
+/// - higher-level utterance code must not truncate tokens and KV separately
 ///
 /// Invariants:
 /// - token truncation and KV truncation happen through one owner
 /// - token-space boundaries and decoder-space boundaries are tracked separately
+/// - do not assume "rewind N transcript tokens" implies "rewind KV by N"
 pub(crate) struct Tape {
     /// Canonical utterance-global token sequence.
     tokens: TokenTape,
     /// KV cache state synchronized to the token sequence.
     kv: KvTape,
-    /// Decoder-visible cache position for each token boundary in the current
-    /// preview state.
+    /// Decoder-visible cache position for each token boundary in the current state.
     ///
     /// Invariant:
     /// - length is always `tokens.len() + 1`
     /// - entry `i` is the decoder position that keeps tokens `[0, i)`
+    ///
+    /// Strategic note:
+    /// - this mapping is what lets `Utterance` choose replay/cut boundaries in
+    ///   token space without lying to itself about KV geometry
     decoder_boundaries: Vec<usize>,
     detected_language: Option<CompactString>,
 }
@@ -275,6 +293,11 @@ impl Tape {
         max_new_tokens: usize,
         confidence_mode: ConfidenceMode,
     ) -> Result<(Vec<i32>, Vec<TokenConfidence>, usize, DecodeStopReason), Exception> {
+        // Strategic note:
+        // - this function only knows about decoder-visible prompt/generated tokens
+        // - it must not infer transcript replay policy on its own
+        // - the utterance layer decides which token boundary stays in KV and
+        //   which tokens are replayed as carry in the prompt
         let start_position = self.kv.decoder_position();
         let (generated, confidences, next_position, stop_reason) = generate::prefill_and_decode(
             model,

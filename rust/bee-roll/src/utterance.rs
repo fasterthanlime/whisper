@@ -1,3 +1,16 @@
+//! `Utterance` owns the rollback-oriented streaming ASR model from the README.
+//!
+//! Desired state:
+//! - `stable` is the left prefix that remains alive in retained KV state
+//! - `carry` is the bridge slice that is replayed as token IDs in the next prompt
+//! - `preview` is the live tail that gets truncated and regenerated
+//!
+//! Non-negotiable constraints:
+//! - token boundaries are canonical; we do not cut or replay in string space
+//! - carry replay must use token IDs sliced from the tape, never decoded text
+//! - cut promotion only belongs in the real rotated-audio path described in the
+//!   README; the current full-audio path must not pretend otherwise
+
 use crate::tokens::UtteranceTokenRange;
 use crate::{
     AsrTokenAlternative, AsrTokenConfidence, AudioBuffer, ComparisonPhone, Cut, FeedOutput,
@@ -9,7 +22,6 @@ use bee_qwen3_asr::encoder::EncoderCache;
 use bee_qwen3_asr::generate::{self, ConfidenceMode, TokenConfidence};
 use bee_qwen3_asr::mel::MelExtractor;
 use bee_qwen3_asr::mlx_rs::Array;
-use bee_qwen3_asr::mlx_rs::error::Exception;
 use bee_qwen3_asr::mlx_rs::ops;
 use bee_qwen3_asr::model::Qwen3ASRModel;
 use bee_transcribe::zipa_align::{
@@ -29,14 +41,29 @@ const PREVIEW_TOKENS_PER_SECOND: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DecodeMode {
+    /// Rebuild the entire prompt from scratch on every feed.
+    ///
+    /// This matches the "full audio buffer" path: no retained KV, prefix carried
+    /// explicitly in prompt token IDs.
     RebuildPromptEachFeed,
+    /// Keep the `stable` prefix alive in KV, replay only `carry` in the prompt,
+    /// and regenerate `preview`.
+    ///
+    /// This mode only makes sense when audio rotation matches the README model.
     PersistentKv,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PreviewDecodePlan {
+    /// Token boundary where the current `preview` starts. Everything at or to the
+    /// right of this boundary is provisional and may be replaced wholesale.
     rollback_to: TokenIndex,
+    /// Decoder position that should remain alive in KV before this decode step.
+    ///
+    /// In the final three-way split this is the decoder position for
+    /// `stable_through`, not for `preview_from`.
     decoder_position: usize,
+    /// Budget for how much new text this feed is allowed to produce.
     rewrite_budget_tokens: usize,
 }
 
@@ -160,13 +187,13 @@ pub struct Utterance {
     /// - any sample/time boundaries are derived from this token boundary, not stored separately
     stable_through: TokenIndex,
 
-    /// Token boundary through which the utterance is retained as `carry`.
+    /// Token boundary where the live `preview` region starts.
     ///
     /// Invariant:
-    /// - `stable_through <= carry_through <= tape.end()`
-    /// - tokens in `[stable_through, carry_through)` are the replay bridge
-    /// - tokens in `[carry_through, tape.end())` are the current `preview`
-    carry_through: TokenIndex,
+    /// - `stable_through <= preview_from <= tape.end()`
+    /// - tokens in `[stable_through, preview_from)` are the replay bridge
+    /// - tokens in `[preview_from, tape.end())` are the current `preview`
+    preview_from: TokenIndex,
 
     /// Canonical token-aligned output tape plus synchronized ASR rollback state.
     tape: Tape,
@@ -175,6 +202,10 @@ pub struct Utterance {
     preview_rewrite_tokens: usize,
 
     /// Streaming decode behavior for this utterance.
+    ///
+    /// Today this remains `PersistentKv` by default because that is the target
+    /// architecture. The current full-audio path must still obey the README
+    /// semantics above instead of smuggling `carry` through strings.
     decode_mode: DecodeMode,
 
     /// Number of feed steps processed so far.
@@ -201,7 +232,7 @@ impl Utterance {
         Self {
             audio: AudioBuffer::new(SampleOffset::new(0), Vec::new()),
             stable_through: TokenIndex::new(0),
-            carry_through: TokenIndex::new(0),
+            preview_from: TokenIndex::new(0),
             tape: Tape::new(num_layers),
             preview_rewrite_tokens: DEFAULT_PREVIEW_REWRITE_TOKENS,
             decode_mode: DecodeMode::PersistentKv,
@@ -271,7 +302,15 @@ impl Utterance {
         {
             self.apply_preview_run(&preview_run);
         }
-        // TODO: optionally run cutter and promote stable/carry boundaries
+        // Desired state:
+        // - `feed()` only mutates `stable/carry/preview` through a real rotated-audio
+        //   three-way split
+        // - cut promotion happens only after the left side has been physically
+        //   retired from the active audio window
+        //
+        // Current constraint:
+        // - this full-audio path may rewrite preview, but it must not advance
+        //   `stable_through` / `preview_from`
 
         FeedOutput::new(self.tape.tokens(), self.tape.detected_language())
     }
@@ -290,53 +329,57 @@ impl Utterance {
     /// Current carry token slice.
     ///
     /// Invariant:
-    /// - this is the bridge `[stable_through, carry_through)`
+    /// - this is the bridge `[stable_through, preview_from)`
     fn carry_tokens(&self) -> &[OutputToken] {
         self.tape.slice(UtteranceTokenRange::new(
             self.stable_through,
-            self.carry_through,
+            self.preview_from,
         ))
     }
 
     /// Current preview token slice.
     ///
     /// Invariant:
-    /// - this is the live tail `[carry_through, tape.end())`
+    /// - this is the live tail `[preview_from, tape.end())`
     fn preview_tokens(&self) -> &[OutputToken] {
-        self.tape.slice(UtteranceTokenRange::new(
-            self.carry_through,
-            self.tape.end(),
-        ))
+        self.tape
+            .slice(UtteranceTokenRange::new(self.preview_from, self.tape.end()))
     }
 
-    /// Replace the current carry/preview partition after a cut.
+    /// Replace the current stable/carry/preview partition after a cut.
     ///
     /// Invariant:
-    /// - `stable_through <= carry_through <= tape.end()`
-    fn set_stable_and_carry(&mut self, stable_through: TokenIndex, carry_through: TokenIndex) {
+    /// - `stable_through <= preview_from <= tape.end()`
+    fn set_stable_and_preview(&mut self, stable_through: TokenIndex, preview_from: TokenIndex) {
         assert!(
-            stable_through <= carry_through,
-            "stable must not exceed carry"
+            stable_through <= preview_from,
+            "stable must not exceed preview start"
         );
         assert!(
-            carry_through <= self.tape.end(),
-            "carry must lie within the tape"
+            preview_from <= self.tape.end(),
+            "preview start must lie within the tape"
         );
         self.stable_through = stable_through;
-        self.carry_through = carry_through;
+        self.preview_from = preview_from;
     }
 
     /// Rewind the live tail so the next decode pass can regenerate preview from
-    /// the current carry boundary.
+    /// the current preview boundary.
     ///
     /// Intent:
     /// - the preview suffix is provisional and can be discarded wholesale
     /// - stable/carry boundaries remain intact
-    /// - persistent-KV mode tracks the visible decoder position at the carry cut
+    /// - `stable` stays in KV, `carry` is replayed in the prompt, and only
+    ///   `preview` is regenerated
+    ///
+    /// WARNING:
+    /// - do not "simplify" this by rewinding KV to `preview_from`
+    /// - do not apply cuts unless audio rotation matches the README model
+    /// - the README is the source of truth here, not ad hoc experiments
     fn plan_preview_decode(&self) -> PreviewDecodePlan {
         PreviewDecodePlan {
-            rollback_to: self.carry_through,
-            decoder_position: self.tape.decoder_position_for_boundary(self.carry_through),
+            rollback_to: self.preview_from,
+            decoder_position: self.tape.decoder_position_for_boundary(self.stable_through),
             rewrite_budget_tokens: self.preview_rewrite_tokens,
         }
     }
@@ -345,11 +388,11 @@ impl Utterance {
     /// the chosen rollback boundary.
     ///
     /// Invariants:
-    /// - `rollback_to` must not precede `carry_through`
+    /// - `rollback_to` must not precede `preview_from`
     /// - `rollback_to` must lie within the current tape
     fn rewrite_preview(&mut self, rollback_to: TokenIndex, decoder_position: usize) {
         assert!(
-            rollback_to >= self.carry_through,
+            rollback_to >= self.preview_from,
             "preview rewrites must not cut into carry"
         );
         assert!(
@@ -379,21 +422,14 @@ impl Utterance {
         &mut self,
         plan: &PreviewDecodePlan,
     ) -> anyhow::Result<Option<DecodedPreview>> {
-        let carry_context = if matches!(self.decode_mode, DecodeMode::RebuildPromptEachFeed) {
-            Some(
-                crate::decode_token_ids(
-                    &self
-                        .carry_tokens()
-                        .iter()
-                        .map(|token| token.timed_token().token())
-                        .collect::<Vec<_>>(),
-                )
-                .map_err(|e| anyhow::anyhow!("decoding carry tokens: {e}"))?,
-            )
-        } else {
-            None
-        };
-
+        // Desired state:
+        // - `carry` is replayed as raw token IDs from the tape
+        // - no decode/re-tokenize round trip is ever allowed here
+        let carry_prompt_tokens = self
+            .carry_tokens()
+            .iter()
+            .map(|token| token.timed_token().token().as_u32() as i32)
+            .collect::<Vec<_>>();
         let Some(asr) = self.asr.as_mut() else {
             return Ok(None);
         };
@@ -422,8 +458,8 @@ impl Utterance {
             plan,
             asr,
             n_audio_tokens,
-            carry_context.as_deref(),
-        )?;
+            &carry_prompt_tokens,
+        );
         let (generated, confidences, next_decoder_position, _) = self
             .tape
             .prefill_and_decode(
@@ -452,11 +488,23 @@ impl Utterance {
         plan: &PreviewDecodePlan,
         asr: &AsrRuntime,
         n_audio_tokens: usize,
-        carry_context: Option<&str>,
-    ) -> Result<Vec<i32>, Exception> {
-        Ok(match decode_mode {
+        carry_prompt_tokens: &[i32],
+    ) -> Vec<i32> {
+        // Desired state:
+        // - `stable` survives in retained KV state
+        // - `carry` is replayed as token IDs sliced directly from the tape
+        // - `preview` is generated after that prompt
+        //
+        // Forbidden:
+        // - decoding carry to text
+        // - re-tokenizing carry text
+        // - storing carry as String anywhere in bee-roll
+        let mut prompt = match decode_mode {
             DecodeMode::PersistentKv => {
                 if plan.decoder_position == 0 {
+                    // Initial prompt emits metadata and audio structure only.
+                    // Carry replay is appended below as token IDs so the prompt
+                    // builder never needs string context.
                     generate::build_initial_prompt(
                         n_audio_tokens,
                         asr.language.as_str(),
@@ -464,6 +512,9 @@ impl Utterance {
                         crate::tokenizer(),
                     )
                 } else {
+                    // Follow-up prompt assumes the `stable` prefix is already in
+                    // KV. Only the bridge (`carry`) is appended after this base
+                    // prompt, then preview is regenerated.
                     generate::build_followup_prompt(
                         n_audio_tokens,
                         asr.language.as_str(),
@@ -471,13 +522,20 @@ impl Utterance {
                     )
                 }
             }
-            DecodeMode::RebuildPromptEachFeed => generate::build_initial_prompt(
-                n_audio_tokens,
-                asr.language.as_str(),
-                carry_context.unwrap_or(""),
-                crate::tokenizer(),
-            ),
-        })
+            DecodeMode::RebuildPromptEachFeed => {
+                // Even in fresh-cache mode, we still replay carry as token IDs
+                // after the base prompt. The prompt builder itself should stay
+                // unaware of transcript strings.
+                generate::build_initial_prompt(
+                    n_audio_tokens,
+                    asr.language.as_str(),
+                    "",
+                    crate::tokenizer(),
+                )
+            }
+        };
+        prompt.extend_from_slice(carry_prompt_tokens);
+        prompt
     }
 
     fn output_tokens_from_generated(
@@ -635,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    fn feed_rewrites_preview_from_carry_boundary() {
+    fn feed_rewrites_preview_from_preview_boundary() {
         let mut utterance = Utterance::new(2, Box::new(NoCut), Box::new(NullListener));
         utterance.tape.append_decoded(
             vec![
@@ -647,7 +705,7 @@ mod tests {
             0,
             4,
         );
-        utterance.set_stable_and_carry(TokenIndex::new(1), TokenIndex::new(3));
+        utterance.set_stable_and_preview(TokenIndex::new(1), TokenIndex::new(3));
 
         let output_len = {
             let output = utterance.feed(vec![0.0; 320]);
@@ -658,7 +716,7 @@ mod tests {
         assert_eq!(utterance.carry_tokens().len(), 2);
         assert_eq!(utterance.preview_tokens().len(), 0);
         assert_eq!(output_len, 3);
-        assert_eq!(utterance.tape.decoder_position(), 3);
+        assert_eq!(utterance.tape.decoder_position(), 1);
     }
 
     #[test]
@@ -667,7 +725,7 @@ mod tests {
         utterance
             .tape
             .append_decoded(vec![dummy_output_token(0, 10)], 0, 1);
-        utterance.set_stable_and_carry(TokenIndex::new(0), TokenIndex::new(1));
+        utterance.set_stable_and_preview(TokenIndex::new(0), TokenIndex::new(1));
         utterance.rewrite_preview(TokenIndex::new(1), 1);
 
         utterance.apply_decoded_preview(DecodedPreview {
