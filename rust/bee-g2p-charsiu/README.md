@@ -1,23 +1,32 @@
 # bee-g2p-charsiu
 
-`bee-g2p-charsiu` is the forward-looking home for Bee's non-GPL G2P story.
+`bee-g2p-charsiu` is now the legacy Python-backed Charsiu crate.
 
-Right now it is deliberately a skeleton:
+It is still useful, but it is no longer the main integration path.
 
-- a small Rust client exists, but real inference still lives in Python
-- Python probes and sidecars are expected here first
-- the immediate job is to understand the model and settle the strategy
-- the later job is to move the useful parts into Rust and eventually MLX
+Current role:
 
-This crate exists so we can stop pretending the current eSpeak-based path is
-good enough.
+- keep the original Python sidecar and probe workflow around
+- preserve the exploration history that led to the current model
+- provide a reference implementation for cross-attention probing
+- act as a comparison point when the MLX-backed path changes behavior
+
+The forward path has moved to:
+
+- [`bee-g2p`](/Users/amos/bearcove/bee/rust/bee-g2p) for Bee-facing transcript/phone/alignment glue
+- [`bee-g2p-charsiu-mlx`](/Users/amos/bearcove/bee/rust/bee-g2p-charsiu-mlx) for actual inference
+
+This crate exists so we do not lose the Python-side experiments and reference
+behavior while the MLX path keeps evolving.
 
 The concrete intermediate model now lives in
 [MODEL.md](/Users/amos/bearcove/bee/rust/bee-g2p-charsiu/MODEL.md).
 
 ## Current Rust Surface
 
-This crate now has a minimal usable Rust surface:
+This is the old surface, not the preferred one for new integration work.
+
+This crate still has a minimal usable Rust surface:
 
 - a persistent sidecar client in [lib.rs](/Users/amos/bearcove/bee/rust/bee-g2p-charsiu/src/lib.rs)
 - a tiny CLI in [main.rs](/Users/amos/bearcove/bee/rust/bee-g2p-charsiu/src/main.rs)
@@ -121,8 +130,8 @@ token   et       word=Facet   chars=7..9   cmp=7..9
 
 That is intentionally modest.
 
-It gives us a Rust entry point now, without forcing the MLX/runtime work too
-early.
+It remains useful as a probe/reference tool, but it is no longer the crate new
+consumers should integrate with.
 
 ## Why This Exists
 
