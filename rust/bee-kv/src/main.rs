@@ -2645,23 +2645,43 @@ function updatePlayheads(time){{\
     playhead.style.left = `${{Math.max(0, Math.min(1, frac)) * 100}}%`;\
   }});\
 }}\
-function stopTracking(){{ if (rafId !== null) cancelAnimationFrame(rafId); rafId = null; activeAudio = null; }}\
+function hidePlayheads(){{\
+  document.querySelectorAll('[data-row-start] .playhead').forEach((playhead) => {{\
+    playhead.style.display = 'none';\
+  }});\
+}}\
+function syncPlayheads(audio){{ updatePlayheads(audio?.currentTime || 0); }}\
+function stopTracking(){{\
+  if (rafId !== null) cancelAnimationFrame(rafId);\
+  rafId = null;\
+  activeAudio = null;\
+  hidePlayheads();\
+}}\
 function tick(){{\
   if (!activeAudio || activeAudio.paused || activeAudio.ended) {{ stopTracking(); return; }}\
-  updatePlayheads(activeAudio.currentTime || 0);\
+  if (chunkAudios.includes(activeAudio)) {{\
+    const end = Number(activeAudio.dataset.windowEnd);\
+    if ((activeAudio.currentTime || 0) >= end) {{\
+      activeAudio.currentTime = end;\
+      activeAudio.pause();\
+      stopTracking();\
+      return;\
+    }}\
+  }}\
+  syncPlayheads(activeAudio);\
   rafId = requestAnimationFrame(tick);\
 }}\
 function startTracking(audio){{\
   pauseOthers(audio);\
   activeAudio = audio;\
   if (rafId !== null) cancelAnimationFrame(rafId);\
-  updatePlayheads(audio.currentTime || 0);\
+  syncPlayheads(audio);\
   rafId = requestAnimationFrame(tick);\
 }}\
 masterAudio.addEventListener('play', () => startTracking(masterAudio));\
 masterAudio.addEventListener('pause', () => {{ if (activeAudio === masterAudio) stopTracking(); }});\
 masterAudio.addEventListener('ended', () => {{ if (activeAudio === masterAudio) stopTracking(); }});\
-masterAudio.addEventListener('seeking', () => updatePlayheads(masterAudio.currentTime || 0));\
+masterAudio.addEventListener('seeking', () => syncPlayheads(masterAudio));\
 chunkAudios.forEach((audio) => {{\
   const start = Number(audio.dataset.windowStart);\
   const end = Number(audio.dataset.windowEnd);\
@@ -2672,14 +2692,10 @@ chunkAudios.forEach((audio) => {{\
   audio.addEventListener('seeking', () => {{\
     if (audio.currentTime < start) audio.currentTime = start;\
     if (audio.currentTime > end) audio.currentTime = end;\
-    updatePlayheads(audio.currentTime || 0);\
+    if (activeAudio === audio) syncPlayheads(audio);\
   }});\
   audio.addEventListener('pause', () => {{ if (activeAudio === audio) stopTracking(); }});\
   audio.addEventListener('ended', () => {{ if (activeAudio === audio) stopTracking(); }});\
-  audio.addEventListener('timeupdate', () => {{\
-    if (audio.currentTime >= end) {{ audio.pause(); audio.currentTime = end; }}\
-    updatePlayheads(audio.currentTime || 0);\
-  }});\
 }});\
 updatePlayheads(0);\
 </script></body></html>"
@@ -2828,9 +2844,11 @@ function updatePlayhead(time){{\
   playhead.style.display = 'block';\
   playhead.style.left = `${{Math.max(0, Math.min(1, frac)) * 100}}%`;\
 }}\
-function stopTracking(){{ if (rafId !== null) cancelAnimationFrame(rafId); rafId = null; }}\
-function tick(){{ if (audio.paused || audio.ended) {{ stopTracking(); return; }} updatePlayhead(audio.currentTime || 0); rafId = requestAnimationFrame(tick); }}\
-audio.addEventListener('play', () => {{ if (rafId !== null) cancelAnimationFrame(rafId); updatePlayhead(audio.currentTime || 0); rafId = requestAnimationFrame(tick); }});\
+function hidePlayhead(){{ if (playhead) playhead.style.display = 'none'; }}\
+function syncPlayhead(){{ updatePlayhead(audio.currentTime || 0); }}\
+function stopTracking(){{ if (rafId !== null) cancelAnimationFrame(rafId); rafId = null; hidePlayhead(); }}\
+function tick(){{ if (audio.paused || audio.ended) {{ stopTracking(); return; }} syncPlayhead(); rafId = requestAnimationFrame(tick); }}\
+audio.addEventListener('play', () => {{ if (rafId !== null) cancelAnimationFrame(rafId); syncPlayhead(); rafId = requestAnimationFrame(tick); }});\
 audio.addEventListener('pause', stopTracking);\
 audio.addEventListener('ended', stopTracking);\
 audio.addEventListener('seeking', () => updatePlayhead(audio.currentTime || 0));\
