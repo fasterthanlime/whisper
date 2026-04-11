@@ -1046,7 +1046,17 @@ fn decode_sliding_window_bridge_replay(
         if !has_next_window {
             break;
         }
-        next_window_start = next_window_start.saturating_add(stride_samples);
+        next_window_start =
+            if let Some(rollback) = window_runs.last().and_then(|run| run.rollback.as_ref()) {
+                if rollback.keep_until_secs > 0.0 {
+                    window.start_sample
+                        + ((rollback.keep_until_secs * SAMPLE_RATE as f64).round() as usize)
+                } else {
+                    next_window_start.saturating_add(stride_samples)
+                }
+            } else {
+                next_window_start.saturating_add(stride_samples)
+            };
         window_index += 1;
     }
 
@@ -3473,6 +3483,16 @@ fn timed_generated_bridge_for_cuts(
         String::new()
     };
 
+    let generated_kept_text = if kept_word_count == 0 {
+        String::new()
+    } else {
+        let end = generated_word_ranges
+            .get(kept_word_count - 1)
+            .map(|word| word.char_end)
+            .ok_or_else(|| anyhow::anyhow!("missing generated kept word range"))?;
+        generated_transcript[..end].trim_end().to_string()
+    };
+
     let bridge = if let (Some(start_word_index), Some(end_word_index)) =
         (effective_bridge_start_word, effective_bridge_end_word)
     {
@@ -3508,11 +3528,11 @@ fn timed_generated_bridge_for_cuts(
         }
     };
 
-    let kept_token_count = if kept_text.is_empty() {
+    let kept_token_count = if generated_kept_text.is_empty() {
         0
     } else {
         tokenizer
-            .encode_fast(kept_text.as_str(), false)
+            .encode_fast(generated_kept_text.as_str(), false)
             .map_err(|e| anyhow::anyhow!("encoding kept bridge prefix: {e}"))?
             .len()
     };
