@@ -1,23 +1,23 @@
 use crate::types2::{TimeRange, UtteranceTime};
 
-/// An utterance-global sample index.
+/// An utterance-global sample offset.
 ///
 /// Invariant:
 /// - zero is the first sample in the utterance
 /// - values are absolute within the utterance, never rebased per buffer/window
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub(crate) struct SampleIndex(usize);
+pub(crate) struct SampleOffset(usize);
 
-impl SampleIndex {
-    pub(crate) fn new(index: usize) -> Self {
-        Self(index)
+impl SampleOffset {
+    pub(crate) fn new(samples: usize) -> Self {
+        Self(samples)
     }
 
     pub(crate) fn as_usize(self) -> usize {
         self.0
     }
 
-    /// Converts this utterance-global sample index into utterance-global time.
+    /// Converts this utterance-global sample offset into utterance-global time.
     pub(crate) fn to_time(self) -> UtteranceTime {
         UtteranceTime::from_secs(self.0 as f64 / crate::SAMPLE_RATE as f64)
     }
@@ -55,16 +55,16 @@ impl SampleCount {
 /// - `start <= end`
 /// - both coordinates are utterance-global
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub(crate) struct UtteranceSampleRange {
+pub(crate) struct SampleRange {
     /// Inclusive start of the half-open sample range in utterance-global coordinates.
-    pub(crate) start: SampleIndex,
+    pub(crate) start: SampleOffset,
     /// Exclusive end of the half-open sample range in utterance-global coordinates.
-    pub(crate) end: SampleIndex,
+    pub(crate) end: SampleOffset,
 }
 
-impl UtteranceSampleRange {
-    pub(crate) fn new(start: SampleIndex, end: SampleIndex) -> Self {
-        assert!(start <= end, "utterance sample ranges must be ordered");
+impl SampleRange {
+    pub(crate) fn new(start: SampleOffset, end: SampleOffset) -> Self {
+        assert!(start <= end, "sample ranges must be ordered");
         Self { start, end }
     }
 
@@ -91,13 +91,13 @@ impl UtteranceSampleRange {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AudioBuffer {
     /// Inclusive utterance-global sample index of the first stored sample.
-    pub(crate) utterance_start: SampleIndex,
+    pub(crate) utterance_start: SampleOffset,
     /// Owned PCM samples covering a contiguous utterance-global sample interval.
     pub(crate) samples: Vec<f32>,
 }
 
 impl AudioBuffer {
-    pub(crate) fn new(utterance_start: SampleIndex, samples: Vec<f32>) -> Self {
+    pub(crate) fn new(utterance_start: SampleOffset, samples: Vec<f32>) -> Self {
         Self {
             utterance_start,
             samples,
@@ -113,8 +113,8 @@ impl AudioBuffer {
     }
 
     /// Returns the utterance-global sample range covered by this buffer.
-    pub(crate) fn utterance_range(&self) -> UtteranceSampleRange {
-        UtteranceSampleRange::new(
+    pub(crate) fn utterance_range(&self) -> SampleRange {
+        SampleRange::new(
             self.utterance_start,
             self.utterance_start.saturating_add(self.sample_count()),
         )
@@ -128,7 +128,7 @@ impl AudioBuffer {
     ///
     /// Invariants:
     /// - `range` must lie entirely within this buffer's utterance-global span
-    pub(crate) fn slice(&self, range: UtteranceSampleRange) -> Self {
+    pub(crate) fn slice(&self, range: SampleRange) -> Self {
         let self_range = self.utterance_range();
         assert!(
             range.start >= self_range.start && range.end <= self_range.end,

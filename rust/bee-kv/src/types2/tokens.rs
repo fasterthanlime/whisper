@@ -2,7 +2,7 @@ use std::fmt;
 
 use anyhow::{Result, bail};
 
-use super::decode_token_ids;
+use crate::types2::{SampleRange, decode_token_ids};
 
 /// A model token ID.
 ///
@@ -140,8 +140,8 @@ pub(crate) struct TimedToken {
     pub(crate) index: TokenIndex,
     /// Opaque model token ID.
     pub(crate) token: TokenId,
-    /// Utterance-global audio span associated with this token.
-    pub(crate) span: TimeRange,
+    /// Utterance-global sample span associated with this token.
+    pub(crate) span: SampleRange,
     /// Present only on the first token of a word; gives the word length in tokens.
     pub(crate) starts_word_len: Option<TokenCount>,
 }
@@ -183,8 +183,8 @@ impl ChunkInfo {
     /// Returns the utterance-global time span covered by this chunk.
     pub(crate) fn time_range(&self) -> Option<TimeRange> {
         Some(TimeRange::new(
-            self.tokens.first()?.span.start,
-            self.tokens.last()?.span.end,
+            self.tokens.first()?.span.start.to_time(),
+            self.tokens.last()?.span.end.to_time(),
         ))
     }
 

@@ -1,4 +1,4 @@
-use crate::types2::{AudioBuffer, ChunkInfo, Cut, SampleIndex, TokenIndex};
+use crate::types2::{AudioBuffer, ChunkInfo, Cut, SampleOffset, TokenIndex};
 
 /// Policy hook that decides where to cut a ready chunk.
 ///
@@ -61,7 +61,7 @@ impl Utterance {
     /// Creates a new utterance with empty audio and no committed tokens yet.
     pub(crate) fn new(cutter: Box<dyn Cutter>, listener: Box<dyn Listener>) -> Self {
         Self {
-            audio: AudioBuffer::new(SampleIndex::new(0), Vec::new()),
+            audio: AudioBuffer::new(SampleOffset::new(0), Vec::new()),
             committed_through: None,
             cutter,
             listener,
@@ -78,7 +78,7 @@ impl Utterance {
     ///   to run inference and construct transient [`ChunkInfo`] values
     pub(crate) fn feed(&mut self, samples: Vec<f32>) {
         assert!(
-            self.audio.utterance_start == SampleIndex::new(0),
+            self.audio.utterance_start == SampleOffset::new(0),
             "utterance audio buffer must remain anchored at sample 0"
         );
         self.audio.samples.extend(samples);
