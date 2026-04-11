@@ -27,7 +27,7 @@ use std::fmt;
 use std::path::Path;
 use std::sync::OnceLock;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use bee_qwen3_asr::tokenizers::Tokenizer;
 
 static TOKENIZER: OnceLock<Tokenizer> = OnceLock::new();
@@ -37,23 +37,23 @@ static TOKENIZER: OnceLock<Tokenizer> = OnceLock::new();
 /// Invariants:
 /// - initialization happens exactly once
 /// - every decode helper in this module reads from the same tokenizer instance
-pub(crate) fn init_tokenizer(path: &Path) -> Result<&'static Tokenizer> {
-    let loaded = Tokenizer::from_file(path)
-        .map_err(|e| anyhow::anyhow!("loading {}: {e}", path.display()))?;
+pub(crate) fn init_tokenizer(path: &Path) -> &'static Tokenizer {
+    let loaded =
+        Tokenizer::from_file(path).unwrap_or_else(|e| panic!("loading {}: {e}", path.display()));
     TOKENIZER
         .set(loaded)
-        .map_err(|_| anyhow::anyhow!("types2 tokenizer already initialized"))?;
-    tokenizer().context("tokenizer slot should be initialized immediately after set")
+        .unwrap_or_else(|_| panic!("types2 tokenizer already initialized"));
+    tokenizer()
 }
 
 /// Returns the process-global tokenizer slot.
 ///
 /// Invariant:
 /// - callers must initialize the slot through [`init_tokenizer`] before use
-pub(crate) fn tokenizer() -> Result<&'static Tokenizer> {
+pub(crate) fn tokenizer() -> &'static Tokenizer {
     TOKENIZER
         .get()
-        .ok_or_else(|| anyhow::anyhow!("types2 tokenizer not initialized"))
+        .unwrap_or_else(|| panic!("types2 tokenizer not initialized"))
 }
 
 /// A model token ID.
@@ -307,7 +307,7 @@ impl fmt::Display for TokenCount {
 
 fn decode_token_ids(token_ids: &[TokenId]) -> Result<String> {
     let ids: Vec<u32> = token_ids.iter().map(|id| id.as_u32()).collect();
-    tokenizer()?
+    tokenizer()
         .decode(&ids, true)
         .map_err(|e| anyhow::anyhow!("decoding token ids: {e}"))
 }

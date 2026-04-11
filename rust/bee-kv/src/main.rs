@@ -76,7 +76,7 @@ fn main() -> Result<()> {
         .with_context(|| format!("loading {}", config_path.display()))?;
     let thinker = config.thinker_config.clone();
 
-    let tokenizer = types2::init_tokenizer(&args.tokenizer_path)?;
+    let tokenizer = types2::init_tokenizer(&args.tokenizer_path);
 
     let mut model = Qwen3ASRModel::new(&thinker).context("constructing qwen3-asr model")?;
     let load_stats = load::load_weights(&mut model, &args.model_dir)
