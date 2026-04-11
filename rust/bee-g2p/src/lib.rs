@@ -249,6 +249,8 @@ impl BeeG2p {
             ));
         }
 
+        retune_token_piece_boundaries(&mut token_piece_spans);
+
         Ok(TextAnalysis {
             text: text.to_owned(),
             word_ipas,
@@ -460,6 +462,85 @@ fn ownership_spans_to_token_piece_spans(
         .collect()
 }
 
+fn retune_token_piece_boundaries(spans: &mut [TokenPieceIpaSpan]) {
+    for i in 1..spans.len() {
+        let (left, right) = spans.split_at_mut(i);
+        let prev = &mut left[i - 1];
+        let next = &mut right[0];
+        if prev.word_index != next.word_index {
+            continue;
+        }
+        if !starts_with_vowel_grapheme(&next.token_surface) {
+            continue;
+        }
+
+        let mut prev_tokens = parse_reviewed_ipa(&prev.ipa_text);
+        let mut next_tokens = parse_reviewed_ipa(&next.ipa_text);
+        if next_tokens.len() < 2 {
+            continue;
+        }
+
+        let move_count = leading_consonant_count_before_first_vowel(&next_tokens);
+        if move_count == 0 || move_count >= next_tokens.len() {
+            continue;
+        }
+
+        prev_tokens.extend(next_tokens.drain(..move_count));
+        prev.ipa_text = prev_tokens.join("");
+        next.ipa_text = next_tokens.join("");
+    }
+}
+
+fn starts_with_vowel_grapheme(surface: &str) -> bool {
+    surface
+        .trim_start()
+        .chars()
+        .next()
+        .is_some_and(|ch| matches!(ch.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u' | 'y'))
+}
+
+fn leading_consonant_count_before_first_vowel(tokens: &[String]) -> usize {
+    let normalized = normalize_ipa_for_comparison(tokens);
+    let mut count = 0usize;
+    for token in normalized {
+        if is_vowel_phone(&token) {
+            break;
+        }
+        count += 1;
+    }
+    count
+}
+
+fn is_vowel_phone(token: &str) -> bool {
+    matches!(
+        token,
+        "a" | "e"
+            | "i"
+            | "o"
+            | "u"
+            | "y"
+            | "ə"
+            | "ɛ"
+            | "ɪ"
+            | "ʊ"
+            | "ɔ"
+            | "æ"
+            | "ɑ"
+            | "ɒ"
+            | "ʌ"
+            | "ɚ"
+            | "ɝ"
+            | "œ"
+            | "ø"
+            | "ɨ"
+            | "ʉ"
+            | "ɯ"
+            | "ɜ"
+            | "ɞ"
+            | "ɐ"
+    )
+}
+
 fn sentence_token_pieces(tokenizer: &Tokenizer, text: &str) -> Result<Vec<SentenceTokenPiece>> {
     let encoding = tokenizer
         .encode(text, false)
@@ -529,7 +610,8 @@ fn word_re() -> &'static Regex {
 #[cfg(test)]
 mod tests {
     use super::{
-        TextAnalysis, TextWordIpa, TokenPieceIpaSpan, transcript_alignment_input, transcript_words,
+        TextAnalysis, TextWordIpa, TokenPieceIpaSpan, retune_token_piece_boundaries,
+        transcript_alignment_input, transcript_words,
     };
 
     #[test]
@@ -623,5 +705,42 @@ mod tests {
         assert_eq!(input.token_pieces[1].comparison_end, 7);
         assert_eq!(input.token_pieces[2].comparison_start, 7);
         assert_eq!(input.token_pieces[2].comparison_end, 9);
+    }
+
+    #[test]
+    fn retune_token_piece_boundaries_pulls_onset_back_to_vowel_piece() {
+        let mut spans = vec![
+            TokenPieceIpaSpan {
+                word_index: Some(0),
+                word_surface: Some("Facet".to_owned()),
+                token_index: 0,
+                token: "Fac".to_owned(),
+                token_surface: "Fac".to_owned(),
+                token_char_start: 0,
+                token_char_end: 3,
+                ipa_byte_start: 0,
+                ipa_byte_end: 3,
+                ipa_text: "feɪ".to_owned(),
+                ownership_score: 0.9,
+            },
+            TokenPieceIpaSpan {
+                word_index: Some(0),
+                word_surface: Some("Facet".to_owned()),
+                token_index: 1,
+                token: "et".to_owned(),
+                token_surface: "et".to_owned(),
+                token_char_start: 3,
+                token_char_end: 5,
+                ipa_byte_start: 3,
+                ipa_byte_end: 6,
+                ipa_text: "sət".to_owned(),
+                ownership_score: 0.8,
+            },
+        ];
+
+        retune_token_piece_boundaries(&mut spans);
+
+        assert_eq!(spans[0].ipa_text, "feɪs");
+        assert_eq!(spans[1].ipa_text, "ət");
     }
 }

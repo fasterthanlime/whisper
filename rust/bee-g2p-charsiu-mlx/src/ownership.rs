@@ -160,18 +160,27 @@ pub fn compute_ownership(
         });
     }
 
-    // For each character group, find the top-scoring span using the last step
-    // (the "anchor" byte, matching bee-g2p-charsiu's logic)
+    // For each character group, accumulate span scores across all decoder steps
+    // that contributed bytes to that emitted character. Using the whole group is
+    // more stable than anchoring on the final byte step only, which can shove a
+    // trailing consonant onto the next token piece.
     let mut group_assignments: Vec<(usize, f32)> = Vec::with_capacity(char_groups.len());
     for group in &char_groups {
-        let anchor_step = *group.steps.last().unwrap();
-        let row = &matrix[anchor_step * enc_len..(anchor_step + 1) * enc_len];
-        let scores = score_spans(row, text_byte_offset, spans);
-        let top = scores
+        let mut accum = vec![0.0f32; spans.len()];
+        for &step in &group.steps {
+            let row = &matrix[step * enc_len..(step + 1) * enc_len];
+            for score in score_spans(row, text_byte_offset, spans) {
+                accum[score.span_index] += score.score;
+            }
+        }
+        let (span_index, score) = accum
             .iter()
-            .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap())
+            .copied()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
             .unwrap();
-        group_assignments.push((top.span_index, top.score));
+        let avg_score = score / group.steps.len() as f32;
+        group_assignments.push((span_index, avg_score));
     }
 
     // Collapse contiguous character groups assigned to the same span
