@@ -1,6 +1,42 @@
 // Types for bee-roll cut-trace JSONL events.
 // Keep in sync with rust/bee-roll/src/cut_trace.rs
 
+export interface ZipaTimingTrace {
+  kind: "aligned" | "deleted" | "projected" | "invalid";
+  start_secs: number | null;
+  end_secs: number | null;
+  projected_at: number | null;
+  normalized_start: number | null;
+  normalized_end: number | null;
+}
+
+export interface AsrAlternativeTrace {
+  token_id: number;
+  token_text: string;
+  logit: number;
+}
+
+export interface ZipaPhoneSpanTrace {
+  phone: string;
+  start_secs: number;
+  end_secs: number;
+}
+
+export interface WordTokenTrace {
+  token_index: number;
+  token_text: string;
+  token_surface: string;
+  token_start_secs: number;
+  token_end_secs: number;
+  asr_margin: number | null;
+  asr_concentration: number | null;
+  asr_alternatives: AsrAlternativeTrace[];
+  g2p_ipa: string | null;
+  transcript_phones: string[];
+  zipa_phone_spans: ZipaPhoneSpanTrace[];
+  zipa_timing: ZipaTimingTrace;
+}
+
 export interface WordSpan {
   start: number;
   end: number;
@@ -8,6 +44,7 @@ export interface WordSpan {
   start_secs: number | null;
   end_secs: number | null;
   region: "stable" | "carry" | "preview";
+  tokens: WordTokenTrace[];
 }
 
 export interface FeedStartEvent {
@@ -64,6 +101,34 @@ export interface CutAppliedEvent {
   context_debug: string;
 }
 
+export interface PreviewApplyTokenChange {
+  token_index: number;
+  token_text: string;
+  old_timing: ZipaTimingTrace;
+  new_timing: ZipaTimingTrace;
+}
+
+export interface PreviewApplyEvent {
+  event: "preview_apply";
+  feed_index: number;
+  stable_through: number;
+  preview_from: number;
+  changed_tokens: PreviewApplyTokenChange[];
+}
+
+export interface ZipaCacheTrimEvent {
+  event: "zipa_cache_trim";
+  feed_index: number;
+  cut_sample: number;
+  cut_sample_secs: number;
+  before_audio_start_secs: number;
+  before_audio_end_secs: number;
+  after_audio_start_secs: number;
+  after_audio_end_secs: number;
+  before_spans: ZipaPhoneSpanTrace[];
+  after_spans: ZipaPhoneSpanTrace[];
+}
+
 export interface FeedEndEvent {
   event: "feed_end";
   feed_index: number;
@@ -81,7 +146,9 @@ export type TraceEvent =
   | RewritePreviewEvent
   | UpdatePreviewFromEvent
   | CutCandidateEvent
+  | PreviewApplyEvent
   | CutAppliedEvent
+  | ZipaCacheTrimEvent
   | FeedEndEvent;
 
 export interface FeedGroup {
@@ -91,6 +158,8 @@ export interface FeedGroup {
   feedEnd: FeedEndEvent | null;
   cutApplied: CutAppliedEvent | null;
   cutCandidate: CutCandidateEvent | null;
+  previewApply: PreviewApplyEvent | null;
+  zipaCacheTrim: ZipaCacheTrimEvent | null;
 }
 
 export function groupByFeed(events: TraceEvent[]): Map<number, FeedGroup> {
@@ -105,6 +174,8 @@ export function groupByFeed(events: TraceEvent[]): Map<number, FeedGroup> {
         feedEnd: null,
         cutApplied: null,
         cutCandidate: null,
+        previewApply: null,
+        zipaCacheTrim: null,
       });
     }
     const group = map.get(fi)!;
@@ -113,6 +184,8 @@ export function groupByFeed(events: TraceEvent[]): Map<number, FeedGroup> {
     if (ev.event === "feed_end") group.feedEnd = ev;
     if (ev.event === "cut_applied") group.cutApplied = ev;
     if (ev.event === "cut_candidate") group.cutCandidate = ev;
+    if (ev.event === "preview_apply") group.previewApply = ev;
+    if (ev.event === "zipa_cache_trim") group.zipaCacheTrim = ev;
   }
   return map;
 }

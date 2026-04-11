@@ -37,12 +37,16 @@ export function CutTimeline({
   zoom,
   viewStartSec,
   onViewStartSecChange,
+  selectedWordKey,
+  onWordSelect,
 }: {
   wordSpans: WordSpan[];
   cutSampleSecs?: number | null;
   zoom: number;
   viewStartSec: number;
   onViewStartSecChange?: (startSec: number) => void;
+  selectedWordKey?: string | null;
+  onWordSelect?: (word: WordSpan) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const pxPerSec = BASE_PX_PER_SEC * zoom;
@@ -122,11 +126,15 @@ export function CutTimeline({
                 {words.map((word, index) => {
                   const left = word.start_secs! * pxPerSec;
                   const width = Math.max((word.end_secs! - word.start_secs!) * pxPerSec, 2);
+                  const wordKey = `${word.start}-${word.end}-${word.text}`;
                   return (
-                    <div
-                      key={index}
+                    <button
+                      key={wordKey}
                       className="timeline-token"
                       title={`tok ${word.start}-${word.end}  ${word.start_secs!.toFixed(3)}s-${word.end_secs!.toFixed(3)}s`}
+                      type="button"
+                      onClick={() => onWordSelect?.(word)}
+                      data-selected={selectedWordKey === wordKey ? "yes" : "no"}
                       style={{
                         left,
                         width,
@@ -136,7 +144,7 @@ export function CutTimeline({
                       }}
                     >
                       {word.text}
-                    </div>
+                    </button>
                   );
                 })}
               </div>

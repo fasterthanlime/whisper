@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { type FeedGroup, type TraceEvent, groupByFeed } from "../cut-trace-types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { type FeedGroup, type TraceEvent, type WordSpan, groupByFeed } from "../cut-trace-types";
 import { CutTimeline } from "./CutTimeline";
 
 function useCutTrace() {
@@ -73,8 +73,18 @@ function EventRow({ event }: { event: TraceEvent }) {
     rewrite_preview: "var(--accent-strong)",
     update_preview_from: "var(--warning)",
     cut_candidate: "var(--lane-carry)",
+    preview_apply: "var(--accent-strong)",
     cut_applied: "var(--success)",
+    zipa_cache_trim: "var(--warning)",
     feed_end: "var(--text-muted)",
+  };
+
+  const formatValue = (value: unknown) => {
+    if (value === null) return "null";
+    if (value === true) return "yes";
+    if (value === false) return "no";
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
   };
 
   return (
@@ -88,12 +98,21 @@ function EventRow({ event }: { event: TraceEvent }) {
           .map(([key, value]) => (
             <span key={key} className="event-field">
               <span className="event-field-key">{key}=</span>
-              <span>{value === null ? "null" : value === true ? "yes" : value === false ? "no" : String(value)}</span>
+              <span>{formatValue(value)}</span>
             </span>
           ))}
       </td>
     </tr>
   );
+}
+
+function timingLabel(timing: WordSpan["tokens"][number]["zipa_timing"]) {
+  if (timing.kind === "aligned") {
+    return `${timing.start_secs?.toFixed(3)}..${timing.end_secs?.toFixed(3)}s`;
+  }
+  if (timing.kind === "deleted") return `deleted @ ${timing.projected_at}`;
+  if (timing.kind === "projected") return `projected ${timing.normalized_start}..${timing.normalized_end}`;
+  return "invalid";
 }
 
 function FeedDetail({
@@ -112,7 +131,18 @@ function FeedDetail({
   const feedEnd = group.feedEnd;
   const cutApplied = group.cutApplied;
   const feedStart = group.feedStart;
+  const previewApply = group.previewApply;
+  const zipaCacheTrim = group.zipaCacheTrim;
   const zoomOptions = [0.5, 0.75, 1, 1.5, 2, 3, 4];
+  const [selectedWordKey, setSelectedWordKey] = useState<string | null>(null);
+
+  const selectedWord = useMemo(() => {
+    if (!feedEnd || !selectedWordKey) return null;
+    return (
+      feedEnd.word_spans.find((word) => `${word.start}-${word.end}-${word.text}` === selectedWordKey) ??
+      null
+    );
+  }, [feedEnd, selectedWordKey]);
 
   return (
     <section className="detail-panel">
@@ -162,7 +192,132 @@ function FeedDetail({
             zoom={timelineZoom}
             viewStartSec={timelineViewStartSec}
             onViewStartSecChange={onTimelineViewStartSecChange}
+            selectedWordKey={selectedWordKey}
+            onWordSelect={(word) => setSelectedWordKey(`${word.start}-${word.end}-${word.text}`)}
           />
+        </section>
+      )}
+
+      {selectedWord && (
+        <section className="panel-card">
+          <div className="panel-card-header">
+            <strong>Word Detail</strong>
+            <span className="detail-muted">
+              tok {selectedWord.start}-{selectedWord.end} {selectedWord.start_secs?.toFixed(3)}..
+              {selectedWord.end_secs?.toFixed(3)}s
+            </span>
+          </div>
+          <div className="word-detail-title">{selectedWord.text}</div>
+          <div className="word-token-list">
+            {selectedWord.tokens.map((token) => (
+              <div key={token.token_index} className="word-token-card">
+                <div className="word-token-header">
+                  <strong>
+                    #{token.token_index} {token.token_text}
+                  </strong>
+                  <span className="detail-muted">{timingLabel(token.zipa_timing)}</span>
+                </div>
+                <div className="word-token-meta">
+                  {token.g2p_ipa && <span>IPA {token.g2p_ipa}</span>}
+                  {token.asr_margin != null && <span>margin {token.asr_margin.toFixed(3)}</span>}
+                  {token.asr_concentration != null && (
+                    <span>conc {token.asr_concentration.toFixed(3)}</span>
+                  )}
+                </div>
+                {token.transcript_phones.length > 0 && (
+                  <div className="chip-row">
+                    {token.transcript_phones.map((phone, index) => (
+                      <span key={`${phone}-${index}`} className="detail-chip">
+                        {phone}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {token.zipa_phone_spans.length > 0 && (
+                  <div className="chip-row">
+                    {token.zipa_phone_spans.map((span, index) => (
+                      <span key={`${span.phone}-${index}`} className="detail-chip accent">
+                        {span.phone} {span.start_secs.toFixed(3)}..{span.end_secs.toFixed(3)}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {token.asr_alternatives.length > 0 && (
+                  <div className="alt-list">
+                    {token.asr_alternatives.map((alternative) => (
+                      <span key={`${alternative.token_id}-${alternative.logit}`} className="detail-chip muted">
+                        {alternative.token_text} ({alternative.logit.toFixed(2)})
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {previewApply && previewApply.changed_tokens.length > 0 && (
+        <section className="panel-card">
+          <div className="panel-card-header">
+            <strong>Preview Timing Overwrites</strong>
+          </div>
+          <div className="word-token-list">
+            {previewApply.changed_tokens.map((change) => (
+              <div key={change.token_index} className="word-token-card">
+                <div className="word-token-header">
+                  <strong>
+                    #{change.token_index} {change.token_text}
+                  </strong>
+                </div>
+                <div className="word-token-meta">
+                  <span>old {timingLabel(change.old_timing)}</span>
+                  <span>new {timingLabel(change.new_timing)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {zipaCacheTrim && (
+        <section className="panel-card">
+          <div className="panel-card-header">
+            <strong>ZIPA Cache Trim</strong>
+            <span className="detail-muted">cut {zipaCacheTrim.cut_sample_secs.toFixed(3)}s</span>
+          </div>
+          <div className="word-token-meta">
+            <span>
+              before {zipaCacheTrim.before_audio_start_secs.toFixed(3)}..
+              {zipaCacheTrim.before_audio_end_secs.toFixed(3)}s
+            </span>
+            <span>
+              after {zipaCacheTrim.after_audio_start_secs.toFixed(3)}..
+              {zipaCacheTrim.after_audio_end_secs.toFixed(3)}s
+            </span>
+          </div>
+          <div className="trim-grid">
+            <div>
+              <strong>Before</strong>
+              <div className="chip-row">
+                {zipaCacheTrim.before_spans.map((span, index) => (
+                  <span key={`before-${index}`} className="detail-chip accent">
+                    {span.phone} {span.start_secs.toFixed(3)}..{span.end_secs.toFixed(3)}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div>
+              <strong>After</strong>
+              <div className="chip-row">
+                {zipaCacheTrim.after_spans.map((span, index) => (
+                  <span key={`after-${index}`} className="detail-chip accent">
+                    {span.phone} {span.start_secs.toFixed(3)}..{span.end_secs.toFixed(3)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
         </section>
       )}
 
