@@ -558,20 +558,24 @@ impl Utterance {
         // - ZIPA must exist
         // Nothing meaningful happens without those three components.
         //
-        // This method is where the machine stops being "just decoded tokens" and
-        // becomes the actual bee-roll model.
+        // Stable tokens are treated as frozen here. Only the mutable seam
+        // (`carry` + `preview`, i.e. `[stable_through, tape.end())`) is
+        // re-decoded, re-phoneticized, and re-aligned on each feed.
         let Some(phonetics) = self.phonetics.as_mut() else {
             return Ok(None);
         };
-        let token_ids = self
-            .tape
-            .tokens()
+        let seam_start = self.stable_through.as_usize();
+        let seam_tokens = self.tape.slice(UtteranceTokenRange::new(
+            self.stable_through,
+            self.tape.end(),
+        ));
+        if seam_tokens.is_empty() {
+            return Ok(None);
+        }
+        let token_ids = seam_tokens
             .iter()
             .map(|token| token.timed_token().token())
             .collect::<Vec<_>>();
-        if token_ids.is_empty() {
-            return Ok(None);
-        }
 
         let transcript = crate::decode_token_ids(&token_ids)?;
         let analysis = phonetics
@@ -596,7 +600,7 @@ impl Utterance {
             .into_iter()
             .zip(timings)
             .map(|(phones, timing)| PreviewTokenEnrichment {
-                token_index: phones.token_index,
+                token_index: seam_start + phones.token_index,
                 g2p_ipa: CompactString::from(phones.ipa_text),
                 transcript_phones: phones
                     .normalized_phones
