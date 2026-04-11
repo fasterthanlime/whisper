@@ -1189,6 +1189,11 @@ fn decode_sliding_window_bridge_replay(
             start_position = rollback_position;
             replay_prefix_for_next =
                 (!split.bridge.text.is_empty()).then_some(split.bridge.clone());
+            let bridge_text = if split.bridge.token_ids.is_empty() {
+                None
+            } else {
+                Some(decode_token_ids(tokenizer, &split.bridge.token_ids)?)
+            };
             let rollback = WindowRollbackDecision {
                 keep_boundary_policy,
                 target_keep_until_secs,
@@ -1199,7 +1204,7 @@ fn decode_sliding_window_bridge_replay(
                 kept_token_ids,
                 kept_text,
                 bridge_token_ids: split.bridge.token_ids.clone(),
-                bridge_text: (!split.bridge.text.is_empty()).then_some(split.bridge.text.clone()),
+                bridge_text,
                 rollback_position,
                 keep_boundary_debug,
             };
@@ -2579,10 +2584,11 @@ fn print_sliding_window_timed_rollback_experiment(
         }
         if let Some(rollback) = &run.rollback {
             println!(
-                "rollback keep_until={:?} kept_words={} kept_tokens={} rollback_position={}",
+                "rollback keep_until={:?} kept_words={} kept_tokens={} bridge_tokens={} rollback_position={}",
                 rollback.keep_until_secs,
                 rollback.kept_word_count,
                 rollback.kept_token_count,
+                rollback.bridge_token_ids.len(),
                 rollback.rollback_position
             );
             println!("kept_text={}", rollback.kept_text);
@@ -3340,13 +3346,14 @@ fn render_sliding_window_row(
             })
             .unwrap_or_else(|| "none".to_string());
         format!(
-            "audio {:.2}s..{:.2}s | replayed_prefix={} | kept_text={} | bridge_text={} | kept_tokens={} | rollback_position={} | keep_policy={} | keep_target={:.2}s | keep_cut={:.2}s | keep_search=[{:.2}s..{:.2}s] | min_keep={:.2}s | snapped={} | keep_word={}",
+            "audio {:.2}s..{:.2}s | replayed_prefix={} | kept_text={} | bridge_text={} | kept_tokens={} | bridge_tokens={} | rollback_position={} | keep_policy={} | keep_target={:.2}s | keep_cut={:.2}s | keep_search=[{:.2}s..{:.2}s] | min_keep={:.2}s | snapped={} | keep_word={}",
             window_start_secs,
             window_end_secs,
             html_escape(replayed_prefix.map(|p| p.text.as_str()).unwrap_or("none")),
             html_escape(&rollback.kept_text),
             html_escape(rollback.bridge_text.as_deref().unwrap_or("none")),
             rollback.kept_token_count,
+            rollback.bridge_token_ids.len(),
             rollback.rollback_position,
             rollback.keep_boundary_policy.as_str(),
             window_start_secs + rollback.target_keep_until_secs,
