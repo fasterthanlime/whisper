@@ -584,7 +584,7 @@ fn build_word_segment_candidates(
                 if range.end > range.start + shift {
                     variants.push(range.start..(range.end - shift));
                 }
-                if range.start + shift < range.end && range.end > range.start + shift {
+                if range.start + shift < range.end {
                     variants.push(
                         (range.start + shift)..(range.end - shift).max(range.start + shift + 1),
                     );

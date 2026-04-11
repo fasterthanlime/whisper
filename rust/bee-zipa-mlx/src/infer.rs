@@ -64,6 +64,7 @@ impl ZipaInference {
     }
 
     pub fn load_quantized_safetensors(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
         let (tensors, metadata) = Array::load_safetensors_with_metadata(path)
             .map_err(|e| mlx_rs::error::Exception::custom(format!("load safetensors: {e}")))?;
         let format = metadata.get("format").ok_or_else(|| {
@@ -88,10 +89,14 @@ impl ZipaInference {
             .map_err(|e| ZipaError::Other(anyhow::Error::new(e)))?;
 
         let variant = ZipaVariant::SmallCrCtcNsNoDiacritics700k;
-        let artifacts =
-            ReferenceArtifacts::from_dir(ReferenceArtifacts::default_reference_dir(variant))?;
+        let bundle_dir = path.parent().ok_or_else(|| {
+            ZipaError::Other(anyhow::anyhow!(
+                "quantized checkpoint has no parent directory"
+            ))
+        })?;
+        let tokens_path = bundle_dir.join("tokens.txt");
         let config = ZipaModelConfig::for_variant(variant);
-        let tokens = TokenTable::from_file(&artifacts.tokens_txt)?;
+        let tokens = TokenTable::from_file(&tokens_path)?;
         let features = FbankExtractor::new(FbankParams::default());
 
         let model = ZipaModel::new(&config)?;
