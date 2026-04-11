@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::OnceLock;
 
-use bee_phonetic::{normalize_ipa_for_comparison, parse_reviewed_ipa};
+use bee_phonetic::{
+    normalize_ipa_for_comparison, normalize_ipa_for_comparison_with_spans, parse_reviewed_ipa,
+};
 use facet::Facet;
 use regex::Regex;
 
@@ -195,6 +197,22 @@ pub struct TokenPiecePhones {
     pub ipa_text: String,
     pub ipa_tokens: Vec<String>,
     pub normalized_phones: Vec<String>,
+    pub ownership_score: f32,
+}
+
+#[derive(Debug, Clone, Facet)]
+pub struct TokenPieceComparisonToken {
+    pub word_index: Option<usize>,
+    pub word_surface: Option<String>,
+    pub token_index: usize,
+    pub token: String,
+    pub token_surface: String,
+    pub token_char_start: usize,
+    pub token_char_end: usize,
+    pub ipa_text: String,
+    pub comparison_token: String,
+    pub ipa_source_start: usize,
+    pub ipa_source_end: usize,
     pub ownership_score: f32,
 }
 
@@ -595,6 +613,30 @@ pub fn token_piece_phones(result: &ProbeResult) -> Vec<TokenPiecePhones> {
         .collect()
 }
 
+pub fn token_piece_comparison_tokens(result: &ProbeResult) -> Vec<TokenPieceComparisonToken> {
+    token_piece_phones(result)
+        .into_iter()
+        .flat_map(|span| {
+            normalize_ipa_for_comparison_with_spans(&span.ipa_tokens)
+                .into_iter()
+                .map(move |token| TokenPieceComparisonToken {
+                    word_index: span.word_index,
+                    word_surface: span.word_surface.clone(),
+                    token_index: span.token_index,
+                    token: span.token.clone(),
+                    token_surface: span.token_surface.clone(),
+                    token_char_start: span.token_char_start,
+                    token_char_end: span.token_char_end,
+                    ipa_text: span.ipa_text.clone(),
+                    comparison_token: token.token,
+                    ipa_source_start: token.source_start,
+                    ipa_source_end: token.source_end,
+                    ownership_score: span.ownership_score,
+                })
+        })
+        .collect()
+}
+
 impl Drop for CharsiuSidecarClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -649,8 +691,8 @@ fn word_re() -> &'static Regex {
 mod tests {
     use super::{
         ProbeAttentionRow, ProbeQwenPieceScore, ProbeQwenTokenPiece, ProbeRankedInput, ProbeResult,
-        ProbeWordScore, ProbeWordSpan, summarize_probe_runs, token_piece_ipa_spans,
-        transcript_words,
+        ProbeWordScore, ProbeWordSpan, summarize_probe_runs, token_piece_comparison_tokens,
+        token_piece_ipa_spans, transcript_words,
     };
 
     #[test]
@@ -760,6 +802,30 @@ mod tests {
         assert_eq!(spans[0].ipa_text, "feɪs");
         assert_eq!(spans[1].token, "et");
         assert_eq!(spans[1].ipa_text, "ət");
+
+        let comparison = token_piece_comparison_tokens(&result);
+        let rendered: Vec<_> = comparison
+            .into_iter()
+            .map(|token| {
+                (
+                    token.token,
+                    token.comparison_token,
+                    token.ipa_source_start,
+                    token.ipa_source_end,
+                )
+            })
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                ("Fac".to_string(), "f".to_string(), 0, 1),
+                ("Fac".to_string(), "ɛ".to_string(), 1, 2),
+                ("Fac".to_string(), "ɪ".to_string(), 1, 2),
+                ("Fac".to_string(), "s".to_string(), 2, 3),
+                ("et".to_string(), "ə".to_string(), 0, 1),
+                ("et".to_string(), "t".to_string(), 1, 2),
+            ]
+        );
     }
 
     fn probe_row(

@@ -31,6 +31,8 @@ The current job of that Rust code is simple:
 - or run the cross-attention probe and return typed ownership data
 - or collapse that ownership into model-facing token-piece IPA spans
 - or collapse those spans into transcript-side comparison phones
+- or flatten those comparison phones into the exact token stream shape the
+  aligner wants
 
 Example:
 
@@ -41,6 +43,7 @@ cargo run -p bee-g2p-charsiu -- --text "For Jason, this Thursday, use Facet."
 cargo run -p bee-g2p-charsiu -- --probe-text "use Facet"
 cargo run -p bee-g2p-charsiu -- --token-spans-text "use Facet"
 cargo run -p bee-g2p-charsiu -- --token-phones-text "use Facet"
+cargo run -p bee-g2p-charsiu -- --comparison-tokens-text "use Facet"
 ```
 
 Current output:
@@ -72,9 +75,21 @@ span    12..15   ət           word=Facet    token=et    surface=et
 
 text    use Facet
 decoded_ipa      ˈjuzˈfeɪsət
-phones  use      word=use      token=use   raw=j u z     norm=j u z
-phones   Fac     word=Facet    token=ĠFac  raw=f eɪ s    norm=f eɪ s
+phones  use      word=use      token=use   raw=j u z     norm=j ʊ z
+phones   Fac     word=Facet    token=ĠFac  raw=f eɪ s    norm=f ɛ ɪ s
 phones  et       word=Facet    token=et    raw=ə t       norm=ə t
+
+text    use Facet
+decoded_ipa      ˈjuzˈfeɪsət
+cmp     use      word=use      token=use   phone=j  span=0..1
+cmp     use      word=use      token=use   phone=ʊ  span=1..2
+cmp     use      word=use      token=use   phone=z  span=2..3
+cmp      Fac     word=Facet    token=ĠFac  phone=f  span=0..1
+cmp      Fac     word=Facet    token=ĠFac  phone=ɛ  span=1..2
+cmp      Fac     word=Facet    token=ĠFac  phone=ɪ  span=1..2
+cmp      Fac     word=Facet    token=ĠFac  phone=s  span=2..3
+cmp     et       word=Facet    token=et    phone=ə  span=0..1
+cmp     et       word=Facet    token=et    phone=t  span=1..2
 ```
 
 That is intentionally modest.

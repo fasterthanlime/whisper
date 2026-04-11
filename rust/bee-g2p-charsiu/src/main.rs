@@ -1,6 +1,7 @@
 use bee_g2p_charsiu::{
     CharsiuSidecarClient, PhonemizeTextRequest, PhonemizeWordsRequest, ProbeRequest,
-    probe_text_default, summarize_probe_runs, token_piece_ipa_spans, token_piece_phones,
+    probe_text_default, summarize_probe_runs, token_piece_comparison_tokens, token_piece_ipa_spans,
+    token_piece_phones,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -10,6 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut probe_text = None;
     let mut token_spans_text = None;
     let mut token_phones_text = None;
+    let mut comparison_tokens_text = None;
     let mut words = Vec::new();
 
     while let Some(arg) = args.next() {
@@ -38,22 +40,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             token_phones_text = Some(value);
             continue;
         }
+        if arg == "--comparison-tokens-text" {
+            let value = args
+                .next()
+                .ok_or("--comparison-tokens-text requires a value")?;
+            comparison_tokens_text = Some(value);
+            continue;
+        }
         words.push(arg);
     }
 
     let selected_modes = usize::from(text.is_some())
         + usize::from(probe_text.is_some())
         + usize::from(token_spans_text.is_some())
-        + usize::from(token_phones_text.is_some());
+        + usize::from(token_phones_text.is_some())
+        + usize::from(comparison_tokens_text.is_some());
     if selected_modes > 1
         || ((text.is_some()
             || probe_text.is_some()
             || token_spans_text.is_some()
-            || token_phones_text.is_some())
+            || token_phones_text.is_some()
+            || comparison_tokens_text.is_some())
             && !words.is_empty())
     {
         return Err(
-            "use exactly one of --text TEXT, --probe-text TEXT, --token-spans-text TEXT, --token-phones-text TEXT, or WORD..."
+            "use exactly one of --text TEXT, --probe-text TEXT, --token-spans-text TEXT, --token-phones-text TEXT, --comparison-tokens-text TEXT, or WORD..."
                 .into(),
         );
     }
@@ -62,12 +73,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         && probe_text.is_none()
         && token_spans_text.is_none()
         && token_phones_text.is_none()
+        && comparison_tokens_text.is_none()
         && words.is_empty()
     {
         return Err(
-            "usage: bee-g2p-charsiu [--lang-code CODE] [--text TEXT | --probe-text TEXT | --token-spans-text TEXT | --token-phones-text TEXT | WORD...]"
+            "usage: bee-g2p-charsiu [--lang-code CODE] [--text TEXT | --probe-text TEXT | --token-spans-text TEXT | --token-phones-text TEXT | --comparison-tokens-text TEXT | WORD...]"
                 .into()
         );
+    }
+
+    if let Some(text) = comparison_tokens_text {
+        let result = probe_text_default(ProbeRequest {
+            text,
+            lang_code,
+            top_k: 6,
+        })?;
+        println!("text\t{}", result.text);
+        println!("decoded_ipa\t{}", result.decoded_output);
+        for token in token_piece_comparison_tokens(&result) {
+            let word = token.word_surface.unwrap_or_default();
+            println!(
+                "cmp\t{}\tword={}\ttoken={}\tphone={}\tspan={}..{}",
+                token.token_surface,
+                word,
+                token.token,
+                token.comparison_token,
+                token.ipa_source_start,
+                token.ipa_source_end
+            );
+        }
+        return Ok(());
     }
 
     if let Some(text) = token_phones_text {
