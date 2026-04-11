@@ -1,0 +1,6 @@
+[test-groups.heavy-ml]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = "package(bee-roll)"
+test-group = "heavy-ml"

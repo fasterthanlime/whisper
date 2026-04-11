@@ -45,6 +45,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 const DEFAULT_PREVIEW_REWRITE_TOKENS: usize = 5;
+const DEFAULT_MIN_PREVIEW_AFTER_CUT: usize = 12;
 const DEFAULT_MAX_NEW_TOKENS: usize = 256;
 const MIN_PREVIEW_MAX_NEW_TOKENS: usize = 4;
 const PREVIEW_MAX_NEW_TOKENS_BASE: usize = 2;
@@ -205,6 +206,11 @@ pub struct Utterance {
     /// How many tail tokens the next feed may rewrite before a new cut is chosen.
     preview_rewrite_tokens: usize,
 
+    /// Minimum number of tokens that must remain between stable_through and
+    /// preview_from after a cut is applied. Prevents overly aggressive cuts
+    /// that leave too little preview context.
+    min_preview_after_cut: usize,
+
     /// Number of feed steps processed so far.
     feed_count: usize,
 
@@ -245,6 +251,7 @@ impl Utterance {
             preview_from: TokenIndex::new(0),
             tape: Tape::new(num_layers),
             preview_rewrite_tokens: DEFAULT_PREVIEW_REWRITE_TOKENS,
+            min_preview_after_cut: DEFAULT_MIN_PREVIEW_AFTER_CUT,
             feed_count: 0,
             cutting,
             asr: None,
@@ -958,7 +965,7 @@ impl Utterance {
             let latest_legal = self
                 .preview_from
                 .as_usize()
-                .saturating_sub(self.preview_rewrite_tokens);
+                .saturating_sub(self.min_preview_after_cut);
             self.cut_tracer.cut_candidate(
                 self.feed_count,
                 self.stable_through.as_usize(),
@@ -1058,7 +1065,7 @@ impl Utterance {
         let latest_legal_boundary = self
             .preview_from
             .as_usize()
-            .saturating_sub(self.preview_rewrite_tokens);
+            .saturating_sub(self.min_preview_after_cut);
         let boundary = find_latest_word_end_at_or_before(
             &ids,
             self.stable_through.as_usize(),
