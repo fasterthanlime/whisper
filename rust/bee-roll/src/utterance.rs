@@ -1,8 +1,6 @@
 use crate::tokens::UtteranceTokenRange;
-use crate::{
-    AudioBuffer, ComparisonPhone, Cut, FeedOutput, OutputToken, SampleOffset, SampleRange, Tape,
-    TimedToken, TokenId, TokenIndex, ZipaTiming,
-};
+use crate::{AudioBuffer, Cut, FeedOutput, OutputToken, SampleOffset, Tape, TokenIndex};
+use compact_str::CompactString;
 
 const DEFAULT_PREVIEW_REWRITE_TOKENS: usize = 5;
 
@@ -10,6 +8,20 @@ const DEFAULT_PREVIEW_REWRITE_TOKENS: usize = 5;
 enum DecodeMode {
     RebuildPromptEachFeed,
     PersistentKv,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PreviewDecodePlan {
+    rollback_to: TokenIndex,
+    decoder_position: usize,
+    rewrite_budget_tokens: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DecodedPreview {
+    detected_language: Option<CompactString>,
+    tokens: Vec<OutputToken>,
+    next_decoder_position: usize,
 }
 
 /// Policy hook that decides where to cut a ready chunk.
@@ -122,9 +134,10 @@ impl Utterance {
         self.audio.extend_samples(samples);
         self.feed_count += 1;
 
-        self.rewrite_preview_from_carry();
+        let plan = self.plan_preview_decode();
+        self.rewrite_preview(plan.rollback_to);
         // TODO: decide when enough audio exists to run ASR
-        // TODO: decode preview from carry boundary using `decode_mode`
+        // TODO: decode preview from `plan` using `decode_mode`
         // TODO: optionally run cutter and promote stable/carry boundaries
 
         FeedOutput::new(self.tape.tokens(), self.tape.detected_language())
@@ -187,21 +200,59 @@ impl Utterance {
     /// - the preview suffix is provisional and can be discarded wholesale
     /// - stable/carry boundaries remain intact
     /// - persistent-KV mode tracks the visible decoder position at the carry cut
-    fn rewrite_preview_from_carry(&mut self) {
-        self.tape.truncate_to(self.carry_through);
+    fn plan_preview_decode(&self) -> PreviewDecodePlan {
+        PreviewDecodePlan {
+            rollback_to: self.carry_through,
+            decoder_position: self.carry_through.as_usize(),
+            rewrite_budget_tokens: self.preview_rewrite_tokens,
+        }
+    }
+
+    /// Rewind the live tail so the next decode pass can regenerate preview from
+    /// the chosen rollback boundary.
+    ///
+    /// Invariants:
+    /// - `rollback_to` must not precede `carry_through`
+    /// - `rollback_to` must lie within the current tape
+    fn rewrite_preview(&mut self, rollback_to: TokenIndex) {
+        assert!(
+            rollback_to >= self.carry_through,
+            "preview rewrites must not cut into carry"
+        );
+        assert!(
+            rollback_to <= self.tape.end(),
+            "preview rewrite boundary must lie within the tape"
+        );
+        self.tape.truncate_to(rollback_to);
         if matches!(self.decode_mode, DecodeMode::PersistentKv) {
-            self.decoder_position = self.carry_through.as_usize();
+            self.decoder_position = rollback_to.as_usize();
+        }
+    }
+
+    /// Apply one decode pass that regenerated preview from the current
+    /// rollback boundary.
+    ///
+    /// Intent:
+    /// - token append + KV advance stay coupled inside `Tape`
+    /// - detected language is updated at the same point as the decode result
+    /// - persistent-KV mode adopts the model-reported next decoder position
+    fn apply_decoded_preview(&mut self, decoded: DecodedPreview) {
+        self.tape.set_detected_language(decoded.detected_language);
+        self.tape.append(decoded.tokens);
+        if matches!(self.decode_mode, DecodeMode::PersistentKv) {
+            self.decoder_position = decoded.next_decoder_position;
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Cutter, Listener, Utterance};
+    use super::{Cutter, DecodedPreview, Listener, Utterance};
     use crate::{
         ComparisonPhone, Cut, OutputToken, SampleOffset, SampleRange, TimedToken, TokenId,
         TokenIndex, ZipaTiming,
     };
+    use compact_str::CompactString;
 
     struct NoCut;
     impl Cutter for NoCut {
@@ -242,6 +293,25 @@ mod tests {
         assert_eq!(utterance.preview_tokens().len(), 0);
         assert_eq!(output_len, 3);
         assert_eq!(utterance.decoder_position, 3);
+    }
+
+    #[test]
+    fn apply_decoded_preview_appends_tokens_and_updates_language() {
+        let mut utterance = Utterance::new(2, Box::new(NoCut), Box::new(NullListener));
+        utterance.tape.append(vec![dummy_output_token(0, 10)]);
+        utterance.set_stable_and_carry(TokenIndex::new(0), TokenIndex::new(1));
+        utterance.rewrite_preview(TokenIndex::new(1));
+
+        utterance.apply_decoded_preview(DecodedPreview {
+            detected_language: Some(CompactString::from("English")),
+            tokens: vec![dummy_output_token(1, 11), dummy_output_token(2, 12)],
+            next_decoder_position: 3,
+        });
+
+        assert_eq!(utterance.tape.tokens().len(), 3);
+        assert_eq!(utterance.decoder_position, 3);
+        assert_eq!(utterance.tape.detected_language(), Some("English"));
+        assert_eq!(utterance.preview_tokens().len(), 2);
     }
 
     fn dummy_output_token(index: usize, token_id: u32) -> OutputToken {

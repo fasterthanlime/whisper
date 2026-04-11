@@ -221,4 +221,8 @@ impl Tape {
     pub(crate) fn detected_language(&self) -> Option<&str> {
         self.detected_language.as_deref()
     }
+
+    pub(crate) fn set_detected_language(&mut self, detected_language: Option<CompactString>) {
+        self.detected_language = detected_language;
+    }
 }
