@@ -30,6 +30,7 @@ The current job of that Rust code is simple:
 - or split a text into words, keep spans, and phonemize those words
 - or run the cross-attention probe and return typed ownership data
 - or collapse that ownership into model-facing token-piece IPA spans
+- or collapse those spans into transcript-side comparison phones
 
 Example:
 
@@ -39,6 +40,7 @@ cargo run -p bee-g2p-charsiu -- Facet Wednesday
 cargo run -p bee-g2p-charsiu -- --text "For Jason, this Thursday, use Facet."
 cargo run -p bee-g2p-charsiu -- --probe-text "use Facet"
 cargo run -p bee-g2p-charsiu -- --token-spans-text "use Facet"
+cargo run -p bee-g2p-charsiu -- --token-phones-text "use Facet"
 ```
 
 Current output:
@@ -67,6 +69,12 @@ decoded_ipa      ˈjuzˈfeɪsət
 span    0..5     ˈjuz         word=use      token=use   surface=use
 span    5..12    ˈfeɪs        word=Facet    token=ĠFac  surface= Fac
 span    12..15   ət           word=Facet    token=et    surface=et
+
+text    use Facet
+decoded_ipa      ˈjuzˈfeɪsət
+phones  use      word=use      token=use   raw=j u z     norm=j u z
+phones   Fac     word=Facet    token=ĠFac  raw=f eɪ s    norm=f eɪ s
+phones  et       word=Facet    token=et    raw=ə t       norm=ə t
 ```
 
 That is intentionally modest.

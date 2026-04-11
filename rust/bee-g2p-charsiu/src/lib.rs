@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::OnceLock;
 
+use bee_phonetic::{normalize_ipa_for_comparison, parse_reviewed_ipa};
 use facet::Facet;
 use regex::Regex;
 
@@ -179,6 +180,21 @@ pub struct TokenPieceIpaSpan {
     pub ipa_step_start: usize,
     pub ipa_step_end: usize,
     pub ipa_text: String,
+    pub ownership_score: f32,
+}
+
+#[derive(Debug, Clone, Facet)]
+pub struct TokenPiecePhones {
+    pub word_index: Option<usize>,
+    pub word_surface: Option<String>,
+    pub token_index: usize,
+    pub token: String,
+    pub token_surface: String,
+    pub token_char_start: usize,
+    pub token_char_end: usize,
+    pub ipa_text: String,
+    pub ipa_tokens: Vec<String>,
+    pub normalized_phones: Vec<String>,
     pub ownership_score: f32,
 }
 
@@ -552,6 +568,29 @@ pub fn token_piece_ipa_spans(result: &ProbeResult) -> Vec<TokenPieceIpaSpan> {
                 ipa_text: run.rendered_output,
                 ownership_score: run.average_qwen_score,
             })
+        })
+        .collect()
+}
+
+pub fn token_piece_phones(result: &ProbeResult) -> Vec<TokenPiecePhones> {
+    token_piece_ipa_spans(result)
+        .into_iter()
+        .map(|span| {
+            let ipa_tokens = parse_reviewed_ipa(&span.ipa_text);
+            let normalized_phones = normalize_ipa_for_comparison(&ipa_tokens);
+            TokenPiecePhones {
+                word_index: span.word_index,
+                word_surface: span.word_surface,
+                token_index: span.token_index,
+                token: span.token,
+                token_surface: span.token_surface,
+                token_char_start: span.token_char_start,
+                token_char_end: span.token_char_end,
+                ipa_text: span.ipa_text,
+                ipa_tokens,
+                normalized_phones,
+                ownership_score: span.ownership_score,
+            }
         })
         .collect()
 }

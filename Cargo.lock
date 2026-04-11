@@ -185,6 +185,7 @@ dependencies = [
 name = "bee-g2p-charsiu"
 version = "0.1.0"
 dependencies = [
+ "bee-phonetic",
  "facet",
  "facet-json",
  "regex",
