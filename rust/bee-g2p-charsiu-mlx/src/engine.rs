@@ -3,8 +3,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::Result;
-use mlx_rs::ops::indexing::IndexOp;
+use anyhow::{Result, bail};
+use mlx_rs::ops::flatten;
+use mlx_rs::{Array, Dtype};
 
 use crate::config::T5Config;
 use crate::load::load_weights_direct;
@@ -149,16 +150,7 @@ impl G2pEngine {
         let ipa_key = (lang_code.to_string(), word.to_string());
         self.ipa_cache.insert(ipa_key, ipa.clone());
 
-        // Extract attention matrix to CPU
-        let dec_len = cross_attn.shape()[0] as usize;
-        let enc_len = cross_attn.shape()[1] as usize;
-        let mut flat = Vec::with_capacity(dec_len * enc_len);
-        for d in 0..dec_len {
-            for e in 0..enc_len {
-                let val: f32 = cross_attn.index((d as i32, e as i32)).item();
-                flat.push(val);
-            }
-        }
+        let (flat, dec_len, enc_len) = extract_attention_matrix(&cross_attn)?;
 
         // Compute text byte offset: where the word starts in the prompt
         let prompt_bytes = input.as_bytes();
@@ -204,6 +196,31 @@ impl G2pEngine {
         self.ipa_cache.clear();
         self.probe_cache.clear();
     }
+}
+
+fn extract_attention_matrix(cross_attn: &Array) -> Result<(Vec<f32>, usize, usize)> {
+    let cross_attn = if cross_attn.dtype() == Dtype::Float32 {
+        cross_attn.clone()
+    } else {
+        cross_attn.as_type::<f32>()?
+    };
+
+    let shape = cross_attn.shape();
+    if shape.len() != 2 {
+        bail!(
+            "cross-attention matrix must be rank 2, got shape {:?}",
+            shape
+        );
+    }
+
+    let dec_len = shape[0] as usize;
+    let enc_len = shape[1] as usize;
+
+    // Normalize once, then bulk-read the full matrix in row-major order.
+    let flat = flatten(&cross_attn, None, None)?;
+    let matrix = flat.as_slice::<f32>().to_vec();
+
+    Ok((matrix, dec_len, enc_len))
 }
 
 #[cfg(test)]
@@ -257,5 +274,16 @@ mod tests {
         assert_eq!(key_a, key_b);
         assert_ne!(key_a, key_c);
         assert_ne!(key_a, key_d);
+    }
+
+    #[test]
+    fn extract_attention_matrix_bulk_reads_row_major_f32() {
+        let cross_attn = Array::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+
+        let (matrix, dec_len, enc_len) = extract_attention_matrix(&cross_attn).unwrap();
+
+        assert_eq!(dec_len, 2);
+        assert_eq!(enc_len, 3);
+        assert_eq!(matrix, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     }
 }
