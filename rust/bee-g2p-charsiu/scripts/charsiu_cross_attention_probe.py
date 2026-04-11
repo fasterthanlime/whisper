@@ -36,10 +36,21 @@ def decode_pieces(tokenizer, token_ids: list[int]) -> list[str]:
     return [tokenizer.decode([token_id], skip_special_tokens=False) for token_id in token_ids]
 
 
+def emitted_texts(tokenizer, output_ids: list[int]) -> list[str]:
+    emitted = []
+    previous = ""
+    for step_end in range(2, len(output_ids) + 1):
+        current = tokenizer.decode(output_ids[:step_end], skip_special_tokens=True)
+        emitted.append(current[len(previous) :] if current.startswith(previous) else current)
+        previous = current
+    return emitted
+
+
 @dataclass
 class AttentionSummary:
     output_index: int
     output_piece: str
+    emitted_text: str
     top_input_index: int
     top_input_piece: str
     top_score: float
@@ -182,6 +193,7 @@ def probe_text(
     output_ids = generated_ids[0].tolist()
     input_pieces = decode_pieces(tokenizer, input_ids)
     output_pieces = decode_pieces(tokenizer, output_ids)
+    output_emitted = emitted_texts(tokenizer, output_ids)
     teacher_forced_cross = average_teacher_forced_cross_attention(
         model,
         input_ids=encoded["input_ids"],
@@ -240,6 +252,7 @@ def probe_text(
             AttentionSummary(
                 output_index=output_index,
                 output_piece=output_pieces[output_index + 1],
+                emitted_text=output_emitted[output_index],
                 top_input_index=int(top["input_index"]),
                 top_input_piece=str(top["input_piece"]),
                 top_score=float(top["score"]),

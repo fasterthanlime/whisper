@@ -120,6 +120,7 @@ pub struct ProbeRankedInput {
 pub struct ProbeAttentionRow {
     pub output_index: usize,
     pub output_piece: String,
+    pub emitted_text: String,
     pub top_input_index: usize,
     pub top_input_piece: String,
     pub top_score: f32,
@@ -149,6 +150,21 @@ pub struct ProbeResult {
     pub output_pieces: Vec<String>,
     pub decoded_output: String,
     pub cross_attention: Vec<ProbeAttentionRow>,
+}
+
+#[derive(Debug, Clone, Facet)]
+pub struct ProbeTokenOwnershipRun {
+    pub qwen_piece_index: usize,
+    pub qwen_piece_token: String,
+    pub qwen_piece_surface: String,
+    pub word_index: Option<usize>,
+    pub word_surface: Option<String>,
+    pub output_start: usize,
+    pub output_end: usize,
+    pub emitted_texts: Vec<String>,
+    pub rendered_output: String,
+    pub average_qwen_score: f32,
+    pub average_word_score: Option<f32>,
 }
 
 #[derive(Debug)]
@@ -395,6 +411,111 @@ pub fn probe_text_with_script(
         .map_err(|err| SidecarClientError::Json(format!("parsing probe json: {err}")))
 }
 
+pub fn summarize_probe_runs(result: &ProbeResult) -> Vec<ProbeTokenOwnershipRun> {
+    let mut runs = Vec::new();
+
+    let mut pending_rows: Vec<&ProbeAttentionRow> = Vec::new();
+
+    for row in result.cross_attention.iter() {
+        if row.output_piece == "</s>" {
+            continue;
+        }
+        pending_rows.push(row);
+        if row.emitted_text.is_empty() {
+            continue;
+        }
+
+        let Some(anchor) = pending_rows
+            .iter()
+            .rev()
+            .find(|row| row.top_qwen_piece_index.is_some())
+            .copied()
+        else {
+            pending_rows.clear();
+            continue;
+        };
+        let Some(qwen_piece_index) = anchor.top_qwen_piece_index else {
+            pending_rows.clear();
+            continue;
+        };
+        let qwen_piece_token = anchor.top_qwen_piece_token.clone().unwrap_or_default();
+        let Some(piece_meta) = result
+            .qwen_token_pieces
+            .iter()
+            .find(|piece| piece.index == qwen_piece_index)
+        else {
+            pending_rows.clear();
+            continue;
+        };
+
+        let extends_last = runs.last().is_some_and(|run: &ProbeTokenOwnershipRun| {
+            run.qwen_piece_index == qwen_piece_index && run.word_index == anchor.top_word_index
+        });
+
+        let run_start = pending_rows
+            .first()
+            .map(|row| row.output_index)
+            .unwrap_or(anchor.output_index);
+        let run_end = pending_rows
+            .last()
+            .map(|row| row.output_index + 1)
+            .unwrap_or(anchor.output_index + 1);
+        let step_count = pending_rows.len() as f32;
+        let qwen_score_sum: f32 = pending_rows
+            .iter()
+            .filter_map(|row| row.top_qwen_piece_score)
+            .sum();
+        let word_score_values: Vec<f32> = pending_rows
+            .iter()
+            .filter_map(|row| row.top_word_score)
+            .collect();
+        let avg_qwen = if step_count > 0.0 {
+            qwen_score_sum / step_count
+        } else {
+            0.0
+        };
+        let avg_word = if word_score_values.is_empty() {
+            None
+        } else {
+            Some(word_score_values.iter().sum::<f32>() / word_score_values.len() as f32)
+        };
+
+        if extends_last {
+            let run = runs.last_mut().expect("checked above");
+            run.output_end = run_end;
+            run.emitted_texts.push(row.emitted_text.clone());
+            run.rendered_output.push_str(&row.emitted_text);
+            let count = run.emitted_texts.len() as f32;
+            run.average_qwen_score = ((run.average_qwen_score * (count - 1.0)) + avg_qwen) / count;
+            run.average_word_score = match (run.average_word_score, avg_word) {
+                (Some(prev), Some(score)) => Some(((prev * (count - 1.0)) + score) / count),
+                (Some(prev), None) => Some(prev),
+                (None, Some(score)) => Some(score),
+                (None, None) => None,
+            };
+            pending_rows.clear();
+            continue;
+        }
+
+        runs.push(ProbeTokenOwnershipRun {
+            qwen_piece_index,
+            qwen_piece_token,
+            qwen_piece_surface: piece_meta.surface.clone(),
+            word_index: anchor.top_word_index,
+            word_surface: anchor.top_word_surface.clone(),
+            output_start: run_start,
+            output_end: run_end,
+            emitted_texts: vec![row.emitted_text.clone()],
+            rendered_output: row.emitted_text.clone(),
+            average_qwen_score: avg_qwen,
+            average_word_score: avg_word,
+        });
+        pending_rows.clear();
+    }
+
+    runs
+}
+
 impl Drop for CharsiuSidecarClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -447,7 +568,10 @@ fn word_re() -> &'static Regex {
 
 #[cfg(test)]
 mod tests {
-    use super::transcript_words;
+    use super::{
+        ProbeAttentionRow, ProbeQwenPieceScore, ProbeQwenTokenPiece, ProbeRankedInput, ProbeResult,
+        ProbeWordScore, ProbeWordSpan, summarize_probe_runs, transcript_words,
+    };
 
     #[test]
     fn transcript_words_keeps_char_spans() {
@@ -484,5 +608,118 @@ mod tests {
                 "case".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn summarize_probe_runs_groups_contiguous_rows_by_qwen_piece() {
+        let result = ProbeResult {
+            text: "Facet".to_string(),
+            lang_code: "eng-us".to_string(),
+            prompt: "<eng-us>: Facet".to_string(),
+            device: "cpu".to_string(),
+            text_bytes: vec![],
+            word_spans: vec![ProbeWordSpan {
+                index: 0,
+                text: "Facet".to_string(),
+                char_start: 0,
+                char_end: 5,
+                byte_start: 0,
+                byte_end: 5,
+            }],
+            qwen_token_pieces: vec![
+                ProbeQwenTokenPiece {
+                    index: 0,
+                    token: "Fac".to_string(),
+                    char_start: 0,
+                    char_end: 3,
+                    surface: "Fac".to_string(),
+                    byte_start: 0,
+                    byte_end: 3,
+                },
+                ProbeQwenTokenPiece {
+                    index: 1,
+                    token: "et".to_string(),
+                    char_start: 3,
+                    char_end: 5,
+                    surface: "et".to_string(),
+                    byte_start: 3,
+                    byte_end: 5,
+                },
+            ],
+            input_ids: vec![],
+            input_pieces: vec![],
+            output_ids: vec![],
+            output_pieces: vec![],
+            decoded_output: "ˈfeɪsət".to_string(),
+            cross_attention: vec![
+                probe_row(2, "f", "f", 0, "Fac", 0.7),
+                probe_row(3, "e", "e", 0, "Fac", 0.8),
+                probe_row(4, "", "ɪ", 0, "Fac", 0.7),
+                probe_row(6, "s", "s", 0, "Fac", 0.6),
+                probe_row(7, "", "ə", 1, "et", 0.7),
+                probe_row(9, "t", "t", 1, "et", 0.6),
+            ],
+        };
+
+        let runs = summarize_probe_runs(&result);
+        assert_eq!(runs.len(), 2);
+
+        assert_eq!(runs[0].qwen_piece_index, 0);
+        assert_eq!(runs[0].rendered_output, "feɪs");
+        assert_eq!(runs[0].output_start, 2);
+        assert_eq!(runs[0].output_end, 7);
+
+        assert_eq!(runs[1].qwen_piece_index, 1);
+        assert_eq!(runs[1].rendered_output, "ət");
+        assert_eq!(runs[1].output_start, 7);
+        assert_eq!(runs[1].output_end, 10);
+    }
+
+    fn probe_row(
+        output_index: usize,
+        output_piece: &str,
+        emitted_text: &str,
+        qwen_piece_index: usize,
+        qwen_piece_token: &str,
+        score: f32,
+    ) -> ProbeAttentionRow {
+        ProbeAttentionRow {
+            output_index,
+            output_piece: output_piece.to_string(),
+            emitted_text: emitted_text.to_string(),
+            top_input_index: 0,
+            top_input_piece: String::new(),
+            top_score: 0.0,
+            top_word_index: Some(0),
+            top_word_surface: Some("Facet".to_string()),
+            top_word_score: Some(score),
+            word_scores: vec![ProbeWordScore {
+                word_index: 0,
+                word_text: "Facet".to_string(),
+                char_start: 0,
+                char_end: 5,
+                byte_start: 0,
+                byte_end: 5,
+                score,
+            }],
+            top_qwen_piece_index: Some(qwen_piece_index),
+            top_qwen_piece_token: Some(qwen_piece_token.to_string()),
+            top_qwen_piece_score: Some(score),
+            qwen_piece_scores: vec![ProbeQwenPieceScore {
+                piece_index: qwen_piece_index,
+                piece_token: qwen_piece_token.to_string(),
+                piece_surface: qwen_piece_token.to_string(),
+                char_start: 0,
+                char_end: 0,
+                byte_start: 0,
+                byte_end: 0,
+                score,
+            }],
+            ranked_inputs: vec![ProbeRankedInput {
+                input_index: 0,
+                input_piece: String::new(),
+                score: 0.0,
+            }],
+        }
     }
 }

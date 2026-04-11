@@ -1,6 +1,6 @@
 use bee_g2p_charsiu::{
     CharsiuSidecarClient, PhonemizeTextRequest, PhonemizeWordsRequest, ProbeRequest,
-    probe_text_default,
+    probe_text_default, summarize_probe_runs,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -49,15 +49,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
         println!("text\t{}", result.text);
         println!("decoded_ipa\t{}", result.decoded_output);
-        for row in result.cross_attention {
-            if row.output_piece.is_empty() || row.output_piece == "</s>" {
-                continue;
-            }
-            let top_word = row.top_word_surface.unwrap_or_default();
-            let top_qwen = row.top_qwen_piece_token.unwrap_or_default();
+        for run in summarize_probe_runs(&result) {
+            let word = run.word_surface.unwrap_or_default();
             println!(
-                "out[{}]\t{}\tword={}\tqwen={}",
-                row.output_index, row.output_piece, top_word, top_qwen
+                "run\t{}..{}\t{}\tword={}\tqwen={}",
+                run.output_start, run.output_end, run.rendered_output, word, run.qwen_piece_token
             );
         }
         return Ok(());

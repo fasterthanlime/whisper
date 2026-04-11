@@ -56,9 +56,9 @@ charsiu ready model=charsiu/g2p_multilingual_byT5_tiny_16_layers device=mps
 
 text    use Facet
 decoded_ipa      ˈjuzˈfeɪsət
-out[2]  j        word=use      qwen=use
-out[8]  e        word=Facet    qwen=ĠFac
-out[14] t        word=Facet    qwen=et
+run     0..5     ˈjuz         word=use      qwen=use
+run     5..12    ˈfeɪs        word=Facet    qwen=ĠFac
+run     12..15   ət           word=Facet    qwen=et
 ```
 
 That is intentionally modest.
