@@ -182,6 +182,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bee-g2p"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bee-g2p-charsiu-mlx",
+ "bee-phonetic",
+ "bee-qwen3-asr",
+ "facet",
+ "regex",
+]
+
+[[package]]
 name = "bee-g2p-charsiu"
 version = "0.1.0"
 dependencies = [
