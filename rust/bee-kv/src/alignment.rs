@@ -14,6 +14,7 @@ use crate::decode::{normalized_transcript, tokenize_token_ids};
 use crate::types::*;
 use crate::{KEEP_BOUNDARY_MIN_KEPT_SECS, SAMPLE_RATE};
 
+/// Returns `text` with `prefix` stripped from the front, or unchanged if no match.
 pub(crate) fn suffix_after_prefix<'a>(prefix: Option<&str>, text: &'a str) -> &'a str {
     let Some(prefix) = prefix else {
         return text;
@@ -25,26 +26,42 @@ pub(crate) fn suffix_after_prefix<'a>(prefix: Option<&str>, text: &'a str) -> &'
     }
 }
 
+/// Result of computing a time-based prefix cut: how many words and tokens to keep.
 pub(crate) struct TimedGeneratedPrefix {
+    /// Number of generated words whose end time falls within the keep region.
     pub(crate) kept_word_count: usize,
+    /// Number of tokens spanning the kept words.
     pub(crate) kept_token_count: usize,
 }
 
+/// A word from a transcript with character offsets and ZIPA-derived timing.
 #[derive(Clone, Debug)]
 pub(crate) struct TimedWord {
+    /// The word text.
     pub(crate) text: String,
+    /// Character range this word occupies in the combined transcript.
     pub(crate) char_range: std::ops::Range<usize>,
+    /// Start time in seconds (relative to the chunk/window start).
     pub(crate) start_secs: f64,
+    /// End time in seconds (relative to the chunk/window start).
     pub(crate) end_secs: f64,
 }
 
+/// Result of computing a bridge cut: kept prefix plus a bridge to carry forward.
 pub(crate) struct TimedGeneratedBridge {
+    /// Number of newly generated words kept (excluding carried prefix words).
     pub(crate) kept_word_count: usize,
+    /// Number of tokens spanning the kept generated words.
     pub(crate) kept_token_count: usize,
+    /// Full kept text (including carried prefix).
     pub(crate) kept_text: String,
+    /// Bridge tokens and words to carry into the next window's prompt.
     pub(crate) bridge: CarriedBridge,
 }
 
+/// Extracts aligned word timings from a ZIPA transcript alignment.
+///
+/// Stops at the first word that lacks aligned timing (e.g. `NoWindow` or `NoTiming`).
 pub(crate) fn timed_aligned_words_for_alignment(
     transcript: &str,
     alignment: &TranscriptAlignment,
@@ -80,6 +97,10 @@ pub(crate) fn timed_aligned_words_for_alignment(
     Ok(timed_words)
 }
 
+/// Computes a time-based prefix cut for a single chunk's generated tokens.
+///
+/// Aligns the chunk transcript with ZIPA, then counts how many words and tokens
+/// fall within the keep region (before `keep_until_secs`).
 pub(crate) fn timed_generated_prefix_for_cut(
     align_ctx: &mut AlignmentContext,
     tokenizer: &Tokenizer,
@@ -127,6 +148,10 @@ pub(crate) fn timed_generated_prefix_for_cut(
     })
 }
 
+/// Computes a bridge cut: splits the transcript into kept prefix + bridge region.
+///
+/// The bridge region spans from `keep_until_secs` to `replay_until_secs` and is
+/// tokenized into a `CarriedBridge` that gets replayed in the next window's prompt.
 pub(crate) fn timed_generated_bridge_for_cuts(
     tokenizer: &Tokenizer,
     combined_transcript: &str,
@@ -254,6 +279,11 @@ pub(crate) fn timed_generated_bridge_for_cuts(
     })
 }
 
+/// Adjusts the keep boundary based on the selected policy.
+///
+/// For `NearestWordEnd`, searches ZIPA word timings for the word end closest
+/// to `target_keep_until_secs` (without exceeding it) within the valid range.
+/// For `Fixed`, returns the target unchanged.
 pub(crate) fn adjust_keep_boundary_secs(
     policy: KeepBoundaryPolicy,
     alignment: &TranscriptAlignment,
@@ -315,12 +345,16 @@ pub(crate) fn adjust_keep_boundary_secs(
     Ok((keep_until_secs, debug))
 }
 
+/// Holds ZIPA alignment resources (G2P engine and acoustic model).
 pub(crate) struct AlignmentContext {
+    /// Cached espeak-based grapheme-to-phoneme engine.
     g2p: CachedEspeakG2p,
+    /// ZIPA forced-alignment inference model.
     pub(crate) zipa: ZipaInference,
 }
 
 impl AlignmentContext {
+    /// Initializes a new alignment context, loading G2P and ZIPA models.
     pub(crate) fn new() -> Result<Self> {
         Ok(Self {
             g2p: CachedEspeakG2p::english(&g2p_base_dir()).context("initializing g2p engine")?,
@@ -330,6 +364,7 @@ impl AlignmentContext {
     }
 }
 
+/// Runs ZIPA forced alignment on a transcript against audio samples.
 pub(crate) fn build_transcript_alignment(
     align_ctx: &mut AlignmentContext,
     transcript: &str,
@@ -344,6 +379,7 @@ pub(crate) fn build_transcript_alignment(
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
+/// Formats a `SpanTiming` as a human-readable string like `{0.12-0.45s}`.
 pub(crate) fn format_span_timing(span_timing: SpanTiming) -> String {
     match span_timing {
         SpanTiming::Aligned {
@@ -359,10 +395,12 @@ pub(crate) fn format_span_timing(span_timing: SpanTiming) -> String {
     }
 }
 
+/// Returns the base directory for espeak G2P data (under the cargo target dir).
 pub(crate) fn g2p_base_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target")
 }
 
+/// Returns the ZIPA model bundle directory, from `$BEE_ZIPA_BUNDLE_DIR` or a fallback.
 pub(crate) fn zipa_bundle_dir() -> Result<PathBuf> {
     if let Ok(path) = env::var("BEE_ZIPA_BUNDLE_DIR") {
         return Ok(PathBuf::from(path));

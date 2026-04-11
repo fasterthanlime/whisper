@@ -12,17 +12,26 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
+/// Full-screen TUI for live exercise progress (committed text, draft, event log).
 pub(crate) struct ExerciseTui {
+    /// Whether the TUI is currently active.
     enabled: bool,
+    /// Terminal handle used for drawing when the TUI is enabled.
     terminal: Option<Terminal<CrosstermBackend<io::Stdout>>>,
+    /// Current phase label shown in the header.
     phase: String,
+    /// Current chunk index shown in the header.
     chunk_index: usize,
+    /// Text that has been committed so far.
     committed: String,
+    /// Text currently held as draft output.
     draft: String,
+    /// Recent status messages shown in the event log.
     logs: VecDeque<String>,
 }
 
 impl ExerciseTui {
+    /// Creates and enters the alternate screen TUI (no-op if stdout is not a terminal).
     pub(crate) fn new() -> Self {
         let enabled = std::io::stdout().is_terminal();
         let terminal = if enabled {
@@ -46,6 +55,7 @@ impl ExerciseTui {
         tui
     }
 
+    /// Leaves the alternate screen and disables further rendering.
     pub(crate) fn clear(&mut self) {
         if !self.enabled {
             return;
@@ -59,6 +69,7 @@ impl ExerciseTui {
         self.enabled = false;
     }
 
+    /// Appends a message to the event log and re-renders.
     pub(crate) fn log(&mut self, message: impl Into<String>) {
         if !self.enabled {
             return;
@@ -70,6 +81,7 @@ impl ExerciseTui {
         self.render();
     }
 
+    /// Updates all TUI fields and re-renders.
     fn update(&mut self, phase: &str, chunk_index: usize, committed: &str, draft: &str) {
         if !self.enabled {
             return;
@@ -84,6 +96,7 @@ impl ExerciseTui {
         self.render();
     }
 
+    /// Draws the current state to the terminal.
     pub(crate) fn render(&mut self) {
         if !self.enabled {
             return;
@@ -183,6 +196,7 @@ impl ExerciseTui {
     }
 }
 
+/// Updates the exercise TUI with new phase, chunk index, committed, and draft text.
 pub(crate) fn update_exercise_progress(
     tui: &mut ExerciseTui,
     phase: &str,
@@ -193,12 +207,14 @@ pub(crate) fn update_exercise_progress(
     tui.update(phase, chunk_index, committed, draft);
 }
 
+/// Appends `text` to `target` verbatim (no separator logic).
 pub(crate) fn append_exact(target: &mut String, text: &str) {
     if !text.is_empty() {
         target.push_str(text);
     }
 }
 
+/// Appends `text` to `target`, inserting a space if needed to separate words.
 pub(crate) fn append_display_delta(target: &mut String, text: &str) {
     if text.is_empty() {
         return;

@@ -9,6 +9,7 @@ use crate::{
     DEFAULT_MAX_NEW_TOKENS, DEFAULT_ROLLBACK_MS, MAX_BRIDGE_WINDOWS, SAMPLE_RATE,
 };
 
+/// Prints CLI usage information to stderr.
 pub(crate) fn print_usage() {
     eprintln!(
         "usage: bee-kv [--mode MODE] [--context TEXT] [--chunk-ms N] [--bridge-ms N] [--rollback-ms N] [wav-path] [language] [max-new-tokens]\n\
@@ -44,6 +45,7 @@ pub(crate) fn print_usage() {
     );
 }
 
+/// Prints results of a chunked follow-up experiment.
 pub(crate) fn print_chunked_experiment(experiment: &ChunkedExperimentResult) {
     println!("=== chunked-followup ===");
     println!("chunk_ms={}", experiment.chunk_ms);
@@ -62,6 +64,7 @@ pub(crate) fn print_chunked_experiment(experiment: &ChunkedExperimentResult) {
     println!();
 }
 
+/// Prints results of a prefix-rerun experiment.
 pub(crate) fn print_prefix_rerun_experiment(experiment: &PrefixRerunExperimentResult) {
     println!("=== prefix-rerun ===");
     println!("chunk_ms={}", experiment.chunk_ms);
@@ -77,6 +80,7 @@ pub(crate) fn print_prefix_rerun_experiment(experiment: &PrefixRerunExperimentRe
     }
 }
 
+/// Prints results of a truncate-replay experiment with baseline vs replay comparison.
 pub(crate) fn print_truncate_replay_experiment(experiment: &TruncateReplayExperimentResult) {
     println!("=== truncate-replay ===");
     println!("chunk_ms={}", experiment.chunk_ms);
@@ -110,6 +114,7 @@ pub(crate) fn print_truncate_replay_experiment(experiment: &TruncateReplayExperi
     println!();
 }
 
+/// Prints results of a sliding-window timed-rollback experiment.
 pub(crate) fn print_sliding_window_timed_rollback_experiment(
     experiment: &SlidingWindowTimedRollbackExperimentResult,
 ) {
@@ -165,6 +170,7 @@ pub(crate) fn print_sliding_window_timed_rollback_experiment(
     println!();
 }
 
+/// Prints results of a dual-lane follow-up experiment.
 pub(crate) fn print_dual_lane_followup_experiment(experiment: &DualLaneFollowupExperimentResult) {
     println!("=== dual-lane-followup ===");
     println!("lane_a_chunk_ms={}", experiment.chunk_ms);
@@ -187,6 +193,7 @@ pub(crate) fn print_dual_lane_followup_experiment(experiment: &DualLaneFollowupE
     }
 }
 
+/// Prints results of a chunk-segment merge rollback experiment.
 pub(crate) fn print_chunk_segment_merge_rollback_experiment(
     experiment: &ChunkSegmentMergeRollbackExperimentResult,
 ) {
@@ -220,6 +227,7 @@ pub(crate) fn print_chunk_segment_merge_rollback_experiment(
     println!();
 }
 
+/// Prints results of a boundary sweep experiment.
 pub(crate) fn print_chunk_segment_merge_boundary_sweep_experiment(
     experiment: &ChunkSegmentMergeBoundarySweepExperimentResult,
 ) {
@@ -243,6 +251,7 @@ pub(crate) fn print_chunk_segment_merge_boundary_sweep_experiment(
     println!();
 }
 
+/// Creates a deep clone of a `ChunkRun` (since `ChunkRun` doesn't derive `Clone`).
 pub(crate) fn clone_chunk_run(chunk: &ChunkRun) -> ChunkRun {
     ChunkRun {
         label: chunk.label.clone(),
@@ -260,6 +269,7 @@ pub(crate) fn clone_chunk_run(chunk: &ChunkRun) -> ChunkRun {
     }
 }
 
+/// Formats chunk transcripts as `[chunk1] [chunk2] ...` for display.
 pub(crate) fn bracketed_chunks(chunks: &[ChunkRun]) -> String {
     chunks
         .iter()
@@ -268,6 +278,7 @@ pub(crate) fn bracketed_chunks(chunks: &[ChunkRun]) -> String {
         .join(" ")
 }
 
+/// Annotates chunk transcripts with ZIPA-derived word timing spans.
 pub(crate) fn annotate_chunk_runs(chunks: &[ChunkRun], samples: &[f32]) -> Result<String> {
     let combined_transcript = combine_transcripts(chunks);
     let mut align_ctx = AlignmentContext::new()?;
@@ -289,6 +300,7 @@ pub(crate) fn annotate_chunk_runs(chunks: &[ChunkRun], samples: &[f32]) -> Resul
     Ok(annotated.join(" "))
 }
 
+/// Prints a one-line summary per chunk in a lane (label, seam position, token count).
 pub(crate) fn print_lane_row(label: &str, chunks: &[ChunkRun]) {
     for chunk in chunks {
         let seam_ms = (chunk.end_sample * 1000) / SAMPLE_RATE as usize;
@@ -300,6 +312,7 @@ pub(crate) fn print_lane_row(label: &str, chunks: &[ChunkRun]) {
     println!();
 }
 
+/// Prints detailed info for a single chunk run.
 pub(crate) fn print_chunk_run(chunk: &ChunkRun) {
     println!("--- {} ---", chunk.label);
     println!(
@@ -318,12 +331,14 @@ pub(crate) fn print_chunk_run(chunk: &ChunkRun) {
     println!();
 }
 
+/// Prints a bold blue "FINALIZING" banner.
 pub(crate) fn print_finalizing_banner() {
     println!(
         "{ANSI_BLUE}{ANSI_BOLD}===================== FINALIZING ====================={ANSI_RESET}"
     );
 }
 
+/// Prints model/audio summary info.
 pub(crate) fn print_summary(summary: &RunSummary<'_>) {
     println!("wav: {}", summary.wav_path.display());
     println!("model_dir: {}", summary.model_dir.display());
@@ -344,6 +359,7 @@ pub(crate) fn print_summary(summary: &RunSummary<'_>) {
     println!();
 }
 
+/// Prints results of a single full-audio decode experiment.
 pub(crate) fn print_experiment(experiment: &ExperimentResult) {
     println!("=== {} ===", experiment.label);
     println!(

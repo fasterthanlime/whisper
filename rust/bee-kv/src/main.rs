@@ -22,30 +22,53 @@ use decode::*;
 use print::*;
 use types::*;
 
+/// Default transcription language passed to the ASR model.
 const DEFAULT_LANGUAGE: &str = "English";
+/// Maximum number of tokens the model may generate per decode call.
 const DEFAULT_MAX_NEW_TOKENS: usize = 256;
+/// Audio sample rate in Hz expected by the mel extractor and alignment engine.
 const SAMPLE_RATE: u32 = 16_000;
+/// FFT window size for mel-spectrogram computation.
 const N_FFT: usize = 400;
+/// Hop length (in samples) between successive mel frames.
 const HOP_LENGTH: usize = 160;
+/// Fallback WAV file path relative to the crate root.
 const DEFAULT_WAV_RELATIVE_TO_CRATE: &str = "../../.artifacts/repros/frozen/EB54CF36.wav";
+/// Audio start position (in samples) for the fresh follow-up decode mode.
 const DEFAULT_START_POSITION_FOR_FRESH_FOLLOWUP: usize = 0;
+/// Default audio chunk duration in milliseconds for chunked decode modes.
 const DEFAULT_CHUNK_MS: usize = 2_000;
+/// Default rollback duration in milliseconds for sliding-window modes.
 const DEFAULT_ROLLBACK_MS: usize = 1_000;
+/// Default bridge window duration in milliseconds for bridge-replay mode.
 const DEFAULT_BRIDGE_MS: usize = 1_000;
+/// Optional explicit stride between chunks; `None` means stride = chunk size - rollback.
 const DEFAULT_STRIDE_MS: Option<usize> = None;
+/// Default policy for snapping the keep boundary to a word edge.
 const DEFAULT_KEEP_BOUNDARY_POLICY: KeepBoundaryPolicy = KeepBoundaryPolicy::Fixed;
+/// Default first-chunk duration in milliseconds for lane B in dual-lane mode.
 const DEFAULT_LANE_B_FIRST_CHUNK_MS: usize = 3_000;
+/// Default chunk index at which truncate-replay begins replaying.
 const DEFAULT_REPLAY_CHUNK_INDEX: usize = 1;
+/// Default number of tokens to truncate when replaying from a rollback point.
 const DEFAULT_TRUNCATE_TOKENS: usize = 4;
+/// Optional MLX memory cache limit in megabytes; `None` means unlimited.
 const DEFAULT_MLX_CACHE_LIMIT_MB: Option<usize> = None;
+/// Minimum audio duration (in seconds) that must be kept when adjusting chunk boundaries.
 const KEEP_BOUNDARY_MIN_KEPT_SECS: f64 = 0.200;
+/// Maximum number of bridge windows before forcing a full decode reset.
 const MAX_BRIDGE_WINDOWS: usize = 50;
+/// ANSI escape code for blue text.
 const ANSI_BLUE: &str = "\x1b[34m";
+/// ANSI escape code for bold text.
 const ANSI_BOLD: &str = "\x1b[1m";
+/// ANSI escape code to reset text formatting.
 const ANSI_RESET: &str = "\x1b[0m";
+/// Token-level offsets to probe when sweeping for optimal chunk boundaries.
 const BOUNDARY_SWEEP_OFFSETS: [isize; 13] =
     [-48, -44, -40, -36, -32, -28, -24, -20, -16, -12, -8, -4, 0];
 
+/// Loads the ASR model and audio, then runs the decode mode specified by CLI arguments.
 fn main() -> Result<()> {
     let interrupted = Arc::new(AtomicBool::new(false));
     let interrupted_for_handler = Arc::clone(&interrupted);

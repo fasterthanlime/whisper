@@ -11,32 +11,53 @@ use crate::types::*;
 
 #[derive(Clone)]
 pub(crate) struct WordPlacement {
+    /// The word text.
     text: String,
+    /// Zero-based chunk index where the word was decoded.
     chunk_index: usize,
+    /// Start time in seconds relative to the full recording.
     start_secs: Option<f64>,
+    /// End time in seconds relative to the full recording.
     end_secs: Option<f64>,
+    /// CSS timing-quality label used for styling.
     quality_label: &'static str,
 }
 
+/// A word placement for sliding-window rows, including replay state.
 pub(crate) struct SlidingWordPlacement {
+    /// The word text.
     text: String,
+    /// Start time in seconds relative to the window.
     start_secs: Option<f64>,
+    /// End time in seconds relative to the window.
     end_secs: Option<f64>,
+    /// CSS timing-quality label used for styling.
     quality_label: &'static str,
+    /// Whether the word came from a carried bridge prefix.
     carried: bool,
+    /// Whether the word was kept into the next window.
     kept: bool,
+    /// Whether the word sits in the bridge replay region.
     bridge: bool,
+    /// Whether the word marks the exact chosen cut boundary.
     cut_word: bool,
 }
 
+/// A committed word placement used by the committed timeline view.
 pub(crate) struct CommittedWordPlacement {
+    /// The word text.
     text: String,
+    /// Start time in seconds relative to the full recording.
     start_secs: Option<f64>,
+    /// End time in seconds relative to the full recording.
     end_secs: Option<f64>,
+    /// CSS timing-quality label used for styling.
     quality_label: &'static str,
+    /// Coarse one-second bucket used for background coloring.
     second_bin: usize,
 }
 
+/// Returns whether two committed word placements are close enough to overlap.
 pub(crate) fn committed_words_equivalent(
     left: &CommittedWordPlacement,
     right: &CommittedWordPlacement,
@@ -57,6 +78,7 @@ pub(crate) fn committed_words_equivalent(
     }
 }
 
+/// Builds aligned word placements for a set of chunk transcripts.
 pub(crate) fn build_word_placements(
     align_ctx: &mut AlignmentContext,
     chunks: &[ChunkRun],
@@ -96,6 +118,7 @@ pub(crate) fn build_word_placements(
     Ok(placements)
 }
 
+/// Writes the sliding-window rollback visualization to the artifacts directory.
 pub(crate) fn write_sliding_window_timed_rollback_html(
     mode_label: &str,
     window_runs: &[SlidingWindowRun],
@@ -120,6 +143,7 @@ pub(crate) fn write_sliding_window_timed_rollback_html(
     Ok(out_path)
 }
 
+/// Writes the committed-word timeline visualization to the artifacts directory.
 pub(crate) fn write_committed_timeline_html(
     mode_label: &str,
     window_runs: &[SlidingWindowRun],
@@ -138,6 +162,7 @@ pub(crate) fn write_committed_timeline_html(
     Ok(out_path)
 }
 
+/// Renders the full sliding-window HTML report.
 pub(crate) fn render_sliding_window_timed_rollback_html(
     align_ctx: &mut AlignmentContext,
     mode_label: &str,
@@ -329,6 +354,7 @@ pub(crate) fn collect_committed_word_placements(
     Ok(placements)
 }
 
+/// Renders the committed-word HTML timeline.
 pub(crate) fn render_committed_timeline_html(
     mode_label: &str,
     duration_secs: f64,
@@ -483,6 +509,7 @@ updatePlayhead(0);\
     )
 }
 
+/// Renders one row in the sliding-window timeline.
 pub(crate) fn render_sliding_window_row(
     width_px: f64,
     row_height_px: f64,
@@ -656,6 +683,7 @@ pub(crate) fn render_sliding_window_row(
     )
 }
 
+/// Builds word placements for a sliding-window row.
 pub(crate) fn build_window_word_placements(
     align_ctx: &mut AlignmentContext,
     run: &SlidingWindowRun,
@@ -735,6 +763,7 @@ pub(crate) fn build_window_word_placements(
         .collect())
 }
 
+/// Writes the chunk-segment merge rollback visualization to disk.
 pub(crate) fn write_chunk_segment_merge_rollback_html(
     baseline_runs: &[ChunkRun],
     replay_runs: &[ChunkRun],
@@ -758,6 +787,7 @@ pub(crate) fn write_chunk_segment_merge_rollback_html(
     Ok(out_path)
 }
 
+/// Renders the chunk-segment merge rollback comparison page.
 pub(crate) fn render_word_timeline_html(
     duration_secs: f64,
     baseline_runs: &[ChunkRun],
@@ -803,6 +833,7 @@ body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f7f4ec
     )
 }
 
+/// Renders a single comparison row for the chunk-segment merge timeline.
 pub(crate) fn render_word_row(
     title: &str,
     width_px: f64,
@@ -878,6 +909,7 @@ pub(crate) fn render_word_row(
     )
 }
 
+/// Escapes a string for safe inclusion in HTML.
 pub(crate) fn html_escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -885,6 +917,7 @@ pub(crate) fn html_escape(text: &str) -> String {
         .replace('\"', "&quot;")
 }
 
+/// Converts a filesystem path into a `file://` URL string.
 pub(crate) fn file_url_for_path(path: &Path) -> Result<String> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()

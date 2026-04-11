@@ -29,6 +29,7 @@ use crate::{
     SAMPLE_RATE,
 };
 
+/// Decodes audio using an initial prompt with language and context.
 pub(crate) fn decode_with_initial_prompt(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -50,6 +51,7 @@ pub(crate) fn decode_with_initial_prompt(
     )
 }
 
+/// Decodes audio using a followup prompt without prior context tokens.
 pub(crate) fn decode_with_followup_prompt(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -70,6 +72,7 @@ pub(crate) fn decode_with_followup_prompt(
     )
 }
 
+/// Runs prefill-and-decode on pre-built prompt tokens and returns the transcription result.
 pub(crate) fn decode_prompt(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -107,6 +110,7 @@ pub(crate) fn decode_prompt(
     })
 }
 
+/// Decodes audio in fixed-size chunks using sequential followup prompts.
 pub(crate) fn decode_chunked_followup(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -138,6 +142,7 @@ pub(crate) fn decode_chunked_followup(
     })
 }
 
+/// Decodes progressively longer audio prefixes to compare transcription stability.
 pub(crate) fn decode_prefix_rerun(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -204,6 +209,7 @@ pub(crate) fn decode_prefix_rerun(
     })
 }
 
+/// Decodes chunks, then truncates tokens at a chosen chunk and replays to test rollback policies.
 pub(crate) fn decode_truncate_replay(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -297,6 +303,7 @@ pub(crate) fn decode_truncate_replay(
     })
 }
 
+/// Runs two independent chunked decode lanes with different first-chunk sizes for comparison.
 pub(crate) fn decode_dual_lane_followup(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -353,6 +360,7 @@ pub(crate) fn decode_dual_lane_followup(
     })
 }
 
+/// Runs sliding-window decoding with a fixed time-based rollback.
 pub(crate) fn decode_sliding_window_timed_rollback(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -483,6 +491,7 @@ pub(crate) fn decode_sliding_window_timed_rollback(
     })
 }
 
+/// Runs sliding-window decoding where each window fully replays the prior context.
 pub(crate) fn decode_sliding_window_full_replay(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -701,6 +710,7 @@ pub(crate) fn decode_sliding_window_full_replay(
     })
 }
 
+/// Runs sliding-window decoding with a replayable bridge segment between windows.
 pub(crate) fn decode_sliding_window_bridge_replay(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -1050,6 +1060,7 @@ pub(crate) fn decode_sliding_window_bridge_replay(
     })
 }
 
+/// Runs the chunk-segment merge rollback experiment on the first three chunks.
 pub(crate) fn decode_chunk_segment_merge_rollback(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -1176,6 +1187,7 @@ pub(crate) fn decode_chunk_segment_merge_rollback(
     })
 }
 
+/// Sweeps boundary offsets to compare chunk merge rollback behavior.
 pub(crate) fn decode_chunk_segment_merge_boundary_sweep(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -1298,6 +1310,7 @@ pub(crate) fn decode_chunk_segment_merge_boundary_sweep(
     })
 }
 
+/// Decodes a single prefix window for prefix-rerun comparisons.
 pub(crate) fn decode_prefix_window(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -1340,6 +1353,7 @@ pub(crate) fn decode_prefix_window(
     })
 }
 
+/// Runs chunked follow-up decoding over a plan of chunk boundaries.
 pub(crate) fn run_chunked_followup_sequence(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -1408,6 +1422,7 @@ pub(crate) fn run_chunked_followup_sequence(
     Ok(chunk_runs)
 }
 
+/// Decodes one chunk with the correct prompt, cache state, and replay prefix.
 pub(crate) fn decode_chunk_followup_step(
     model: &Qwen3ASRModel,
     tokenizer: &Tokenizer,
@@ -1487,6 +1502,7 @@ pub(crate) fn decode_chunk_followup_step(
     })
 }
 
+/// Truncates the KV cache to a target rollback position.
 pub(crate) fn truncate_cache(
     cache: &mut Option<bee_qwen3_asr::decoder::KVCache>,
     rollback_position: usize,
@@ -1498,16 +1514,19 @@ pub(crate) fn truncate_cache(
     Ok(())
 }
 
+/// Trims leading and trailing whitespace from a transcript.
 pub(crate) fn normalized_transcript(text: &str) -> &str {
     text.trim()
 }
 
+/// Decodes token IDs into a transcript string.
 pub(crate) fn decode_token_ids(tokenizer: &Tokenizer, token_ids: &[u32]) -> Result<String> {
     tokenizer
         .decode(token_ids, true)
         .map_err(|e| anyhow::anyhow!("decoding transcript tokens: {e}"))
 }
 
+/// Converts unsigned token IDs into signed prompt token IDs.
 pub(crate) fn prompt_tokens_from_token_ids(token_ids: &[u32]) -> Result<Vec<i32>> {
     token_ids
         .iter()
@@ -1515,6 +1534,7 @@ pub(crate) fn prompt_tokens_from_token_ids(token_ids: &[u32]) -> Result<Vec<i32>
         .collect()
 }
 
+/// Tokenizes prompt text into token IDs without adding special tokens.
 pub(crate) fn tokenize_token_ids(tokenizer: &Tokenizer, text: &str) -> Result<Vec<u32>> {
     Ok(tokenizer
         .encode_fast(text, false)
@@ -1523,11 +1543,13 @@ pub(crate) fn tokenize_token_ids(tokenizer: &Tokenizer, text: &str) -> Result<Ve
         .to_vec())
 }
 
+/// Returns the leading generated token IDs that should be kept.
 pub(crate) fn kept_generated_token_ids(chunk_run: &ChunkRun, kept_token_count: usize) -> Vec<u32> {
     chunk_run.generated_token_ids[..kept_token_count.min(chunk_run.generated_token_ids.len())]
         .to_vec()
 }
 
+/// Returns the leading carried-bridge token IDs that should be kept.
 pub(crate) fn kept_carried_token_ids(
     prefix: Option<&CarriedBridge>,
     kept_token_count: usize,
@@ -1538,6 +1560,7 @@ pub(crate) fn kept_carried_token_ids(
     prefix.token_ids[..kept_token_count.min(prefix.token_ids.len())].to_vec()
 }
 
+/// Counts how many carried-bridge tokens should survive a rollback cut.
 pub(crate) fn kept_carried_token_count(
     prefix: Option<&CarriedBridge>,
     keep_until_secs: Option<f64>,
@@ -1563,6 +1586,7 @@ pub(crate) fn kept_carried_token_count(
         .unwrap_or(0)
 }
 
+/// Returns the decoded text for a carried bridge, if any.
 pub(crate) fn carried_bridge_text(
     tokenizer: &Tokenizer,
     bridge: Option<&CarriedBridge>,
@@ -1576,6 +1600,7 @@ pub(crate) fn carried_bridge_text(
     }
 }
 
+/// Concatenates chunk transcripts without inserting separators.
 pub(crate) fn combine_transcripts(chunks: &[ChunkRun]) -> String {
     let mut combined = String::new();
     for chunk in chunks {
@@ -1587,6 +1612,7 @@ pub(crate) fn combine_transcripts(chunks: &[ChunkRun]) -> String {
     combined
 }
 
+/// Builds a chunk plan from the total sample count and chunk sizes.
 pub(crate) fn build_chunk_plan(
     total_samples: usize,
     first_chunk_samples: usize,
@@ -1619,6 +1645,7 @@ pub(crate) fn build_chunk_plan(
     Ok(plan)
 }
 
+/// Builds an overlapping window plan from a total sample count and stride.
 pub(crate) fn build_overlapping_window_plan(
     total_samples: usize,
     window_samples: usize,
@@ -1652,6 +1679,7 @@ pub(crate) fn build_overlapping_window_plan(
     Ok(plan)
 }
 
+/// Converts milliseconds to samples at the fixed ASR sample rate.
 pub(crate) fn ms_to_samples(chunk_ms: usize) -> Result<usize> {
     let chunk_size_samples = (chunk_ms * SAMPLE_RATE as usize) / 1000;
     if chunk_size_samples == 0 {
@@ -1660,6 +1688,7 @@ pub(crate) fn ms_to_samples(chunk_ms: usize) -> Result<usize> {
     Ok(chunk_size_samples)
 }
 
+/// Returns the canned system prompts used for comparison experiments.
 pub(crate) fn system_compare_contexts() -> &'static [&'static str] {
     &[
         "",
