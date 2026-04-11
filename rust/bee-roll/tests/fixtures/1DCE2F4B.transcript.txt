@@ -1,0 +1,26 @@
+Correction disabled via BEE_DISABLE_CORRECTION
+Engine loaded in 729ms
+Audio: 3.5s (55907 samples) loaded in 6ms
+
+--- Streaming (chunk=500ms) ---
+
+  chunk 1: 18ms (silence/buffering)
+  chunk 2: 163ms | rev=1 committed=0 pending=3 volatile=0 | I asked.
+  chunk 3: 170ms | rev=2 committed=0 pending=5 volatile=1 | I asked Copilot.
+  chunk 4: 199ms | rev=3 committed=0 pending=6 volatile=0 | I asked Copilot to.
+  chunk 5: 191ms | rev=4 committed=0 pending=8 volatile=2 | I asked Copilot to generate code.
+  chunk 6: 203ms | rev=5 committed=0 pending=10 volatile=0 | I asked Copilot to generate comments for you.
+  chunk 7: 0ms (silence/buffering)
+
+--- Final (320ms, total 1265ms) ---
+  text: "I asked Copilot to generate comments for you."
+
+Alignments:
+  [0.000s - 0.160s] I
+  [0.160s - 0.560s]  asked
+  [0.640s - 1.280s]  Copilot
+  [1.360s - 1.520s]  to
+  [1.520s - 1.840s]  generate
+  [1.840s - 2.160s]  comments
+  [2.160s - 2.320s]  for
+  [2.320s - 2.480s]  you.

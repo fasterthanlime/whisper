@@ -1,0 +1,25 @@
+Correction disabled via BEE_DISABLE_CORRECTION
+Engine loaded in 786ms
+Audio: 2.5s (40675 samples) loaded in 4ms
+
+--- Streaming (chunk=500ms) ---
+
+  chunk 1: 195ms | rev=1 committed=0 pending=2 volatile=1 | The.
+  chunk 2: 181ms | rev=2 committed=0 pending=5 volatile=0 | There's honestly no.
+  chunk 3: 243ms | rev=3 committed=0 pending=9 volatile=0 | There's honestly no reason that it should.
+  chunk 4: 206ms | rev=4 committed=0 pending=11 volatile=0 | There's honestly no reason that it shouldn't work.
+  chunk 5: 192ms (unchanged)
+  chunk 6: 0ms (silence/buffering)
+
+--- Final (315ms, total 1334ms) ---
+  text: "There's honestly no reason that it shouldn't work."
+
+Alignments:
+  [0.400s - 0.480s] There's
+  [0.480s - 0.800s]  honestly
+  [0.800s - 0.960s]  no
+  [0.960s - 1.200s]  reason
+  [1.200s - 1.280s]  that
+  [1.280s - 1.440s]  it
+  [1.440s - 1.600s]  shouldn't
+  [1.600s - 1.920s]  work.

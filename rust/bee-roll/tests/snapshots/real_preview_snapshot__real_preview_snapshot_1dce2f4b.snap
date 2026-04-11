@@ -1,0 +1,439 @@
+---
+source: rust/bee-roll/tests/real_preview_snapshot.rs
+expression: "snapshot_for_artifact(\"1DCE2F4B\")?"
+---
+wav: /Users/amos/bearcove/bee/rust/bee-roll/tests/fixtures/1DCE2F4B.wav
+expected: I asked Copilot to generate comments for you.
+
+feed 01  samples=3200  secs=0.200
+lang en
+text Oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh, oh,
+ 0 "Oh"         conf=0.875/0.875 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+ 1 ","          conf=0.201/0.201 g2p=- phones=- zipa=invalid
+ 2 " oh"        conf=0.031/0.031 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+ 3 ","          conf=1.693/1.693 g2p=- phones=- zipa=invalid
+ 4 " oh"        conf=4.668/4.668 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+ 5 ","          conf=1.848/1.848 g2p=- phones=- zipa=invalid
+ 6 " oh"        conf=4.564/4.564 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+ 7 ","          conf=2.280/2.280 g2p=- phones=- zipa=invalid
+ 8 " oh"        conf=4.225/4.225 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+ 9 ","          conf=2.350/2.350 g2p=- phones=- zipa=invalid
+10 " oh"        conf=4.051/4.051 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+11 ","          conf=2.440/2.440 g2p=- phones=- zipa=invalid
+12 " oh"        conf=4.122/4.122 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+13 ","          conf=2.568/2.568 g2p=- phones=- zipa=invalid
+14 " oh"        conf=4.293/4.293 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+15 ","          conf=2.644/2.644 g2p=- phones=- zipa=invalid
+16 " oh"        conf=4.481/4.481 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+17 ","          conf=2.619/2.619 g2p=- phones=- zipa=invalid
+18 " oh"        conf=4.010/4.010 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+19 ","          conf=2.344/2.344 g2p=- phones=- zipa=invalid
+20 " oh"        conf=3.804/3.804 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+21 ","          conf=2.242/2.242 g2p=- phones=- zipa=invalid
+22 " oh"        conf=3.808/3.808 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+23 ","          conf=2.567/2.567 g2p=- phones=- zipa=invalid
+24 " oh"        conf=3.862/3.862 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+25 ","          conf=2.724/2.724 g2p=- phones=- zipa=invalid
+26 " oh"        conf=3.783/3.783 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+27 ","          conf=2.950/2.950 g2p=- phones=- zipa=invalid
+28 " oh"        conf=3.941/3.941 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+29 ","          conf=3.198/3.198 g2p=- phones=- zipa=invalid
+30 " oh"        conf=4.333/4.333 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+31 ","          conf=3.282/3.282 g2p=- phones=- zipa=invalid
+32 " oh"        conf=4.334/4.334 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+33 ","          conf=3.353/3.353 g2p=- phones=- zipa=invalid
+34 " oh"        conf=4.077/4.077 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+35 ","          conf=3.312/3.312 g2p=- phones=- zipa=invalid
+36 " oh"        conf=3.271/3.271 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+37 ","          conf=3.334/3.334 g2p=- phones=- zipa=invalid
+38 " oh"        conf=3.395/3.395 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+39 ","          conf=3.734/3.734 g2p=- phones=- zipa=invalid
+40 " oh"        conf=3.966/3.966 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+41 ","          conf=3.972/3.972 g2p=- phones=- zipa=invalid
+42 " oh"        conf=3.815/3.815 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+43 ","          conf=3.899/3.899 g2p=- phones=- zipa=invalid
+44 " oh"        conf=3.665/3.665 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+45 ","          conf=4.040/4.040 g2p=- phones=- zipa=invalid
+46 " oh"        conf=3.713/3.713 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+47 ","          conf=4.418/4.418 g2p=- phones=- zipa=invalid
+48 " oh"        conf=4.066/4.066 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+49 ","          conf=4.712/4.712 g2p=- phones=- zipa=invalid
+50 " oh"        conf=4.117/4.117 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+51 ","          conf=4.936/4.936 g2p=- phones=- zipa=invalid
+52 " oh"        conf=3.967/3.967 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+53 ","          conf=5.104/5.104 g2p=- phones=- zipa=invalid
+54 " oh"        conf=3.730/3.730 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+55 ","          conf=5.033/5.033 g2p=- phones=- zipa=invalid
+56 " oh"        conf=3.931/3.931 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+57 ","          conf=4.838/4.838 g2p=- phones=- zipa=invalid
+58 " oh"        conf=4.243/4.243 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+59 ","          conf=4.909/4.909 g2p=- phones=- zipa=invalid
+60 " oh"        conf=4.415/4.415 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+61 ","          conf=5.010/5.010 g2p=- phones=- zipa=invalid
+62 " oh"        conf=4.335/4.335 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+63 ","          conf=4.708/4.708 g2p=- phones=- zipa=invalid
+64 " oh"        conf=4.306/4.306 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+65 ","          conf=4.344/4.344 g2p=- phones=- zipa=invalid
+66 " oh"        conf=4.204/4.204 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+67 ","          conf=4.242/4.242 g2p=- phones=- zipa=invalid
+68 " oh"        conf=3.840/3.840 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+69 ","          conf=4.590/4.590 g2p=- phones=- zipa=invalid
+70 " oh"        conf=3.961/3.961 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+71 ","          conf=5.014/5.014 g2p=- phones=- zipa=invalid
+72 " oh"        conf=4.319/4.319 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+73 ","          conf=5.106/5.106 g2p=- phones=- zipa=invalid
+74 " oh"        conf=4.580/4.580 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+75 ","          conf=4.851/4.851 g2p=- phones=- zipa=invalid
+76 " oh"        conf=4.421/4.421 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+77 ","          conf=4.865/4.865 g2p=- phones=- zipa=invalid
+78 " oh"        conf=4.340/4.340 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+79 ","          conf=4.947/4.947 g2p=- phones=- zipa=invalid
+80 " oh"        conf=4.473/4.473 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+81 ","          conf=4.751/4.751 g2p=- phones=- zipa=invalid
+82 " oh"        conf=4.526/4.526 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+83 ","          conf=4.574/4.574 g2p=- phones=- zipa=invalid
+84 " oh"        conf=4.561/4.561 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+85 ","          conf=4.569/4.569 g2p=- phones=- zipa=invalid
+86 " oh"        conf=4.776/4.776 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+87 ","          conf=4.729/4.729 g2p=- phones=- zipa=invalid
+88 " oh"        conf=4.851/4.851 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+89 ","          conf=4.961/4.961 g2p=- phones=- zipa=invalid
+90 " oh"        conf=4.811/4.811 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+91 ","          conf=5.117/5.117 g2p=- phones=- zipa=invalid
+92 " oh"        conf=4.754/4.754 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+93 ","          conf=5.042/5.042 g2p=- phones=- zipa=invalid
+94 " oh"        conf=4.386/4.386 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+95 ","          conf=4.946/4.946 g2p=- phones=- zipa=invalid
+96 " oh"        conf=4.049/4.049 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+97 ","          conf=5.087/5.087 g2p=- phones=- zipa=invalid
+98 " oh"        conf=4.108/4.108 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+99 ","          conf=5.273/5.273 g2p=- phones=- zipa=invalid
+100 " oh"        conf=4.144/4.144 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+101 ","          conf=5.469/5.469 g2p=- phones=- zipa=invalid
+102 " oh"        conf=4.067/4.067 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+103 ","          conf=5.602/5.602 g2p=- phones=- zipa=invalid
+104 " oh"        conf=4.394/4.394 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+105 ","          conf=5.291/5.291 g2p=- phones=- zipa=invalid
+106 " oh"        conf=4.336/4.336 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+107 ","          conf=4.988/4.988 g2p=- phones=- zipa=invalid
+108 " oh"        conf=4.318/4.318 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+109 ","          conf=5.252/5.252 g2p=- phones=- zipa=invalid
+110 " oh"        conf=4.512/4.512 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+111 ","          conf=5.374/5.374 g2p=- phones=- zipa=invalid
+112 " oh"        conf=4.515/4.515 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+113 ","          conf=5.073/5.073 g2p=- phones=- zipa=invalid
+114 " oh"        conf=4.104/4.104 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+115 ","          conf=5.110/5.110 g2p=- phones=- zipa=invalid
+116 " oh"        conf=4.147/4.147 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+117 ","          conf=5.460/5.460 g2p=- phones=- zipa=invalid
+118 " oh"        conf=4.402/4.402 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+119 ","          conf=5.680/5.680 g2p=- phones=- zipa=invalid
+120 " oh"        conf=4.510/4.510 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+121 ","          conf=5.676/5.676 g2p=- phones=- zipa=invalid
+122 " oh"        conf=4.674/4.674 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+123 ","          conf=5.399/5.399 g2p=- phones=- zipa=invalid
+124 " oh"        conf=4.525/4.525 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+125 ","          conf=5.237/5.237 g2p=- phones=- zipa=invalid
+126 " oh"        conf=4.302/4.302 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+127 ","          conf=5.472/5.472 g2p=- phones=- zipa=invalid
+128 " oh"        conf=4.341/4.341 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+129 ","          conf=5.639/5.639 g2p=- phones=- zipa=invalid
+130 " oh"        conf=4.698/4.698 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+131 ","          conf=5.524/5.524 g2p=- phones=- zipa=invalid
+132 " oh"        conf=4.755/4.755 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+133 ","          conf=5.429/5.429 g2p=- phones=- zipa=invalid
+134 " oh"        conf=4.700/4.700 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+135 ","          conf=5.412/5.412 g2p=- phones=- zipa=invalid
+136 " oh"        conf=4.805/4.805 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+137 ","          conf=5.279/5.279 g2p=- phones=- zipa=invalid
+138 " oh"        conf=4.568/4.568 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+139 ","          conf=5.357/5.357 g2p=- phones=- zipa=invalid
+140 " oh"        conf=4.098/4.098 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+141 ","          conf=5.528/5.528 g2p=- phones=- zipa=invalid
+142 " oh"        conf=4.104/4.104 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+143 ","          conf=5.371/5.371 g2p=- phones=- zipa=invalid
+144 " oh"        conf=4.164/4.164 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+145 ","          conf=5.189/5.189 g2p=- phones=- zipa=invalid
+146 " oh"        conf=4.120/4.120 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+147 ","          conf=5.603/5.603 g2p=- phones=- zipa=invalid
+148 " oh"        conf=4.165/4.165 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+149 ","          conf=6.000/6.000 g2p=- phones=- zipa=invalid
+150 " oh"        conf=4.160/4.160 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+151 ","          conf=5.683/5.683 g2p=- phones=- zipa=invalid
+152 " oh"        conf=4.557/4.557 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+153 ","          conf=4.854/4.854 g2p=- phones=- zipa=invalid
+154 " oh"        conf=4.857/4.857 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+155 ","          conf=4.616/4.616 g2p=- phones=- zipa=invalid
+156 " oh"        conf=5.253/5.253 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+157 ","          conf=4.994/4.994 g2p=- phones=- zipa=invalid
+158 " oh"        conf=4.749/4.749 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+159 ","          conf=5.306/5.306 g2p=- phones=- zipa=invalid
+160 " oh"        conf=4.729/4.729 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+161 ","          conf=5.175/5.175 g2p=- phones=- zipa=invalid
+162 " oh"        conf=5.227/5.227 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+163 ","          conf=4.838/4.838 g2p=- phones=- zipa=invalid
+164 " oh"        conf=5.143/5.143 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+165 ","          conf=5.026/5.026 g2p=- phones=- zipa=invalid
+166 " oh"        conf=4.604/4.604 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+167 ","          conf=5.111/5.111 g2p=- phones=- zipa=invalid
+168 " oh"        conf=4.381/4.381 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+169 ","          conf=4.963/4.963 g2p=- phones=- zipa=invalid
+170 " oh"        conf=4.302/4.302 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+171 ","          conf=5.049/5.049 g2p=- phones=- zipa=invalid
+172 " oh"        conf=4.195/4.195 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+173 ","          conf=5.197/5.197 g2p=- phones=- zipa=invalid
+174 " oh"        conf=4.307/4.307 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+175 ","          conf=5.228/5.228 g2p=- phones=- zipa=invalid
+176 " oh"        conf=4.339/4.339 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+177 ","          conf=5.275/5.275 g2p=- phones=- zipa=invalid
+178 " oh"        conf=4.100/4.100 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+179 ","          conf=5.324/5.324 g2p=- phones=- zipa=invalid
+180 " oh"        conf=4.125/4.125 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+181 ","          conf=5.107/5.107 g2p=- phones=- zipa=invalid
+182 " oh"        conf=4.134/4.134 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+183 ","          conf=4.797/4.797 g2p=- phones=- zipa=invalid
+184 " oh"        conf=3.968/3.968 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+185 ","          conf=5.002/5.002 g2p=- phones=- zipa=invalid
+186 " oh"        conf=3.987/3.987 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+187 ","          conf=5.457/5.457 g2p=- phones=- zipa=invalid
+188 " oh"        conf=3.907/3.907 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+189 ","          conf=5.778/5.778 g2p=- phones=- zipa=invalid
+190 " oh"        conf=3.876/3.876 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+191 ","          conf=5.749/5.749 g2p=- phones=- zipa=invalid
+192 " oh"        conf=4.277/4.277 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+193 ","          conf=5.483/5.483 g2p=- phones=- zipa=invalid
+194 " oh"        conf=4.387/4.387 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+195 ","          conf=5.553/5.553 g2p=- phones=- zipa=invalid
+196 " oh"        conf=4.243/4.243 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+197 ","          conf=5.688/5.688 g2p=- phones=- zipa=invalid
+198 " oh"        conf=4.635/4.635 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+199 ","          conf=5.327/5.327 g2p=- phones=- zipa=invalid
+200 " oh"        conf=5.144/5.144 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+201 ","          conf=5.019/5.019 g2p=- phones=- zipa=invalid
+202 " oh"        conf=5.103/5.103 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+203 ","          conf=5.473/5.473 g2p=- phones=- zipa=invalid
+204 " oh"        conf=4.919/4.919 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+205 ","          conf=5.865/5.865 g2p=- phones=- zipa=invalid
+206 " oh"        conf=4.488/4.488 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+207 ","          conf=5.922/5.922 g2p=- phones=- zipa=invalid
+208 " oh"        conf=4.478/4.478 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+209 ","          conf=5.544/5.544 g2p=- phones=- zipa=invalid
+210 " oh"        conf=4.176/4.176 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+211 ","          conf=5.196/5.196 g2p=- phones=- zipa=invalid
+212 " oh"        conf=3.984/3.984 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+213 ","          conf=5.070/5.070 g2p=- phones=- zipa=invalid
+214 " oh"        conf=3.624/3.624 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+215 ","          conf=5.316/5.316 g2p=- phones=- zipa=invalid
+216 " oh"        conf=3.416/3.416 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+217 ","          conf=5.846/5.846 g2p=- phones=- zipa=invalid
+218 " oh"        conf=3.857/3.857 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+219 ","          conf=6.147/6.147 g2p=- phones=- zipa=invalid
+220 " oh"        conf=4.029/4.029 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+221 ","          conf=6.076/6.076 g2p=- phones=- zipa=invalid
+222 " oh"        conf=4.243/4.243 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+223 ","          conf=6.026/6.026 g2p=- phones=- zipa=invalid
+224 " oh"        conf=4.692/4.692 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+225 ","          conf=6.092/6.092 g2p=- phones=- zipa=invalid
+226 " oh"        conf=4.602/4.602 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+227 ","          conf=6.070/6.070 g2p=- phones=- zipa=invalid
+228 " oh"        conf=4.691/4.691 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+229 ","          conf=5.724/5.724 g2p=- phones=- zipa=invalid
+230 " oh"        conf=5.133/5.133 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+231 ","          conf=5.378/5.378 g2p=- phones=- zipa=invalid
+232 " oh"        conf=4.687/4.687 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+233 ","          conf=5.794/5.794 g2p=- phones=- zipa=invalid
+234 " oh"        conf=4.398/4.398 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+235 ","          conf=6.348/6.348 g2p=- phones=- zipa=invalid
+236 " oh"        conf=4.283/4.283 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+237 ","          conf=6.432/6.432 g2p=- phones=- zipa=invalid
+238 " oh"        conf=4.450/4.450 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+239 ","          conf=6.170/6.170 g2p=- phones=- zipa=invalid
+240 " oh"        conf=4.471/4.471 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+241 ","          conf=6.064/6.064 g2p=- phones=- zipa=invalid
+242 " oh"        conf=4.595/4.595 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+243 ","          conf=6.173/6.173 g2p=- phones=- zipa=invalid
+244 " oh"        conf=4.591/4.591 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+245 ","          conf=6.297/6.297 g2p=- phones=- zipa=invalid
+246 " oh"        conf=4.468/4.468 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+247 ","          conf=6.297/6.297 g2p=- phones=- zipa=invalid
+248 " oh"        conf=4.706/4.706 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+249 ","          conf=6.207/6.207 g2p=- phones=- zipa=invalid
+250 " oh"        conf=4.625/4.625 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+251 ","          conf=6.298/6.298 g2p=- phones=- zipa=invalid
+252 " oh"        conf=4.455/4.455 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+253 ","          conf=6.603/6.603 g2p=- phones=- zipa=invalid
+254 " oh"        conf=4.455/4.455 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+255 ","          conf=6.651/6.651 g2p=- phones=- zipa=invalid
+
+feed 02  samples=6400  secs=0.400
+lang en
+text Oh, yeah.
+ 0 "Oh"         conf=1.010/1.010 g2p=ˈoʊ phones=ə ʊ zipa=invalid
+ 1 ","          conf=0.206/0.206 g2p=- phones=- zipa=invalid
+ 2 " yeah"      conf=0.351/0.351 g2p=ˈji phones=j ɪ zipa=invalid
+ 3 "."          conf=0.557/0.557 g2p=- phones=- zipa=invalid
+
+feed 03  samples=9600  secs=0.600
+lang en
+text I.
+ 0 "I"          conf=3.369/3.369 g2p=ˈi phones=ɪ zipa=0.554..0.577
+ 1 "."          conf=6.576/6.576 g2p=- phones=- zipa=invalid
+
+feed 04  samples=12800  secs=0.800
+lang en
+text I.
+ 0 "I"          conf=11.414/11.414 g2p=ˈi phones=ɪ zipa=0.556..0.578
+ 1 "."          conf=3.111/3.111 g2p=- phones=- zipa=invalid
+
+feed 05  samples=16000  secs=1.000
+lang en
+text I asked.
+ 0 "I"          conf=16.862/16.862 g2p=ˈi phones=ɪ zipa=0.609..0.652
+ 1 " asked"     conf=9.370/9.370 g2p=ˈæskt phones=ɛ s k t zipa=0.717..0.935
+ 2 "."          conf=9.314/9.314 g2p=- phones=- zipa=invalid
+
+feed 06  samples=19200  secs=1.200
+lang en
+text I asked.
+ 0 "I"          conf=16.851/16.851 g2p=ˈi phones=ɪ zipa=0.600..0.643
+ 1 " asked"     conf=11.825/11.825 g2p=ˈæskt phones=ɛ s k t zipa=0.707..1.007
+ 2 "."          conf=6.810/6.810 g2p=- phones=- zipa=invalid
+
+feed 07  samples=22400  secs=1.400
+lang en
+text I asked Cop.
+ 0 "I"          conf=16.699/16.699 g2p=ˈi phones=ɪ zipa=0.594..0.636
+ 1 " asked"     conf=11.802/11.802 g2p=ˈæskt phones=ɛ s k t zipa=0.700..0.997
+ 2 " Cop"       conf=1.256/1.256 g2p=ˈkɑp phones=k ɑ p zipa=1.188..1.400
+ 3 "."          conf=3.424/3.424 g2p=- phones=- zipa=invalid
+
+feed 08  samples=25600  secs=1.600
+lang en
+text I asked Copilot.
+ 0 "I"          conf=15.964/15.964 g2p=ˈi phones=ɪ zipa=0.589..0.632
+ 1 " asked"     conf=12.095/12.095 g2p=ˈæskt phones=ɛ s k t zipa=0.695..0.989
+ 2 " Cop"       conf=0.230/0.230 g2p=kɑp phones=k ɑ p zipa=1.179..1.411
+ 3 "ilot"       conf=8.666/8.666 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.453..1.558
+ 4 "."          conf=6.842/6.842 g2p=- phones=- zipa=invalid
+
+feed 09  samples=28800  secs=1.800
+lang en
+text I asked Copilot.
+ 0 "I"          conf=15.311/15.311 g2p=ˈi phones=ɪ zipa=0.586..0.628
+ 1 " asked"     conf=12.422/12.422 g2p=ˈæskt phones=ɛ s k t zipa=0.691..0.984
+ 2 " Cop"       conf=6.696/6.696 g2p=kɑp phones=k ɑ p zipa=1.172..1.486
+ 3 "ilot"       conf=9.003/9.003 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.465..1.716
+ 4 "."          conf=7.753/7.753 g2p=- phones=- zipa=invalid
+
+feed 10  samples=32000  secs=2.000
+lang en
+text I asked Copilot to.
+ 0 "I"          conf=14.744/14.744 g2p=ˈi phones=ɪ zipa=0.583..0.625
+ 1 " asked"     conf=12.278/12.278 g2p=ˈæskt phones=ɛ s k t zipa=0.688..0.979
+ 2 " Cop"       conf=6.500/6.500 g2p=kɑp phones=k ɑ p zipa=1.167..1.479
+ 3 "ilot"       conf=8.791/8.791 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.458..1.729
+ 4 " to"        conf=7.846/7.846 g2p=ˈtu phones=t ʊ zipa=1.833..1.958
+ 5 "."          conf=6.371/6.371 g2p=- phones=- zipa=invalid
+
+feed 11  samples=35200  secs=2.200
+lang en
+text I asked Copilot to generate.
+ 0 "I"          conf=15.182/15.182 g2p=ˈi phones=ɪ zipa=0.581..0.623
+ 1 " asked"     conf=11.895/11.895 g2p=ˈæskt phones=ɛ s k t zipa=0.685..0.975
+ 2 " Cop"       conf=6.194/6.194 g2p=kɑp phones=k ɑ p zipa=1.162..1.474
+ 3 "ilot"       conf=8.577/8.577 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.453..1.723
+ 4 " to"        conf=14.882/14.882 g2p=ˈtu phones=t ʊ zipa=1.826..1.992
+ 5 " generate"  conf=5.218/5.218 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.034..2.158
+ 6 "."          conf=3.389/3.389 g2p=- phones=- zipa=invalid
+
+feed 12  samples=38400  secs=2.400
+lang en
+text I asked Copilot to generate.
+ 0 "I"          conf=14.905/14.905 g2p=ˈi phones=ɪ zipa=0.579..0.621
+ 1 " asked"     conf=12.491/12.491 g2p=ˈæskt phones=ɛ s k t zipa=0.683..0.972
+ 2 " Cop"       conf=6.380/6.380 g2p=kɑp phones=k ɑ p zipa=1.159..1.469
+ 3 "ilot"       conf=8.502/8.502 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.448..1.717
+ 4 " to"        conf=16.911/16.911 g2p=ˈtu phones=t ʊ zipa=1.821..1.986
+ 5 " generate"  conf=14.458/14.458 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.028..2.359
+ 6 "."          conf=4.239/4.239 g2p=- phones=- zipa=invalid
+
+feed 13  samples=41600  secs=2.600
+lang en
+text I asked Copilot to generate comments.
+ 0 "I"          conf=14.607/14.607 g2p=ˈi phones=ɪ zipa=0.578..0.619
+ 1 " asked"     conf=12.614/12.614 g2p=ˈæskt phones=ɛ s k t zipa=0.681..0.970
+ 2 " Cop"       conf=6.441/6.441 g2p=kɑp phones=k ɑ p zipa=1.156..1.465
+ 3 "ilot"       conf=8.258/8.258 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.444..1.713
+ 4 " to"        conf=17.621/17.621 g2p=ˈtu phones=t ʊ zipa=1.816..1.981
+ 5 " generate"  conf=16.615/16.615 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.022..2.394
+ 6 " comments"  conf=5.722/5.722 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.394..2.600
+ 7 "."          conf=5.266/5.266 g2p=- phones=- zipa=invalid
+
+feed 14  samples=44800  secs=2.800
+lang en
+text I asked Copilot to generate comments for.
+ 0 "I"          conf=14.892/14.892 g2p=ˈi phones=ɪ zipa=0.576..0.618
+ 1 " asked"     conf=12.567/12.567 g2p=ˈæskt phones=ɛ s k t zipa=0.679..0.968
+ 2 " Cop"       conf=6.259/6.259 g2p=kɑp phones=k ɑ p zipa=1.153..1.462
+ 3 "ilot"       conf=8.579/8.579 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.441..1.709
+ 4 " to"        conf=16.872/16.872 g2p=ˈtu phones=t ʊ zipa=1.812..1.976
+ 5 " generate"  conf=17.056/17.056 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.018..2.388
+ 6 " comments"  conf=10.174/10.174 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.388..2.718
+ 7 " for"       conf=5.368/5.368 g2p=ˈfɔɹ phones=f ɔ zipa=2.718..2.800
+ 8 "."          conf=4.606/4.606 g2p=- phones=- zipa=invalid
+
+feed 15  samples=48000  secs=3.000
+lang en
+text I asked Copilot to generate comments for you.
+ 0 "I"          conf=14.065/14.065 g2p=ˈi phones=ɪ zipa=0.575..0.616
+ 1 " asked"     conf=12.503/12.503 g2p=ˈæskt phones=ɛ s k t zipa=0.678..0.966
+ 2 " Cop"       conf=5.879/5.879 g2p=kɑp phones=k ɑ p zipa=1.151..1.459
+ 3 "ilot"       conf=8.237/8.237 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.438..1.705
+ 4 " to"        conf=16.958/16.958 g2p=ˈtu phones=t ʊ zipa=1.808..1.973
+ 5 " generate"  conf=17.561/17.561 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.014..2.384
+ 6 " comments"  conf=9.390/9.390 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.384..2.733
+ 7 " for"       conf=19.166/19.166 g2p=ˈfɔɹ phones=f ɔ zipa=2.753..2.856
+ 8 " you"       conf=13.987/13.987 g2p=ˈju phones=j ʊ zipa=2.877..2.959
+ 9 "."          conf=10.997/10.997 g2p=- phones=- zipa=invalid
+
+feed 16  samples=51200  secs=3.200
+lang en
+text I asked Copilot to generate comments for you.
+ 0 "I"          conf=14.429/14.429 g2p=ˈi phones=ɪ zipa=0.574..0.615
+ 1 " asked"     conf=12.499/12.499 g2p=ˈæskt phones=ɛ s k t zipa=0.677..0.964
+ 2 " Cop"       conf=5.605/5.605 g2p=kɑp phones=k ɑ p zipa=1.149..1.456
+ 3 "ilot"       conf=8.090/8.090 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.436..1.703
+ 4 " to"        conf=17.442/17.442 g2p=ˈtu phones=t ʊ zipa=1.805..1.969
+ 5 " generate"  conf=17.188/17.188 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.010..2.379
+ 6 " comments"  conf=9.977/9.977 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.379..2.728
+ 7 " for"       conf=19.342/19.342 g2p=ˈfɔɹ phones=f ɔ zipa=2.749..2.872
+ 8 " you"       conf=14.445/14.445 g2p=ˈju phones=j ʊ zipa=2.872..2.995
+ 9 "."          conf=10.875/10.875 g2p=- phones=- zipa=invalid
+
+feed 17  samples=54400  secs=3.400
+lang en
+text I asked Copilot to generate comments for you.
+ 0 "I"          conf=14.372/14.372 g2p=ˈi phones=ɪ zipa=0.573..0.614
+ 1 " asked"     conf=12.441/12.441 g2p=ˈæskt phones=ɛ s k t zipa=0.676..0.963
+ 2 " Cop"       conf=5.723/5.723 g2p=kɑp phones=k ɑ p zipa=1.147..1.454
+ 3 "ilot"       conf=7.987/7.987 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.434..1.700
+ 4 " to"        conf=17.654/17.654 g2p=ˈtu phones=t ʊ zipa=1.802..1.966
+ 5 " generate"  conf=17.190/17.190 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.007..2.376
+ 6 " comments"  conf=10.046/10.046 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.376..2.724
+ 7 " for"       conf=19.712/19.712 g2p=ˈfɔɹ phones=f ɔ zipa=2.745..2.847
+ 8 " you"       conf=14.609/14.609 g2p=ˈju phones=j ʊ zipa=2.867..2.970
+ 9 "."          conf=10.182/10.182 g2p=- phones=- zipa=invalid
+
+feed 18  samples=57600  secs=3.600
+lang en
+text I asked Copilot to generate comments for you.
+ 0 "I"          conf=14.463/14.463 g2p=ˈi phones=ɪ zipa=0.572..0.613
+ 1 " asked"     conf=12.333/12.333 g2p=ˈæskt phones=ɛ s k t zipa=0.674..0.960
+ 2 " Cop"       conf=5.442/5.442 g2p=kɑp phones=k ɑ p zipa=1.144..1.451
+ 3 "ilot"       conf=8.137/8.137 g2p=əɫɑt phones=ə ɫ ɑ t zipa=1.430..1.696
+ 4 " to"        conf=17.831/17.831 g2p=ˈtu phones=t ʊ zipa=1.798..1.962
+ 5 " generate"  conf=16.987/16.987 g2p=ˈdʒɛnɝˌeɪt phones=d ʒ ɛ n ə ɛ ɪ t zipa=2.003..2.370
+ 6 " comments"  conf=9.643/9.643 g2p=ˈkɑmənts phones=k ɑ m ə n t s zipa=2.370..2.718
+ 7 " for"       conf=19.039/19.039 g2p=ˈfɔɹ phones=f ɔ zipa=2.738..2.840
+ 8 " you"       conf=14.387/14.387 g2p=ˈju phones=j ʊ zipa=2.861..2.963
+ 9 "."          conf=9.546/9.546 g2p=- phones=- zipa=invalid

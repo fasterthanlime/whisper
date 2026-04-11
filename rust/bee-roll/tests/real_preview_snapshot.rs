@@ -27,11 +27,26 @@ impl Listener for NoopListener {}
 
 #[test]
 fn real_preview_snapshot_8453579b() -> anyhow::Result<()> {
-    let wav_path =
-        workspace_root().join(".artifacts/gpu-hotline/corpus-staging/current/8453579B.wav");
-    let transcript_path = workspace_root().join(
-        ".artifacts/gpu-hotline/runs/clean-corpus-v1-no-correction-20260409/transcripts/8453579B.txt",
+    insta::assert_snapshot!(
+        "real_preview_snapshot_8453579b",
+        snapshot_for_artifact("8453579B")?
     );
+    Ok(())
+}
+
+#[test]
+fn real_preview_snapshot_1dce2f4b() -> anyhow::Result<()> {
+    insta::assert_snapshot!(
+        "real_preview_snapshot_1dce2f4b",
+        snapshot_for_artifact("1DCE2F4B")?
+    );
+    Ok(())
+}
+
+fn snapshot_for_artifact(stem: &str) -> anyhow::Result<String> {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let wav_path = fixtures.join(format!("{stem}.wav"));
+    let transcript_path = fixtures.join(format!("{stem}.transcript.txt"));
 
     let samples = load_wav_mono_f32(&wav_path)?;
     let expected_text = extract_transcript_text(&transcript_path)?;
@@ -78,8 +93,7 @@ fn real_preview_snapshot_8453579b() -> anyhow::Result<()> {
         )?;
     }
 
-    insta::assert_snapshot!("real_preview_snapshot_8453579b", snapshot);
-    Ok(())
+    Ok(snapshot)
 }
 
 fn render_feed(
@@ -170,13 +184,6 @@ fn format_zipa_timing(timing: &ZipaTiming) -> String {
 
 fn quote_surface(surface: &str) -> String {
     format!("{surface:?}")
-}
-
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("workspace root")
 }
 
 fn extract_transcript_text(path: &Path) -> anyhow::Result<String> {

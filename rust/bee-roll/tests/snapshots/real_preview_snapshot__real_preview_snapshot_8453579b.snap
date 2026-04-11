@@ -1,8 +1,8 @@
 ---
 source: rust/bee-roll/tests/real_preview_snapshot.rs
-expression: snapshot
+expression: "snapshot_for_artifact(\"8453579B\")?"
 ---
-wav: /Users/amos/bearcove/bee/.artifacts/gpu-hotline/corpus-staging/current/8453579B.wav
+wav: /Users/amos/bearcove/bee/rust/bee-roll/tests/fixtures/8453579B.wav
 expected: There's honestly no reason that it shouldn't work.
 
 feed 01  samples=3200  secs=0.200
