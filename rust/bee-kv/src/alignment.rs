@@ -30,7 +30,7 @@ pub(crate) fn suffix_after_prefix<'a>(prefix: Option<&str>, text: &'a str) -> &'
 #[derive(Clone, Debug)]
 pub(crate) struct TimedWord {
     /// Character range this word occupies in the combined transcript.
-    pub(crate) char_range: std::ops::Range<usize>,
+    pub(crate) char_range: CharSpan,
     /// Start time in seconds (relative to the chunk/window start).
     pub(crate) start_secs: WindowTime,
     /// End time in seconds (relative to the chunk/window start).
@@ -75,7 +75,7 @@ pub(crate) fn timed_aligned_words_for_alignment(
         };
 
         timed_words.push(TimedWord {
-            char_range: word_range.char_start..word_range.char_end,
+            char_range: CharSpan::new(word_range.char_start, word_range.char_end),
             start_secs: WindowTime::from_secs(start_secs),
             end_secs: WindowTime::from_secs(end_secs),
         });
@@ -138,30 +138,37 @@ pub(crate) fn timed_generated_bridge_for_cuts(
 
     let kept_text = timed_words
         .get(full_kept_word_count.saturating_sub(1))
-        .map(|end_word| combined_transcript[..end_word.char_range.end].to_string())
+        .map(|end_word| combined_transcript[..end_word.char_range.end.as_usize()].to_string())
         .unwrap_or_default();
 
     let bridge = if let (Some(first_bridge_word), Some(last_bridge_word)) =
         (bridge_words_slice.first(), bridge_words_slice.last())
     {
-        let mut bridge_char_base = first_bridge_word.char_range.start;
+        let mut bridge_char_base = first_bridge_word.char_range.start.as_usize();
         while bridge_char_base > 0
             && combined_transcript.as_bytes()[bridge_char_base - 1].is_ascii_whitespace()
         {
             bridge_char_base -= 1;
         }
-        let text =
-            combined_transcript[bridge_char_base..last_bridge_word.char_range.end].to_string();
+        let text = combined_transcript
+            [bridge_char_base..last_bridge_word.char_range.end.as_usize()]
+            .to_string();
         let token_ids = tokenize_token_ids(tokenizer, &text)?;
         let bridge_words = bridge_words_slice
             .iter()
             .map(|word| -> Result<CarriedBridgeWord> {
-                let relative_start = word.char_range.start.saturating_sub(bridge_char_base);
-                let relative_end = word.char_range.end.saturating_sub(bridge_char_base);
+                let relative_start = word
+                    .char_range
+                    .start
+                    .saturating_sub(CharIndex::new(bridge_char_base));
+                let relative_end = word
+                    .char_range
+                    .end
+                    .saturating_sub(CharIndex::new(bridge_char_base));
                 let token_start = tokenize_token_ids(tokenizer, &text[..relative_start])?.len();
                 let token_end = tokenize_token_ids(tokenizer, &text[..relative_end])?.len();
                 Ok(CarriedBridgeWord {
-                    token_range: token_start..token_end,
+                    token_range: TokenSpan::new(token_start, token_end),
                     end_secs: WindowTime::from_secs(
                         (word.end_secs.as_secs() - keep_until_secs.as_secs()).max(0.0),
                     ),
@@ -188,11 +195,11 @@ pub(crate) fn timed_generated_bridge_for_cuts(
     } else {
         let generated_start = generated_words
             .first()
-            .map(|word| word.char_range.start)
+            .map(|word| word.char_range.start.as_usize())
             .ok_or_else(|| anyhow::anyhow!("missing generated word start"))?;
         let generated_end = generated_words
             .get(kept_word_count - 1)
-            .map(|word| word.char_range.end)
+            .map(|word| word.char_range.end.as_usize())
             .ok_or_else(|| anyhow::anyhow!("missing generated kept word range"))?;
         combined_transcript[generated_start..generated_end].to_string()
     };

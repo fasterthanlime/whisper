@@ -262,7 +262,7 @@ pub(crate) fn collect_committed_word_placements(
         let words = build_window_word_placements(align_ctx, run, chunk_samples)?;
         let window_start_secs = chunk.start_sample.as_secs();
         let keep_word_count = if let Some(rollback) = &run.rollback {
-            sentence_word_tokens(&rollback.kept_text).len()
+            rollback.kept_word_count.as_usize()
         } else {
             words.len()
         };
@@ -676,14 +676,14 @@ pub(crate) fn build_window_word_placements(
     let kept_word_count = run
         .rollback
         .as_ref()
-        .map_or(word_timings.len(), |r| r.kept_word_count);
+        .map_or(word_timings.len(), |r| r.kept_word_count.as_usize());
     let replay_word_count = run.rollback.as_ref().map_or(word_timings.len(), |r| {
         let bridge_words = r
             .bridge_text
             .as_ref()
             .map(|text| sentence_word_tokens(text).len())
             .unwrap_or(0);
-        r.kept_word_count + bridge_words
+        r.kept_word_count.as_usize() + bridge_words
     });
     let chosen_cut = run
         .rollback

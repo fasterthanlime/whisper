@@ -25,6 +25,12 @@ use crate::tui::{ExerciseTui, append_display_delta, update_exercise_progress};
 use crate::types::*;
 use crate::{HOP_LENGTH, N_FFT, SAMPLE_RATE};
 
+struct ResolvedRollback {
+    decision: WindowRollbackDecision,
+    next_start_position: CachePosition,
+    next_replay_prefix: Option<CarriedBridge>,
+}
+
 /// Runs sliding-window decoding with a replayable bridge segment between windows.
 pub(crate) fn decode_sliding_window_bridge_replay(
     model: &Qwen3ASRModel,
@@ -110,8 +116,8 @@ pub(crate) fn decode_sliding_window_bridge_replay(
     let mut align_ctx = AlignmentContext::new()?;
     let mut interrupted_early = false;
     let mut tui = ExerciseTui::new();
-    let mut committed_token_ids: Vec<u32> = Vec::new();
-    let mut draft_token_ids: Vec<u32> = Vec::new();
+    let mut committed_token_ids: Vec<TokenId> = Vec::new();
+    let mut draft_token_ids: Vec<TokenId> = Vec::new();
     let mut committed_text = String::new();
     let mut draft_text = String::new();
 
@@ -183,14 +189,13 @@ pub(crate) fn decode_sliding_window_bridge_replay(
             chunk_run.generated_tokens,
             chunk_run.stop_reason.as_str(),
         ));
-        draft_token_ids.clear();
-        if let Some(prefix) = replayed_prefix.as_ref() {
-            draft_token_ids.extend_from_slice(&prefix.token_ids);
-        }
-        draft_token_ids.extend_from_slice(&chunk_run.generated_token_ids);
-        draft_text.clear();
-        append_display_delta(&mut draft_text, replayed_prefix_text.as_str());
-        append_display_delta(&mut draft_text, chunk_run.transcript.as_str());
+        set_draft_from_decoded_chunk(
+            &mut draft_token_ids,
+            &mut draft_text,
+            replayed_prefix.as_ref(),
+            replayed_prefix_text.as_str(),
+            &chunk_run,
+        );
         update_exercise_progress(
             &mut tui,
             if window_end_sample.as_usize() < samples.len() {
@@ -205,134 +210,46 @@ pub(crate) fn decode_sliding_window_bridge_replay(
 
         let has_next_window = window_end_sample.as_usize() < samples.len();
         let rollback = if has_next_window {
-            let generated_transcript = normalized_transcript(&chunk_run.transcript);
-            let normalized_replayed_prefix = normalized_transcript(&replayed_prefix_text);
-            let combined_transcript =
-                match Some(normalized_replayed_prefix).filter(|text| !text.is_empty()) {
-                    Some(prefix) if !prefix.is_empty() && !generated_transcript.is_empty() => {
-                        format!("{prefix} {generated_transcript}")
-                    }
-                    Some(prefix) if !prefix.is_empty() => prefix.to_string(),
-                    _ => generated_transcript.to_string(),
-                };
-            let alignment =
-                build_transcript_alignment(&mut align_ctx, &combined_transcript, chunk_samples)?;
-            let target_keep_until_secs = WindowTime::from_secs(unresolved_keep_samples.as_secs());
-            let replay_until_secs = WindowTime::from_secs(
-                unresolved_keep_samples
-                    .checked_add(bridge_samples)
-                    .ok_or_else(|| anyhow::anyhow!("replay window geometry overflow"))?
-                    .as_secs(),
-            );
-            let (candidate_keep_until_secs, keep_boundary_debug) = adjust_keep_boundary_secs(
-                keep_boundary_policy,
-                &alignment,
-                target_keep_until_secs,
-                replay_until_secs,
-            )?;
-            let timed_words = timed_aligned_words_for_alignment(&combined_transcript, &alignment)?;
-            let found_boundary =
-                keep_boundary_policy == KeepBoundaryPolicy::Fixed || keep_boundary_debug.snapped;
-            let keep_until_secs = if found_boundary {
-                Some(candidate_keep_until_secs)
-            } else {
-                None
-            };
-            let split = timed_generated_bridge_for_cuts(
+            let resolved = resolve_window_rollback(
                 tokenizer,
-                &combined_transcript,
+                &mut align_ctx,
+                &chunk_run,
                 replayed_prefix.as_ref(),
-                &timed_words,
-                keep_until_secs.unwrap_or(WindowTime::from_secs(0.0)),
-                replay_until_secs,
-                keep_boundary_debug.chosen_word.as_ref(),
-            )?;
-            let carried_token_count = kept_carried_token_count(
-                replayed_prefix.as_ref(),
-                keep_until_secs,
-                keep_boundary_debug.chosen_word.as_ref(),
-            );
-            let mut kept_token_ids =
-                kept_carried_token_ids(replayed_prefix.as_ref(), carried_token_count);
-            kept_token_ids.extend(kept_generated_token_ids(&chunk_run, split.kept_token_count));
-            let kept_text = split.kept_text.clone();
-            if keep_until_secs.is_some() && !kept_text.is_empty() {
-                tui.log(format!("kept words: {}", kept_text));
-            }
-            let replay_prefix_token_count = replayed_prefix
-                .as_ref()
-                .map(|prefix| prefix.token_ids.len())
-                .unwrap_or(0);
-            let base_prompt_tokens = TokenCount::new(
-                chunk_run
-                    .prompt_tokens
-                    .saturating_sub(replay_prefix_token_count),
-            );
-            let rollback_position = if keep_until_secs.is_some()
-                && (carried_token_count > 0 || !split.kept_token_count.is_zero())
-            {
-                chunk_run
-                    .start_position
-                    .saturating_add(base_prompt_tokens)
-                    .saturating_add(TokenCount::new(carried_token_count))
-                    .saturating_add(split.kept_token_count)
-            } else {
-                chunk_run.start_position
-            };
-            truncate_cache(&mut cache, rollback_position)?;
-            start_position = rollback_position;
-            replay_prefix_for_next =
-                (!split.bridge.text.is_empty()).then_some(split.bridge.clone());
-            let bridge_text = if split.bridge.token_ids.is_empty() {
-                None
-            } else {
-                Some(decode_token_ids(tokenizer, &split.bridge.token_ids)?)
-            };
-            let rollback = WindowRollbackDecision {
+                replayed_prefix_text.as_str(),
+                chunk_samples,
                 keep_boundary_policy,
-                target_keep_until_secs,
-                keep_until_secs,
-                replay_until_secs: Some(replay_until_secs),
-                kept_word_count: sentence_word_tokens(&kept_text).len(),
-                kept_token_count: TokenCount::new(kept_token_ids.len()),
-                kept_token_ids,
-                kept_text,
-                bridge_token_ids: split.bridge.token_ids.clone(),
-                bridge_text,
-                rollback_position,
-                keep_boundary_debug,
-            };
-            committed_token_ids.extend_from_slice(&rollback.kept_token_ids);
-            draft_token_ids.clear();
-            let committed_delta = if rollback.keep_until_secs.is_some() {
-                suffix_after_prefix(
-                    Some(replayed_prefix_text.as_str()),
-                    rollback.kept_text.as_str(),
-                )
-            } else {
-                ""
-            };
-            append_display_delta(&mut committed_text, committed_delta);
-            draft_text.clear();
-            if let Some(prefix) = replay_prefix_for_next.as_ref() {
-                draft_token_ids.extend_from_slice(&prefix.token_ids);
-                append_display_delta(
-                    &mut draft_text,
-                    carried_bridge_text(tokenizer, Some(prefix))?.as_str(),
-                );
+                unresolved_keep_samples,
+                bridge_samples,
+            )?;
+            if resolved.decision.keep_until_secs.is_some()
+                && !resolved.decision.kept_text.is_empty()
+            {
+                tui.log(format!("kept words: {}", resolved.decision.kept_text));
             }
-            Some(rollback)
+            truncate_cache(&mut cache, resolved.next_start_position)?;
+            apply_resolved_rollback_to_display(
+                &mut committed_token_ids,
+                &mut committed_text,
+                &mut draft_token_ids,
+                &mut draft_text,
+                replayed_prefix_text.as_str(),
+                &resolved,
+            );
+            start_position = resolved.next_start_position;
+            replay_prefix_for_next = resolved.next_replay_prefix;
+            Some(resolved.decision)
         } else {
             start_position = chunk_run.end_position;
             replay_prefix_for_next = None;
-            if let Some(prefix) = replayed_prefix.as_ref() {
-                committed_token_ids.extend_from_slice(&prefix.token_ids);
-                append_display_delta(&mut committed_text, replayed_prefix_text.as_str());
-            }
-            committed_token_ids.extend_from_slice(&chunk_run.generated_token_ids);
-            append_display_delta(&mut committed_text, chunk_run.transcript.as_str());
-            draft_token_ids.clear();
-            draft_text.clear();
+            apply_final_window_to_display(
+                &mut committed_token_ids,
+                &mut committed_text,
+                &mut draft_token_ids,
+                &mut draft_text,
+                replayed_prefix.as_ref(),
+                replayed_prefix_text.as_str(),
+                &chunk_run,
+            );
             None
         };
 
@@ -399,6 +316,202 @@ pub(crate) fn decode_sliding_window_bridge_replay(
     })
 }
 
+fn resolve_window_rollback(
+    tokenizer: &Tokenizer,
+    align_ctx: &mut AlignmentContext,
+    chunk_run: &ChunkRun,
+    replayed_prefix: Option<&CarriedBridge>,
+    replayed_prefix_text: &str,
+    chunk_samples: &[f32],
+    keep_boundary_policy: KeepBoundaryPolicy,
+    unresolved_keep_samples: SampleCount,
+    bridge_samples: SampleCount,
+) -> Result<ResolvedRollback> {
+    let combined_transcript =
+        combined_window_transcript(replayed_prefix_text, &chunk_run.transcript);
+    let alignment = build_transcript_alignment(align_ctx, &combined_transcript, chunk_samples)?;
+    let target_keep_until_secs = WindowTime::from_secs(unresolved_keep_samples.as_secs());
+    let replay_until_secs = WindowTime::from_secs(
+        unresolved_keep_samples
+            .checked_add(bridge_samples)
+            .ok_or_else(|| anyhow::anyhow!("replay window geometry overflow"))?
+            .as_secs(),
+    );
+    let (candidate_keep_until_secs, keep_boundary_debug) = adjust_keep_boundary_secs(
+        keep_boundary_policy,
+        &alignment,
+        target_keep_until_secs,
+        replay_until_secs,
+    )?;
+    let timed_words = timed_aligned_words_for_alignment(&combined_transcript, &alignment)?;
+    let keep_until_secs = select_keep_boundary(
+        keep_boundary_policy,
+        &keep_boundary_debug,
+        candidate_keep_until_secs,
+    );
+    let split = timed_generated_bridge_for_cuts(
+        tokenizer,
+        &combined_transcript,
+        replayed_prefix,
+        &timed_words,
+        keep_until_secs.unwrap_or(WindowTime::from_secs(0.0)),
+        replay_until_secs,
+        keep_boundary_debug.chosen_word.as_ref(),
+    )?;
+    let carried_token_count = kept_carried_token_count(
+        replayed_prefix,
+        keep_until_secs,
+        keep_boundary_debug.chosen_word.as_ref(),
+    );
+    let mut kept_token_ids = kept_carried_token_ids(replayed_prefix, carried_token_count);
+    kept_token_ids.extend(kept_generated_token_ids(chunk_run, split.kept_token_count));
+    let next_start_position = rollback_position_for_cut(
+        chunk_run,
+        replayed_prefix,
+        keep_until_secs,
+        carried_token_count,
+        split.kept_token_count,
+    );
+    let next_replay_prefix = (!split.bridge.text.is_empty()).then_some(split.bridge.clone());
+    let bridge_text = if split.bridge.token_ids.is_empty() {
+        None
+    } else {
+        Some(decode_token_ids(tokenizer, &split.bridge.token_ids)?)
+    };
+    let kept_text = split.kept_text;
+    let decision = WindowRollbackDecision {
+        keep_boundary_policy,
+        target_keep_until_secs,
+        keep_until_secs,
+        replay_until_secs: Some(replay_until_secs),
+        kept_word_count: WordCount::new(sentence_word_tokens(&kept_text).len()),
+        kept_token_count: TokenCount::new(kept_token_ids.len()),
+        kept_token_ids,
+        kept_text,
+        bridge_token_ids: split.bridge.token_ids.clone(),
+        bridge_text,
+        rollback_position: next_start_position,
+        keep_boundary_debug,
+    };
+    Ok(ResolvedRollback {
+        decision,
+        next_start_position,
+        next_replay_prefix,
+    })
+}
+
+fn combined_window_transcript(replayed_prefix_text: &str, generated_transcript: &str) -> String {
+    let generated_transcript = normalized_transcript(generated_transcript);
+    let replayed_prefix_text = normalized_transcript(replayed_prefix_text);
+    match Some(replayed_prefix_text).filter(|text| !text.is_empty()) {
+        Some(prefix) if !generated_transcript.is_empty() => {
+            format!("{prefix} {generated_transcript}")
+        }
+        Some(prefix) => prefix.to_string(),
+        None => generated_transcript.to_string(),
+    }
+}
+
+fn select_keep_boundary(
+    keep_boundary_policy: KeepBoundaryPolicy,
+    keep_boundary_debug: &KeepBoundaryDebug,
+    candidate_keep_until_secs: WindowTime,
+) -> Option<WindowTime> {
+    (keep_boundary_policy == KeepBoundaryPolicy::Fixed || keep_boundary_debug.snapped)
+        .then_some(candidate_keep_until_secs)
+}
+
+fn rollback_position_for_cut(
+    chunk_run: &ChunkRun,
+    replayed_prefix: Option<&CarriedBridge>,
+    keep_until_secs: Option<WindowTime>,
+    carried_token_count: TokenCount,
+    kept_generated_token_count: TokenCount,
+) -> CachePosition {
+    let replay_prefix_token_count = replayed_prefix
+        .map(|prefix| prefix.token_ids.len())
+        .unwrap_or(0);
+    let base_prompt_tokens = TokenCount::new(
+        chunk_run
+            .prompt_tokens
+            .as_usize()
+            .saturating_sub(replay_prefix_token_count),
+    );
+    if keep_until_secs.is_some()
+        && (!carried_token_count.is_zero() || !kept_generated_token_count.is_zero())
+    {
+        chunk_run
+            .start_position
+            .saturating_add(base_prompt_tokens)
+            .saturating_add(carried_token_count)
+            .saturating_add(kept_generated_token_count)
+    } else {
+        chunk_run.start_position
+    }
+}
+
+fn set_draft_from_decoded_chunk(
+    draft_token_ids: &mut Vec<TokenId>,
+    draft_text: &mut String,
+    replayed_prefix: Option<&CarriedBridge>,
+    replayed_prefix_text: &str,
+    chunk_run: &ChunkRun,
+) {
+    draft_token_ids.clear();
+    if let Some(prefix) = replayed_prefix {
+        draft_token_ids.extend_from_slice(&prefix.token_ids);
+    }
+    draft_token_ids.extend_from_slice(&chunk_run.generated_token_ids);
+    draft_text.clear();
+    append_display_delta(draft_text, replayed_prefix_text);
+    append_display_delta(draft_text, chunk_run.transcript.as_str());
+}
+
+fn apply_resolved_rollback_to_display(
+    committed_token_ids: &mut Vec<TokenId>,
+    committed_text: &mut String,
+    draft_token_ids: &mut Vec<TokenId>,
+    draft_text: &mut String,
+    replayed_prefix_text: &str,
+    resolved: &ResolvedRollback,
+) {
+    committed_token_ids.extend_from_slice(&resolved.decision.kept_token_ids);
+    draft_token_ids.clear();
+    let committed_delta = if resolved.decision.keep_until_secs.is_some() {
+        suffix_after_prefix(
+            Some(replayed_prefix_text),
+            resolved.decision.kept_text.as_str(),
+        )
+    } else {
+        ""
+    };
+    append_display_delta(committed_text, committed_delta);
+    draft_text.clear();
+    if let Some(prefix) = resolved.next_replay_prefix.as_ref() {
+        draft_token_ids.extend_from_slice(&prefix.token_ids);
+        append_display_delta(draft_text, prefix.text.as_str());
+    }
+}
+
+fn apply_final_window_to_display(
+    committed_token_ids: &mut Vec<TokenId>,
+    committed_text: &mut String,
+    draft_token_ids: &mut Vec<TokenId>,
+    draft_text: &mut String,
+    replayed_prefix: Option<&CarriedBridge>,
+    replayed_prefix_text: &str,
+    chunk_run: &ChunkRun,
+) {
+    if let Some(prefix) = replayed_prefix {
+        committed_token_ids.extend_from_slice(&prefix.token_ids);
+        append_display_delta(committed_text, replayed_prefix_text);
+    }
+    committed_token_ids.extend_from_slice(&chunk_run.generated_token_ids);
+    append_display_delta(committed_text, chunk_run.transcript.as_str());
+    draft_token_ids.clear();
+    draft_text.clear();
+}
+
 /// Decodes one chunk with the correct prompt, cache state, and replay prefix.
 pub(crate) fn decode_chunk_followup_step(
     model: &Qwen3ASRModel,
@@ -443,7 +556,7 @@ pub(crate) fn decode_chunk_followup_step(
         prompt_tokens.extend(prompt_tokens_from_token_ids(&prefix.token_ids)?);
     }
 
-    let prompt_len = prompt_tokens.len();
+    let prompt_len = TokenCount::new(prompt_tokens.len());
     let (generated, _confidence, end_position, stop_reason) = prefill_and_decode(
         model,
         &prompt_tokens,
@@ -455,18 +568,20 @@ pub(crate) fn decode_chunk_followup_step(
     )
     .with_context(|| format!("decoding {label}"))?;
 
-    let token_ids: Vec<u32> = generated
+    let token_ids: Vec<TokenId> = generated
         .iter()
-        .map(|&id| u32::try_from(id).context("generated negative token id"))
+        .map(|&id| {
+            u32::try_from(id)
+                .map(TokenId::new)
+                .context("generated negative token id")
+        })
         .collect::<Result<_>>()?;
-    let transcript = tokenizer
-        .decode(&token_ids, true)
-        .map_err(|e| anyhow::anyhow!("decoding transcript: {e}"))?;
+    let transcript = decode_token_ids(tokenizer, &token_ids)?;
 
     Ok(ChunkRun {
         label,
         prompt_tokens: prompt_len,
-        generated_tokens: generated.len(),
+        generated_tokens: TokenCount::new(generated.len()),
         generated_token_ids: token_ids,
         transcript,
         sample_count: SampleCount::new(chunk_samples.len()),
@@ -497,34 +612,38 @@ pub(crate) fn normalized_transcript(text: &str) -> &str {
 }
 
 /// Decodes token IDs into a transcript string.
-pub(crate) fn decode_token_ids(tokenizer: &Tokenizer, token_ids: &[u32]) -> Result<String> {
+pub(crate) fn decode_token_ids(tokenizer: &Tokenizer, token_ids: &[TokenId]) -> Result<String> {
+    let token_ids: Vec<u32> = token_ids.iter().map(|id| id.as_u32()).collect();
     tokenizer
-        .decode(token_ids, true)
+        .decode(&token_ids, true)
         .map_err(|e| anyhow::anyhow!("decoding transcript tokens: {e}"))
 }
 
 /// Converts unsigned token IDs into signed prompt token IDs.
-pub(crate) fn prompt_tokens_from_token_ids(token_ids: &[u32]) -> Result<Vec<i32>> {
+pub(crate) fn prompt_tokens_from_token_ids(token_ids: &[TokenId]) -> Result<Vec<i32>> {
     token_ids
         .iter()
-        .map(|&id| i32::try_from(id).context("prompt token id overflow"))
+        .map(|id| i32::try_from(id.as_u32()).context("prompt token id overflow"))
         .collect()
 }
 
 /// Tokenizes prompt text into token IDs without adding special tokens.
-pub(crate) fn tokenize_token_ids(tokenizer: &Tokenizer, text: &str) -> Result<Vec<u32>> {
+pub(crate) fn tokenize_token_ids(tokenizer: &Tokenizer, text: &str) -> Result<Vec<TokenId>> {
     Ok(tokenizer
         .encode_fast(text, false)
         .map_err(|e| anyhow::anyhow!("encoding prompt text: {e}"))?
         .get_ids()
-        .to_vec())
+        .iter()
+        .copied()
+        .map(TokenId::new)
+        .collect())
 }
 
 /// Returns the leading generated token IDs that should be kept.
 pub(crate) fn kept_generated_token_ids(
     chunk_run: &ChunkRun,
     kept_token_count: TokenCount,
-) -> Vec<u32> {
+) -> Vec<TokenId> {
     chunk_run.generated_token_ids[..kept_token_count
         .as_usize()
         .min(chunk_run.generated_token_ids.len())]
@@ -534,12 +653,12 @@ pub(crate) fn kept_generated_token_ids(
 /// Returns the leading carried-bridge token IDs that should be kept.
 pub(crate) fn kept_carried_token_ids(
     prefix: Option<&CarriedBridge>,
-    kept_token_count: usize,
-) -> Vec<u32> {
+    kept_token_count: TokenCount,
+) -> Vec<TokenId> {
     let Some(prefix) = prefix else {
         return Vec::new();
     };
-    prefix.token_ids[..kept_token_count.min(prefix.token_ids.len())].to_vec()
+    prefix.token_ids[..kept_token_count.as_usize().min(prefix.token_ids.len())].to_vec()
 }
 
 /// Counts how many carried-bridge tokens should survive a rollback cut.
@@ -547,27 +666,32 @@ pub(crate) fn kept_carried_token_count(
     prefix: Option<&CarriedBridge>,
     keep_until_secs: Option<WindowTime>,
     chosen_word: Option<&BoundaryWordDebug>,
-) -> usize {
+) -> TokenCount {
     let Some(prefix) = prefix else {
-        return 0;
+        return TokenCount::new(0);
     };
     if let Some(chosen_word) = chosen_word {
         if chosen_word.word_index.as_usize() < prefix.words.len() {
-            return prefix.words[chosen_word.word_index.as_usize()]
-                .token_range
-                .end;
+            return TokenCount::new(
+                prefix.words[chosen_word.word_index.as_usize()]
+                    .token_range
+                    .end
+                    .as_usize(),
+            );
         }
     }
     let Some(keep_until_secs) = keep_until_secs else {
-        return 0;
+        return TokenCount::new(0);
     };
-    prefix
-        .words
-        .iter()
-        .take_while(|word| word.end_secs <= keep_until_secs)
-        .last()
-        .map(|word| word.token_range.end)
-        .unwrap_or(0)
+    TokenCount::new(
+        prefix
+            .words
+            .iter()
+            .take_while(|word| word.end_secs <= keep_until_secs)
+            .last()
+            .map(|word| word.token_range.end.as_usize())
+            .unwrap_or(0),
+    )
 }
 
 /// Returns the decoded text for a carried bridge, if any.
