@@ -12,6 +12,10 @@
 //! Non-negotiable constraints:
 //! - token boundaries are canonical; we do not cut or replay in string space
 //! - carry replay must use token IDs sliced from the tape, never decoded text
+//! - transcript text must exist
+//! - G2P must exist
+//! - ZIPA must exist
+//! - nothing in the real machine happens without those components
 //! - cut promotion only belongs in the real rotated-audio path described in the
 //!   README; the current full-audio path must not pretend otherwise
 
@@ -147,8 +151,12 @@ impl PhoneticRuntime {
 /// - the moving stable/carry/preview boundaries are tracked in token space
 /// - cut policy is a small enum, not an external trait
 ///
-/// Non-goals:
-/// - this scaffold does not yet implement decode scheduling or cut application
+/// Required pipeline:
+/// - transcript text must exist before we can reason about boundaries
+/// - G2P must exist before we can build transcript-side phones
+/// - ZIPA must exist before we can project timings back onto tokens
+/// - if any of those are missing, the real machine is not "partially running";
+///   it is simply not running the intended model yet
 pub struct Utterance {
     /// Append-only utterance audio owned in utterance-global sample space.
     ///
@@ -190,7 +198,16 @@ pub struct Utterance {
     /// Optional ASR runtime used to decode preview on each feed step.
     asr: Option<AsrRuntime>,
 
-    /// Optional phonetic/timing runtime used to enrich the current preview.
+    /// Phonetic/timing runtime used to enrich the current preview.
+    ///
+    /// This is not optional in the intended machine semantics:
+    /// - transcript text
+    /// - G2P
+    /// - ZIPA
+    /// are all required before preview/cut decisions are meaningful.
+    ///
+    /// It remains an `Option` only because the crate is still being brought into
+    /// alignment with the README model incrementally.
     phonetics: Option<PhoneticRuntime>,
 }
 
@@ -535,6 +552,14 @@ impl Utterance {
     }
 
     fn build_preview_run(&mut self) -> anyhow::Result<Option<PreviewRun>> {
+        // Hard model invariant from the README:
+        // - transcript text must exist
+        // - G2P must exist
+        // - ZIPA must exist
+        // Nothing meaningful happens without those three components.
+        //
+        // This method is where the machine stops being "just decoded tokens" and
+        // becomes the actual bee-roll model.
         let Some(phonetics) = self.phonetics.as_mut() else {
             return Ok(None);
         };
@@ -627,6 +652,14 @@ impl Utterance {
     }
 
     fn apply_cut_if_any(&mut self) {
+        // Invariant:
+        // - boundary 0 is not a special mode
+        // - `Cutting::Never` is just the policy that selects boundary 0
+        // - once a boundary has been selected, this one cut-application path must
+        //   handle 0 and nonzero boundaries alike
+        // - the rest of the machine derives naturally from the chosen boundary:
+        //   retained decoder position, prompt choice, audio rotation, and tape
+        //   partitioning must not branch on "zero means no cut"
         let new_stable = match self.cutting {
             Cutting::Never => TokenIndex::new(0),
             Cutting::Auto => self.find_auto_cut_boundary().unwrap_or(self.stable_through),
@@ -642,6 +675,15 @@ impl Utterance {
     }
 
     fn find_auto_cut_boundary(&self) -> Option<TokenIndex> {
+        // Desired strategy:
+        // - search in token space only
+        // - use the tokenizer's streaming decoder over the actual generated token
+        //   IDs to detect word ends
+        // - stop as soon as the latest legal cut boundary has been identified
+        // - do not decode tokens one-by-one into standalone strings
+        // - do not re-tokenize transcript text to rediscover boundaries
+        // - do not treat boundary 0 as special; it is just another candidate
+        //   boundary and the policy may legitimately return it
         if self.preview_from <= self.stable_through {
             return None;
         }
