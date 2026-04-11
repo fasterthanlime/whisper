@@ -1193,6 +1193,19 @@ impl TranscriptAlignment {
         timed_range_for_normalized_range(&self.zipa_norm_with_spans, &self.phone_spans, projected)
     }
 
+    pub fn projected_comparison_range(
+        &self,
+        comparison_range: Range<usize>,
+    ) -> Option<Range<usize>> {
+        if comparison_range.start >= comparison_range.end
+            || comparison_range.end > self.transcript_normalized_len
+        {
+            return None;
+        }
+        self.transcript_alignment
+            .project_left_range(comparison_range)
+    }
+
     /// Timed audio span covering words `[word_start, word_end)`.
     ///
     /// When only some words have alignment windows the returned timing covers

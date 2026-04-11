@@ -88,31 +88,42 @@ fn main() -> anyhow::Result<()> {
     }
 
     for token in &charsiu_input.token_pieces {
+        let projected =
+            alignment.projected_comparison_range(token.comparison_start..token.comparison_end);
         match alignment.comparison_range_timing(token.comparison_start..token.comparison_end) {
             Some(timing) => println!(
-                "token\t{}\tword={}\tchars={}..{}\tcmp={}..{}\ttime={:.3}..{:.3}",
+                "token\t{}\tword={}\tchars={}..{}\tcmp={}..{}\tproj={}\ttime={:.3}..{:.3}",
                 token.token_surface,
                 token.word_surface.as_deref().unwrap_or_default(),
                 token.token_char_start,
                 token.token_char_end,
                 token.comparison_start,
                 token.comparison_end,
+                format_projected_range(projected.as_ref()),
                 timing.start_time_secs,
                 timing.end_time_secs
             ),
             None => println!(
-                "token\t{}\tword={}\tchars={}..{}\tcmp={}..{}\ttime=<none>",
+                "token\t{}\tword={}\tchars={}..{}\tcmp={}..{}\tproj={}\ttime=<none>",
                 token.token_surface,
                 token.word_surface.as_deref().unwrap_or_default(),
                 token.token_char_start,
                 token.token_char_end,
                 token.comparison_start,
-                token.comparison_end
+                token.comparison_end,
+                format_projected_range(projected.as_ref())
             ),
         }
     }
 
     Ok(())
+}
+
+fn format_projected_range(range: Option<&std::ops::Range<usize>>) -> String {
+    match range {
+        Some(range) => format!("{}..{}", range.start, range.end),
+        None => "<none>".to_string(),
+    }
 }
 
 fn extract_transcript_text(path: &PathBuf) -> anyhow::Result<String> {
