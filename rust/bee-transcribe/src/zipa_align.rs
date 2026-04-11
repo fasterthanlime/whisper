@@ -45,6 +45,18 @@ pub struct WordAlignmentWindow {
     pub ops: Vec<AlignmentOp>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TokenPieceTiming {
+    pub token_index: usize,
+    pub token: String,
+    pub token_surface: String,
+    pub token_char_start: usize,
+    pub token_char_end: usize,
+    pub word_index: Option<usize>,
+    pub word_surface: Option<String>,
+    pub timing: ComparisonRangeTiming,
+}
+
 #[derive(Debug, Clone)]
 pub struct TranscriptComparisonInput {
     pub transcript: String,
@@ -1228,6 +1240,25 @@ impl TranscriptAlignment {
             .project_left_range(comparison_range)
     }
 
+    pub fn token_piece_timings(
+        &self,
+        token_pieces: &[bee_g2p_charsiu::TranscriptTokenPieceComparisonRange],
+    ) -> Vec<TokenPieceTiming> {
+        token_pieces
+            .iter()
+            .map(|token| TokenPieceTiming {
+                token_index: token.token_index,
+                token: token.token.clone(),
+                token_surface: token.token_surface.clone(),
+                token_char_start: token.token_char_start,
+                token_char_end: token.token_char_end,
+                word_index: token.word_index,
+                word_surface: token.word_surface.clone(),
+                timing: self.comparison_range_timing(token.comparison_start..token.comparison_end),
+            })
+            .collect()
+    }
+
     /// Timed audio span covering words `[word_start, word_end)`.
     ///
     /// When only some words have alignment windows the returned timing covers
@@ -1849,5 +1880,145 @@ mod tests {
         assert_eq!(et.raw_phone_range, 6..8);
         assert!((et.start_time_secs - 0.60).abs() < 1e-6);
         assert!((et.end_time_secs - 0.80).abs() < 1e-6);
+    }
+
+    #[test]
+    fn token_piece_timings_wrap_comparison_ranges() {
+        let input = bee_g2p_charsiu::TranscriptAlignmentInput {
+            normalized: vec![
+                "f".to_string(),
+                "ɛ".to_string(),
+                "ɪ".to_string(),
+                "s".to_string(),
+                "ə".to_string(),
+                "t".to_string(),
+            ],
+            sequence: bee_g2p_charsiu::TranscriptComparisonSequence {
+                tokens: vec![],
+                provenance: vec![],
+            },
+            words: vec![bee_g2p_charsiu::TranscriptWordComparisonRange {
+                word_index: 0,
+                word_surface: "Facet".to_string(),
+                char_start: 0,
+                char_end: 5,
+                comparison_start: 0,
+                comparison_end: 6,
+            }],
+            token_pieces: vec![
+                bee_g2p_charsiu::TranscriptTokenPieceComparisonRange {
+                    token_index: 0,
+                    token: "Fac".to_string(),
+                    token_surface: "Fac".to_string(),
+                    token_char_start: 0,
+                    token_char_end: 3,
+                    word_index: Some(0),
+                    word_surface: Some("Facet".to_string()),
+                    comparison_start: 0,
+                    comparison_end: 4,
+                },
+                bee_g2p_charsiu::TranscriptTokenPieceComparisonRange {
+                    token_index: 1,
+                    token: "et".to_string(),
+                    token_surface: "et".to_string(),
+                    token_char_start: 3,
+                    token_char_end: 5,
+                    word_index: Some(0),
+                    word_surface: Some("Facet".to_string()),
+                    comparison_start: 4,
+                    comparison_end: 6,
+                },
+            ],
+        };
+        let ta = TranscriptAlignment::build_from_comparison_input_and_zipa(
+            transcript_comparison_input_from_charsiu("Facet", &input),
+            vec![
+                ComparisonToken {
+                    token: "f".into(),
+                    source_start: 0,
+                    source_end: 1,
+                },
+                ComparisonToken {
+                    token: "ɛ".into(),
+                    source_start: 1,
+                    source_end: 2,
+                },
+                ComparisonToken {
+                    token: "ɪ".into(),
+                    source_start: 1,
+                    source_end: 2,
+                },
+                ComparisonToken {
+                    token: "s".into(),
+                    source_start: 2,
+                    source_end: 3,
+                },
+                ComparisonToken {
+                    token: "ə".into(),
+                    source_start: 3,
+                    source_end: 4,
+                },
+                ComparisonToken {
+                    token: "t".into(),
+                    source_start: 4,
+                    source_end: 5,
+                },
+            ],
+            vec![
+                PhoneSpan {
+                    token_id: 1,
+                    token: "f".into(),
+                    start_frame: 0,
+                    end_frame: 10,
+                    start_time_secs: 0.0,
+                    end_time_secs: 0.1,
+                },
+                PhoneSpan {
+                    token_id: 2,
+                    token: "eɪ".into(),
+                    start_frame: 10,
+                    end_frame: 20,
+                    start_time_secs: 0.1,
+                    end_time_secs: 0.2,
+                },
+                PhoneSpan {
+                    token_id: 3,
+                    token: "s".into(),
+                    start_frame: 20,
+                    end_frame: 30,
+                    start_time_secs: 0.2,
+                    end_time_secs: 0.3,
+                },
+                PhoneSpan {
+                    token_id: 4,
+                    token: "ə".into(),
+                    start_frame: 30,
+                    end_frame: 40,
+                    start_time_secs: 0.3,
+                    end_time_secs: 0.4,
+                },
+                PhoneSpan {
+                    token_id: 5,
+                    token: "t".into(),
+                    start_frame: 40,
+                    end_frame: 50,
+                    start_time_secs: 0.4,
+                    end_time_secs: 0.5,
+                },
+            ],
+        );
+
+        let timings = ta.token_piece_timings(&input.token_pieces);
+        assert_eq!(timings.len(), 2);
+        let ComparisonRangeTiming::Aligned(fac) = &timings[0].timing else {
+            panic!("Fac should align");
+        };
+        assert!((fac.start_time_secs - 0.0).abs() < 1e-6);
+        assert!((fac.end_time_secs - 0.3).abs() < 1e-6);
+        let ComparisonRangeTiming::Aligned(et) = &timings[1].timing else {
+            panic!("et should align");
+        };
+        assert!((et.start_time_secs - 0.3).abs() < 1e-6);
+        assert!((et.end_time_secs - 0.5).abs() < 1e-6);
     }
 }
