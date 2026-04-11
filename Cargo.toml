@@ -30,3 +30,6 @@ tokenizers = { version = "0.22", features = ["onig"] }
 rust_2018_idioms = "warn"
 unsafe_op_in_unsafe_fn = "warn"
 unused_lifetimes = "warn"
+
+[profile.release]
+debug = "line-tables-only"
