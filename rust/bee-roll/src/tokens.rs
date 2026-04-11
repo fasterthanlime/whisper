@@ -1,6 +1,7 @@
 use std::fmt;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
+use compact_str::CompactString;
 
 use crate::{SampleRange, decode_token_ids};
 
@@ -9,19 +10,19 @@ use crate::{SampleRange, decode_token_ids};
 /// Invariant:
 /// - opaque identifier only; no text is stored here
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub(crate) struct TokenId(u32);
+pub struct TokenId(u32);
 
 impl TokenId {
     pub(crate) fn new(id: u32) -> Self {
         Self(id)
     }
 
-    pub(crate) fn as_u32(self) -> u32 {
+    pub fn as_u32(self) -> u32 {
         self.0
     }
 
     /// Decodes this single token through the process-global tokenizer.
-    pub(crate) fn decode(self) -> Result<String> {
+    pub fn decode(self) -> Result<String> {
         decode_token_ids(&[self])
     }
 }
@@ -32,14 +33,14 @@ impl TokenId {
 /// - zero is the first token in the utterance
 /// - values are absolute within the utterance, never rebased per chunk/window
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub(crate) struct TokenIndex(usize);
+pub struct TokenIndex(usize);
 
 impl TokenIndex {
     pub(crate) fn new(index: usize) -> Self {
         Self(index)
     }
 
-    pub(crate) fn as_usize(self) -> usize {
+    pub fn as_usize(self) -> usize {
         self.0
     }
 }
@@ -67,14 +68,14 @@ impl TokenCount {
 /// - this is utterance-global time, not wall-clock time
 /// - this is never chunk-relative, window-relative, or carry-relative
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
-pub(crate) struct UtteranceTime(f64);
+pub struct UtteranceTime(f64);
 
 impl UtteranceTime {
     pub(crate) fn from_secs(secs: f64) -> Self {
         Self(secs)
     }
 
-    pub(crate) fn as_secs(self) -> f64 {
+    pub fn as_secs(self) -> f64 {
         self.0
     }
 }
@@ -85,11 +86,11 @@ impl UtteranceTime {
 /// - `start <= end`
 /// - both endpoints are relative to utterance start
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct TimeRange {
+pub struct TimeRange {
     /// Inclusive start of the half-open time range in utterance-global coordinates.
-    pub(crate) start: UtteranceTime,
+    pub start: UtteranceTime,
     /// Exclusive end of the half-open time range in utterance-global coordinates.
-    pub(crate) end: UtteranceTime,
+    pub end: UtteranceTime,
 }
 
 impl TimeRange {
@@ -133,82 +134,190 @@ impl UtteranceTokenRange {
 /// - `index` is utterance-global
 /// - `span` is utterance-global
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct TimedToken {
-    /// Utterance-global token index for this token.
-    pub(crate) index: TokenIndex,
-    /// Opaque model token ID.
-    pub(crate) token: TokenId,
-    /// Utterance-global sample span associated with this token.
-    pub(crate) span: SampleRange,
+pub struct TimedToken {
+    index: TokenIndex,
+    token: TokenId,
+    span: SampleRange,
 }
 
-/// The canonical aligned token sequence for a decodeable utterance slice.
-///
-/// Invariants:
-/// - `tokens` is ordered by increasing `TimedToken.index`
-/// - indices are monotonically increasing without rebase
-/// - this vector is the single source of truth for token order
+impl TimedToken {
+    pub(crate) fn new(index: TokenIndex, token: TokenId, span: SampleRange) -> Self {
+        Self { index, token, span }
+    }
+
+    pub fn index(self) -> TokenIndex {
+        self.index
+    }
+
+    pub fn token(self) -> TokenId {
+        self.token
+    }
+
+    pub fn time_range(self) -> TimeRange {
+        self.span.to_time_range()
+    }
+}
+
+/// One ASR alternative for a decoded token.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AsrTokenAlternative {
+    token: TokenId,
+    logit: f32,
+}
+
+impl AsrTokenAlternative {
+    pub(crate) fn new(token: TokenId, logit: f32) -> Self {
+        Self { token, logit }
+    }
+
+    pub fn token(self) -> TokenId {
+        self.token
+    }
+
+    pub fn logit(self) -> f32 {
+        self.logit
+    }
+}
+
+/// Token-level ASR confidence and candidate data.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ChunkInfo {
-    /// Canonical utterance-global token sequence in strictly increasing index order.
-    pub(crate) tokens: Vec<TimedToken>,
+pub struct AsrTokenConfidence {
+    concentration: f32,
+    margin: f32,
+    alternatives: Vec<AsrTokenAlternative>,
 }
 
-impl ChunkInfo {
-    pub(crate) fn new(tokens: Vec<TimedToken>) -> Self {
-        for pair in tokens.windows(2) {
-            assert!(
-                pair[0].index < pair[1].index,
-                "chunk token indices must increase strictly"
-            );
+impl AsrTokenConfidence {
+    pub(crate) fn new(
+        concentration: f32,
+        margin: f32,
+        alternatives: Vec<AsrTokenAlternative>,
+    ) -> Self {
+        Self {
+            concentration,
+            margin,
+            alternatives,
         }
-        Self { tokens }
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.tokens.is_empty()
+    pub fn concentration(&self) -> f32 {
+        self.concentration
     }
 
-    /// Returns the utterance-global token span covered by this chunk.
-    pub(crate) fn token_range(&self) -> Option<UtteranceTokenRange> {
-        let start = self.tokens.first()?.index;
-        let end = TokenIndex::new(self.tokens.last()?.index.as_usize() + 1);
-        Some(UtteranceTokenRange::new(start, end))
+    pub fn margin(&self) -> f32 {
+        self.margin
     }
 
-    /// Returns the utterance-global time span covered by this chunk.
-    pub(crate) fn time_range(&self) -> Option<TimeRange> {
-        Some(TimeRange::new(
-            self.tokens.first()?.span.start.to_time(),
-            self.tokens.last()?.span.end.to_time(),
-        ))
+    pub fn alternatives(&self) -> &[AsrTokenAlternative] {
+        &self.alternatives
+    }
+}
+
+/// G2P-derived IPA for one decoded token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct G2pTokenIpa {
+    ipa: CompactString,
+}
+
+impl G2pTokenIpa {
+    pub(crate) fn new(ipa: CompactString) -> Self {
+        Self { ipa }
     }
 
-    /// Decodes the entire chunk on demand through the process-global tokenizer.
-    pub(crate) fn decode_text(&self) -> Result<String> {
-        decode_timed_tokens(&self.tokens)
+    pub fn as_str(&self) -> &str {
+        self.ipa.as_str()
+    }
+}
+
+/// One ZIPA phone span aligned back onto a decoded token.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ZipaPhoneSpan {
+    phone: CompactString,
+    start: UtteranceTime,
+    end: UtteranceTime,
+}
+
+impl ZipaPhoneSpan {
+    pub(crate) fn new(phone: CompactString, start: UtteranceTime, end: UtteranceTime) -> Self {
+        Self { phone, start, end }
     }
 
-    /// Decodes a sub-range of this chunk on demand through the process-global tokenizer.
-    ///
-    /// Invariants:
-    /// - `range` must lie within this chunk's utterance-global token span
-    pub(crate) fn decode_range(&self, range: UtteranceTokenRange) -> Result<String> {
-        let trace_range = self
-            .token_range()
-            .ok_or_else(|| anyhow::anyhow!("cannot decode range from empty chunk"))?;
-        if range.start < trace_range.start || range.end > trace_range.end {
-            bail!(
-                "decode range {}..{} lies outside chunk range {}..{}",
-                range.start,
-                range.end,
-                trace_range.start,
-                trace_range.end
-            );
+    pub fn phone(&self) -> &str {
+        self.phone.as_str()
+    }
+
+    pub fn time_range(&self) -> TimeRange {
+        TimeRange::new(self.start, self.end)
+    }
+}
+
+/// Token-aligned output bundle returned from one feed step.
+///
+/// Intent:
+/// - one record per token
+/// - ASR and IPA side data stay aligned to the same token anchor
+/// - no parallel public slices
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutputToken {
+    timed_token: TimedToken,
+    asr_confidence: Option<AsrTokenConfidence>,
+    g2p_ipa: Option<G2pTokenIpa>,
+    zipa_phone_spans: Vec<ZipaPhoneSpan>,
+}
+
+impl OutputToken {
+    pub(crate) fn new(
+        timed_token: TimedToken,
+        asr_confidence: Option<AsrTokenConfidence>,
+        g2p_ipa: Option<G2pTokenIpa>,
+        zipa_phone_spans: Vec<ZipaPhoneSpan>,
+    ) -> Self {
+        Self {
+            timed_token,
+            asr_confidence,
+            g2p_ipa,
+            zipa_phone_spans,
         }
-        let local_start = range.start.as_usize() - trace_range.start.as_usize();
-        let local_end = range.end.as_usize() - trace_range.start.as_usize();
-        decode_timed_tokens(&self.tokens[local_start..local_end])
+    }
+
+    pub fn timed_token(&self) -> TimedToken {
+        self.timed_token
+    }
+
+    pub fn asr_confidence(&self) -> Option<&AsrTokenConfidence> {
+        self.asr_confidence.as_ref()
+    }
+
+    pub fn g2p_ipa(&self) -> Option<&G2pTokenIpa> {
+        self.g2p_ipa.as_ref()
+    }
+
+    pub fn zipa_phone_spans(&self) -> &[ZipaPhoneSpan] {
+        &self.zipa_phone_spans
+    }
+}
+
+/// Borrowed view of the current utterance output after one feed step.
+#[derive(Clone, Copy, Debug)]
+pub struct FeedOutput<'a> {
+    tokens: &'a [OutputToken],
+    detected_language: Option<&'a str>,
+}
+
+impl<'a> FeedOutput<'a> {
+    pub(crate) fn new(tokens: &'a [OutputToken], detected_language: Option<&'a str>) -> Self {
+        Self {
+            tokens,
+            detected_language,
+        }
+    }
+
+    pub fn tokens(self) -> &'a [OutputToken] {
+        self.tokens
+    }
+
+    pub fn detected_language(self) -> Option<&'a str> {
+        self.detected_language
     }
 }
 
@@ -221,7 +330,7 @@ impl ChunkInfo {
 /// Invariant:
 /// - `index` is an utterance-global token boundary
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Cut {
+pub enum Cut {
     /// No commit/carry boundary was found; the chunk should grow.
     NoCut,
     /// Commit everything strictly before this utterance-global token boundary.
@@ -229,7 +338,7 @@ pub(crate) enum Cut {
 }
 
 impl Cut {
-    pub(crate) fn token_index(self) -> Option<TokenIndex> {
+    pub fn token_index(self) -> Option<TokenIndex> {
         match self {
             Self::NoCut => None,
             Self::At(index) => Some(index),
@@ -249,7 +358,7 @@ impl fmt::Display for TokenCount {
     }
 }
 
-fn decode_timed_tokens(tokens: &[TimedToken]) -> Result<String> {
+pub(crate) fn decode_timed_tokens(tokens: &[TimedToken]) -> Result<String> {
     let ids: Vec<TokenId> = tokens.iter().map(|token| token.token).collect();
     decode_token_ids(&ids)
 }

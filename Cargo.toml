@@ -19,6 +19,7 @@ exclude = ["mlx-rs", "rust/vendor/rspanphon"]
 
 [workspace.dependencies]
 anyhow = "1"
+compact_str = "0.9"
 ctrlc = "3.4"
 hound = "3.5"
 serde = { version = "1", features = ["derive"] }

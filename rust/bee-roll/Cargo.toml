@@ -11,4 +11,4 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 [dependencies]
 anyhow.workspace = true
 bee-qwen3-asr = { path = "../bee-qwen3-asr" }
-
+compact_str.workspace = true

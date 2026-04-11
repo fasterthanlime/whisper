@@ -91,9 +91,9 @@ impl SampleRange {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AudioBuffer {
     /// Inclusive utterance-global sample index of the first stored sample.
-    pub(crate) utterance_start: SampleOffset,
+    utterance_start: SampleOffset,
     /// Owned PCM samples covering a contiguous utterance-global sample interval.
-    pub(crate) samples: Vec<f32>,
+    samples: Vec<f32>,
 }
 
 impl AudioBuffer {
@@ -118,6 +118,14 @@ impl AudioBuffer {
             self.utterance_start,
             self.utterance_start.saturating_add(self.sample_count()),
         )
+    }
+
+    /// Appends raw samples to the end of this buffer.
+    ///
+    /// Invariant:
+    /// - raw samples extend the current utterance-global tail without rebasing the buffer
+    pub(crate) fn extend_samples(&mut self, samples: Vec<f32>) {
+        self.samples.extend(samples);
     }
 
     /// Returns a copied utterance-global slice of this buffer.
