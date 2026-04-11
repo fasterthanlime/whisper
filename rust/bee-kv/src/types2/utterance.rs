@@ -1,3 +1,5 @@
+use crate::types2::{AudioBuffer, ChunkInfo, Cut, SampleIndex, TokenIndex};
+
 /// Policy hook that decides where to cut a ready chunk.
 ///
 /// Intent:
@@ -8,7 +10,7 @@ pub(crate) trait Cutter {
     ///
     /// Invariant:
     /// - returned cuts must refer to utterance-global token coordinates
-    fn cut(&mut self, chunk: &super::ChunkInfo) -> super::Cut;
+    fn cut(&mut self, chunk: &ChunkInfo) -> Cut;
 }
 
 /// Observer hook for utterance lifecycle events.
@@ -18,28 +20,37 @@ pub(crate) trait Cutter {
 /// - listeners observe state transitions; they do not decide cuts
 pub(crate) trait Listener {
     /// Called when the utterance has produced a new chunk ready for a cut decision.
-    fn on_chunk(&mut self, _chunk: &super::ChunkInfo) {}
+    fn on_chunk(&mut self, _chunk: &ChunkInfo) {}
 
     /// Called immediately after the utterance applies a cut.
-    fn on_cut(&mut self, _chunk: &super::ChunkInfo, _cut: super::Cut) {}
+    fn on_cut(&mut self, _chunk: &ChunkInfo, _cut: Cut) {}
 }
 
 /// Streaming utterance state for the next rollback model.
 ///
 /// Intent:
 /// - audio is the only public ingress
+/// - utterance audio is append-only and remains anchored at utterance sample 0
 /// - inference and chunk construction happen inside this type
 /// - cut application happens inside this type
+/// - the moving committed boundary is tracked in token space
 /// - external policy is delegated to [`Cutter`]
 /// - external observation is delegated to [`Listener`]
 ///
 /// Non-goals:
 /// - this scaffold does not yet implement decode scheduling or cut application
 pub(crate) struct Utterance {
-    /// Buffered audio owned in utterance-global sample space.
-    pub(crate) audio: super::AudioBuffer,
-    /// Most recent chunk information made available for cutting.
-    pub(crate) chunk: Option<super::ChunkInfo>,
+    /// Append-only utterance audio owned in utterance-global sample space.
+    ///
+    /// Invariant:
+    /// - this buffer remains anchored at utterance sample 0
+    pub(crate) audio: AudioBuffer,
+    /// Token boundary through which the utterance has been committed.
+    ///
+    /// Invariant:
+    /// - this is the primary moving boundary in utterance state
+    /// - any sample/time boundaries are derived from this token boundary, not stored separately
+    pub(crate) committed_through: Option<TokenIndex>,
     /// Boxed cut policy used by this utterance.
     pub(crate) cutter: Box<dyn Cutter>,
     /// Boxed event sink used by this utterance.
@@ -47,11 +58,11 @@ pub(crate) struct Utterance {
 }
 
 impl Utterance {
-    /// Creates a new utterance with empty audio and no chunk yet.
+    /// Creates a new utterance with empty audio and no committed tokens yet.
     pub(crate) fn new(cutter: Box<dyn Cutter>, listener: Box<dyn Listener>) -> Self {
         Self {
-            audio: super::AudioBuffer::new(super::SampleIndex::new(0), Vec::new()),
-            chunk: None,
+            audio: AudioBuffer::new(SampleIndex::new(0), Vec::new()),
+            committed_through: None,
             cutter,
             listener,
         }
@@ -61,9 +72,10 @@ impl Utterance {
     ///
     /// Intent:
     /// - audio is the only public input into utterance state
+    /// - incoming audio is appended to the utterance-global recording buffer
     /// - future implementations will decide internally when enough audio exists
-    ///   to run inference and refresh [`super::ChunkInfo`]
-    pub(crate) fn push_audio(&mut self, buffer: super::AudioBuffer) {
+    ///   to run inference and refresh [`ChunkInfo`]
+    pub(crate) fn push_audio(&mut self, buffer: AudioBuffer) {
         if self.audio.is_empty() {
             self.audio = buffer;
         } else {
