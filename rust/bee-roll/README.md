@@ -106,223 +106,69 @@ So the loop is:
 
 ## Worked Timeline: 200 ms Feeds
 
-One column below is one `200 ms` slice of utterance time.
+This section should be generated, not hand-aligned.
 
-```text
-Legend
+The sample below was produced by:
 
-A = audio currently held by the utterance
-S = stable tokens; KV for these stays alive
-C = carry tokens; these are replayed into the next ASR step
-P = preview tokens; these are the live tail
-^ = audio passed to the ASR encoder on this feed
+```bash
+python3 rust/bee-roll/scripts/render_timeline.py \
+  rust/bee-roll/scripts/timeline_demo.json
 ```
 
-In this example, the cutter wakes up whenever `preview` reaches `10`
-columns, that is `2.0 s`.
+The current demo uses:
 
-### Before the first cut
-
-Before the first cut exists:
-
-- there is no `stable`
-- there is no `carry`
-- there is no KV worth keeping
-- every `feed()` re-decodes from the beginning
+- one `200 ms` feed interval
+- real words on the transcript row
+- token pieces on the token row
+- `stable` / `carry` / `preview` on the tape rows
+- separate rows for kept KV, replayed carry text, and ASR audio span
 
 ```text
-feed(1)   append one 200 ms buffer
-audio held : A
+feed(10)  first cut search
+time       : 0.0s                1.0s
+ticks      : |   |   |   |   |   |   |   |   |   |  |
+audio held : ========================================
+words      :  this  is  a  long   utterance  that wa
+tokens     : .this..is..a..long..utter..ance.that.wa.
 kv kept    :
 carry txt  :
-ASR audio  : ^
-tape out   : P
+ASR audio  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+raw tape   : PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+cut tape   : SSSSSSSSSSSSSSSSSSSSCCCCCCCCCCCCPPPPPPPP
 
-feed(2)
-audio held : AA
-kv kept    :
-carry txt  :
-ASR audio  : ^^
-tape out   : PP
+feed(11)  first rewrite after the cut
+time       : 0.0s                1.0s                2.0s
+ticks      : |   |   |   |   |   |   |   |   |   |   |  |
+audio held : ============================================
+words      :  this  is  a  long   utterance  that warr...
+tokens     : .this..is..a..long..utter..ance.that..warr..
+kv kept    : ####################
+carry txt  :                      utterance
+ASR audio  :                     ^^^^^^^^^^^^^^^^^^^^^^^^
+tape out   : SSSSSSSSSSSSSSSSSSSSCCCCCCCCCCCCPPPPPPPPPPPP
 
-feed(3)
-audio held : AAA
-kv kept    :
-carry txt  :
-ASR audio  : ^^^
-tape out   : PPP
+feed(18)  second cut search
+time       : 0.0s                1.0s                2.0s                3.0s
+ticks      : |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |  |
+audio held : ========================================================================
+words      :  this  is  a  long   utterance  that   warrants    several     rounds
+tokens     : .this..is..a..long..utter..ance.that..war..rants..sev...eral...rounds...
+kv kept    : ####################
+carry txt  :                      utterance
+ASR audio  :                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+raw tape   : SSSSSSSSSSSSSSSSSSSSCCCCCCCCCCCCPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+cut tape   : SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSCCCCCCCCCCCCPPPPPPPPPPP
 
-feed(4)
-audio held : AAAA
-kv kept    :
-carry txt  :
-ASR audio  : ^^^^
-tape out   : PPPP
-
-feed(5)
-audio held : AAAAA
-kv kept    :
-carry txt  :
-ASR audio  : ^^^^^
-tape out   : PPPPP
-
-feed(6)
-audio held : AAAAAA
-kv kept    :
-carry txt  :
-ASR audio  : ^^^^^^
-tape out   : PPPPPP
-
-feed(7)
-audio held : AAAAAAA
-kv kept    :
-carry txt  :
-ASR audio  : ^^^^^^^
-tape out   : PPPPPPP
-
-feed(8)
-audio held : AAAAAAAA
-kv kept    :
-carry txt  :
-ASR audio  : ^^^^^^^^
-tape out   : PPPPPPPP
-
-feed(9)
-audio held : AAAAAAAAA
-kv kept    :
-carry txt  :
-ASR audio  : ^^^^^^^^^
-tape out   : PPPPPPPPP
-
-feed(10)  preview just reached the cut-search threshold
-audio held : AAAAAAAAAA
-kv kept    :
-carry txt  :
-ASR audio  : ^^^^^^^^^^
-raw out    : PPPPPPPPPP
-cut        : SSSSSSCCPP
-```
-
-So after `feed(10)` the tape has been repartitioned like this:
-
-```text
-SSSSSSCCPP
-```
-
-That means, in this worked example:
-
-- `stable` is `6` columns
-- `carry` is `2` columns
-- `preview` is `2` columns
-
-### After the first cut
-
-Now each `feed()` does something more interesting:
-
-- keep KV for `stable`
-- replay `carry` into the prompt
-- re-decode audio starting at the beginning of `carry`
-- rebuild `carry + preview`
-
-```text
-feed(11)
-audio held : AAAAAAAAAAA
-kv kept    : SSSSSS
-carry txt  :       CC
-ASR audio  :       ^^^^^
-tape out   : SSSSSSCCPPP
-
-feed(12)
-audio held : AAAAAAAAAAAA
-kv kept    : SSSSSS
-carry txt  :       CC
-ASR audio  :       ^^^^^^
-tape out   : SSSSSSCCPPPP
-
-feed(13)
-audio held : AAAAAAAAAAAAA
-kv kept    : SSSSSS
-carry txt  :       CC
-ASR audio  :       ^^^^^^^
-tape out   : SSSSSSCCPPPPP
-
-feed(14)
-audio held : AAAAAAAAAAAAAA
-kv kept    : SSSSSS
-carry txt  :       CC
-ASR audio  :       ^^^^^^^^
-tape out   : SSSSSSCCPPPPPP
-
-feed(15)
-audio held : AAAAAAAAAAAAAAA
-kv kept    : SSSSSS
-carry txt  :       CC
-ASR audio  :       ^^^^^^^^^
-tape out   : SSSSSSCCPPPPPPP
-
-feed(16)
-audio held : AAAAAAAAAAAAAAAA
-kv kept    : SSSSSS
-carry txt  :       CC
-ASR audio  :       ^^^^^^^^^^
-tape out   : SSSSSSCCPPPPPPPP
-
-feed(17)
-audio held : AAAAAAAAAAAAAAAAA
-kv kept    : SSSSSS
-carry txt  :       CC
-ASR audio  :       ^^^^^^^^^^^
-tape out   : SSSSSSCCPPPPPPPPP
-
-feed(18)  preview just reached the cut-search threshold again
-audio held : AAAAAAAAAAAAAAAAAA
-kv kept    : SSSSSS
-carry txt  :       CC
-ASR audio  :       ^^^^^^^^^^^^
-raw out    : SSSSSSCCPPPPPPPPPP
-cut        : SSSSSSSSSSSSCCPPPP
-```
-
-After `feed(18)`, the seam has moved right:
-
-```text
-old : SSSSSSCCPPPPPPPPPP
-new : SSSSSSSSSSSSCCPPPP
-```
-
-That is the entire loop:
-
-```text
-rewrite preview
-rewrite preview
-rewrite preview
-rewrite preview
-rewrite preview
-rewrite preview
-rewrite preview
-rewrite preview
-rewrite preview
-cut
-rewrite preview
-rewrite preview
-rewrite preview
-rewrite preview
-rewrite preview
-rewrite preview
-rewrite preview
-cut
-...
-```
-
-One more step, just to show the new seam taking effect immediately:
-
-```text
-feed(19)
-audio held : AAAAAAAAAAAAAAAAAAA
-kv kept    : SSSSSSSSSSSS
-carry txt  :             CC
-ASR audio  :             ^^^^^^^
-tape out   : SSSSSSSSSSSSCCPPPPP
+feed(19)  first rewrite after the second cut
+time       : 0.0s                1.0s                2.0s                3.0s
+ticks      : |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |  |
+audio held : ============================================================================
+words      :  this  is  a  long   utterance  that   warrants    several     rounds now
+tokens     : .this..is..a..long..utter..ance.that..war..rants..sev...eral..rounds...now..
+kv kept    : #################################################
+carry txt  :                                                    several
+ASR audio  :                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tape out   : SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSCCCCCCCCCCCCPPPPPPPPPPPPPPP
 ```
 
 That is the geometry `bee-roll` is trying to express:

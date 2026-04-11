@@ -1,0 +1,282 @@
+{
+  "ms_per_col": 50,
+  "tick_ms": 200,
+  "label_ms": 1000,
+  "steps": [
+    {
+      "title": "feed(10)  first cut search",
+      "timeline_end_ms": 2000,
+      "rows": [
+        {
+          "label": "audio held",
+          "spans": [
+            { "start_ms": 0, "end_ms": 2000, "fill": "=" }
+          ]
+        },
+        {
+          "label": "words",
+          "spans": [
+            { "start_ms": 0, "end_ms": 300, "text": "this" },
+            { "start_ms": 300, "end_ms": 500, "text": "is" },
+            { "start_ms": 500, "end_ms": 650, "text": "a" },
+            { "start_ms": 650, "end_ms": 1000, "text": "long" },
+            { "start_ms": 1000, "end_ms": 1600, "text": "utterance" },
+            { "start_ms": 1600, "end_ms": 1850, "text": "that" },
+            { "start_ms": 1850, "end_ms": 2000, "text": "wa" }
+          ]
+        },
+        {
+          "label": "tokens",
+          "spans": [
+            { "start_ms": 0, "end_ms": 300, "fill": ".", "text": "this" },
+            { "start_ms": 300, "end_ms": 500, "fill": ".", "text": "is" },
+            { "start_ms": 500, "end_ms": 650, "fill": ".", "text": "a" },
+            { "start_ms": 650, "end_ms": 1000, "fill": ".", "text": "long" },
+            { "start_ms": 1000, "end_ms": 1300, "fill": ".", "text": "utter" },
+            { "start_ms": 1300, "end_ms": 1600, "fill": ".", "text": "ance" },
+            { "start_ms": 1600, "end_ms": 1850, "fill": ".", "text": "that" },
+            { "start_ms": 1850, "end_ms": 2000, "fill": ".", "text": "wa" }
+          ]
+        },
+        {
+          "label": "kv kept",
+          "spans": []
+        },
+        {
+          "label": "carry txt",
+          "spans": []
+        },
+        {
+          "label": "ASR audio",
+          "spans": [
+            { "start_ms": 0, "end_ms": 2000, "fill": "^" }
+          ]
+        },
+        {
+          "label": "raw tape",
+          "spans": [
+            { "start_ms": 0, "end_ms": 2000, "fill": "P" }
+          ]
+        },
+        {
+          "label": "cut tape",
+          "spans": [
+            { "start_ms": 0, "end_ms": 1000, "fill": "S" },
+            { "start_ms": 1000, "end_ms": 1600, "fill": "C" },
+            { "start_ms": 1600, "end_ms": 2000, "fill": "P" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "feed(11)  first rewrite after the cut",
+      "timeline_end_ms": 2200,
+      "rows": [
+        {
+          "label": "audio held",
+          "spans": [
+            { "start_ms": 0, "end_ms": 2200, "fill": "=" }
+          ]
+        },
+        {
+          "label": "words",
+          "spans": [
+            { "start_ms": 0, "end_ms": 300, "text": "this" },
+            { "start_ms": 300, "end_ms": 500, "text": "is" },
+            { "start_ms": 500, "end_ms": 650, "text": "a" },
+            { "start_ms": 650, "end_ms": 1000, "text": "long" },
+            { "start_ms": 1000, "end_ms": 1600, "text": "utterance" },
+            { "start_ms": 1600, "end_ms": 1850, "text": "that" },
+            { "start_ms": 1850, "end_ms": 2200, "text": "warr..." }
+          ]
+        },
+        {
+          "label": "tokens",
+          "spans": [
+            { "start_ms": 0, "end_ms": 300, "fill": ".", "text": "this" },
+            { "start_ms": 300, "end_ms": 500, "fill": ".", "text": "is" },
+            { "start_ms": 500, "end_ms": 650, "fill": ".", "text": "a" },
+            { "start_ms": 650, "end_ms": 1000, "fill": ".", "text": "long" },
+            { "start_ms": 1000, "end_ms": 1300, "fill": ".", "text": "utter" },
+            { "start_ms": 1300, "end_ms": 1600, "fill": ".", "text": "ance" },
+            { "start_ms": 1600, "end_ms": 1850, "fill": ".", "text": "that" },
+            { "start_ms": 1850, "end_ms": 2200, "fill": ".", "text": "warr" }
+          ]
+        },
+        {
+          "label": "kv kept",
+          "spans": [
+            { "start_ms": 0, "end_ms": 1000, "fill": "#" }
+          ]
+        },
+        {
+          "label": "carry txt",
+          "spans": [
+            { "start_ms": 1000, "end_ms": 1600, "fill": " ", "text": "utterance" }
+          ]
+        },
+        {
+          "label": "ASR audio",
+          "spans": [
+            { "start_ms": 1000, "end_ms": 2200, "fill": "^" }
+          ]
+        },
+        {
+          "label": "tape out",
+          "spans": [
+            { "start_ms": 0, "end_ms": 1000, "fill": "S" },
+            { "start_ms": 1000, "end_ms": 1600, "fill": "C" },
+            { "start_ms": 1600, "end_ms": 2200, "fill": "P" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "feed(18)  second cut search",
+      "timeline_end_ms": 3600,
+      "rows": [
+        {
+          "label": "audio held",
+          "spans": [
+            { "start_ms": 0, "end_ms": 3600, "fill": "=" }
+          ]
+        },
+        {
+          "label": "words",
+          "spans": [
+            { "start_ms": 0, "end_ms": 300, "text": "this" },
+            { "start_ms": 300, "end_ms": 500, "text": "is" },
+            { "start_ms": 500, "end_ms": 650, "text": "a" },
+            { "start_ms": 650, "end_ms": 1000, "text": "long" },
+            { "start_ms": 1000, "end_ms": 1600, "text": "utterance" },
+            { "start_ms": 1600, "end_ms": 1850, "text": "that" },
+            { "start_ms": 1850, "end_ms": 2450, "text": "warrants" },
+            { "start_ms": 2450, "end_ms": 3050, "text": "several" },
+            { "start_ms": 3050, "end_ms": 3600, "text": "rounds" }
+          ]
+        },
+        {
+          "label": "tokens",
+          "spans": [
+            { "start_ms": 0, "end_ms": 300, "fill": ".", "text": "this" },
+            { "start_ms": 300, "end_ms": 500, "fill": ".", "text": "is" },
+            { "start_ms": 500, "end_ms": 650, "fill": ".", "text": "a" },
+            { "start_ms": 650, "end_ms": 1000, "fill": ".", "text": "long" },
+            { "start_ms": 1000, "end_ms": 1300, "fill": ".", "text": "utter" },
+            { "start_ms": 1300, "end_ms": 1600, "fill": ".", "text": "ance" },
+            { "start_ms": 1600, "end_ms": 1850, "fill": ".", "text": "that" },
+            { "start_ms": 1850, "end_ms": 2150, "fill": ".", "text": "war" },
+            { "start_ms": 2150, "end_ms": 2450, "fill": ".", "text": "rants" },
+            { "start_ms": 2450, "end_ms": 2750, "fill": ".", "text": "sev" },
+            { "start_ms": 2750, "end_ms": 3050, "fill": ".", "text": "eral" },
+            { "start_ms": 3050, "end_ms": 3600, "fill": ".", "text": "rounds" }
+          ]
+        },
+        {
+          "label": "kv kept",
+          "spans": [
+            { "start_ms": 0, "end_ms": 1000, "fill": "#" }
+          ]
+        },
+        {
+          "label": "carry txt",
+          "spans": [
+            { "start_ms": 1000, "end_ms": 1600, "fill": " ", "text": "utterance" }
+          ]
+        },
+        {
+          "label": "ASR audio",
+          "spans": [
+            { "start_ms": 1000, "end_ms": 3600, "fill": "^" }
+          ]
+        },
+        {
+          "label": "raw tape",
+          "spans": [
+            { "start_ms": 0, "end_ms": 1000, "fill": "S" },
+            { "start_ms": 1000, "end_ms": 1600, "fill": "C" },
+            { "start_ms": 1600, "end_ms": 3600, "fill": "P" }
+          ]
+        },
+        {
+          "label": "cut tape",
+          "spans": [
+            { "start_ms": 0, "end_ms": 2450, "fill": "S" },
+            { "start_ms": 2450, "end_ms": 3050, "fill": "C" },
+            { "start_ms": 3050, "end_ms": 3600, "fill": "P" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "feed(19)  first rewrite after the second cut",
+      "timeline_end_ms": 3800,
+      "rows": [
+        {
+          "label": "audio held",
+          "spans": [
+            { "start_ms": 0, "end_ms": 3800, "fill": "=" }
+          ]
+        },
+        {
+          "label": "words",
+          "spans": [
+            { "start_ms": 0, "end_ms": 300, "text": "this" },
+            { "start_ms": 300, "end_ms": 500, "text": "is" },
+            { "start_ms": 500, "end_ms": 650, "text": "a" },
+            { "start_ms": 650, "end_ms": 1000, "text": "long" },
+            { "start_ms": 1000, "end_ms": 1600, "text": "utterance" },
+            { "start_ms": 1600, "end_ms": 1850, "text": "that" },
+            { "start_ms": 1850, "end_ms": 2450, "text": "warrants" },
+            { "start_ms": 2450, "end_ms": 3050, "text": "several" },
+            { "start_ms": 3050, "end_ms": 3800, "text": "rounds now" }
+          ]
+        },
+        {
+          "label": "tokens",
+          "spans": [
+            { "start_ms": 0, "end_ms": 300, "fill": ".", "text": "this" },
+            { "start_ms": 300, "end_ms": 500, "fill": ".", "text": "is" },
+            { "start_ms": 500, "end_ms": 650, "fill": ".", "text": "a" },
+            { "start_ms": 650, "end_ms": 1000, "fill": ".", "text": "long" },
+            { "start_ms": 1000, "end_ms": 1300, "fill": ".", "text": "utter" },
+            { "start_ms": 1300, "end_ms": 1600, "fill": ".", "text": "ance" },
+            { "start_ms": 1600, "end_ms": 1850, "fill": ".", "text": "that" },
+            { "start_ms": 1850, "end_ms": 2150, "fill": ".", "text": "war" },
+            { "start_ms": 2150, "end_ms": 2450, "fill": ".", "text": "rants" },
+            { "start_ms": 2450, "end_ms": 2750, "fill": ".", "text": "sev" },
+            { "start_ms": 2750, "end_ms": 3050, "fill": ".", "text": "eral" },
+            { "start_ms": 3050, "end_ms": 3450, "fill": ".", "text": "rounds" },
+            { "start_ms": 3450, "end_ms": 3800, "fill": ".", "text": "now" }
+          ]
+        },
+        {
+          "label": "kv kept",
+          "spans": [
+            { "start_ms": 0, "end_ms": 2450, "fill": "#" }
+          ]
+        },
+        {
+          "label": "carry txt",
+          "spans": [
+            { "start_ms": 2450, "end_ms": 3050, "fill": " ", "text": "several" }
+          ]
+        },
+        {
+          "label": "ASR audio",
+          "spans": [
+            { "start_ms": 2450, "end_ms": 3800, "fill": "^" }
+          ]
+        },
+        {
+          "label": "tape out",
+          "spans": [
+            { "start_ms": 0, "end_ms": 2450, "fill": "S" },
+            { "start_ms": 2450, "end_ms": 3050, "fill": "C" },
+            { "start_ms": 3050, "end_ms": 3800, "fill": "P" }
+          ]
+        }
+      ]
+    }
+  ]
+}
