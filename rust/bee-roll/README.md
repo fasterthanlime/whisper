@@ -27,35 +27,40 @@ pipeline and the debugging visualization need more structure than that.
 
 ## The Core Model
 
-Conceptually, an utterance has two regions:
+The whole utterance should be thought of as three adjacent regions:
 
-- `committed`: the stable prefix
-- `fresh`: everything after that
+- `stable`: old text that is settled enough to keep
+- `carry`: recent kept text that is replayed into the next decode step
+- `preview`: the live right edge that gets reopened and re-decoded
 
-`fresh` is the live tail. It is expected to change.
+For a longer utterance, the tape can look like this:
 
-`feed()` does not just append more text forever. It keeps rewriting the
-current live tail as more audio arrives.
+```text
+This is a long utterance that warrants several rounds
+SSSSSSSSSSSSSS CCCCCCCCCCCCCC PPPPPPPPPPPPPPPPPPPPPPP
+```
 
-That means:
+That is the vocabulary this crate should use.
 
-1. keep the committed prefix
-2. keep enough prefix/context for the next decode step
-3. truncate the revisable tail in token space and KV space
-4. decode again over the current fresh region
-5. rebuild the current output tape
+`stable`, `carry`, and `preview` are all part of the current tape. The
+difference is how the next decode step treats them:
+
+- `stable` remains alive in retained KV state
+- `carry` is replayed as bridging text into the next decode step
+- `preview` is the live tail that gets rewritten
 
 The canonical rollback unit is still the token boundary. Phones and timings
 help choose coherent cut points, but they do not replace tokens as the
-coordinate system used for truncation, commitment, and KV synchronization.
+coordinate system used for truncation, promotion, and KV synchronization.
 
 ## The Three-Way Split
 
-The right mental model for the live decode step is a three-way split:
+The three-way split is not just a visualization trick. It is the actual
+operational model:
 
-- a kept prefix that stays alive in KV
-- a replayed bridge/prefix that is fed into the next decode step
-- a reopened tail that gets re-decoded
+- keep `stable`
+- replay `carry`
+- reopen `preview`
 
 This is not full-prefix rerun.
 
@@ -68,33 +73,36 @@ reopening the recent tail so the model can revise seam-local mistakes.
 
 `feed()` is the only public ingress for audio.
 
-As audio arrives, `fresh` grows.
+As audio arrives, `preview` grows.
 
-While `fresh` is still small, for example under a threshold like `2s`,
+While `preview` is still small, for example under a threshold like `2s`,
 calling `feed()` means:
 
 - extend the utterance audio buffer
-- truncate the live tail back to the kept/replay point
-- re-run ASR over the current fresh region
+- keep the existing `stable` prefix
+- keep the existing `carry` bridge
+- truncate the live decode state back to the kept point
+- re-run ASR for the current live tail
 - return the whole current token-aligned tape
 
 At that stage, there is no point searching for a new cut yet. The system is
-still just repeatedly rewriting the live tail.
+still just repeatedly rewriting `preview`.
 
-Once `fresh` is large enough, `feed()` also asks the `Cutter` to choose a
+Once `preview` is large enough, `feed()` also asks the `Cutter` to choose a
 good boundary. If a cut is accepted:
 
-- `committed` advances
-- the fresh region becomes smaller again
-- the next rounds go back to repeated live-tail rewrites until the fresh
-  region grows enough to justify another cut search
+- more material moves into `stable`
+- the right edge is repartitioned into a new `carry` and `preview`
+- the next rounds go back to repeated preview rewrites until `preview`
+  grows enough to justify another cut search
 
 So the loop is:
 
-1. keep rewriting `fresh`
+1. keep rewriting `preview`
 2. once big enough, search for a cut
-3. extend `committed`
-4. repeat
+3. extend `stable`
+4. repartition the right edge into `carry` + `preview`
+5. repeat
 
 ## Why We Return More Than Text
 
@@ -124,7 +132,7 @@ The important internal boundary is still token space.
 This crate uses token indices for:
 
 - rollback
-- commitment
+- stable/carry/preview partitioning
 - KV truncation
 - stage-to-stage references
 
@@ -137,7 +145,7 @@ internally just because those views are useful.
 At a high level, `Utterance` owns:
 
 - append-only utterance audio
-- the committed boundary
+- the stable/carry/preview partition over the current tape
 - the current token-aligned output tape
 - synchronized rollback state for ASR
 - the cut policy hook
@@ -159,8 +167,9 @@ There is already a strong bias in the design:
 
 - one canonical token-aligned tape
 - synchronized token/KV rollback
-- repeated re-decode of the fresh tail
-- cut search only when the fresh region is large enough
+- repeated re-decode of `preview`
+- `stable` / `carry` / `preview` as the primary mental model
+- cut search only when `preview` is large enough
 - richer per-token output because later stages need it
 
 What is not implemented yet is the actual concrete decode loop that wires in
