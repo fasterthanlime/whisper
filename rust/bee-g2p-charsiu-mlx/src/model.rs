@@ -273,7 +273,7 @@ impl T5Attention {
         &self,
         x: &Array,
         cache: &KvCache,
-        position_bias: Option<&Array>,
+        mask: Option<&Array>,
     ) -> Result<Array, Exception> {
         let batch_size = x.shape()[0];
         let q_len = x.shape()[1];
@@ -288,7 +288,7 @@ impl T5Attention {
             .get()
             .expect("cross-attention cache must be populated");
 
-        self.attend(&q, k, v, position_bias, None)
+        self.attend(&q, k, v, None, mask)
     }
 
     fn attend(
@@ -475,6 +475,7 @@ impl T5DecoderBlock {
         encoder_output: &Array,
         self_attn_bias: Option<&Array>,
         cache: &mut DecoderLayerCache,
+        cross_attn_mask: Option<&Array>,
     ) -> Result<Array, Exception> {
         let normed = self.self_attn_norm.forward(x)?;
         let attn_out = self.self_attn.forward_cached(
@@ -488,9 +489,9 @@ impl T5DecoderBlock {
 
         let normed = self.cross_attn_norm.forward(&x)?;
         let cross_out = if cache.cross_attn.get().is_some() {
-            // Reuse cached encoder K/V
+            // Reuse cached encoder K/V — still need cross_attn_mask
             self.cross_attn
-                .forward_cross_cached(&normed, &cache.cross_attn, None)?
+                .forward_cross_cached(&normed, &cache.cross_attn, cross_attn_mask)?
         } else {
             // First step: compute and cache encoder K/V
             self.cross_attn.forward_cached(
@@ -498,7 +499,7 @@ impl T5DecoderBlock {
                 encoder_output,
                 &mut cache.cross_attn,
                 None,
-                None,
+                cross_attn_mask,
             )?
         };
         let x = x.add(&cross_out)?;
@@ -542,9 +543,30 @@ impl T5Encoder {
     }
 
     pub fn forward(&self, input_ids: &Array) -> Result<Array, Exception> {
+        self.forward_with_mask(input_ids, None)
+    }
+
+    /// Forward with optional attention mask for padding.
+    /// `attention_mask`: [batch, seq_len] with 1 for real, 0 for padding.
+    pub fn forward_with_mask(
+        &self,
+        input_ids: &Array,
+        attention_mask: Option<&Array>,
+    ) -> Result<Array, Exception> {
         let seq_len = input_ids.shape()[1] as i32;
         let mut x = self.embed_tokens.forward(input_ids)?;
-        let bias = self.position_bias.forward(seq_len, seq_len)?;
+        let mut bias = self.position_bias.forward(seq_len, seq_len)?;
+
+        // Apply padding mask: where mask==0, set bias to -inf so those positions are ignored
+        if let Some(mask) = attention_mask {
+            // mask: [batch, seq_len] -> [batch, 1, 1, seq_len]
+            let batch_size = mask.shape()[0];
+            let mask_4d = mask.reshape(&[batch_size, 1, 1, seq_len])?;
+            let neg_inf = Array::from_f32(f32::NEG_INFINITY);
+            let zero = Array::from_f32(0.0);
+            let mask_bias = ops::r#where(&mask_4d.as_type::<bool>()?, &zero, &neg_inf)?;
+            bias = bias.add(&mask_bias)?;
+        }
 
         for block in &self.blocks {
             x = block.forward(&x, Some(&bias))?;
@@ -606,18 +628,18 @@ impl T5Decoder {
         self.final_layer_norm.forward(&x)
     }
 
-    /// Cached step: processes a single new token using KV cache.
-    /// `step` is the current decode position (0-indexed).
+    /// Cached step: processes one new token per batch element using KV cache.
+    /// `token_ids` shape: [batch, 1]. `step` is the current decode position (0-indexed).
+    /// `cross_attn_mask`: optional [batch, 1, 1, enc_len] mask for encoder padding.
     pub fn step_cached(
         &self,
-        token_id: i32,
+        token_ids: &Array,
         encoder_output: &Array,
         cache: &mut DecoderCache,
         step: i32,
+        cross_attn_mask: Option<&Array>,
     ) -> Result<Array, Exception> {
-        let batch_size = encoder_output.shape()[0];
-        let token_ids = Array::from_int(token_id).reshape(&[batch_size, 1])?;
-        let mut x = self.embed_tokens.forward(&token_ids)?;
+        let mut x = self.embed_tokens.forward(token_ids)?;
 
         // Position bias for this step: need bias for position `step` attending to all positions 0..=step
         // Shape: [1, num_heads, 1, step+1]
@@ -626,7 +648,13 @@ impl T5Decoder {
         let step_bias = full_bias.index((.., .., -1.., ..));
 
         for (block, layer_cache) in self.blocks.iter().zip(cache.layers.iter_mut()) {
-            x = block.forward_cached(&x, encoder_output, Some(&step_bias), layer_cache)?;
+            x = block.forward_cached(
+                &x,
+                encoder_output,
+                Some(&step_bias),
+                layer_cache,
+                cross_attn_mask,
+            )?;
         }
 
         self.final_layer_norm.forward(&x)
@@ -672,6 +700,14 @@ impl T5ForConditionalGeneration {
         self.encoder.forward(input_ids)
     }
 
+    pub fn encode_with_mask(
+        &self,
+        input_ids: &Array,
+        attention_mask: Option<&Array>,
+    ) -> Result<Array, Exception> {
+        self.encoder.forward_with_mask(input_ids, attention_mask)
+    }
+
     pub fn decode(
         &self,
         decoder_input_ids: &Array,
@@ -687,22 +723,102 @@ impl T5ForConditionalGeneration {
 
         let mut cache = DecoderCache::new(self.config.num_decoder_layers as usize);
         let mut generated = Vec::new();
-        let mut current_token = self.config.decoder_start_token_id;
+        let start_token = self.config.decoder_start_token_id;
+        let mut current_ids = Array::from_int(start_token).reshape(&[1, 1])?;
 
         for step in 0..max_length {
             let hidden =
                 self.decoder
-                    .step_cached(current_token, &encoder_output, &mut cache, step)?;
+                    .step_cached(&current_ids, &encoder_output, &mut cache, step, None)?;
             let logits = self.lm_head.forward(&hidden)?;
-            let next_token = argmax_axis(&logits.index((.., -1, ..)), -1, None)?;
-            next_token.eval()?;
-            let token_id: i32 = next_token.item();
+            let next_ids = argmax_axis(&logits.index((.., -1, ..)), -1, None)?;
+            next_ids.eval()?;
+            let token_id: i32 = next_ids.item();
 
             if token_id == self.config.eos_token_id {
                 break;
             }
             generated.push(token_id);
-            current_token = token_id;
+            current_ids = Array::from_int(token_id).reshape(&[1, 1])?;
+        }
+
+        Ok(generated)
+    }
+
+    /// Batched generation: encode and decode multiple inputs in parallel.
+    /// `input_ids` shape: [batch, seq_len] (padded with 0).
+    /// Returns one Vec<i32> per batch element.
+    pub fn generate_batch(
+        &self,
+        input_ids: &Array,
+        max_length: i32,
+    ) -> Result<Vec<Vec<i32>>, Exception> {
+        let batch_size = input_ids.shape()[0] as usize;
+
+        // Create attention mask: 1 where input_ids != 0 (PAD), 0 where padding
+        let attention_mask = input_ids.ne(&Array::from_int(0))?.as_type::<i32>()?;
+        let encoder_output = self.encode_with_mask(input_ids, Some(&attention_mask))?;
+        encoder_output.eval()?;
+
+        // Cross-attention mask: [batch, 1, 1, enc_len] — prevents decoder attending to encoder padding
+        let enc_len = input_ids.shape()[1];
+        let cross_attn_mask = {
+            let mask_2d = attention_mask.reshape(&[batch_size as i32, 1, 1, enc_len as i32])?;
+            let neg_inf = Array::from_f32(f32::NEG_INFINITY);
+            let zero = Array::from_f32(0.0);
+            ops::r#where(&mask_2d.as_type::<bool>()?, &zero, &neg_inf)?
+        };
+
+        let mut cache = DecoderCache::new(self.config.num_decoder_layers as usize);
+        let mut generated: Vec<Vec<i32>> = vec![Vec::new(); batch_size];
+        let mut finished = vec![false; batch_size];
+
+        let start_token = self.config.decoder_start_token_id;
+        let mut current_ids =
+            Array::from_slice(&vec![start_token; batch_size], &[batch_size as i32, 1])
+                .as_type::<i32>()?;
+
+        for step in 0..max_length {
+            let hidden = self.decoder.step_cached(
+                &current_ids,
+                &encoder_output,
+                &mut cache,
+                step,
+                Some(&cross_attn_mask),
+            )?;
+            let logits = self.lm_head.forward(&hidden)?;
+            // next_ids: [batch, 1]
+            let next_ids = argmax_axis(&logits.index((.., -1, ..)), -1, None)?;
+            next_ids.eval()?;
+
+            let mut all_done = true;
+            let mut next_tokens = Vec::with_capacity(batch_size);
+            for i in 0..batch_size {
+                let token_id: i32 = next_ids.index((i as i32,)).item();
+                if !finished[i] {
+                    if token_id == self.config.eos_token_id {
+                        finished[i] = true;
+                    } else {
+                        generated[i].push(token_id);
+                    }
+                }
+                // Keep feeding the token even if finished (will be ignored in output)
+                next_tokens.push(if finished[i] {
+                    self.config.eos_token_id
+                } else {
+                    token_id
+                });
+                if !finished[i] {
+                    all_done = false;
+                }
+            }
+
+            if all_done {
+                break;
+            }
+
+            current_ids =
+                Array::from_slice(&next_tokens, &[batch_size as i32, 1]).as_type::<i32>()?;
         }
 
         Ok(generated)

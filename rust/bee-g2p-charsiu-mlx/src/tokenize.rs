@@ -35,3 +35,21 @@ pub fn encode_to_array(text: &str) -> Result<Array, Exception> {
     let len = ids.len() as i32;
     Array::from_slice(&ids, &[1, len]).as_type::<i32>()
 }
+
+/// Encode multiple texts to a padded batch of token ids.
+///
+/// Returns shape [batch_size, max_seq_len] with PAD_TOKEN_ID (0) padding.
+pub fn encode_batch_to_array(texts: &[String]) -> Result<Array, Exception> {
+    let encoded: Vec<Vec<i32>> = texts.iter().map(|t| encode_byt5(t)).collect();
+    let max_len = encoded.iter().map(|ids| ids.len()).max().unwrap_or(0);
+    let batch_size = texts.len();
+
+    let mut flat = vec![0i32; batch_size * max_len]; // 0 = PAD
+    for (i, ids) in encoded.iter().enumerate() {
+        for (j, &id) in ids.iter().enumerate() {
+            flat[i * max_len + j] = id;
+        }
+    }
+
+    Array::from_slice(&flat, &[batch_size as i32, max_len as i32]).as_type::<i32>()
+}
