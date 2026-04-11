@@ -36,8 +36,7 @@ const DEFAULT_LANE_B_FIRST_CHUNK_MS: usize = 3_000;
 const DEFAULT_REPLAY_CHUNK_INDEX: usize = 1;
 const DEFAULT_TRUNCATE_TOKENS: usize = 4;
 const DEFAULT_MLX_CACHE_LIMIT_MB: Option<usize> = None;
-const KEEP_BOUNDARY_MAX_BACKTRACK_SECS: f64 = 0.150;
-const KEEP_BOUNDARY_MIN_KEPT_FRACTION: f64 = 0.75;
+const KEEP_BOUNDARY_MIN_KEPT_SECS: f64 = 0.200;
 const MAX_BRIDGE_WINDOWS: usize = 50;
 const BOUNDARY_SWEEP_OFFSETS: [isize; 13] =
     [-48, -44, -40, -36, -32, -28, -24, -20, -16, -12, -8, -4, 0];
@@ -2469,6 +2468,7 @@ struct SlidingWordPlacement {
     carried: bool,
     kept: bool,
     bridge: bool,
+    cut_word: bool,
 }
 
 struct CommittedWordPlacement {
@@ -2598,12 +2598,18 @@ body{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f7f4ec
 .track{{position:relative;width:{width_px}px;height:{row_height_px}px;border-top:1px solid #d6cfbf;border-bottom:1px solid #d6cfbf;background:linear-gradient(180deg,#fffdf8,#f4efe3);overflow:hidden;}}\
 .word{{text-align:center;vertical-align:middle;position:absolute;height:2em;padding:4px 2px;border-radius:4px;border:1px solid #7a6d56;white-space:nowrap;overflow:visible;font-size:12px;box-sizing:border-box;cursor:default;font-family:\"SF Pro\", serif;}}\
 .word.carried{{background:#d8d0f0;border-color:#6f64a8;color:#30274f;}}\
-.word.kept{{background:#cfdcc8;border-color:#71846f;}}\
+.word.kept{{background:#b9e5c0;border-color:#2d8a57;color:#113a25;font-weight:700;box-shadow:0 0 0 2px rgba(45,138,87,0.18);}}\
 .word.bridge{{background:#efe2b8;border-color:#9a7b2f;}}\
 .word.rolled{{background:#e7c2c2;border-color:#9f5d5d;}}\
+.word.cut-word{{outline:3px solid rgba(36,88,166,0.35);outline-offset:1px;border-style:dashed;}}\
 .word.no-window,.word.no-timing{{background:#e5d9c9;border-color:#8f7f69;height:22px;font-size:11px;}}\
+.search-range{{position:absolute;height:12px;border-bottom:2px solid #5a5a5a;border-left:2px solid #5a5a5a;border-right:2px solid #5a5a5a;border-bottom-left-radius:8px;border-bottom-right-radius:8px;background:rgba(90,90,90,0.06);pointer-events:none;}}\
+.search-range-label{{position:absolute;transform:translateX(-50%);font-size:11px;color:#5a5a5a;font-weight:700;pointer-events:none;}}\
 .cut{{position:absolute;top:0;width:2px;height:{row_height_px}px;background:#2458a6;}}\
-.cut-label{{position:absolute;top:2px;transform:translateX(6px);font-size:11px;color:#2458a6;font-weight:700;}}\
+.cut-label{{position:absolute;transform:translateX(6px);font-size:11px;color:#2458a6;font-weight:700;white-space:nowrap;}}\
+.cut-label.cut-label-cut{{top:2px;}}\
+.cut-label.cut-label-target{{top:18px;}}\
+.cut-label.cut-label-bridge{{top:2px;}}\
 .window-start,.window-end{{position:absolute;top:0;width:1px;height:{row_height_px}px;background:#9d9483;}}\
 .window-label{{position:absolute;bottom:2px;transform:translateX(4px);font-size:11px;color:#6d6457;}}\
 .playhead{{position:absolute;top:0;width:2px;height:{row_height_px}px;background:#d97706;pointer-events:none;display:none;}}\
@@ -2825,7 +2831,7 @@ updatePlayhead(0);\
 
 fn render_sliding_window_row(
     width_px: f64,
-    _row_height_px: f64,
+    row_height_px: f64,
     row_index: usize,
     chunk: &ChunkRun,
     rollback: Option<&WindowRollbackDecision>,
@@ -2849,20 +2855,31 @@ fn render_sliding_window_row(
     ));
     markers.push_str("<div class=\"playhead\"></div>");
     if let Some(rollback) = rollback {
+        let search_start_x = (rollback.keep_boundary_debug.earliest_candidate_secs
+            / window_duration_secs)
+            * width_px;
+        let search_end_x = (rollback.target_keep_until_secs / window_duration_secs) * width_px;
+        let search_width = (search_end_x - search_start_x).max(0.0);
+        let search_label_x = search_start_x + (search_width / 2.0);
+        markers.push_str(&format!(
+            "<div class=\"search-range\" style=\"left:{search_start_x:.1}px;top:{:.1}px;width:{search_width:.1}px\"></div><div class=\"search-range-label\" style=\"left:{search_label_x:.1}px;top:{:.1}px\">search</div>",
+            row_height_px - 14.0,
+            row_height_px - 28.0,
+        ));
         let cut_x = (rollback.keep_until_secs / window_duration_secs) * width_px;
         markers.push_str(&format!(
-            "<div class=\"cut\" style=\"left:{cut_x:.1}px\"></div><div class=\"cut-label\" style=\"left:{cut_x:.1}px\">cut @{:.2}s</div>",
+            "<div class=\"cut\" style=\"left:{cut_x:.1}px\"></div><div class=\"cut-label cut-label-cut\" style=\"left:{cut_x:.1}px\">cut @{:.2}s</div>",
             window_start_secs + rollback.keep_until_secs
         ));
         let target_cut_x = (rollback.target_keep_until_secs / window_duration_secs) * width_px;
         markers.push_str(&format!(
-            "<div class=\"cut\" style=\"left:{target_cut_x:.1}px;background:#5a5a5a;opacity:0.55\"></div><div class=\"cut-label\" style=\"left:{target_cut_x:.1}px;color:#5a5a5a\">target @{:.2}s</div>",
+            "<div class=\"cut\" style=\"left:{target_cut_x:.1}px;background:#5a5a5a;opacity:0.55\"></div><div class=\"cut-label cut-label-target\" style=\"left:{target_cut_x:.1}px;color:#5a5a5a\">target @{:.2}s</div>",
             window_start_secs + rollback.target_keep_until_secs
         ));
         if let Some(replay_until_secs) = rollback.replay_until_secs {
             let replay_x = (replay_until_secs / window_duration_secs) * width_px;
             markers.push_str(&format!(
-                "<div class=\"cut\" style=\"left:{replay_x:.1}px;background:#8b5e1a\"></div><div class=\"cut-label\" style=\"left:{replay_x:.1}px;color:#8b5e1a\">bridge @{:.2}s</div>",
+                "<div class=\"cut\" style=\"left:{replay_x:.1}px;background:#8b5e1a\"></div><div class=\"cut-label cut-label-bridge\" style=\"left:{replay_x:.1}px;color:#8b5e1a\">bridge @{:.2}s</div>",
                 window_start_secs + replay_until_secs
             ));
         }
@@ -2882,7 +2899,11 @@ fn render_sliding_window_row(
         } else {
             "rolled"
         };
-        let class = format!("word {segment_class} {}", word.quality_label);
+        let cut_word_class = if word.cut_word { " cut-word" } else { "" };
+        let class = format!(
+            "word {segment_class} {}{cut_word_class}",
+            word.quality_label
+        );
         let (left, width, lane_index) = match (word.start_secs, word.end_secs) {
             (Some(start), Some(end)) => {
                 let left = (start / window_duration_secs) * width_px;
@@ -3016,6 +3037,10 @@ fn build_window_word_placements(
             .unwrap_or(0);
         r.kept_word_count + bridge_words
     });
+    let chosen_cut = run
+        .rollback
+        .as_ref()
+        .and_then(|r| r.keep_boundary_debug.chosen_word.as_ref());
 
     Ok(word_timings
         .into_iter()
@@ -3031,6 +3056,14 @@ fn build_window_word_placements(
             };
             let generated_index = index.saturating_sub(carried_word_count);
             let carried = index < carried_word_count;
+            let cut_word = match (&chosen_cut, start_secs, end_secs) {
+                (Some(chosen), Some(start), Some(end)) => {
+                    word_timing.word == chosen.text
+                        && (start - chosen.start_secs).abs() < 0.000_1
+                        && (end - chosen.end_secs).abs() < 0.000_1
+                }
+                _ => false,
+            };
             SlidingWordPlacement {
                 text: word_timing.word.to_string(),
                 start_secs,
@@ -3041,6 +3074,7 @@ fn build_window_word_placements(
                 bridge: !carried
                     && generated_index >= kept_word_count
                     && generated_index < replay_word_count,
+                cut_word,
             }
         })
         .collect())
@@ -3434,9 +3468,7 @@ fn timed_generated_bridge_for_cuts(
         let word = combined_word_ranges
             .get(end_word_index)
             .ok_or_else(|| anyhow::anyhow!("missing effective kept word range"))?;
-        combined_transcript[word.char_start..word.char_end]
-            .trim()
-            .to_string()
+        combined_transcript[..word.char_end].trim().to_string()
     } else {
         String::new()
     };
@@ -3444,9 +3476,6 @@ fn timed_generated_bridge_for_cuts(
     let bridge = if let (Some(start_word_index), Some(end_word_index)) =
         (effective_bridge_start_word, effective_bridge_end_word)
     {
-        let start_word_index = effective_kept_end_word
-            .map(|kept_index| kept_index.min(start_word_index))
-            .unwrap_or(start_word_index);
         let start = combined_word_ranges
             .get(start_word_index)
             .map(|word| word.char_start)
@@ -3527,9 +3556,8 @@ fn adjust_keep_boundary_secs(
         None => generated_transcript.to_string(),
     };
     let alignment = build_transcript_alignment(&combined_transcript, chunk_samples)?;
-    let min_keep_secs = (target_keep_until_secs * KEEP_BOUNDARY_MIN_KEPT_FRACTION).max(0.0);
-    let earliest_candidate_secs =
-        (target_keep_until_secs - KEEP_BOUNDARY_MAX_BACKTRACK_SECS).max(min_keep_secs);
+    let min_keep_secs = KEEP_BOUNDARY_MIN_KEPT_SECS.min(target_keep_until_secs);
+    let earliest_candidate_secs = min_keep_secs;
     let mut best_candidate = None;
     let mut best_distance = f64::INFINITY;
 
