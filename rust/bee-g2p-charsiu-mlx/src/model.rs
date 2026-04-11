@@ -5,9 +5,69 @@ use mlx_rs::macros::ModuleParameters;
 use mlx_rs::module::Module;
 use mlx_rs::nn;
 use mlx_rs::ops;
+use mlx_rs::ops::concatenate_axis;
 use mlx_rs::ops::indexing::{IndexOp, argmax_axis};
 
 use crate::config::T5Config;
+
+// ---------------------------------------------------------------------------
+// KV Cache for decoder attention
+// ---------------------------------------------------------------------------
+
+/// Per-layer cache for one attention sublayer (self-attn or cross-attn).
+#[derive(Default)]
+pub struct KvCache {
+    pub keys: Option<Array>,
+    pub values: Option<Array>,
+}
+
+impl KvCache {
+    pub fn update(&mut self, k: Array, v: Array) -> Result<(Array, Array), Exception> {
+        match (self.keys.take(), self.values.take()) {
+            (Some(prev_k), Some(prev_v)) => {
+                let new_k = concatenate_axis(&[prev_k, k], 2)?;
+                let new_v = concatenate_axis(&[prev_v, v], 2)?;
+                self.keys = Some(new_k.clone());
+                self.values = Some(new_v.clone());
+                Ok((new_k, new_v))
+            }
+            _ => {
+                self.keys = Some(k.clone());
+                self.values = Some(v.clone());
+                Ok((k, v))
+            }
+        }
+    }
+
+    pub fn get(&self) -> Option<(&Array, &Array)> {
+        match (&self.keys, &self.values) {
+            (Some(k), Some(v)) => Some((k, v)),
+            _ => None,
+        }
+    }
+}
+
+/// Per-layer cache: self-attention + cross-attention.
+#[derive(Default)]
+pub struct DecoderLayerCache {
+    pub self_attn: KvCache,
+    pub cross_attn: KvCache,
+}
+
+/// Full decoder cache: one entry per decoder layer.
+pub struct DecoderCache {
+    pub layers: Vec<DecoderLayerCache>,
+}
+
+impl DecoderCache {
+    pub fn new(num_layers: usize) -> Self {
+        let mut layers = Vec::with_capacity(num_layers);
+        for _ in 0..num_layers {
+            layers.push(DecoderLayerCache::default());
+        }
+        Self { layers }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // T5 Relative Position Bias
@@ -169,8 +229,81 @@ impl T5Attention {
             .reshape(&[batch_size, k_len, self.num_heads, self.d_kv])?
             .transpose_axes(&[0, 2, 1, 3])?;
 
+        self.attend(&q, &k, &v, position_bias, mask)
+    }
+
+    /// Cached forward: projects Q from x, K/V from kv_input, appends to cache.
+    pub fn forward_cached(
+        &self,
+        x: &Array,
+        kv_input: &Array,
+        cache: &mut KvCache,
+        position_bias: Option<&Array>,
+        mask: Option<&Array>,
+    ) -> Result<Array, Exception> {
+        let batch_size = x.shape()[0];
+        let q_len = x.shape()[1];
+        let kv_len = kv_input.shape()[1];
+
+        let q = self
+            .q
+            .forward(x)?
+            .reshape(&[batch_size, q_len, self.num_heads, self.d_kv])?
+            .transpose_axes(&[0, 2, 1, 3])?;
+
+        let k = self
+            .k
+            .forward(kv_input)?
+            .reshape(&[batch_size, kv_len, self.num_heads, self.d_kv])?
+            .transpose_axes(&[0, 2, 1, 3])?;
+
+        let v = self
+            .v
+            .forward(kv_input)?
+            .reshape(&[batch_size, kv_len, self.num_heads, self.d_kv])?
+            .transpose_axes(&[0, 2, 1, 3])?;
+
+        let (k, v) = cache.update(k, v)?;
+
+        self.attend(&q, &k, &v, position_bias, mask)
+    }
+
+    /// Use pre-computed K/V from cache (for cross-attention after first step).
+    pub fn forward_cross_cached(
+        &self,
+        x: &Array,
+        cache: &KvCache,
+        position_bias: Option<&Array>,
+    ) -> Result<Array, Exception> {
+        let batch_size = x.shape()[0];
+        let q_len = x.shape()[1];
+
+        let q = self
+            .q
+            .forward(x)?
+            .reshape(&[batch_size, q_len, self.num_heads, self.d_kv])?
+            .transpose_axes(&[0, 2, 1, 3])?;
+
+        let (k, v) = cache
+            .get()
+            .expect("cross-attention cache must be populated");
+
+        self.attend(&q, k, v, position_bias, None)
+    }
+
+    fn attend(
+        &self,
+        q: &Array,
+        k: &Array,
+        v: &Array,
+        position_bias: Option<&Array>,
+        mask: Option<&Array>,
+    ) -> Result<Array, Exception> {
+        let batch_size = q.shape()[0];
+        let q_len = q.shape()[2];
+
         // scores: [batch, heads, qlen, klen]
-        let mut scores = ops::matmul(&q, &k.transpose_axes(&[0, 1, 3, 2])?)?;
+        let mut scores = ops::matmul(q, &k.transpose_axes(&[0, 1, 3, 2])?)?;
 
         if let Some(bias) = position_bias {
             scores = scores.add(bias)?;
@@ -180,7 +313,7 @@ impl T5Attention {
         }
 
         let weights = ops::softmax_axis(&scores, -1, false)?;
-        let context = ops::matmul(&weights, &v)?;
+        let context = ops::matmul(&weights, v)?;
 
         let context = context.transpose_axes(&[0, 2, 1, 3])?.reshape(&[
             batch_size,
@@ -334,6 +467,46 @@ impl T5DecoderBlock {
         let ff_out = self.ff.forward(&normed)?;
         x.add(&ff_out)
     }
+
+    /// Cached forward: only processes the new token, using KV cache.
+    pub fn forward_cached(
+        &self,
+        x: &Array,
+        encoder_output: &Array,
+        self_attn_bias: Option<&Array>,
+        cache: &mut DecoderLayerCache,
+    ) -> Result<Array, Exception> {
+        let normed = self.self_attn_norm.forward(x)?;
+        let attn_out = self.self_attn.forward_cached(
+            &normed,
+            &normed,
+            &mut cache.self_attn,
+            self_attn_bias,
+            None,
+        )?;
+        let x = x.add(&attn_out)?;
+
+        let normed = self.cross_attn_norm.forward(&x)?;
+        let cross_out = if cache.cross_attn.get().is_some() {
+            // Reuse cached encoder K/V
+            self.cross_attn
+                .forward_cross_cached(&normed, &cache.cross_attn, None)?
+        } else {
+            // First step: compute and cache encoder K/V
+            self.cross_attn.forward_cached(
+                &normed,
+                encoder_output,
+                &mut cache.cross_attn,
+                None,
+                None,
+            )?
+        };
+        let x = x.add(&cross_out)?;
+
+        let normed = self.ff_norm.forward(&x)?;
+        let ff_out = self.ff.forward(&normed)?;
+        x.add(&ff_out)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -432,6 +605,32 @@ impl T5Decoder {
 
         self.final_layer_norm.forward(&x)
     }
+
+    /// Cached step: processes a single new token using KV cache.
+    /// `step` is the current decode position (0-indexed).
+    pub fn step_cached(
+        &self,
+        token_id: i32,
+        encoder_output: &Array,
+        cache: &mut DecoderCache,
+        step: i32,
+    ) -> Result<Array, Exception> {
+        let batch_size = encoder_output.shape()[0];
+        let token_ids = Array::from_int(token_id).reshape(&[batch_size, 1])?;
+        let mut x = self.embed_tokens.forward(&token_ids)?;
+
+        // Position bias for this step: need bias for position `step` attending to all positions 0..=step
+        // Shape: [1, num_heads, 1, step+1]
+        let full_bias = self.position_bias.forward(step + 1, step + 1)?;
+        // Take only the last row (the new token attending to all cached + itself)
+        let step_bias = full_bias.index((.., .., -1.., ..));
+
+        for (block, layer_cache) in self.blocks.iter().zip(cache.layers.iter_mut()) {
+            x = block.forward_cached(&x, encoder_output, Some(&step_bias), layer_cache)?;
+        }
+
+        self.final_layer_norm.forward(&x)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -484,15 +683,18 @@ impl T5ForConditionalGeneration {
 
     pub fn generate(&self, input_ids: &Array, max_length: i32) -> Result<Vec<i32>, Exception> {
         let encoder_output = self.encode(input_ids)?;
-        let mut generated = vec![self.config.decoder_start_token_id];
+        encoder_output.eval()?;
 
-        for _ in 0..max_length {
-            let decoder_ids =
-                Array::from_slice(&generated, &[1, generated.len() as i32]).as_type::<i32>()?;
-            let logits = self.decode(&decoder_ids, &encoder_output)?;
+        let mut cache = DecoderCache::new(self.config.num_decoder_layers as usize);
+        let mut generated = Vec::new();
+        let mut current_token = self.config.decoder_start_token_id;
 
-            let last_logits = logits.index((.., -1, ..));
-            let next_token = argmax_axis(&last_logits, -1, None)?;
+        for step in 0..max_length {
+            let hidden =
+                self.decoder
+                    .step_cached(current_token, &encoder_output, &mut cache, step)?;
+            let logits = self.lm_head.forward(&hidden)?;
+            let next_token = argmax_axis(&logits.index((.., -1, ..)), -1, None)?;
             next_token.eval()?;
             let token_id: i32 = next_token.item();
 
@@ -500,8 +702,9 @@ impl T5ForConditionalGeneration {
                 break;
             }
             generated.push(token_id);
+            current_token = token_id;
         }
 
-        Ok(generated[1..].to_vec())
+        Ok(generated)
     }
 }

@@ -39,13 +39,23 @@ fn main() -> Result<()> {
         eprintln!("Unexpected: {:?}", stats.unexpected);
     }
 
+    let mut total_us = 0u128;
     for word in &words {
+        let start = std::time::Instant::now();
         let input = tokenize::format_g2p_input(word, lang_code);
         let input_ids = tokenize::encode_to_array(&input)?;
         let output_ids = model.generate(&input_ids, 64)?;
+        let elapsed = start.elapsed();
+        total_us += elapsed.as_micros();
         let ipa = tokenize::decode_byt5(&output_ids);
-        println!("{word} -> {ipa}");
+        println!("{word} -> {ipa}  ({:.1}ms)", elapsed.as_secs_f64() * 1000.0);
     }
+    let n = words.len();
+    eprintln!(
+        "\n{n} words in {:.1}ms total, {:.1}ms/word average",
+        total_us as f64 / 1000.0,
+        total_us as f64 / 1000.0 / n as f64,
+    );
 
     Ok(())
 }
