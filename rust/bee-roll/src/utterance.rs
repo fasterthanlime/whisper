@@ -682,6 +682,17 @@ impl Utterance {
         let comparison_input = transcript_comparison_input_from_g2p(&transcript, &alignment_input);
         let current_audio_start = self.audio.utterance_range().start;
         let current_audio_end = self.audio.utterance_range().end;
+        let current_audio_samples = self.audio.sample_count().as_usize();
+        let current_audio_secs = self.audio.sample_count().to_secs();
+        tracing::trace!(
+            target: "bee_zipa_audit",
+            feed_index = self.feed_count,
+            retained_samples = current_audio_samples,
+            retained_secs = current_audio_secs,
+            utterance_start = current_audio_start.as_usize(),
+            utterance_end = current_audio_end.as_usize(),
+            "zipa retained audio state"
+        );
         let zipa_output = {
             let audio = &self.audio;
             let cache = (self.stable_through > TokenIndex::new(0))
@@ -696,6 +707,7 @@ impl Utterance {
                 audio,
                 cache,
                 &phonetics.zipa,
+                self.feed_count,
                 current_audio_end,
             )?;
             tracing::trace!(
@@ -948,9 +960,20 @@ fn infer_zipa_output_for_current_audio(
     audio: &AudioBuffer,
     existing_cache: Option<&ZipaPreviewCache>,
     zipa: &ZipaInference,
+    feed_index: usize,
     current_audio_end: SampleOffset,
 ) -> anyhow::Result<CachedZipaOutput> {
     let Some(cache) = existing_cache else {
+        tracing::trace!(
+            target: "bee_zipa_audit",
+            feed_index,
+            path = "full_retained_suffix_cache_miss",
+            retained_samples = audio.sample_count().as_usize(),
+            retained_secs = audio.sample_count().to_secs(),
+            utterance_start = audio.utterance_range().start.as_usize(),
+            utterance_end = audio.utterance_range().end.as_usize(),
+            "zipa path"
+        );
         let zipa_audio = ZipaAudioBuffer {
             samples: audio.samples().to_vec(),
             sample_rate_hz: crate::SAMPLE_RATE,
@@ -963,6 +986,19 @@ fn infer_zipa_output_for_current_audio(
         return Ok(cache.output.clone());
     }
     if cache.audio_end > current_audio_end {
+        tracing::trace!(
+            target: "bee_zipa_audit",
+            feed_index,
+            path = "full_retained_suffix_rewind",
+            retained_samples = audio.sample_count().as_usize(),
+            retained_secs = audio.sample_count().to_secs(),
+            utterance_start = audio.utterance_range().start.as_usize(),
+            utterance_end = audio.utterance_range().end.as_usize(),
+            cache_start = cache.audio_start.as_usize(),
+            cache_end = cache.audio_end.as_usize(),
+            current_audio_end = current_audio_end.as_usize(),
+            "zipa path"
+        );
         let zipa_audio = ZipaAudioBuffer {
             samples: audio.samples().to_vec(),
             sample_rate_hz: crate::SAMPLE_RATE,
@@ -974,6 +1010,22 @@ fn infer_zipa_output_for_current_audio(
     let tail_audio = audio.slice(SampleRange::new(cache.audio_end, current_audio_end));
     let tail_offset_secs =
         tail_audio.utterance_range().start.as_usize() as f64 / crate::SAMPLE_RATE as f64;
+    tracing::trace!(
+        target: "bee_zipa_audit",
+        feed_index,
+        path = "incremental_tail",
+        retained_samples = audio.sample_count().as_usize(),
+        retained_secs = audio.sample_count().to_secs(),
+        utterance_start = audio.utterance_range().start.as_usize(),
+        utterance_end = audio.utterance_range().end.as_usize(),
+        cache_start = cache.audio_start.as_usize(),
+        cache_end = cache.audio_end.as_usize(),
+        tail_samples = tail_audio.sample_count().as_usize(),
+        tail_secs = tail_audio.sample_count().to_secs(),
+        tail_offset_secs,
+        current_audio_end = current_audio_end.as_usize(),
+        "zipa path"
+    );
     let tail_audio = ZipaAudioBuffer {
         samples: tail_audio.samples().to_vec(),
         sample_rate_hz: crate::SAMPLE_RATE,
