@@ -1,4 +1,4 @@
-//! High-level G2P engine with word-level IPA cache.
+//! High-level G2P engine with word-level IPA and probe caches.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -29,10 +29,18 @@ pub struct ProbeOutput {
     pub enc_len: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ProbeCacheKey {
+    lang_code: String,
+    word: String,
+    spans: Vec<ByteSpan>,
+}
+
 /// High-level G2P engine. Bundles model + word-level IPA cache.
 pub struct G2pEngine {
     model: T5ForConditionalGeneration,
     ipa_cache: HashMap<(String, String), String>,
+    probe_cache: HashMap<ProbeCacheKey, ProbeOutput>,
 }
 
 impl G2pEngine {
@@ -51,7 +59,16 @@ impl G2pEngine {
         Ok(Self {
             model,
             ipa_cache: HashMap::new(),
+            probe_cache: HashMap::new(),
         })
+    }
+
+    fn probe_cache_key(word: &str, lang_code: &str, spans: &[ByteSpan]) -> ProbeCacheKey {
+        ProbeCacheKey {
+            lang_code: lang_code.to_owned(),
+            word: word.to_owned(),
+            spans: spans.to_vec(),
+        }
     }
 
     /// Look up or compute IPA for a single word.
@@ -117,6 +134,11 @@ impl G2pEngine {
         lang_code: &str,
         spans: &[ByteSpan],
     ) -> Result<ProbeOutput> {
+        let probe_key = Self::probe_cache_key(word, lang_code, spans);
+        if let Some(cached) = self.probe_cache.get(&probe_key) {
+            return Ok(cached.clone());
+        }
+
         let input = tokenize::format_g2p_input(word, lang_code);
         let input_ids = tokenize::encode_to_array(&input)?;
 
@@ -124,9 +146,8 @@ impl G2pEngine {
             self.model.generate_with_cross_attention(&input_ids, 64)?;
         let ipa = tokenize::decode_byt5(&generated_ids);
 
-        // Cache the IPA
-        let key = (lang_code.to_string(), word.to_string());
-        self.ipa_cache.insert(key, ipa.clone());
+        let ipa_key = (lang_code.to_string(), word.to_string());
+        self.ipa_cache.insert(ipa_key, ipa.clone());
 
         // Extract attention matrix to CPU
         let dec_len = cross_attn.shape()[0] as usize;
@@ -154,14 +175,18 @@ impl G2pEngine {
             &generated_ids,
         );
 
-        Ok(ProbeOutput {
+        let output = ProbeOutput {
             ipa,
             generated_ids,
             ownership,
             attention_matrix: flat,
             dec_len,
             enc_len,
-        })
+        };
+
+        self.probe_cache.insert(probe_key, output.clone());
+
+        Ok(output)
     }
 
     /// Number of cached IPA entries.
@@ -169,8 +194,68 @@ impl G2pEngine {
         self.ipa_cache.len()
     }
 
-    /// Clear the IPA cache.
+    /// Number of cached probe entries.
+    pub fn probe_cache_len(&self) -> usize {
+        self.probe_cache.len()
+    }
+
+    /// Clear the IPA and probe caches.
     pub fn clear_cache(&mut self) {
         self.ipa_cache.clear();
+        self.probe_cache.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_cache_key_includes_span_layout_and_order() {
+        let spans_a = vec![
+            ByteSpan {
+                label: "a".into(),
+                byte_start: 0,
+                byte_end: 1,
+            },
+            ByteSpan {
+                label: "b".into(),
+                byte_start: 1,
+                byte_end: 3,
+            },
+        ];
+        let spans_b = vec![
+            ByteSpan {
+                label: "a".into(),
+                byte_start: 0,
+                byte_end: 1,
+            },
+            ByteSpan {
+                label: "b".into(),
+                byte_start: 1,
+                byte_end: 3,
+            },
+        ];
+        let spans_c = vec![
+            ByteSpan {
+                label: "b".into(),
+                byte_start: 1,
+                byte_end: 3,
+            },
+            ByteSpan {
+                label: "a".into(),
+                byte_start: 0,
+                byte_end: 1,
+            },
+        ];
+
+        let key_a = G2pEngine::probe_cache_key("word", "eng-us", &spans_a);
+        let key_b = G2pEngine::probe_cache_key("word", "eng-us", &spans_b);
+        let key_c = G2pEngine::probe_cache_key("word", "eng-us", &spans_c);
+        let key_d = G2pEngine::probe_cache_key("word", "eng-gb", &spans_a);
+
+        assert_eq!(key_a, key_b);
+        assert_ne!(key_a, key_c);
+        assert_ne!(key_a, key_d);
     }
 }

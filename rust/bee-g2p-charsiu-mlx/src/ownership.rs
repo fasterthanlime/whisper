@@ -4,7 +4,7 @@
 //! matrix extracted from the model.
 
 /// A byte range in the input text (e.g., a word span or Qwen token-piece span).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ByteSpan {
     pub label: String,
     pub byte_start: usize,
