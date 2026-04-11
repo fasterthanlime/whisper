@@ -23,6 +23,9 @@ use std::sync::Arc;
 
 const DEFAULT_PREVIEW_REWRITE_TOKENS: usize = 5;
 const DEFAULT_MAX_NEW_TOKENS: usize = 256;
+const MIN_PREVIEW_MAX_NEW_TOKENS: usize = 4;
+const PREVIEW_MAX_NEW_TOKENS_BASE: usize = 2;
+const PREVIEW_TOKENS_PER_SECOND: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DecodeMode {
@@ -427,7 +430,10 @@ impl Utterance {
                 asr.model.as_ref(),
                 &prompt,
                 &audio_features,
-                asr.max_new_tokens,
+                Self::preview_max_new_tokens_for_samples(
+                    self.audio.sample_count().as_usize(),
+                    asr.max_new_tokens,
+                ),
                 ConfidenceMode::Streaming,
             )
             .map_err(|e| anyhow::anyhow!("prefill/decode preview: {e}"))?;
@@ -500,6 +506,15 @@ impl Utterance {
                 )
             })
             .collect()
+    }
+
+    fn preview_max_new_tokens_for_samples(sample_count: usize, max_new_tokens: usize) -> usize {
+        let scaled = sample_count
+            .saturating_mul(PREVIEW_TOKENS_PER_SECOND)
+            .saturating_add(crate::SAMPLE_RATE as usize - 1)
+            / crate::SAMPLE_RATE as usize;
+        let budget = PREVIEW_MAX_NEW_TOKENS_BASE.saturating_add(scaled);
+        budget.max(MIN_PREVIEW_MAX_NEW_TOKENS).min(max_new_tokens)
     }
 
     fn map_token_confidence(confidence: &TokenConfidence) -> AsrTokenConfidence {
@@ -666,6 +681,19 @@ mod tests {
         assert_eq!(utterance.tape.decoder_position(), 3);
         assert_eq!(utterance.tape.detected_language(), Some("English"));
         assert_eq!(utterance.preview_tokens().len(), 2);
+    }
+
+    #[test]
+    fn preview_token_budget_scales_with_audio_length() {
+        assert_eq!(Utterance::preview_max_new_tokens_for_samples(3_200, 256), 4);
+        assert_eq!(
+            Utterance::preview_max_new_tokens_for_samples(16_000, 256),
+            10
+        );
+        assert_eq!(
+            Utterance::preview_max_new_tokens_for_samples(320_000, 12),
+            12
+        );
     }
 
     fn dummy_output_token(index: usize, token_id: u32) -> OutputToken {

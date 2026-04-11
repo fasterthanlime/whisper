@@ -82,7 +82,9 @@ pub struct TokenConfidence {
     pub margin: f32,
 }
 
-const REPETITION_THRESHOLD: usize = 20;
+const SINGLE_TOKEN_REPETITION_THRESHOLD: usize = 20;
+const PATTERN_REPETITION_THRESHOLD: usize = 4;
+const MAX_REPETITION_PATTERN_LEN: usize = 4;
 
 // Chat template token IDs
 pub const TOK_IM_START: TokenId = 151644;
@@ -513,11 +515,53 @@ fn tokenize(tokenizer: &tokenizers::Tokenizer, text: &str) -> Vec<i32> {
 }
 
 fn detect_repetition(tokens: &[i32]) -> bool {
-    if tokens.len() < REPETITION_THRESHOLD {
-        return false;
+    if tokens.len() >= SINGLE_TOKEN_REPETITION_THRESHOLD {
+        let last = tokens[tokens.len() - 1];
+        if tokens[tokens.len() - SINGLE_TOKEN_REPETITION_THRESHOLD..]
+            .iter()
+            .all(|&t| t == last)
+        {
+            return true;
+        }
     }
-    let last = tokens[tokens.len() - 1];
-    tokens[tokens.len() - REPETITION_THRESHOLD..]
-        .iter()
-        .all(|&t| t == last)
+
+    for pattern_len in 2..=MAX_REPETITION_PATTERN_LEN {
+        let needed = pattern_len * PATTERN_REPETITION_THRESHOLD;
+        if tokens.len() < needed {
+            continue;
+        }
+        let pattern = &tokens[tokens.len() - pattern_len..];
+        let start = tokens.len() - needed;
+        if (start..tokens.len())
+            .step_by(pattern_len)
+            .all(|offset| &tokens[offset..offset + pattern_len] == pattern)
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detect_repetition;
+
+    #[test]
+    fn detects_single_token_repetition() {
+        let tokens = vec![7; 20];
+        assert!(detect_repetition(&tokens));
+    }
+
+    #[test]
+    fn detects_short_pattern_repetition() {
+        let tokens = vec![1, 2, 1, 2, 1, 2, 1, 2];
+        assert!(detect_repetition(&tokens));
+    }
+
+    #[test]
+    fn ignores_non_repeated_suffixes() {
+        let tokens = vec![1, 2, 1, 2, 1, 3, 1, 2];
+        assert!(!detect_repetition(&tokens));
+    }
 }
