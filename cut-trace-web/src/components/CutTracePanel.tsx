@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { type FeedGroup, type TraceEvent, type WordSpan, groupByFeed } from "../cut-trace-types";
+import {
+  type FeedGroup,
+  type PreviewAlignmentTokenTrace,
+  type TraceEvent,
+  type WordSpan,
+  groupByFeed,
+} from "../cut-trace-types";
 import { CutTimeline } from "./CutTimeline";
 
 function useCutTrace() {
@@ -73,6 +79,7 @@ function EventRow({ event }: { event: TraceEvent }) {
     rewrite_preview: "var(--accent-strong)",
     update_preview_from: "var(--warning)",
     cut_candidate: "var(--lane-carry)",
+    preview_alignment: "var(--warning)",
     preview_apply: "var(--accent-strong)",
     cut_applied: "var(--success)",
     zipa_cache_trim: "var(--warning)",
@@ -115,14 +122,40 @@ function timingLabel(timing: WordSpan["tokens"][number]["zipa_timing"]) {
   return "invalid";
 }
 
+function rangeLabel(range: { start: number; end: number } | null) {
+  if (!range) return "null";
+  return `${range.start}..${range.end}`;
+}
+
+function sameRange(
+  left: { start: number; end: number } | null,
+  right: { start: number; end: number } | null,
+) {
+  if (left === null || right === null) return left === right;
+  return left.start === right.start && left.end === right.end;
+}
+
+function sameTiming(left: PreviewAlignmentTokenTrace["zipa_timing"], right: PreviewAlignmentTokenTrace["zipa_timing"]) {
+  return (
+    left.kind === right.kind &&
+    left.start_secs === right.start_secs &&
+    left.end_secs === right.end_secs &&
+    left.projected_at === right.projected_at &&
+    left.normalized_start === right.normalized_start &&
+    left.normalized_end === right.normalized_end
+  );
+}
+
 function FeedDetail({
   group,
+  prevGroup,
   timelineZoom,
   timelineViewStartSec,
   onTimelineZoomChange,
   onTimelineViewStartSecChange,
 }: {
   group: FeedGroup;
+  prevGroup: FeedGroup | null;
   timelineZoom: number;
   timelineViewStartSec: number;
   onTimelineZoomChange: (zoom: number) => void;
@@ -132,6 +165,8 @@ function FeedDetail({
   const cutApplied = group.cutApplied;
   const feedStart = group.feedStart;
   const previewApply = group.previewApply;
+  const previewAlignment = group.previewAlignment;
+  const prevPreviewAlignment = prevGroup?.previewAlignment ?? null;
   const zipaCacheTrim = group.zipaCacheTrim;
   const zoomOptions = [0.5, 0.75, 1, 1.5, 2, 3, 4];
   const [selectedWordKey, setSelectedWordKey] = useState<string | null>(null);
@@ -143,6 +178,25 @@ function FeedDetail({
       null
     );
   }, [feedEnd, selectedWordKey]);
+
+  const previewAlignmentDiffs = useMemo(() => {
+    if (!previewAlignment) return [];
+    const previous = new Map(
+      (prevPreviewAlignment?.tokens ?? []).map((token) => [token.token_index, token]),
+    );
+    return previewAlignment.tokens
+      .filter((token) => token.token_index >= previewAlignment.preview_from)
+      .map((token) => {
+        const prev = previous.get(token.token_index) ?? null;
+        const changed =
+          !prev ||
+          !sameRange(token.projected_range, prev.projected_range) ||
+          !sameRange(token.raw_phone_range, prev.raw_phone_range) ||
+          !sameTiming(token.zipa_timing, prev.zipa_timing);
+        return { token, prev, changed };
+      })
+      .filter((entry) => entry.changed);
+  }, [previewAlignment, prevPreviewAlignment]);
 
   return (
     <section className="detail-panel">
@@ -273,6 +327,79 @@ function FeedDetail({
                 <div className="word-token-meta">
                   <span>old {timingLabel(change.old_timing)}</span>
                   <span>new {timingLabel(change.new_timing)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {previewAlignment && (
+        <section className="panel-card">
+          <div className="panel-card-header">
+            <strong>Preview Alignment</strong>
+            <span className="detail-muted">
+              seam {previewAlignment.seam_start} / preview {previewAlignment.preview_from}
+            </span>
+          </div>
+          <div className="word-token-list">
+            {previewAlignment.tokens
+              .filter((token) => token.token_index >= previewAlignment.preview_from)
+              .map((token) => (
+                <div key={token.token_index} className="word-token-card">
+                  <div className="word-token-header">
+                    <strong>
+                      #{token.token_index} {token.token_text}
+                    </strong>
+                    <span className="detail-muted">{timingLabel(token.zipa_timing)}</span>
+                  </div>
+                  <div className="word-token-meta">
+                    <span>projected {rangeLabel(token.projected_range)}</span>
+                    <span>raw {rangeLabel(token.raw_phone_range)}</span>
+                    {token.word_surface && <span>word {token.word_surface}</span>}
+                  </div>
+                  {token.zipa_phone_spans.length > 0 && (
+                    <div className="chip-row">
+                      {token.zipa_phone_spans.map((span, index) => (
+                        <span key={`${span.phone}-${index}`} className="detail-chip accent">
+                          {span.phone} {span.start_secs.toFixed(3)}..{span.end_secs.toFixed(3)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+          </div>
+        </section>
+      )}
+
+      {previewAlignmentDiffs.length > 0 && (
+        <section className="panel-card">
+          <div className="panel-card-header">
+            <strong>Preview Alignment Diff</strong>
+            <span className="detail-muted">
+              vs #{prevGroup?.feedIndex ?? "previous"}
+            </span>
+          </div>
+          <div className="word-token-list">
+            {previewAlignmentDiffs.map(({ token, prev }) => (
+              <div key={token.token_index} className="word-token-card">
+                <div className="word-token-header">
+                  <strong>
+                    #{token.token_index} {token.token_text}
+                  </strong>
+                </div>
+                <div className="word-token-meta">
+                  <span>prev projected {rangeLabel(prev?.projected_range ?? null)}</span>
+                  <span>now projected {rangeLabel(token.projected_range)}</span>
+                </div>
+                <div className="word-token-meta">
+                  <span>prev raw {rangeLabel(prev?.raw_phone_range ?? null)}</span>
+                  <span>now raw {rangeLabel(token.raw_phone_range)}</span>
+                </div>
+                <div className="word-token-meta">
+                  <span>prev {prev ? timingLabel(prev.zipa_timing) : "none"}</span>
+                  <span>now {timingLabel(token.zipa_timing)}</span>
                 </div>
               </div>
             ))}
@@ -451,6 +578,11 @@ export function CutTracePanel() {
         {selectedGroup ? (
           <FeedDetail
             group={selectedGroup}
+            prevGroup={
+              selectedFeed != null
+                ? feeds.get(sortedIndices[Math.max(0, sortedIndices.indexOf(selectedFeed) - 1)]) ?? null
+                : null
+            }
             timelineZoom={timelineZoom}
             timelineViewStartSec={timelineViewStartSec}
             onTimelineZoomChange={setTimelineZoom}

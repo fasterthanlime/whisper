@@ -35,6 +35,12 @@ pub(crate) struct ZipaPhoneSpanTrace {
 }
 
 #[derive(Serialize, Clone)]
+pub(crate) struct IndexRangeTrace {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Serialize, Clone)]
 pub(crate) struct WordTokenTrace {
     pub token_index: usize,
     pub token_text: String,
@@ -152,6 +158,29 @@ pub(crate) struct PreviewApplyTokenChange {
     pub token_text: String,
     pub old_timing: ZipaTimingTrace,
     pub new_timing: ZipaTimingTrace,
+}
+
+#[derive(Serialize, Clone)]
+pub(crate) struct PreviewAlignmentTokenTrace {
+    pub token_index: usize,
+    pub token_text: String,
+    pub token_surface: String,
+    pub word_index: Option<usize>,
+    pub word_surface: Option<String>,
+    pub projected_range: Option<IndexRangeTrace>,
+    pub raw_phone_range: Option<IndexRangeTrace>,
+    pub zipa_phone_spans: Vec<ZipaPhoneSpanTrace>,
+    pub zipa_timing: ZipaTimingTrace,
+}
+
+#[derive(Serialize)]
+struct PreviewAlignmentEvent {
+    event: &'static str,
+    feed_index: usize,
+    stable_through: usize,
+    preview_from: usize,
+    seam_start: usize,
+    tokens: Vec<PreviewAlignmentTokenTrace>,
 }
 
 #[derive(Serialize)]
@@ -331,6 +360,24 @@ impl CutTracer {
             stable_through,
             preview_from,
             changed_tokens,
+        });
+    }
+
+    pub(crate) fn preview_alignment(
+        &mut self,
+        feed_index: usize,
+        stable_through: usize,
+        preview_from: usize,
+        seam_start: usize,
+        tokens: Vec<PreviewAlignmentTokenTrace>,
+    ) {
+        self.emit(&PreviewAlignmentEvent {
+            event: "preview_alignment",
+            feed_index,
+            stable_through,
+            preview_from,
+            seam_start,
+            tokens,
         });
     }
 

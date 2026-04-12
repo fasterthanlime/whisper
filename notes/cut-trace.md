@@ -21,6 +21,7 @@ and one JSON object per event is appended per feed.
 | `feed_start` | top of each feed, with current audio end in seconds |
 | `plan_preview_decode` | after planning rollback boundaries |
 | `rewrite_preview` | before truncating the tape |
+| `preview_alignment` | token-piece projected/raw ownership and phone spans for the current seam/preview analysis |
 | `update_preview_from` | after the preview-from boundary is updated |
 | `cut_candidate` | result of `find_auto_cut_boundary` (Auto mode only) |
 | `cut_applied` | cut outcome — `applied: true/false`, `cut_sample_secs` |

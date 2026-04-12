@@ -20,8 +20,8 @@
 //!   README; the current full-audio path must not pretend otherwise
 
 use crate::cut_trace::{
-    AsrAlternativeTrace, CutTracer, PreviewApplyTokenChange, WordSpan, WordTokenTrace,
-    ZipaPhoneSpanTrace, ZipaTimingTrace,
+    AsrAlternativeTrace, CutTracer, IndexRangeTrace, PreviewAlignmentTokenTrace,
+    PreviewApplyTokenChange, WordSpan, WordTokenTrace, ZipaPhoneSpanTrace, ZipaTimingTrace,
 };
 use crate::tokens::UtteranceTokenRange;
 use crate::{
@@ -860,6 +860,39 @@ impl Utterance {
         });
         let alignment = TranscriptAlignment::build_from_cached_zipa(comparison_input, zipa_output);
         let token_details = alignment.token_piece_details(&alignment_input.token_pieces);
+        if self.cut_tracer.is_active() {
+            let tokens = token_details
+                .iter()
+                .map(|detail| PreviewAlignmentTokenTrace {
+                    token_index: seam_start + detail.token_index,
+                    token_text: detail.token.clone(),
+                    token_surface: detail.token_surface.clone(),
+                    word_index: detail.word_index,
+                    word_surface: detail.word_surface.clone(),
+                    projected_range: detail.projected_range.clone().map(|range| IndexRangeTrace {
+                        start: range.start,
+                        end: range.end,
+                    }),
+                    raw_phone_range: detail.raw_phone_range.clone().map(|range| IndexRangeTrace {
+                        start: range.start,
+                        end: range.end,
+                    }),
+                    zipa_phone_spans: detail
+                        .phone_spans
+                        .iter()
+                        .map(|span| phone_span_trace(span.clone()))
+                        .collect(),
+                    zipa_timing: Self::map_comparison_range_timing_trace(&detail.timing),
+                })
+                .collect();
+            self.cut_tracer.preview_alignment(
+                self.feed_count,
+                self.stable_through.as_usize(),
+                self.preview_from.as_usize(),
+                seam_start,
+                tokens,
+            );
+        }
 
         let token_enrichments = token_piece_phones
             .into_iter()
@@ -943,6 +976,43 @@ impl Utterance {
                 crate::UtteranceTime::from_secs(timed.start_time_secs),
                 crate::UtteranceTime::from_secs(timed.end_time_secs),
             )),
+        }
+    }
+
+    fn map_comparison_range_timing_trace(timing: &ComparisonRangeTiming) -> ZipaTimingTrace {
+        match timing {
+            ComparisonRangeTiming::Invalid => ZipaTimingTrace {
+                kind: "invalid",
+                start_secs: None,
+                end_secs: None,
+                projected_at: None,
+                normalized_start: None,
+                normalized_end: None,
+            },
+            ComparisonRangeTiming::Deleted { projected_at } => ZipaTimingTrace {
+                kind: "deleted",
+                start_secs: None,
+                end_secs: None,
+                projected_at: Some(*projected_at),
+                normalized_start: None,
+                normalized_end: None,
+            },
+            ComparisonRangeTiming::NoTiming { projected_range } => ZipaTimingTrace {
+                kind: "projected",
+                start_secs: None,
+                end_secs: None,
+                projected_at: None,
+                normalized_start: Some(projected_range.start),
+                normalized_end: Some(projected_range.end),
+            },
+            ComparisonRangeTiming::Aligned(timed) => ZipaTimingTrace {
+                kind: "aligned",
+                start_secs: Some(timed.start_time_secs),
+                end_secs: Some(timed.end_time_secs),
+                projected_at: None,
+                normalized_start: Some(timed.normalized_range.start),
+                normalized_end: Some(timed.normalized_range.end),
+            },
         }
     }
 

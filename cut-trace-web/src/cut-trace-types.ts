@@ -22,6 +22,11 @@ export interface ZipaPhoneSpanTrace {
   end_secs: number;
 }
 
+export interface IndexRangeTrace {
+  start: number;
+  end: number;
+}
+
 export interface WordTokenTrace {
   token_index: number;
   token_text: string;
@@ -116,6 +121,27 @@ export interface PreviewApplyEvent {
   changed_tokens: PreviewApplyTokenChange[];
 }
 
+export interface PreviewAlignmentTokenTrace {
+  token_index: number;
+  token_text: string;
+  token_surface: string;
+  word_index: number | null;
+  word_surface: string | null;
+  projected_range: IndexRangeTrace | null;
+  raw_phone_range: IndexRangeTrace | null;
+  zipa_phone_spans: ZipaPhoneSpanTrace[];
+  zipa_timing: ZipaTimingTrace;
+}
+
+export interface PreviewAlignmentEvent {
+  event: "preview_alignment";
+  feed_index: number;
+  stable_through: number;
+  preview_from: number;
+  seam_start: number;
+  tokens: PreviewAlignmentTokenTrace[];
+}
+
 export interface ZipaCacheTrimEvent {
   event: "zipa_cache_trim";
   feed_index: number;
@@ -146,6 +172,7 @@ export type TraceEvent =
   | RewritePreviewEvent
   | UpdatePreviewFromEvent
   | CutCandidateEvent
+  | PreviewAlignmentEvent
   | PreviewApplyEvent
   | CutAppliedEvent
   | ZipaCacheTrimEvent
@@ -158,6 +185,7 @@ export interface FeedGroup {
   feedEnd: FeedEndEvent | null;
   cutApplied: CutAppliedEvent | null;
   cutCandidate: CutCandidateEvent | null;
+  previewAlignment: PreviewAlignmentEvent | null;
   previewApply: PreviewApplyEvent | null;
   zipaCacheTrim: ZipaCacheTrimEvent | null;
 }
@@ -174,6 +202,7 @@ export function groupByFeed(events: TraceEvent[]): Map<number, FeedGroup> {
         feedEnd: null,
         cutApplied: null,
         cutCandidate: null,
+        previewAlignment: null,
         previewApply: null,
         zipaCacheTrim: null,
       });
@@ -184,6 +213,7 @@ export function groupByFeed(events: TraceEvent[]): Map<number, FeedGroup> {
     if (ev.event === "feed_end") group.feedEnd = ev;
     if (ev.event === "cut_applied") group.cutApplied = ev;
     if (ev.event === "cut_candidate") group.cutCandidate = ev;
+    if (ev.event === "preview_alignment") group.previewAlignment = ev;
     if (ev.event === "preview_apply") group.previewApply = ev;
     if (ev.event === "zipa_cache_trim") group.zipaCacheTrim = ev;
   }
