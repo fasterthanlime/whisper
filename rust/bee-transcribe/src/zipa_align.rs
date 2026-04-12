@@ -14,6 +14,8 @@ use bee_phonetic::{
 use bee_zipa_mlx::audio::AudioBuffer as ZipaAudioBuffer;
 use bee_zipa_mlx::infer::{PhoneSpan, ZipaInference};
 
+const ADJACENT_ALIGNMENT_OVERLAP_EPSILON_SECS: f64 = 1e-4;
+
 #[derive(Clone, Debug)]
 pub struct CachedZipaOutput {
     raw_token_count: usize,
@@ -1557,7 +1559,7 @@ impl TranscriptAlignment {
         &self,
         token_pieces: &[bee_g2p::TranscriptTokenPieceComparisonRange],
     ) -> Vec<TokenPieceDetail> {
-        token_pieces
+        let details = token_pieces
             .iter()
             .map(|token| {
                 let projected_range =
@@ -1584,7 +1586,72 @@ impl TranscriptAlignment {
                     phone_spans,
                 }
             })
-            .collect()
+            .collect::<Vec<_>>();
+        self.assert_no_adjacent_aligned_token_overlap(&details);
+        details
+    }
+
+    fn assert_no_adjacent_aligned_token_overlap(&self, details: &[TokenPieceDetail]) {
+        for pair in details.windows(2) {
+            let [left, right] = pair else { continue };
+            if left.token_index + 1 != right.token_index {
+                continue;
+            }
+            let (
+                ComparisonRangeTiming::Aligned(left_timing),
+                ComparisonRangeTiming::Aligned(right_timing),
+            ) = (&left.timing, &right.timing)
+            else {
+                continue;
+            };
+            if left_timing.end_time_secs
+                <= right_timing.start_time_secs + ADJACENT_ALIGNMENT_OVERLAP_EPSILON_SECS
+            {
+                continue;
+            }
+
+            tracing::error!(
+                left_token_index = left.token_index,
+                left_token = %left.token_surface,
+                left_timing = format_args!(
+                    "[{:.6}, {:.6}]",
+                    left_timing.start_time_secs,
+                    left_timing.end_time_secs
+                ),
+                left_projected_range = ?left.projected_range,
+                left_raw_phone_range = ?left.raw_phone_range,
+                left_phone_spans = %format_phone_spans(&left.phone_spans),
+                right_token_index = right.token_index,
+                right_token = %right.token_surface,
+                right_timing = format_args!(
+                    "[{:.6}, {:.6}]",
+                    right_timing.start_time_secs,
+                    right_timing.end_time_secs
+                ),
+                right_projected_range = ?right.projected_range,
+                right_raw_phone_range = ?right.raw_phone_range,
+                right_phone_spans = %format_phone_spans(&right.phone_spans),
+                "zipa_align: adjacent aligned token-piece timings overlap"
+            );
+
+            panic!(
+                "zipa_align adjacent aligned token overlap: \
+left token #{} {:?} [{:.6}, {:.6}] projected={:?} raw={:?}; \
+right token #{} {:?} [{:.6}, {:.6}] projected={:?} raw={:?}",
+                left.token_index,
+                left.token_surface,
+                left_timing.start_time_secs,
+                left_timing.end_time_secs,
+                left.projected_range,
+                left.raw_phone_range,
+                right.token_index,
+                right.token_surface,
+                right_timing.start_time_secs,
+                right_timing.end_time_secs,
+                right.projected_range,
+                right.raw_phone_range,
+            );
+        }
     }
 
     /// Timed audio span covering words `[word_start, word_end)`.
@@ -1629,6 +1696,19 @@ impl TranscriptAlignment {
             None => SpanTiming::NoTiming,
         }
     }
+}
+
+fn format_phone_spans(phone_spans: &[PhoneSpan]) -> String {
+    phone_spans
+        .iter()
+        .map(|span| {
+            format!(
+                "{}[{:.6},{:.6}]",
+                span.token, span.start_time_secs, span.end_time_secs
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub fn infer_cached_zipa_output(
@@ -2469,5 +2549,223 @@ mod tests {
         };
         assert!((et.start_time_secs - 0.3).abs() < 1e-6);
         assert!((et.end_time_secs - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn token_piece_details_reject_adjacent_aligned_overlap() {
+        let input = bee_g2p::TranscriptAlignmentInput {
+            normalized: vec!["f".to_string(), "r".to_string(), "ə".to_string()],
+            sequence: bee_g2p::TranscriptComparisonSequence {
+                tokens: vec![],
+                provenance: vec![],
+            },
+            words: vec![
+                bee_g2p::TranscriptWordComparisonRange {
+                    word_index: 0,
+                    word_surface: "from".to_string(),
+                    char_start: 0,
+                    char_end: 4,
+                    comparison_start: 0,
+                    comparison_end: 2,
+                },
+                bee_g2p::TranscriptWordComparisonRange {
+                    word_index: 1,
+                    word_surface: "a".to_string(),
+                    char_start: 5,
+                    char_end: 6,
+                    comparison_start: 2,
+                    comparison_end: 3,
+                },
+            ],
+            token_pieces: vec![
+                bee_g2p::TranscriptTokenPieceComparisonRange {
+                    token_index: 0,
+                    token: " from".to_string(),
+                    token_surface: " from".to_string(),
+                    token_char_start: 0,
+                    token_char_end: 4,
+                    word_index: Some(0),
+                    word_surface: Some("from".to_string()),
+                    comparison_start: 0,
+                    comparison_end: 2,
+                },
+                bee_g2p::TranscriptTokenPieceComparisonRange {
+                    token_index: 1,
+                    token: " a".to_string(),
+                    token_surface: " a".to_string(),
+                    token_char_start: 5,
+                    token_char_end: 6,
+                    word_index: Some(1),
+                    word_surface: Some("a".to_string()),
+                    comparison_start: 2,
+                    comparison_end: 3,
+                },
+            ],
+        };
+        let ta = TranscriptAlignment::build_from_comparison_input_and_zipa(
+            transcript_comparison_input_from_g2p("from a", &input),
+            vec![
+                ComparisonToken {
+                    token: "f".into(),
+                    source_start: 0,
+                    source_end: 1,
+                },
+                ComparisonToken {
+                    token: "r".into(),
+                    source_start: 1,
+                    source_end: 2,
+                },
+                ComparisonToken {
+                    token: "ə".into(),
+                    source_start: 2,
+                    source_end: 3,
+                },
+            ],
+            vec![
+                PhoneSpan {
+                    token_id: 1,
+                    token: "f".into(),
+                    start_frame: 0,
+                    end_frame: 10,
+                    start_time_secs: 4.024,
+                    end_time_secs: 4.228,
+                },
+                PhoneSpan {
+                    token_id: 2,
+                    token: "r".into(),
+                    start_frame: 10,
+                    end_frame: 20,
+                    start_time_secs: 4.100,
+                    end_time_secs: 4.228,
+                },
+                PhoneSpan {
+                    token_id: 3,
+                    token: "ə".into(),
+                    start_frame: 20,
+                    end_frame: 30,
+                    start_time_secs: 4.187,
+                    end_time_secs: 4.248,
+                },
+            ],
+        );
+
+        let err = std::panic::catch_unwind(|| ta.token_piece_details(&input.token_pieces))
+            .expect_err("adjacent overlap should panic");
+        let message = panic_message(err);
+        assert!(message.contains("zipa_align adjacent aligned token overlap"));
+        assert!(message.contains("from"));
+        assert!(message.contains("a"));
+    }
+
+    #[test]
+    fn token_piece_details_accept_adjacent_non_overlapping_timings() {
+        let input = bee_g2p::TranscriptAlignmentInput {
+            normalized: vec!["f".to_string(), "r".to_string(), "ə".to_string()],
+            sequence: bee_g2p::TranscriptComparisonSequence {
+                tokens: vec![],
+                provenance: vec![],
+            },
+            words: vec![
+                bee_g2p::TranscriptWordComparisonRange {
+                    word_index: 0,
+                    word_surface: "from".to_string(),
+                    char_start: 0,
+                    char_end: 4,
+                    comparison_start: 0,
+                    comparison_end: 2,
+                },
+                bee_g2p::TranscriptWordComparisonRange {
+                    word_index: 1,
+                    word_surface: "a".to_string(),
+                    char_start: 5,
+                    char_end: 6,
+                    comparison_start: 2,
+                    comparison_end: 3,
+                },
+            ],
+            token_pieces: vec![
+                bee_g2p::TranscriptTokenPieceComparisonRange {
+                    token_index: 0,
+                    token: " from".to_string(),
+                    token_surface: " from".to_string(),
+                    token_char_start: 0,
+                    token_char_end: 4,
+                    word_index: Some(0),
+                    word_surface: Some("from".to_string()),
+                    comparison_start: 0,
+                    comparison_end: 2,
+                },
+                bee_g2p::TranscriptTokenPieceComparisonRange {
+                    token_index: 1,
+                    token: " a".to_string(),
+                    token_surface: " a".to_string(),
+                    token_char_start: 5,
+                    token_char_end: 6,
+                    word_index: Some(1),
+                    word_surface: Some("a".to_string()),
+                    comparison_start: 2,
+                    comparison_end: 3,
+                },
+            ],
+        };
+        let ta = TranscriptAlignment::build_from_comparison_input_and_zipa(
+            transcript_comparison_input_from_g2p("from a", &input),
+            vec![
+                ComparisonToken {
+                    token: "f".into(),
+                    source_start: 0,
+                    source_end: 1,
+                },
+                ComparisonToken {
+                    token: "r".into(),
+                    source_start: 1,
+                    source_end: 2,
+                },
+                ComparisonToken {
+                    token: "ə".into(),
+                    source_start: 2,
+                    source_end: 3,
+                },
+            ],
+            vec![
+                PhoneSpan {
+                    token_id: 1,
+                    token: "f".into(),
+                    start_frame: 0,
+                    end_frame: 10,
+                    start_time_secs: 4.024,
+                    end_time_secs: 4.140,
+                },
+                PhoneSpan {
+                    token_id: 2,
+                    token: "r".into(),
+                    start_frame: 10,
+                    end_frame: 20,
+                    start_time_secs: 4.140,
+                    end_time_secs: 4.228,
+                },
+                PhoneSpan {
+                    token_id: 3,
+                    token: "ə".into(),
+                    start_frame: 20,
+                    end_frame: 30,
+                    start_time_secs: 4.228,
+                    end_time_secs: 4.248,
+                },
+            ],
+        );
+
+        let details = ta.token_piece_details(&input.token_pieces);
+        assert_eq!(details.len(), 2);
+    }
+
+    fn panic_message(err: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(msg) = err.downcast_ref::<String>() {
+            return msg.clone();
+        }
+        if let Some(msg) = err.downcast_ref::<&'static str>() {
+            return (*msg).to_owned();
+        }
+        "<non-string panic>".to_owned()
     }
 }
