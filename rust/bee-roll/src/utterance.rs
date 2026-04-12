@@ -958,15 +958,17 @@ impl Utterance {
             .iter()
             .map(|token| token.timed_token().token().as_u32())
             .collect::<Vec<_>>();
-        self.preview_from = TokenIndex::new(find_word_start_at_or_before(
+        let candidate = TokenIndex::new(find_word_start_at_or_before(
             &ids,
             self.stable_through.as_usize(),
             target,
         ));
+        self.preview_from = self.preview_from.max(candidate);
         tracing::trace!(
             stable_through = self.stable_through.as_usize(),
             tape_end = self.tape.end().as_usize(),
             target,
+            candidate = candidate.as_usize(),
             preview_from = self.preview_from.as_usize(),
             "bee_roll.update_preview_from"
         );
@@ -1704,6 +1706,31 @@ mod tests {
         assert_eq!(
             Utterance::preview_max_new_tokens_for_samples(320_000, 12),
             12
+        );
+    }
+
+    #[test]
+    fn update_preview_from_does_not_move_backward() {
+        ensure_test_tokenizer();
+        let token_ids = encode_ids("While the astronomer who had spent 20 years");
+        let mut utterance = Utterance::new(2, Cutting::Never);
+        utterance.tape.append_decoded(
+            token_ids
+                .iter()
+                .enumerate()
+                .map(|(index, &token_id)| dummy_output_token(index, token_id))
+                .collect(),
+            0,
+            token_ids.len(),
+        );
+
+        utterance.set_stable_and_preview(TokenIndex::new(0), TokenIndex::new(7));
+        utterance.update_preview_from();
+
+        assert_eq!(
+            utterance.preview_from,
+            TokenIndex::new(7),
+            "preview_from should not retreat when the recomputed target moves left"
         );
     }
 
