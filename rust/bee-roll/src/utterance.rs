@@ -47,7 +47,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-const DEFAULT_PREVIEW_REWRITE_TOKENS: usize = 5;
+const DEFAULT_PREVIEW_REWRITE_TOKENS: usize = 8;
 const DEFAULT_MIN_PREVIEW_AFTER_CUT: usize = 12;
 const DEFAULT_MAX_NEW_TOKENS: usize = 256;
 const MIN_PREVIEW_MAX_NEW_TOKENS: usize = 4;
