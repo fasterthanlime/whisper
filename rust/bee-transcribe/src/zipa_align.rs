@@ -1536,22 +1536,144 @@ impl TranscriptAlignment {
             .project_left_range(comparison_range)
     }
 
+    fn strict_projected_comparison_range(
+        &self,
+        comparison_range: Range<usize>,
+    ) -> Option<Range<usize>> {
+        if comparison_range.start >= comparison_range.end
+            || comparison_range.end > self.transcript_normalized_len
+        {
+            return None;
+        }
+        strict_project_left_range(&self.transcript_alignment.ops, comparison_range)
+    }
+
+    fn token_piece_projected_ranges(
+        &self,
+        token_pieces: &[bee_g2p::TranscriptTokenPieceComparisonRange],
+    ) -> Vec<Option<Range<usize>>> {
+        let mut projected = token_pieces
+            .iter()
+            .map(|token| {
+                self.strict_projected_comparison_range(token.comparison_start..token.comparison_end)
+            })
+            .collect::<Vec<_>>();
+
+        let mut previous_token_index = None;
+        let mut previous_end = None;
+        for (token, range) in token_pieces.iter().zip(projected.iter_mut()) {
+            let adjacent = previous_token_index
+                .map(|prev| token.token_index == prev + 1)
+                .unwrap_or(false);
+            if adjacent {
+                if let (Some(prev_end), Some(current)) = (previous_end, range.as_mut()) {
+                    current.start = current.start.max(prev_end);
+                    if current.end < current.start {
+                        current.end = current.start;
+                    }
+                }
+            }
+            previous_token_index = Some(token.token_index);
+            previous_end = range.as_ref().map(|range| range.end);
+        }
+
+        projected
+    }
+
+    fn token_piece_raw_phone_ranges(
+        &self,
+        token_pieces: &[bee_g2p::TranscriptTokenPieceComparisonRange],
+        projected_ranges: &[Option<Range<usize>>],
+    ) -> Vec<Option<Range<usize>>> {
+        let mut raw_ranges = projected_ranges
+            .iter()
+            .map(|projected| {
+                projected.clone().and_then(|range| {
+                    raw_phone_range_for_normalized_range(&self.zipa_norm_with_spans, range)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut previous_token_index = None;
+        let mut previous_end = None;
+        for (token, raw_range) in token_pieces.iter().zip(raw_ranges.iter_mut()) {
+            let adjacent = previous_token_index
+                .map(|prev| token.token_index == prev + 1)
+                .unwrap_or(false);
+            if adjacent {
+                if let (Some(prev_end), Some(current)) = (previous_end, raw_range.as_mut()) {
+                    current.start = current.start.max(prev_end);
+                    if current.end < current.start {
+                        current.end = current.start;
+                    }
+                }
+            }
+            previous_token_index = Some(token.token_index);
+            previous_end = raw_range.as_ref().map(|range| range.end);
+        }
+
+        raw_ranges
+    }
+
+    fn comparison_range_timing_from_projected_and_raw(
+        &self,
+        projected: Option<Range<usize>>,
+        raw_phone_range: Option<Range<usize>>,
+    ) -> ComparisonRangeTiming {
+        let Some(projected) = projected else {
+            return ComparisonRangeTiming::Invalid;
+        };
+        let Some(raw_phone_range) = raw_phone_range else {
+            if projected.start >= projected.end {
+                return ComparisonRangeTiming::Deleted {
+                    projected_at: projected.start,
+                };
+            }
+            return ComparisonRangeTiming::NoTiming {
+                projected_range: projected,
+            };
+        };
+        if raw_phone_range.start >= raw_phone_range.end {
+            return ComparisonRangeTiming::Deleted {
+                projected_at: projected.start,
+            };
+        }
+        match timed_range_for_raw_phone_range(&self.phone_spans, raw_phone_range.clone()) {
+            Some(mut timed) => {
+                timed.normalized_range = projected;
+                ComparisonRangeTiming::Aligned(timed)
+            }
+            None => ComparisonRangeTiming::NoTiming {
+                projected_range: projected,
+            },
+        }
+    }
+
     pub fn token_piece_timings(
         &self,
         token_pieces: &[bee_g2p::TranscriptTokenPieceComparisonRange],
     ) -> Vec<TokenPieceTiming> {
+        let projected_ranges = self.token_piece_projected_ranges(token_pieces);
+        let raw_ranges = self.token_piece_raw_phone_ranges(token_pieces, &projected_ranges);
         token_pieces
             .iter()
-            .map(|token| TokenPieceTiming {
-                token_index: token.token_index,
-                token: token.token.clone(),
-                token_surface: token.token_surface.clone(),
-                token_char_start: token.token_char_start,
-                token_char_end: token.token_char_end,
-                word_index: token.word_index,
-                word_surface: token.word_surface.clone(),
-                timing: self.comparison_range_timing(token.comparison_start..token.comparison_end),
-            })
+            .zip(projected_ranges)
+            .zip(raw_ranges)
+            .map(
+                |((token, projected_range), raw_phone_range)| TokenPieceTiming {
+                    token_index: token.token_index,
+                    token: token.token.clone(),
+                    token_surface: token.token_surface.clone(),
+                    token_char_start: token.token_char_start,
+                    token_char_end: token.token_char_end,
+                    word_index: token.word_index,
+                    word_surface: token.word_surface.clone(),
+                    timing: self.comparison_range_timing_from_projected_and_raw(
+                        projected_range,
+                        raw_phone_range,
+                    ),
+                },
+            )
             .collect()
     }
 
@@ -1559,14 +1681,13 @@ impl TranscriptAlignment {
         &self,
         token_pieces: &[bee_g2p::TranscriptTokenPieceComparisonRange],
     ) -> Vec<TokenPieceDetail> {
+        let projected_ranges = self.token_piece_projected_ranges(token_pieces);
+        let raw_ranges = self.token_piece_raw_phone_ranges(token_pieces, &projected_ranges);
         let details = token_pieces
             .iter()
-            .map(|token| {
-                let projected_range =
-                    self.projected_comparison_range(token.comparison_start..token.comparison_end);
-                let raw_phone_range = projected_range.clone().and_then(|range| {
-                    raw_phone_range_for_normalized_range(&self.zipa_norm_with_spans, range)
-                });
+            .zip(projected_ranges)
+            .zip(raw_ranges)
+            .map(|((token, projected_range), raw_phone_range)| {
                 let phone_spans = raw_phone_range
                     .clone()
                     .map(|range| self.phone_spans.get(range).unwrap_or(&[]).to_vec())
@@ -1579,8 +1700,10 @@ impl TranscriptAlignment {
                     token_char_end: token.token_char_end,
                     word_index: token.word_index,
                     word_surface: token.word_surface.clone(),
-                    timing: self
-                        .comparison_range_timing(token.comparison_start..token.comparison_end),
+                    timing: self.comparison_range_timing_from_projected_and_raw(
+                        projected_range.clone(),
+                        raw_phone_range.clone(),
+                    ),
                     projected_range,
                     raw_phone_range,
                     phone_spans,
@@ -2552,9 +2675,21 @@ mod tests {
     }
 
     #[test]
-    fn token_piece_details_reject_adjacent_aligned_overlap() {
+    fn token_piece_details_keep_adjacent_projection_non_overlapping() {
         let input = bee_g2p::TranscriptAlignmentInput {
-            normalized: vec!["f".to_string(), "r".to_string(), "ə".to_string()],
+            normalized: vec![
+                "s".to_string(),
+                "p".to_string(),
+                "ɛ".to_string(),
+                "n".to_string(),
+                "t".to_string(),
+                "t".to_string(),
+                "w".to_string(),
+                "ɛ".to_string(),
+                "n".to_string(),
+                "t".to_string(),
+                "i".to_string(),
+            ],
             sequence: bee_g2p::TranscriptComparisonSequence {
                 tokens: vec![],
                 provenance: vec![],
@@ -2562,99 +2697,131 @@ mod tests {
             words: vec![
                 bee_g2p::TranscriptWordComparisonRange {
                     word_index: 0,
-                    word_surface: "from".to_string(),
+                    word_surface: "spent".to_string(),
                     char_start: 0,
-                    char_end: 4,
+                    char_end: 5,
                     comparison_start: 0,
-                    comparison_end: 2,
+                    comparison_end: 5,
                 },
                 bee_g2p::TranscriptWordComparisonRange {
                     word_index: 1,
-                    word_surface: "a".to_string(),
-                    char_start: 5,
-                    char_end: 6,
-                    comparison_start: 2,
-                    comparison_end: 3,
+                    word_surface: "twenty".to_string(),
+                    char_start: 6,
+                    char_end: 12,
+                    comparison_start: 5,
+                    comparison_end: 11,
                 },
             ],
             token_pieces: vec![
                 bee_g2p::TranscriptTokenPieceComparisonRange {
                     token_index: 0,
-                    token: " from".to_string(),
-                    token_surface: " from".to_string(),
+                    token: " spent".to_string(),
+                    token_surface: " spent".to_string(),
                     token_char_start: 0,
-                    token_char_end: 4,
+                    token_char_end: 5,
                     word_index: Some(0),
-                    word_surface: Some("from".to_string()),
+                    word_surface: Some("spent".to_string()),
                     comparison_start: 0,
-                    comparison_end: 2,
+                    comparison_end: 5,
                 },
                 bee_g2p::TranscriptTokenPieceComparisonRange {
                     token_index: 1,
-                    token: " a".to_string(),
-                    token_surface: " a".to_string(),
-                    token_char_start: 5,
-                    token_char_end: 6,
+                    token: " twenty".to_string(),
+                    token_surface: " twenty".to_string(),
+                    token_char_start: 6,
+                    token_char_end: 12,
                     word_index: Some(1),
-                    word_surface: Some("a".to_string()),
-                    comparison_start: 2,
-                    comparison_end: 3,
+                    word_surface: Some("twenty".to_string()),
+                    comparison_start: 5,
+                    comparison_end: 11,
                 },
             ],
         };
         let ta = TranscriptAlignment::build_from_comparison_input_and_zipa(
-            transcript_comparison_input_from_g2p("from a", &input),
+            transcript_comparison_input_from_g2p("spent twenty", &input),
             vec![
                 ComparisonToken {
-                    token: "f".into(),
-                    source_start: 0,
-                    source_end: 1,
+                    token: "s".into(),
+                    source_start: 17,
+                    source_end: 18,
                 },
                 ComparisonToken {
-                    token: "r".into(),
-                    source_start: 1,
-                    source_end: 2,
+                    token: "p".into(),
+                    source_start: 18,
+                    source_end: 19,
                 },
                 ComparisonToken {
-                    token: "ə".into(),
-                    source_start: 2,
-                    source_end: 3,
+                    token: "ɛ".into(),
+                    source_start: 19,
+                    source_end: 20,
+                },
+                ComparisonToken {
+                    token: "n".into(),
+                    source_start: 20,
+                    source_end: 21,
+                },
+                ComparisonToken {
+                    token: "t".into(),
+                    source_start: 22,
+                    source_end: 23,
+                },
+                ComparisonToken {
+                    token: "t".into(),
+                    source_start: 22,
+                    source_end: 23,
+                },
+                ComparisonToken {
+                    token: "w".into(),
+                    source_start: 23,
+                    source_end: 24,
+                },
+                ComparisonToken {
+                    token: "ɛ".into(),
+                    source_start: 24,
+                    source_end: 25,
+                },
+                ComparisonToken {
+                    token: "n".into(),
+                    source_start: 25,
+                    source_end: 26,
+                },
+                ComparisonToken {
+                    token: "t".into(),
+                    source_start: 26,
+                    source_end: 27,
+                },
+                ComparisonToken {
+                    token: "i".into(),
+                    source_start: 26,
+                    source_end: 27,
                 },
             ],
-            vec![
-                PhoneSpan {
-                    token_id: 1,
-                    token: "f".into(),
-                    start_frame: 0,
-                    end_frame: 10,
-                    start_time_secs: 4.024,
-                    end_time_secs: 4.228,
-                },
-                PhoneSpan {
-                    token_id: 2,
-                    token: "r".into(),
-                    start_frame: 10,
-                    end_frame: 20,
-                    start_time_secs: 4.100,
-                    end_time_secs: 4.228,
-                },
-                PhoneSpan {
-                    token_id: 3,
-                    token: "ə".into(),
-                    start_frame: 20,
-                    end_frame: 30,
-                    start_time_secs: 4.187,
-                    end_time_secs: 4.248,
-                },
-            ],
+            (0..27)
+                .map(|i| PhoneSpan {
+                    token_id: i + 1,
+                    token: format!("p{i}"),
+                    start_frame: i * 10,
+                    end_frame: i * 10 + 10,
+                    start_time_secs: 1.0 + i as f64 * 0.01,
+                    end_time_secs: 1.01 + i as f64 * 0.01,
+                })
+                .collect(),
         );
 
-        let err = std::panic::catch_unwind(|| ta.token_piece_details(&input.token_pieces))
-            .expect_err("adjacent overlap should panic");
-        let message = panic_message(err);
-        assert!(message.contains("zipa_align adjacent aligned token overlap"));
-        assert!(message.contains("from"));
-        assert!(message.contains("a"));
+        let details = ta.token_piece_details(&input.token_pieces);
+        assert_eq!(details.len(), 2);
+        assert_eq!(details[0].projected_range, Some(0..5));
+        assert_eq!(details[1].projected_range, Some(5..11));
+        assert_eq!(details[0].raw_phone_range, Some(17..23));
+        assert_eq!(details[1].raw_phone_range, Some(23..27));
+
+        let ComparisonRangeTiming::Aligned(left) = &details[0].timing else {
+            panic!("left token should align");
+        };
+        let ComparisonRangeTiming::Aligned(right) = &details[1].timing else {
+            panic!("right token should align");
+        };
+        assert!(left.end_time_secs <= right.start_time_secs);
     }
 
     #[test]
@@ -2757,15 +2924,5 @@ mod tests {
 
         let details = ta.token_piece_details(&input.token_pieces);
         assert_eq!(details.len(), 2);
-    }
-
-    fn panic_message(err: Box<dyn std::any::Any + Send>) -> String {
-        if let Some(msg) = err.downcast_ref::<String>() {
-            return msg.clone();
-        }
-        if let Some(msg) = err.downcast_ref::<&'static str>() {
-            return (*msg).to_owned();
-        }
-        "<non-string panic>".to_owned()
     }
 }
